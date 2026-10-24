@@ -1688,10 +1688,22 @@ fn content_type_for_path(path: &Path) -> &'static str {
 }
 
 fn transcode_cache_path(song_id: &str, path: &Path, bitrate: u32) -> PathBuf {
+    transcode_cache_path_for(song_id, path, bitrate, TranscodeFormat::Mp3)
+}
+
+fn transcode_cache_path_for(
+    song_id: &str,
+    path: &Path,
+    bitrate: u32,
+    format: TranscodeFormat,
+) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(song_id.as_bytes());
     hasher.update(path.to_string_lossy().as_bytes());
     hasher.update(bitrate.to_le_bytes());
+    if format != TranscodeFormat::Mp3 {
+        hasher.update(format.extension().as_bytes());
+    }
     if let Ok(metadata) = std::fs::metadata(path) {
         hasher.update(metadata.len().to_le_bytes());
         if let Ok(modified) = metadata.modified()
@@ -1709,8 +1721,95 @@ fn transcode_cache_path(song_id: &str, path: &Path, bitrate: u32) -> PathBuf {
     let mut cache_dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
     cache_dir.push("Parson");
     cache_dir.push("Transcodes");
-    cache_dir.push(format!("{}.mp3", cache_key));
+    cache_dir.push(format!("{}.{}", cache_key, format.extension()));
     cache_dir
+}
+
+/// Output of the ffmpeg transcoder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TranscodeFormat {
+    /// MP3 at the requested bitrate.
+    Mp3,
+    /// FLAC at 48 kHz-family or 44.1 kHz-family rate and at most 24 bits,
+    /// the most Sonos players accept.
+    SonosFlac { sample_rate: u32, bit_depth: u8 },
+}
+
+impl TranscodeFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::SonosFlac { .. } => "flac",
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Mp3 => "audio/mpeg",
+            Self::SonosFlac { .. } => "audio/flac",
+        }
+    }
+}
+
+/// How a song reaches a Sonos player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SonosStreamPlan {
+    pub mime_type: &'static str,
+    /// `None` streams the original file; otherwise FLAC at this rate/depth.
+    pub convert_to: Option<(u32, u8)>,
+}
+
+/// Sonos plays MP3, AAC, FLAC, ALAC and WAV up to 48 kHz/24-bit. Anything
+/// above that, or any other codec, becomes FLAC at the nearest supported rate
+/// (44.1 kHz for the 44.1 family, else 48 kHz) and at most 24 bits.
+pub(crate) fn sonos_stream_plan(song: &crate::domain::Song) -> SonosStreamPlan {
+    let extension = Path::new(&song.path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let audio = song.audio.clone().unwrap_or_default();
+    let codec = audio
+        .codec
+        .clone()
+        .unwrap_or_else(|| match extension.as_str() {
+            "mp3" => "mp3".to_string(),
+            "aac" => "aac".to_string(),
+            "flac" => "flac".to_string(),
+            "wav" => "pcm".to_string(),
+            "m4a" | "mp4" => "aac".to_string(),
+            other => other.to_string(),
+        });
+    let sample_rate = audio.sample_rate.unwrap_or(44_100);
+    let bit_depth = audio.bit_depth.unwrap_or(16);
+    let within_limits = sample_rate <= 48_000 && bit_depth <= 24;
+    let direct = match codec.as_str() {
+        "mp3" => Some("audio/mpeg"),
+        "aac" if extension == "aac" => Some("audio/aac"),
+        "aac" | "alac" if matches!(extension.as_str(), "m4a" | "mp4") && within_limits => {
+            Some("audio/mp4")
+        }
+        "flac" if extension == "flac" && within_limits => Some("audio/flac"),
+        "pcm" if extension == "wav" && within_limits => Some("audio/wav"),
+        _ => None,
+    };
+    match direct {
+        Some(mime_type) => SonosStreamPlan {
+            mime_type,
+            convert_to: None,
+        },
+        None => SonosStreamPlan {
+            mime_type: "audio/flac",
+            convert_to: Some((
+                if sample_rate.is_multiple_of(11_025) {
+                    44_100
+                } else {
+                    48_000
+                },
+                bit_depth.clamp(16, 24),
+            )),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -2171,9 +2270,10 @@ async fn stream_cached_transcode(
     etag_key: &str,
     bitrate: u32,
     audio_effect: StreamAudioEffect,
+    format: TranscodeFormat,
 ) -> HttpResponse {
     if tokio::fs::metadata(cache_path).await.is_ok() {
-        return stream_file_range(req, cache_path, etag_key, "audio/mpeg").await;
+        return stream_file_range(req, cache_path, etag_key, format.content_type()).await;
     }
 
     let cache_lock = {
@@ -2187,7 +2287,7 @@ async fn stream_cached_transcode(
     if tokio::fs::metadata(cache_path).await.is_ok() {
         drop(cache_guard);
         release_transcode_lock(cache_path, &cache_lock).await;
-        return stream_file_range(req, cache_path, etag_key, "audio/mpeg").await;
+        return stream_file_range(req, cache_path, etag_key, format.content_type()).await;
     }
     let Some(parent) = cache_path.parent() else {
         drop(cache_guard);
@@ -2228,17 +2328,35 @@ async fn stream_cached_transcode(
     } else {
         command.args(["-map", "0:a:0"]);
     }
+    match format {
+        TranscodeFormat::Mp3 => {
+            command.args([
+                "-b:a",
+                &bitrate_arg,
+                "-f",
+                "mp3",
+                "-c:a",
+                "libmp3lame",
+                "-compression_level",
+                "0",
+                "-write_xing",
+                "0",
+            ]);
+        }
+        TranscodeFormat::SonosFlac {
+            sample_rate,
+            bit_depth,
+        } => {
+            let sample_format = if bit_depth > 16 { "s32" } else { "s16" };
+            command
+                .args(["-vn", "-c:a", "flac", "-ar"])
+                .arg(sample_rate.to_string())
+                .args(["-sample_fmt", sample_format, "-bits_per_raw_sample"])
+                .arg(bit_depth.to_string())
+                .args(["-compression_level", "5", "-f", "flac"]);
+        }
+    }
     command.args([
-        "-b:a",
-        &bitrate_arg,
-        "-f",
-        "mp3",
-        "-c:a",
-        "libmp3lame",
-        "-compression_level",
-        "0",
-        "-write_xing",
-        "0",
         "-flush_packets",
         "1",
         "-threads",
@@ -2360,7 +2478,7 @@ async fn stream_cached_transcode(
     });
 
     HttpResponse::Ok()
-        .insert_header((header::CONTENT_TYPE, "audio/mpeg"))
+        .insert_header((header::CONTENT_TYPE, format.content_type()))
         .insert_header((header::CACHE_CONTROL, "no-store"))
         .streaming(stream)
 }
@@ -2535,8 +2653,50 @@ async fn stream_song_profile(
             &format!("{}-{}k", cache_identity, output_bitrate),
             output_bitrate,
             audio_effect,
+            TranscodeFormat::Mp3,
         )
         .await
+    }
+}
+
+/// Streams Sonos-compatible audio: the original file when Sonos plays it
+/// natively, else FLAC within 48 kHz/24-bit.
+pub(crate) async fn stream_sonos_compatible(
+    req: &HttpRequest,
+    song_key: &str,
+    lifecycle: &web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    let plan = lifecycle
+        .cache()
+        .await
+        .ok()
+        .and_then(|cache| cache.song(song_key).map(sonos_stream_plan));
+    let Some(plan) = plan else {
+        return not_found("Song not found.", "song_not_found");
+    };
+    let (song_id, song_path) = match resolve_stream_song_with_refresh(song_key, lifecycle).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
+    match plan.convert_to {
+        None => stream_file_range(req, &song_path, &song_id, plan.mime_type).await,
+        Some((sample_rate, bit_depth)) => {
+            let format = TranscodeFormat::SonosFlac {
+                sample_rate,
+                bit_depth,
+            };
+            let cache_path = transcode_cache_path_for(&song_id, &song_path, 0, format);
+            stream_cached_transcode(
+                req,
+                &song_path,
+                &cache_path,
+                &format!("{song_id}-sonos-{sample_rate}-{bit_depth}"),
+                0,
+                StreamAudioEffect::None,
+                format,
+            )
+            .await
+        }
     }
 }
 

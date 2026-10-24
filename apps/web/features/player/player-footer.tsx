@@ -15,7 +15,7 @@ import {
 import { AudioLines, ListMusic, Maximize2, MicVocal } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
 import {
@@ -59,6 +59,8 @@ export function PlayerFooter({
   title,
   explicit,
   volume,
+  zonePicker,
+  zoneLabel,
 }: {
   albumCover?: string;
   albumId: string;
@@ -93,6 +95,10 @@ export function PlayerFooter({
   title: string;
   explicit: boolean;
   volume: number;
+  /** Roon-style zone picker, shown next to volume. */
+  zonePicker?: ReactNode;
+  /** Name of the remote zone being controlled, if any. */
+  zoneLabel?: string | null;
 }) {
   return (
     <SongMenu
@@ -120,6 +126,7 @@ export function PlayerFooter({
             songId={songId}
             title={title}
             explicit={explicit}
+            zoneLabel={zoneLabel ?? null}
           />
           <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
             <PlaybackControls
@@ -168,6 +175,11 @@ export function PlayerFooter({
                 <AudioLines className="h-4 w-4" />
               </ActionButton>
             </div>
+            {zonePicker && (
+              <div className="relative z-30" data-zone-picker-slot>
+                {zonePicker}
+              </div>
+            )}
             <div className="hidden sm:block">
               <VolumeControl
                 muted={muted}
@@ -220,6 +232,7 @@ function TrackInfo({
   title,
   explicit,
   songId,
+  zoneLabel,
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
@@ -227,6 +240,7 @@ function TrackInfo({
   title: string;
   explicit: boolean;
   songId: string;
+  zoneLabel: string | null;
 }) {
   return (
     <section className="flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden md:justify-self-start">
@@ -249,8 +263,13 @@ function TrackInfo({
           {explicit && <ExplicitBadge />}
           <ArtistCreditLinks credits={artistCredits} />
         </span>
+        {zoneLabel && (
+          <span className="block truncate text-[11px] font-medium text-emerald-300">
+            Playing on {zoneLabel}
+          </span>
+        )}
       </div>
-      <FavoriteButton songId={songId} songName={title} />
+      {songId && <FavoriteButton songId={songId} songName={title} />}
     </section>
   );
 }

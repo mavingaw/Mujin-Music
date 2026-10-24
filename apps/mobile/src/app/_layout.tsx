@@ -22,6 +22,7 @@ import { MiniPlayer } from "@/components/mini-player";
 import { ActionDrawerProvider } from "@/components/action-drawer";
 import { PlayerProvider } from "@/providers/player-provider";
 import { SessionProvider, useSession } from "@/providers/session-provider";
+import { ZonesProvider } from "@/providers/zones-provider";
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -118,32 +119,40 @@ export default function RootLayout() {
         <NativeQueryLifecycle />
         <SessionProvider>
           <PlayerProvider>
-            <ActionDrawerProvider>
-              <ThemeProvider value={theme}>
-                <StatusBar style="light" />
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    contentStyle: { backgroundColor: palette.background },
-                    animation: "slide_from_right",
-                  }}
-                >
-                  <Stack.Screen name="index" options={{ animation: "fade" }} />
-                  <Stack.Screen name="(tabs)" options={{ animation: "fade" }} />
-                  <Stack.Screen
-                    name="player"
-                    options={{
-                      presentation: "fullScreenModal",
-                      animation: "slide_from_bottom",
-                      animationDuration: 180,
-                      gestureEnabled: true,
+            <ZonesProvider>
+              <ActionDrawerProvider>
+                <ThemeProvider value={theme}>
+                  <StatusBar style="light" />
+                  <Stack
+                    screenOptions={{
+                      headerShown: false,
+                      contentStyle: { backgroundColor: palette.background },
+                      animation: "slide_from_right",
                     }}
-                  />
-                </Stack>
-                <SessionNavigationGuard />
-                <PersistentMiniPlayer />
-              </ThemeProvider>
-            </ActionDrawerProvider>
+                  >
+                    <Stack.Screen
+                      name="index"
+                      options={{ animation: "fade" }}
+                    />
+                    <Stack.Screen
+                      name="(tabs)"
+                      options={{ animation: "fade" }}
+                    />
+                    <Stack.Screen
+                      name="player"
+                      options={{
+                        presentation: "fullScreenModal",
+                        animation: "slide_from_bottom",
+                        animationDuration: 180,
+                        gestureEnabled: true,
+                      }}
+                    />
+                  </Stack>
+                  <SessionNavigationGuard />
+                  <PersistentMiniPlayer />
+                </ThemeProvider>
+              </ActionDrawerProvider>
+            </ZonesProvider>
           </PlayerProvider>
         </SessionProvider>
       </QueryClientProvider>

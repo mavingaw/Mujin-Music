@@ -18,4 +18,8 @@ pub mod recommendation;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod settings;
+#[cfg(feature = "server")]
+pub mod sonos;
 pub mod startup;
+#[cfg(feature = "server")]
+pub mod zones;

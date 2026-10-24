@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
@@ -85,6 +86,7 @@ export function FullscreenPlayer({
   explicit,
   timedLyrics,
   volume,
+  zonePicker,
 }: {
   activeLine: number;
   activeLineRef: RefObject<HTMLElement | null>;
@@ -129,6 +131,8 @@ export function FullscreenPlayer({
   explicit: boolean;
   timedLyrics: TimedLyric[];
   volume: number;
+  /** Zone picker; on phones this is where zones are reached. */
+  zonePicker?: ReactNode;
 }) {
   const dragStart = useRef<number | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -354,6 +358,7 @@ export function FullscreenPlayer({
                   >
                     <AudioLines className="h-4 w-4" />
                   </ActionButton>
+                  {zonePicker}
                   <div className="hidden sm:block">
                     <VolumeControl
                       muted={muted}
