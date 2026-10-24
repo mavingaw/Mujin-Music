@@ -2,10 +2,13 @@
 
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
-import type { Player } from "./player-api";
+import { usePlayer, type Player } from "./player-api";
+import { radioSectionStart } from "@parson/music-sdk";
+import { RadioQueueSection, RadioThumbs } from "./radio/radio-controls";
 import { ListMusic, Play, X } from "lucide-react";
 import Image from "next/image";
 import {
+  Fragment,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
@@ -91,16 +94,19 @@ export default function PlayerQueue({
           queue={queue}
         />
       ) : (
-        <div className="grid flex-1 place-items-center px-6 text-center">
-          <div>
-            <ListMusic className="mx-auto h-7 w-7 text-zinc-700" />
-            <p className="mt-3 text-sm font-medium text-zinc-300">
-              Nothing queued
-            </p>
-            <p className="mt-1 text-xs leading-5 text-zinc-600">
-              Play a song or album to get started.
-            </p>
+        <div className="flex flex-1 flex-col overflow-y-auto p-2">
+          <div className="grid flex-1 place-items-center px-6 py-6 text-center">
+            <div>
+              <ListMusic className="mx-auto h-7 w-7 text-zinc-700" />
+              <p className="mt-3 text-sm font-medium text-zinc-300">
+                Nothing queued
+              </p>
+              <p className="mt-1 text-xs leading-5 text-zinc-600">
+                Play a song or album, or start a station.
+              </p>
+            </div>
           </div>
+          <RadioQueueSection hasPicks={false} />
         </div>
       )}
     </aside>
@@ -126,6 +132,11 @@ export function PlayerQueueList({
     index: number;
   } | null>(null);
   const suppressClick = useRef(false);
+  const { currentIndex } = usePlayer();
+  const radioStart = radioSectionStart(
+    queue.map((item) => item.origin),
+    currentIndex,
+  );
 
   const move = (from: number, to: number) => {
     if (from === to || from < 0 || to < 0 || to >= queue.length) {
@@ -165,100 +176,122 @@ export function PlayerQueueList({
     >
       {queue.map((item, index) => {
         const active = item.song.id === currentSongId;
+        const radioPick = radioStart >= 0 && index >= radioStart;
         const cover = item.album.cover_url
           ? `${getBaseURL()}/media/images/${encodeURIComponent(item.album.cover_url)}`
           : defaultCover;
         return (
-          <button
-            aria-current={active ? "true" : undefined}
-            aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}. Drag to reorder, or use the arrow keys.`}
-            className={`group relative flex h-15.5 w-full cursor-grab items-center gap-3 rounded-xl p-2 text-left transition-colors active:cursor-grabbing ${
-              active ? "bg-white/9" : "hover:bg-white/5"
-            } ${draggedIndex === index ? "opacity-60" : ""}`}
-            data-native-drag="true"
-            draggable
-            key={`${item.song.id}-${index}`}
-            onClick={() => {
-              if (!suppressClick.current) {
-                onSelect(index);
-              }
-            }}
-            onDragEnd={() => {
-              setDraggedIndex(null);
-              setDropTarget(null);
-              window.setTimeout(() => {
-                suppressClick.current = false;
-              }, 0);
-            }}
-            onDragOver={(event) => {
-              if (draggedIndex === null) {
-                return;
-              }
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              const bounds = event.currentTarget.getBoundingClientRect();
-              setDropTarget({
-                edge:
-                  event.clientY < bounds.top + bounds.height / 2
-                    ? "before"
-                    : "after",
-                index,
-              });
-            }}
-            onDragStart={(event) => {
-              suppressClick.current = true;
-              setDraggedIndex(index);
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", String(index));
-            }}
-            onDrop={(event) => drop(event, index)}
-            onKeyDown={(event) => moveWithKeyboard(event, index)}
-            type="button"
-          >
-            {dropTarget?.index === index && draggedIndex !== index && (
-              <span
-                aria-hidden="true"
-                className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-white ${
-                  dropTarget.edge === "before" ? "top-0" : "bottom-0"
-                }`}
-              />
-            )}
-            <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
-              <Image
-                alt=""
-                className="object-cover"
-                draggable={false}
-                fill
-                sizes="44px"
-                src={cover}
-              />
-              <span className="absolute inset-0 hidden place-items-center bg-black/50 group-hover:grid">
-                <Play className="h-4 w-4 fill-white" />
-              </span>
-            </div>
-            <div className="min-w-0 flex-1">
-              <p
-                className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
+          <Fragment key={`${item.song.id}-${index}`}>
+            {index === radioStart && <RadioQueueSection hasPicks />}
+            <div className="relative">
+              <button
+                aria-current={active ? "true" : undefined}
+                aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}. Drag to reorder, or use the arrow keys.`}
+                className={`group relative flex h-15.5 w-full cursor-grab items-center gap-3 rounded-xl p-2 text-left transition-colors active:cursor-grabbing ${
+                  active ? "bg-white/9" : "hover:bg-white/5"
+                } ${draggedIndex === index ? "opacity-60" : ""} ${radioPick ? "pr-22" : ""}`}
+                data-native-drag="true"
+                draggable
+                onClick={() => {
+                  if (!suppressClick.current) {
+                    onSelect(index);
+                  }
+                }}
+                onDragEnd={() => {
+                  setDraggedIndex(null);
+                  setDropTarget(null);
+                  window.setTimeout(() => {
+                    suppressClick.current = false;
+                  }, 0);
+                }}
+                onDragOver={(event) => {
+                  if (draggedIndex === null) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  setDropTarget({
+                    edge:
+                      event.clientY < bounds.top + bounds.height / 2
+                        ? "before"
+                        : "after",
+                    index,
+                  });
+                }}
+                onDragStart={(event) => {
+                  suppressClick.current = true;
+                  setDraggedIndex(index);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", String(index));
+                }}
+                onDrop={(event) => drop(event, index)}
+                onKeyDown={(event) => moveWithKeyboard(event, index)}
+                type="button"
               >
-                <SongTitle title={item.song.name || "Untitled song"} />
-              </p>
-              <p className="truncate text-xs text-zinc-500">
-                {isExplicitSongTitle(item.song.name) && <ExplicitBadge />}
-                {trackArtistCredit({
-                  albumArtist: item.artist.name,
-                  albumType: item.album.primary_type,
-                  contributingArtists: item.song.contributing_artists ?? [],
-                  trackArtist: item.song.artist,
-                }) ||
-                  item.artist.name ||
-                  item.song.artist ||
-                  "Unknown artist"}
-              </p>
+                {dropTarget?.index === index && draggedIndex !== index && (
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-white ${
+                      dropTarget.edge === "before" ? "top-0" : "bottom-0"
+                    }`}
+                  />
+                )}
+                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
+                  <Image
+                    alt=""
+                    className="object-cover"
+                    draggable={false}
+                    fill
+                    sizes="44px"
+                    src={cover}
+                  />
+                  <span className="absolute inset-0 hidden place-items-center bg-black/50 group-hover:grid">
+                    <Play className="h-4 w-4 fill-white" />
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
+                  >
+                    <SongTitle title={item.song.name || "Untitled song"} />
+                  </p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {radioPick && item.reason && (
+                      <span className="sr-only">
+                        Radio pick, {item.reason}.{" "}
+                      </span>
+                    )}
+                    {isExplicitSongTitle(item.song.name) && <ExplicitBadge />}
+                    {trackArtistCredit({
+                      albumArtist: item.artist.name,
+                      albumType: item.album.primary_type,
+                      contributingArtists: item.song.contributing_artists ?? [],
+                      trackArtist: item.song.artist,
+                    }) ||
+                      item.artist.name ||
+                      item.song.artist ||
+                      "Unknown artist"}
+                  </p>
+                </div>
+                {active && (
+                  <span className="mr-2 h-2 w-2 rounded-full bg-white" />
+                )}
+              </button>
+              {radioPick && (
+                <RadioThumbs
+                  className="absolute right-2 top-1/2 -translate-y-1/2"
+                  index={index}
+                  label={item.song.name || "this song"}
+                  liked={item.liked}
+                  size="sm"
+                />
+              )}
             </div>
-            {active && <span className="mr-2 h-2 w-2 rounded-full bg-white" />}
-          </button>
+          </Fragment>
         );
       })}
+      {radioStart < 0 && <RadioQueueSection hasPicks={false} />}
     </div>
   );
 }

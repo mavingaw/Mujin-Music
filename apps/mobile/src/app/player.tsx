@@ -4,6 +4,7 @@ import {
   addFavoriteSong,
   findLyrics,
   isFavoriteSong,
+  radioStationLabel,
   removeFavoriteSong,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -71,6 +72,12 @@ import { PlaylistPicker } from "@/components/playlist-picker";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
 import { CastOutputButton } from "@/components/cast-output-button";
+import {
+  RadioNotices,
+  RadioQueueHeader,
+  RadioThumbs,
+  StartRadioAction,
+} from "@/components/radio-ui";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -178,6 +185,13 @@ function NowPlayingPanel({
       />
       <View style={styles.songInfo}>
         <View style={{ flex: 1 }}>
+          {player.radio.currentIsPick ? (
+            <Text numberOfLines={1} style={styles.radioLabel}>
+              {player.radio.seed && player.radio.seed.kind !== "song"
+                ? radioStationLabel(player.radio.seed)
+                : `Radio · ${radioStationLabel(player.radio.seed)}`}
+            </Text>
+          ) : null}
           <Text
             accessibilityLabel={`View album ${song.album_object?.name ?? song.name}`}
             accessibilityRole={song.album_object?.id ? "button" : undefined}
@@ -225,7 +239,13 @@ function NowPlayingPanel({
           />
         </Pressable>
       </View>
+      {online ? (
+        <View style={styles.feedbackRow}>
+          <RadioThumbs index={player.currentIndex} name={song.name} />
+        </View>
+      ) : null}
       <PlaybackTimeline onSeek={player.seek} />
+      {online ? <RadioNotices /> : null}
       {notice ? (
         <Text accessibilityRole="alert" style={styles.playbackError}>
           {notice}
@@ -392,6 +412,7 @@ function PlaybackTimeline({ onSeek }: { onSeek: (seconds: number) => void }) {
 }
 
 function QueuePanel({ player }: { player: Player }) {
+  const sectionStart = player.radio.sectionStart;
   return (
     <View style={styles.panel}>
       {player.currentIndex < player.queue.length - 1 ? (
@@ -406,26 +427,40 @@ function QueuePanel({ player }: { player: Player }) {
       <FlatList
         data={player.queue}
         contentContainerStyle={{ paddingVertical: 10 }}
-        getItemLayout={(_data, index) => ({
-          index,
-          length: 64,
-          offset: 64 * index,
-        })}
         keyExtractor={(item, index) => `${item.id}-${index}`}
         removeClippedSubviews
-        renderItem={({ item, index }) => (
-          <SongRow
-            song={item}
-            queue={player.queue}
-            index={index}
-            onRemove={
-              index === player.currentIndex
-                ? undefined
-                : () => player.removeFromQueue(index)
-            }
-            removeLabel="Remove from queue"
-          />
-        )}
+        ListFooterComponent={
+          sectionStart < 0 ? <RadioQueueHeader hasPicks={false} /> : null
+        }
+        renderItem={({ item, index }) => {
+          const radioPick = sectionStart >= 0 && index >= sectionStart;
+          const row = (
+            <SongRow
+              song={item}
+              queue={player.queue}
+              index={index}
+              onRemove={
+                index === player.currentIndex
+                  ? undefined
+                  : () => player.removeFromQueue(index)
+              }
+              removeLabel="Remove from queue"
+            />
+          );
+          return (
+            <>
+              {index === sectionStart ? <RadioQueueHeader hasPicks /> : null}
+              {radioPick ? (
+                <View style={styles.radioRow}>
+                  <View style={{ flex: 1 }}>{row}</View>
+                  <RadioThumbs index={index} name={item.name} size={18} />
+                </View>
+              ) : (
+                row
+              )}
+            </>
+          );
+        }}
       />
     </View>
   );
@@ -631,6 +666,12 @@ function PlayerDrawers({
             onActionsClose();
           }}
         />
+        {online ? (
+          <StartRadioAction
+            seed={{ kind: "song", id: song.id }}
+            onStarted={onActionsClose}
+          />
+        ) : null}
         {online && song.album_object?.id ? (
           <DrawerAction
             icon={Disc3}
@@ -966,6 +1007,16 @@ const styles = StyleSheet.create({
   },
   panelText: { color: "white", fontWeight: "800" },
   panel: { flex: 1, paddingTop: 18 },
+  radioLabel: {
+    color: "#7dd3fc",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  feedbackRow: { flexDirection: "row", marginTop: -4, marginLeft: -8 },
+  radioRow: { flexDirection: "row", alignItems: "center", paddingRight: 12 },
   lyricsPanel: {
     overflow: "hidden",
     backgroundColor: "#111114",

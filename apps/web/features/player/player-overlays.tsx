@@ -12,12 +12,14 @@ import {
   ListMusic,
   MicVocal,
   Minimize2,
+  Radio,
 } from "lucide-react";
 import {
   memo,
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
@@ -83,6 +85,8 @@ export function FullscreenPlayer({
   songId,
   title,
   explicit,
+  feedback,
+  radioLabel,
   timedLyrics,
   volume,
 }: {
@@ -127,6 +131,10 @@ export function FullscreenPlayer({
   songId: string;
   title: string;
   explicit: boolean;
+  /** Thumbs up / down for the current track. */
+  feedback?: ReactNode;
+  /** "Radio · Playing X radio" when the current track is a Radio pick. */
+  radioLabel?: string | null;
   timedLyrics: TimedLyric[];
   volume: number;
 }) {
@@ -296,6 +304,12 @@ export function FullscreenPlayer({
                     />
                   </div>
                   <div className="w-full min-w-0 max-w-95">
+                    {radioLabel && (
+                      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-sky-300/90">
+                        <Radio aria-hidden="true" className="h-3.5 w-3.5" />
+                        <span className="truncate">{radioLabel}</span>
+                      </p>
+                    )}
                     <h1
                       className="wrap-break-word text-2xl font-semibold leading-tight tracking-tight md:text-[32px]"
                       title={title}
@@ -309,6 +323,7 @@ export function FullscreenPlayer({
                         onNavigate={onClose}
                       />
                     </p>
+                    {feedback && <div className="mt-4 flex">{feedback}</div>}
                   </div>
                 </div>
               )}

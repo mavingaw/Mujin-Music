@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
 import AlbumMenu from "@/features/library/album-menu";
+import { StartRadioButton } from "@/features/player/radio/radio-controls";
 import { songCreditsArtist } from "@/features/library/artist-appearance";
 
 type ArtistDetailsProps = {
@@ -132,9 +133,17 @@ export default function ArtistDetails({
               />
             </div>
           )}
-          <h1 className="min-w-0 wrap-break-word text-4xl font-black leading-none text-white sm:text-6xl">
-            {artist.name}
-          </h1>
+          <div className="min-w-0">
+            <h1 className="min-w-0 wrap-break-word text-4xl font-black leading-none text-white sm:text-6xl">
+              {artist.name}
+            </h1>
+            <div className="mt-4">
+              <StartRadioButton
+                label={`Start ${artist.name} radio`}
+                seed={{ kind: "artist", id: artist.id }}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="space-y-12">

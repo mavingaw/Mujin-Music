@@ -1,6 +1,17 @@
 import {
   createPlaybackQueue,
+  defaultRadioSettings,
   fillReverbImpulseChannel,
+  getRadioPicks,
+  getRadioSettings,
+  radioSeedParams,
+  radioSkipReasonEvent,
+  shouldContinueWithRadio,
+  updateRadioSettings,
+  type RadioSeed,
+  type RadioSettings,
+  type RadioSkipReasonId,
+  type ResolvedRadioSeed,
   getPlayerAudioPreset,
   playerAudioPresets,
   recordPlaybackEvent,
@@ -64,7 +75,13 @@ import {
   serializePlayerState,
 } from "@/lib/player-storage";
 import { useSession } from "@/providers/session-provider";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  extendWithRadio,
+  isCurrentRadioPick,
+  needsRadioTopUp,
+  radioStartIndex,
+} from "@/lib/radio-queue";
 import { useCastOutput } from "@/hooks/use-cast-output";
 
 type RepeatMode = "none" | "one" | "all";
@@ -96,7 +113,33 @@ type PlaybackControls = {
   seek: (seconds: number) => void;
 };
 
+export type PlayerRadio = {
+  /** Continue with Radio picks once the queue runs out. */
+  enabled: boolean;
+  /** Show the "Coming up" notice before a Radio pick plays. */
+  comingUpNotice: boolean;
+  /** What the current station is built around, when known. */
+  seed: ResolvedRadioSeed | null;
+  /** Index where the Radio section starts in `queue`, or -1. */
+  sectionStart: number;
+  /** The current track is a Radio pick. */
+  currentIsPick: boolean;
+  liked: ReadonlySet<string>;
+  /** A Radio pick skipped early, awaiting an optional reason. */
+  pendingSkip: LibrarySong | null;
+  answerSkip: (reason: RadioSkipReasonId) => void;
+  dismissSkip: () => void;
+  setEnabled: (enabled: boolean) => void;
+  setComingUpNotice: (visible: boolean) => void;
+  /** Starts a station; resolves to its name, or null when nothing plays. */
+  start: (seed: RadioSeed) => Promise<string | null>;
+  thumbsUp: (index: number) => void;
+  /** Skips the current track, or replaces an upcoming Radio pick. */
+  thumbsDown: (index: number) => void;
+};
+
 type PlayerContextValue = {
+  radio: PlayerRadio;
   current: LibrarySong | null;
   currentIndex: number;
   error: string | null;
@@ -540,6 +583,29 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   const playbackSessionId = useRef("");
   const playbackEventSequence = useRef(0);
   const telemetry = useRef(newPlaybackTelemetry());
+  const radioSettingsQuery = useQuery({
+    queryKey: ["radio-settings"],
+    queryFn: getRadioSettings,
+    enabled: session.phase === "ready" && Boolean(session.claims?.sub),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const radioSettings = radioSettingsQuery.data ?? defaultRadioSettings;
+  const radioEnabledRef = useRef(radioSettings.enabled);
+  const [radioIds, setRadioIdsState] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const radioIdsRef = useRef<ReadonlySet<string>>(radioIds);
+  const [radioSeed, setRadioSeedState] = useState<ResolvedRadioSeed | null>(
+    null,
+  );
+  const radioSeedRef = useRef<ResolvedRadioSeed | null>(null);
+  const [likedIds, setLikedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [pendingSkip, setPendingSkip] = useState<LibrarySong | null>(null);
+  const rejectedSongs = useRef(new Set<string>());
+  const radioTopUp = useRef({ inFlight: false, exhaustedKey: "" });
 
   const [queue, setQueue] = useState<LibrarySong[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -635,6 +701,40 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   }, [session.claims, session.phase]);
 
   const current = queue[currentIndex] ?? null;
+  const queueRef = useRef(queue);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+  useEffect(() => {
+    radioEnabledRef.current = radioSettings.enabled;
+  }, [radioSettings.enabled]);
+  const setRadioIds = useCallback((ids: ReadonlySet<string>) => {
+    radioIdsRef.current = ids;
+    setRadioIdsState(ids);
+  }, []);
+  const addRadioIds = useCallback(
+    (songs: LibrarySong[]) => {
+      if (!songs.length) return;
+      setRadioIds(
+        new Set([...radioIdsRef.current, ...songs.map((song) => song.id)]),
+      );
+    },
+    [setRadioIds],
+  );
+  const setRadioSeed = useCallback((seed: ResolvedRadioSeed | null) => {
+    radioSeedRef.current = seed;
+    setRadioSeedState(seed);
+  }, []);
+  const resetRadio = useCallback(() => {
+    setRadioIds(new Set());
+    setRadioSeed(null);
+    radioTopUp.current.exhaustedKey = "";
+  }, [setRadioIds, setRadioSeed]);
+  const originFor = useCallback(
+    (song: LibrarySong | undefined): "generated" | "manual" =>
+      song && radioIdsRef.current.has(song.id) ? "generated" : "manual",
+    [],
+  );
   const preset = getPlayerAudioPreset(audioPreset);
   const audioPresetsEnabled = Platform.OS !== "android";
   const effectivePreset = audioPresetsEnabled
@@ -681,6 +781,26 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       session.claims?.sub,
       session.phase,
     ],
+  );
+
+  /** Feedback about any song, e.g. a thumbs up on an upcoming Radio pick. */
+  const sendSongEvent = useCallback(
+    (songId: string, eventType: PlaybackEventType) => {
+      if (!songId || !session.claims?.sub || session.phase === "offline")
+        return;
+      if (!playbackSessionId.current) {
+        playbackSessionId.current = `mobile-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      }
+      playbackEventSequence.current += 1;
+      void recordPlaybackEvent({
+        event_key: `${playbackSessionId.current}:${songId}:${eventType}:${playbackEventSequence.current}`,
+        event_type: eventType,
+        session_id: playbackSessionId.current,
+        song_id: songId,
+        source: "generated",
+      }).catch(() => {});
+    },
+    [session.claims?.sub, session.phase],
   );
 
   const ensureGraph = useCallback(() => {
@@ -847,26 +967,30 @@ export function PlayerProvider({ children }: PropsWithChildren) {
         0,
         songs.findIndex((item) => item.id === song.id),
       );
-      loadAt(songs, index);
+      // Tapping a song inside the current queue keeps its Radio section.
+      if (songs !== queueRef.current) resetRadio();
+      loadAt(songs, index, true, false, originFor(songs[index]));
     },
-    [loadAt],
+    [loadAt, originFor, resetRadio],
   );
 
   const playAt = useCallback(
-    (index: number) => loadAt(queue, index, true, true, "manual"),
-    [loadAt, queue],
+    (index: number) =>
+      loadAt(queue, index, true, true, originFor(queue[index])),
+    [loadAt, originFor, queue],
   );
 
   const playShuffled = useCallback(
     (songs: LibrarySong[]) => {
       if (!songs.length) return;
+      resetRadio();
       originalQueue.current = [...songs];
       const selected = Math.floor(Math.random() * songs.length);
       const shuffled = shuffledQueue(songs, selected);
       setShuffle(true);
       loadAt(shuffled.queue, shuffled.currentIndex, true, true);
     },
-    [loadAt],
+    [loadAt, resetRadio],
   );
 
   const addNext = useCallback(
@@ -1014,16 +1138,26 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       isEarlySkip(telemetry.current.listenedSeconds, duration)
     ) {
       sendPlaybackEvent("early_skip");
+      if (current) setPendingSkip(current);
     }
     if (nextIndex < queue.length)
-      loadAt(queue, nextIndex, true, true, playbackOrigin.current);
+      loadAt(queue, nextIndex, true, true, originFor(queue[nextIndex]));
     else if (repeat === "all")
-      loadAt(queue, 0, true, true, playbackOrigin.current);
+      loadAt(queue, 0, true, true, originFor(queue[0]));
     else {
       desiredPlaying.current = false;
       setIsPlaying(false);
     }
-  }, [currentIndex, duration, loadAt, queue, repeat, sendPlaybackEvent]);
+  }, [
+    current,
+    currentIndex,
+    duration,
+    loadAt,
+    originFor,
+    queue,
+    repeat,
+    sendPlaybackEvent,
+  ]);
 
   const seek = useCallback(
     (seconds: number) => {
@@ -1051,13 +1185,14 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       sendPlaybackEvent("early_skip");
     }
     if (previousIndex >= 0)
-      loadAt(queue, previousIndex, true, true, playbackOrigin.current);
+      loadAt(queue, previousIndex, true, true, originFor(queue[previousIndex]));
     else seek(0);
   }, [
     currentIndex,
     currentTime,
     duration,
     loadAt,
+    originFor,
     queue,
     seek,
     sendPlaybackEvent,
@@ -1105,6 +1240,61 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     setShuffle(true);
   }, [currentIndex, queue, shuffle]);
 
+  /** Extends a finished queue with a Radio station when Radio is on. */
+  const continueWithRadio = useCallback(() => {
+    desiredPlaying.current = false;
+    const endingSongId = queue[currentIndex]?.id;
+    if (
+      !endingSongId ||
+      session.phase !== "ready" ||
+      !shouldContinueWithRadio({
+        enabled: radioEnabledRef.current,
+        repeating: repeat !== "none",
+      })
+    )
+      return;
+    const request = ++radioRequest.current;
+    const seed: RadioSeed =
+      radioIdsRef.current.has(endingSongId) && radioSeedRef.current
+        ? radioSeedRef.current
+        : { kind: "song", id: endingSongId };
+    const endingQueue = queue;
+    const endingIndex = currentIndex;
+    void createPlaybackQueue({
+      ...radioSeedParams(seed),
+      exclude_song_ids: [
+        ...new Set([
+          ...endingQueue.slice(-80).map((song) => song.id),
+          ...rejectedSongs.current,
+        ]),
+      ].slice(-100),
+      generated_items: 20,
+      source: "radio",
+    })
+      .then((generated) => {
+        if (request !== radioRequest.current) return;
+        const songs = playableQueueSongs(generated.items);
+        const extended = extendWithRadio(endingQueue, endingIndex, songs);
+        if (extended.nextIndex >= extended.queue.length) return;
+        addRadioIds(songs);
+        if (generated.seed) setRadioSeed(generated.seed);
+        originalQueue.current = shuffle
+          ? [...originalQueue.current, ...songs]
+          : [...extended.queue];
+        loadAt(extended.queue, extended.nextIndex, true, true, "generated");
+      })
+      .catch(() => {});
+  }, [
+    addRadioIds,
+    currentIndex,
+    loadAt,
+    queue,
+    repeat,
+    session.phase,
+    setRadioSeed,
+    shuffle,
+  ]);
+
   const handleEnded = useCallback(() => {
     setIsPlaying(false);
     if (
@@ -1117,38 +1307,234 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     if (repeat === "one")
       loadAt(queue, currentIndex, true, true, playbackOrigin.current);
     else if (currentIndex + 1 < queue.length)
-      loadAt(queue, currentIndex + 1, true, true, playbackOrigin.current);
+      loadAt(
+        queue,
+        currentIndex + 1,
+        true,
+        true,
+        originFor(queue[currentIndex + 1]),
+      );
     else if (repeat === "all")
-      loadAt(queue, 0, true, true, playbackOrigin.current);
-    else if (current?.id && session.phase === "ready") {
-      desiredPlaying.current = false;
-      const endingSongId = current.id;
-      const request = ++radioRequest.current;
-      void createPlaybackQueue({
-        exclude_song_ids: queue.slice(-50).map((song) => song.id),
-        generated_items: 20,
-        seed_song_id: endingSongId,
-        source: "radio",
-      })
-        .then((generated) => {
-          if (request !== radioRequest.current || current?.id !== endingSongId)
-            return;
-          const songs = playableQueueSongs(generated.items);
-          if (!songs.length) return;
-          originalQueue.current = songs;
-          setShuffle(false);
-          loadAt(songs, 0, true, true, "generated");
-        })
-        .catch(() => {});
-    } else desiredPlaying.current = false;
+      loadAt(queue, 0, true, true, originFor(queue[0]));
+    else continueWithRadio();
   }, [
-    current,
+    continueWithRadio,
     currentIndex,
     duration,
     loadAt,
+    originFor,
     queue,
     repeat,
     sendPlaybackEvent,
+  ]);
+
+  /** Appends Radio picks to the Radio section at the end of the queue. */
+  const requestRadioPicks = useCallback(
+    (limit: number) => {
+      const topUp = radioTopUp.current;
+      const base = queueRef.current;
+      const last = base.at(-1);
+      const key = `${base.length}:${last?.id ?? ""}:${radioSeedRef.current?.id ?? ""}`;
+      if (topUp.inFlight || topUp.exhaustedKey === key) return;
+      const seed: RadioSeed | null =
+        radioSeedRef.current ?? (last ? { kind: "song", id: last.id } : null);
+      topUp.inFlight = true;
+      void getRadioPicks({
+        seed,
+        exclude_song_ids: [
+          ...new Set([
+            ...base.map((song) => song.id),
+            ...rejectedSongs.current,
+          ]),
+        ],
+        limit,
+      })
+        .then((result) => {
+          const latest = queueRef.current;
+          if (!latest.length || latest[0]?.id !== base[0]?.id) return;
+          const known = new Set(latest.map((song) => song.id));
+          const songs = playableQueueSongs(result.items).filter(
+            (song) => !known.has(song.id),
+          );
+          if (!songs.length) {
+            topUp.exhaustedKey = key;
+            return;
+          }
+          addRadioIds(songs);
+          if (!radioSeedRef.current && result.seed) setRadioSeed(result.seed);
+          originalQueue.current = [...originalQueue.current, ...songs];
+          setQueue((items) =>
+            items[0]?.id === latest[0]?.id ? [...items, ...songs] : items,
+          );
+        })
+        .catch(() => {})
+        .finally(() => {
+          topUp.inFlight = false;
+        });
+    },
+    [addRadioIds, setRadioSeed],
+  );
+
+  const saveRadioSettings = useCallback(
+    (update: Partial<RadioSettings>) => {
+      const previous =
+        queryClient.getQueryData<RadioSettings>(["radio-settings"]) ??
+        defaultRadioSettings;
+      const optimistic = { ...previous, ...update };
+      queryClient.setQueryData(["radio-settings"], optimistic);
+      radioEnabledRef.current = optimistic.enabled;
+      void updateRadioSettings(update)
+        .then((saved) => {
+          queryClient.setQueryData(["radio-settings"], saved);
+          radioEnabledRef.current = saved.enabled;
+        })
+        .catch(() => {
+          queryClient.setQueryData(["radio-settings"], previous);
+          radioEnabledRef.current = previous.enabled;
+          setPlaybackError("Radio settings could not be saved.");
+        });
+    },
+    [queryClient],
+  );
+
+  const setRadioEnabled = useCallback(
+    (enabled: boolean) => {
+      saveRadioSettings({ enabled });
+      radioTopUp.current.exhaustedKey = "";
+      if (enabled) return;
+      const start = radioStartIndex(queue, radioIdsRef.current, currentIndex);
+      if (start < 0) return;
+      const removed = new Set(queue.slice(start).map((song) => song.id));
+      originalQueue.current = originalQueue.current.filter(
+        (song) => !removed.has(song.id),
+      );
+      setQueue(queue.slice(0, start));
+    },
+    [currentIndex, queue, saveRadioSettings],
+  );
+
+  const startRadio = useCallback(
+    async (seed: RadioSeed) => {
+      const created = await createPlaybackQueue({
+        ...radioSeedParams(seed),
+        explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
+        exclude_song_ids: [...rejectedSongs.current].slice(-100),
+        generated_items: 25,
+        source: "radio",
+      });
+      const songs = playableQueueSongs(created.items);
+      if (!songs.length) return null;
+      const generated = new Set(
+        created.items
+          .filter((item) => item.origin === "generated")
+          .map((item) => item.id),
+      );
+      setRadioIds(generated);
+      setRadioSeed(created.seed ?? null);
+      radioTopUp.current.exhaustedKey = "";
+      if (!radioEnabledRef.current) saveRadioSettings({ enabled: true });
+      // Starting Radio turns repeat and shuffle off, as in Roon.
+      setRepeat("none");
+      setShuffle(false);
+      originalQueue.current = [...songs];
+      const first = songs[0]!;
+      loadAt(
+        songs,
+        0,
+        true,
+        true,
+        generated.has(first.id) ? "generated" : "manual",
+      );
+      return created.seed?.name ?? first.name;
+    },
+    [loadAt, saveRadioSettings, setRadioIds, setRadioSeed],
+  );
+
+  const thumbsUp = useCallback(
+    (index: number) => {
+      const song = queue[index];
+      if (!song || likedIds.has(song.id)) return;
+      rejectedSongs.current.delete(song.id);
+      sendSongEvent(song.id, "thumbs_up");
+      setLikedIds(new Set([...likedIds, song.id]));
+    },
+    [likedIds, queue, sendSongEvent],
+  );
+
+  const thumbsDown = useCallback(
+    (index: number) => {
+      const song = queue[index];
+      if (!song) return;
+      rejectedSongs.current.add(song.id);
+      sendSongEvent(song.id, "disliked");
+      if (index === currentIndex) {
+        setPendingSkip(null);
+        if (currentIndex + 1 < queue.length)
+          loadAt(
+            queue,
+            currentIndex + 1,
+            true,
+            true,
+            originFor(queue[currentIndex + 1]),
+          );
+        else {
+          audioRef.current?.pause();
+          androidPlayerRef.current?.pause();
+          setIsPlaying(false);
+          continueWithRadio();
+        }
+        return;
+      }
+      const wasRadioPick = radioIdsRef.current.has(song.id);
+      removeFromQueue(index);
+      if (wasRadioPick && radioEnabledRef.current) {
+        radioTopUp.current.exhaustedKey = "";
+        requestRadioPicks(1);
+      }
+    },
+    [
+      continueWithRadio,
+      currentIndex,
+      loadAt,
+      originFor,
+      queue,
+      removeFromQueue,
+      requestRadioPicks,
+      sendSongEvent,
+    ],
+  );
+
+  const answerSkip = useCallback(
+    (reason: RadioSkipReasonId) => {
+      const skipped = pendingSkip?.id;
+      setPendingSkip(null);
+      if (!skipped) return;
+      if (reason === "dislike") rejectedSongs.current.add(skipped);
+      sendSongEvent(skipped, radioSkipReasonEvent(reason));
+    },
+    [pendingSkip?.id, sendSongEvent],
+  );
+  const dismissSkip = useCallback(() => setPendingSkip(null), []);
+
+  // Keep a few Radio picks queued while Radio is on.
+  useEffect(() => {
+    if (
+      !radioSettings.enabled ||
+      repeat !== "none" ||
+      cast.casting ||
+      session.phase !== "ready" ||
+      !needsRadioTopUp(queue, radioIds, currentIndex)
+    )
+      return;
+    requestRadioPicks(6);
+  }, [
+    cast.casting,
+    currentIndex,
+    queue,
+    radioIds,
+    radioSettings.enabled,
+    repeat,
+    requestRadioPicks,
     session.phase,
   ]);
 
@@ -1219,6 +1605,23 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   const value = useMemo<PlayerContextValue>(() => {
     const effectiveIndex = cast.casting ? cast.currentIndex : currentIndex;
     return {
+      radio: {
+        enabled: radioSettings.enabled,
+        comingUpNotice: radioSettings.coming_up_notice,
+        seed: radioSeed,
+        sectionStart: radioStartIndex(queue, radioIds, effectiveIndex),
+        currentIsPick: isCurrentRadioPick(queue, radioIds, effectiveIndex),
+        liked: likedIds,
+        pendingSkip,
+        answerSkip,
+        dismissSkip,
+        setEnabled: setRadioEnabled,
+        setComingUpNotice: (visible: boolean) =>
+          saveRadioSettings({ coming_up_notice: visible }),
+        start: startRadio,
+        thumbsUp,
+        thumbsDown,
+      },
       current: queue[effectiveIndex] ?? current,
       currentIndex: effectiveIndex,
       error: playbackError,
@@ -1245,6 +1648,19 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       setAudioPreset,
     };
   }, [
+    answerSkip,
+    dismissSkip,
+    likedIds,
+    pendingSkip,
+    radioIds,
+    radioSeed,
+    radioSettings.coming_up_notice,
+    radioSettings.enabled,
+    saveRadioSettings,
+    setRadioEnabled,
+    startRadio,
+    thumbsDown,
+    thumbsUp,
     addNext,
     addToQueue,
     clearUpcoming,

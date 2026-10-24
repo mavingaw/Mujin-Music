@@ -77,5 +77,28 @@ export function usePlaybackTelemetry({
     },
     [activeSong, audio, currentOrigin, persistedQueue, queryClient, userId],
   );
-  return { sendPlaybackEvent: send, telemetry };
+  /** Records feedback about any song (a Radio pick that has not played). */
+  const sendSongEvent = useCallback(
+    (songId: string, eventType: PlaybackEventType) => {
+      if (!songId || !userId) return Promise.resolve();
+      return recordPlaybackEvent({
+        event_key: `${sessionId.current}:${songId}:${eventType}:${Date.now()}`,
+        song_id: songId,
+        event_type: eventType,
+        session_id: sessionId.current,
+        source: "generated",
+      })
+        .then(() => {
+          void queryClient
+            .invalidateQueries({
+              queryKey: ["library", "feed"],
+              refetchType: "none",
+            })
+            .catch(() => {});
+        })
+        .catch(() => {});
+    },
+    [queryClient, userId],
+  );
+  return { sendPlaybackEvent: send, sendSongEvent, telemetry };
 }
