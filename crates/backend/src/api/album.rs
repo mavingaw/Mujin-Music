@@ -257,6 +257,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::scope("/albums")
             .service(get_random_album)
             .service(get_batch_album_info)
+            .service(crate::api::editorial::album_about)
+            .service(crate::api::editorial::put_album_note)
             .service(get_album_info),
     );
 }

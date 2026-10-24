@@ -6,9 +6,10 @@ import AdvancedSettings from "@/features/settings/advanced-settings";
 import LibrarySettings from "@/features/settings/library-settings";
 import UserForm from "@/features/settings/user-form";
 import { useSession } from "@/features/account/session-provider";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
+import EnrichmentSettings from "@/features/settings/enrichment-settings";
 
 const settingsTabs = [
   "account",
@@ -36,6 +37,15 @@ export default function SettingsPage() {
   const availableTabs = isAdmin
     ? settingsTabs
     : (["account", "playback", "data"] as const);
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    const allowed: readonly string[] = isAdmin
+      ? settingsTabs
+      : ["account", "playback", "data"];
+    if (requested && allowed.includes(requested)) {
+      setActiveTab(requested as SettingsTab);
+    }
+  }, [isAdmin]);
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -73,7 +83,14 @@ export default function SettingsPage() {
             <BitrateForm initialBitrate={session?.bitrate ?? 0} />
           )}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
-          {isAdmin && activeTab === "library" && <LibrarySettings />}
+          {isAdmin && activeTab === "library" && (
+            <>
+              <LibrarySettings />
+              <div className="mt-8">
+                <EnrichmentSettings />
+              </div>
+            </>
+          )}
           {isAdmin && activeTab === "users" && <UserForm />}
           {isAdmin && activeTab === "advanced" && <AdvancedSettings />}
         </div>

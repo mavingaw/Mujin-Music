@@ -198,7 +198,13 @@ impl TagCredits {
             TagField::Performer => {
                 for value in split_values(value) {
                     let (name, instrument) = split_performer(value);
-                    self.push("performer", &name, instrument);
+                    // Picard writes "Name (conductor)" and "Name (orchestra)"
+                    // into PERFORMER; those are roles, not instruments.
+                    match instrument.as_deref() {
+                        Some("conductor") => self.push("conductor", &name, None),
+                        Some("orchestra" | "ensemble") => self.push("ensemble", &name, None),
+                        _ => self.push("performer", &name, instrument),
+                    }
                 }
             }
             TagField::Label(priority) => {
@@ -332,6 +338,24 @@ mod tests {
                 ("remixer".to_string(), "Rémy Remixer"),
                 ("performer:piano".to_string(), "Piper Pianist"),
                 ("performer".to_string(), "Solo Singer"),
+            ]
+        );
+    }
+
+    #[test]
+    fn performer_roles_written_as_instruments_become_roles() {
+        let mut credits = TagCredits::default();
+        credits.apply_named("PERFORMER", "Gil Evans (conductor); LSO (Orchestra)");
+        let roles = credits
+            .credits
+            .iter()
+            .map(|credit| (credit.role_key(), credit.name.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            [
+                ("conductor".to_string(), "Gil Evans"),
+                ("ensemble".to_string(), "LSO")
             ]
         );
     }

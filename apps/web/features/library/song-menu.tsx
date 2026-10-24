@@ -16,6 +16,7 @@ import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Disc3,
+  Info,
   ListEnd,
   ListPlus,
   Loader2,
@@ -47,6 +48,8 @@ type SongMenuProps = {
   context?: SongMenuContext;
   onRemoveFromPlaylist?: () => void;
   removeFromPlaylistLabel?: string;
+  /** Shows "View credits…" when the caller can show the track's credits. */
+  onViewCredits?: () => void;
 };
 
 export default function SongMenu({
@@ -61,6 +64,7 @@ export default function SongMenu({
   context = "default",
   onRemoveFromPlaylist,
   removeFromPlaylistLabel = "Remove from playlist",
+  onViewCredits,
 }: SongMenuProps) {
   const player = usePlayer();
   const queryClient = useQueryClient();
@@ -195,8 +199,14 @@ export default function SongMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
-          {(entityLinks.album || entityLinks.artist) && (
+          {(entityLinks.album || entityLinks.artist || onViewCredits) && (
             <ContextMenuSeparator />
+          )}
+          {onViewCredits && (
+            <ContextMenuItem onSelect={onViewCredits}>
+              <Info className="h-4 w-4" />
+              View credits…
+            </ContextMenuItem>
           )}
           {entityLinks.album && (
             <ContextMenuItem asChild>

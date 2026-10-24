@@ -375,3 +375,169 @@ export interface Relationship {
   end: string;
   url: string;
 }
+
+/** Where a credit came from: file tags or an external source such as MusicBrainz. */
+export type CreditSource = "tags" | "musicbrainz" | (string & {});
+
+/**
+ * A credit on an album page, merged across tags and external sources.
+ * `artist_id` is a local artist id, `mb:<MusicBrainz id>` for a person only
+ * known from MusicBrainz, or `null` when the person cannot be browsed.
+ * An empty `track_ids` list means the credit applies to the whole release.
+ */
+export interface AboutCredit {
+  artist_id: string | null;
+  name: string;
+  role: CreditRole | (string & {});
+  instrument: string | null;
+  track_ids: string[];
+  sources: CreditSource[];
+}
+
+/** Licensed text (Wikipedia, CC BY-SA 4.0) stored with its attribution. */
+export interface EditorialText {
+  kind: "biography" | "background" | "reception";
+  source: "wikipedia" | (string & {});
+  language: string;
+  /** Article title. */
+  title: string;
+  body: string;
+  /** Article URL. */
+  url: string;
+  license: string;
+  license_url: string;
+}
+
+export interface EditorialImage {
+  /** Server path relative to the API base, e.g. `/artists/{id}/image`. */
+  url: string;
+  author: string;
+  license: string;
+  license_url: string | null;
+  page_url: string;
+}
+
+export interface ExternalLink {
+  provider: "musicbrainz" | "wikidata" | (string & {});
+  url: string;
+}
+
+/** A private note the signed-in user wrote about an album or artist. */
+export interface UserNote {
+  body: string;
+  updated_at: string;
+}
+
+export interface EnrichmentTaskState {
+  status: "pending" | "done" | "skipped" | "failed" | (string & {});
+  last_error: string | null;
+  updated_at: string;
+}
+
+export interface EnrichmentStatus {
+  /** Whether an administrator turned on online metadata enrichment. */
+  enabled: boolean;
+  task: EnrichmentTaskState | null;
+}
+
+export interface AlbumReleaseFacts {
+  /**
+   * Whether the matched MusicBrainz release is known to be this exact
+   * edition (tagged id or identical track list). Edition facts such as
+   * `date`, `country`, `barcode` and catalog numbers only apply when true.
+   */
+  exact?: boolean;
+  date?: string | null;
+  first_release_date?: string | null;
+  country?: string | null;
+  barcode?: string | null;
+  release_type?: string | null;
+  labels?: { name: string; catalog_number: string | null }[];
+}
+
+export interface AlbumAbout {
+  album_id: string;
+  credits: AboutCredit[];
+  /** The Wikipedia article lead about the album. */
+  background: EditorialText | null;
+  /** The Wikipedia article's critical reception section. */
+  review: EditorialText | null;
+  facts: AlbumReleaseFacts | null;
+  links: ExternalLink[];
+  note: UserNote | null;
+  enrichment: EnrichmentStatus;
+}
+
+export interface ArtistFacts {
+  name?: string | null;
+  /** `Person`, `Group`, `Orchestra`, `Choir`, ... */
+  kind?: string | null;
+  area?: string | null;
+  begin_area?: string | null;
+  /** Born or formed. */
+  begin?: string | null;
+  /** Died or disbanded. */
+  end?: string | null;
+  disambiguation?: string | null;
+}
+
+export interface CreditRoleSummary {
+  role: CreditRole | (string & {});
+  instrument: string | null;
+  track_count: number;
+  album_count: number;
+}
+
+export interface ArtistAbout {
+  artist_id: string;
+  name: string;
+  biography: EditorialText | null;
+  image: EditorialImage | null;
+  facts: ArtistFacts | null;
+  links: ExternalLink[];
+  /** Contributor roles across the library (composer on 12 tracks, ...). */
+  roles: CreditRoleSummary[];
+  note: UserNote | null;
+  enrichment: EnrichmentStatus;
+}
+
+export interface CreditRoleRef {
+  role: CreditRole | (string & {});
+  instrument: string | null;
+}
+
+export interface CreditedAlbum {
+  album: Album;
+  artist: Artist;
+  roles: CreditRoleRef[];
+  /** Credited tracks on the album; empty for a release-wide credit. */
+  track_ids: string[];
+}
+
+export interface CreditedSong {
+  song: LibrarySong;
+  roles: CreditRoleRef[];
+}
+
+/** Everything a person is credited on, for linked credit browsing. */
+export interface ArtistCredits {
+  artist_id: string;
+  name: string;
+  /** Whether the person also has their own albums in the library. */
+  has_discography: boolean;
+  roles: CreditRoleSummary[];
+  albums: CreditedAlbum[];
+  songs: CreditedSong[];
+}
+
+export interface EnrichmentSettings {
+  enabled: boolean;
+  language: string;
+  artist_images: boolean;
+}
+
+export interface EnrichmentOverview extends EnrichmentSettings {
+  counts: { pending: number; done: number; skipped: number; failed: number };
+  /** Hosts enrichment contacts when enabled. */
+  sources: string[];
+}

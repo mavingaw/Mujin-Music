@@ -9,6 +9,8 @@ pub mod assets;
 pub mod discovery;
 pub mod domain;
 #[cfg(feature = "server")]
+pub mod enrichment;
+#[cfg(feature = "server")]
 pub mod http;
 pub mod library;
 pub mod persistence;
