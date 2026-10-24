@@ -1,6 +1,73 @@
-import { expect, test } from "bun:test";
-import { ApiError } from "../core/http";
-import { getPlaybackQueueRevisionConflict } from "./playback";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import api, { ApiError } from "../core/http";
+import {
+  getPlaybackQueueRevisionConflict,
+  getRadioPicks,
+  getRadioSettings,
+  radioSeedParams,
+  updateRadioSettings,
+} from "./playback";
+
+afterEach(() => {
+  mock.restore();
+});
+
+test("radio seeds map to one request field per kind", () => {
+  expect(radioSeedParams({ kind: "song", id: "s" })).toEqual({
+    seed_song_id: "s",
+  });
+  expect(radioSeedParams({ kind: "album", id: "a" })).toEqual({
+    seed_album_id: "a",
+  });
+  expect(radioSeedParams({ kind: "artist", id: "r" })).toEqual({
+    seed_artist_id: "r",
+  });
+  expect(radioSeedParams({ kind: "genre", id: "Jazz" })).toEqual({
+    seed_genre: "Jazz",
+  });
+  expect(radioSeedParams(null)).toEqual({});
+});
+
+test("radio picks and settings use the playback radio endpoints", async () => {
+  const post = spyOn(api, "post").mockResolvedValue({
+    data: { items: [] },
+    status: 200,
+    headers: new Headers(),
+  } as never);
+  const exclusions = Array.from({ length: 600 }, (_, index) => `s${index}`);
+  await getRadioPicks({
+    seed: { kind: "genre", id: "Jazz" },
+    exclude_song_ids: exclusions,
+    limit: 1,
+  });
+  expect(post).toHaveBeenCalledWith("/playback/radio/picks", {
+    seed_genre: "Jazz",
+    exclude_song_ids: exclusions.slice(-500),
+    limit: 1,
+  });
+
+  const get = spyOn(api, "get").mockResolvedValue({
+    data: { enabled: false, coming_up_notice: true },
+    status: 200,
+    headers: new Headers(),
+  } as never);
+  expect(await getRadioSettings()).toEqual({
+    enabled: false,
+    coming_up_notice: true,
+  });
+  expect(get).toHaveBeenCalledWith("/playback/radio/settings", {
+    timeout: 4_000,
+  });
+  const put = spyOn(api, "put").mockResolvedValue({
+    data: { enabled: true, coming_up_notice: false },
+    status: 200,
+    headers: new Headers(),
+  } as never);
+  await updateRadioSettings({ coming_up_notice: false });
+  expect(put).toHaveBeenCalledWith("/playback/radio/settings", {
+    coming_up_notice: false,
+  });
+});
 
 test("queue revision conflicts expose a validated reconciliation state", () => {
   const conflict = new ApiError(

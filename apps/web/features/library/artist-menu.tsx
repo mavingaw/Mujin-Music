@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/context-menu";
 import { usePlayer } from "@/features/player/player-context";
 import { getArtistInfo } from "@parson/music-sdk";
-import { Play, UserRound } from "lucide-react";
+import { Play, Radio, UserRound } from "lucide-react";
+import { useStartRadio } from "@/features/player/radio/radio-controls";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -21,6 +22,7 @@ export default function ArtistMenu({
   children: React.ReactNode;
 }) {
   const player = usePlayer();
+  const startRadio = useStartRadio();
 
   const play = async () => {
     try {
@@ -57,6 +59,12 @@ export default function ArtistMenu({
         <ContextMenuItem onSelect={() => void play()}>
           <Play className="h-4 w-4" />
           Play
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void startRadio({ kind: "artist", id: artistId })}
+        >
+          <Radio className="h-4 w-4" />
+          Start radio
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem asChild>

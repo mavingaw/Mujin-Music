@@ -1,4 +1,4 @@
-import type { PlaybackQueueSong } from "@parson/music-sdk";
+import type { PlaybackQueueSong, RadioPick } from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 
 export type PlayerInput = Partial<
@@ -22,6 +22,10 @@ export type QueueItem = {
   artist: Artist;
   origin: QueueOrigin;
   queuePosition: number | null;
+  /** Why Radio picked this item ("from this artist"), when known. */
+  reason?: string;
+  /** The listener gave this Radio pick a thumbs up. */
+  liked?: boolean;
 };
 
 export function blankArtist(): Artist {
@@ -122,6 +126,20 @@ export function persistedQueueItems(items: PlaybackQueueSong[]): QueueItem[] {
       album: song.album_object,
       origin: item.origin,
       queuePosition: item.queue_position,
+    };
+  });
+}
+
+export function radioPickItems(picks: RadioPick[]): QueueItem[] {
+  return picks.map((pick) => {
+    const song = normalizeSong(pick, pick.artist_object, pick.album_object);
+    return {
+      song,
+      artist: song.artist_object,
+      album: song.album_object,
+      origin: "generated",
+      queuePosition: null,
+      reason: pick.reason,
     };
   });
 }

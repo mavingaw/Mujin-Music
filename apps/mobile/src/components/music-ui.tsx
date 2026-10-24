@@ -17,6 +17,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
+import { StartRadioAction } from "@/components/radio-ui";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import {
@@ -179,6 +180,12 @@ export function SongRow({
             player.addToQueue([song]);
           }}
         />
+        {session.phase !== "offline" ? (
+          <StartRadioAction
+            seed={{ kind: "song", id: song.id }}
+            onStarted={() => setMenu(false)}
+          />
+        ) : null}
         {session.phase !== "offline" && song.album_object?.id ? (
           <DrawerAction
             icon={Disc3}

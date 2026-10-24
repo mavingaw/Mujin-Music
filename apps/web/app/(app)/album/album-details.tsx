@@ -20,12 +20,17 @@ import {
   MoreHorizontal,
   Pause,
   Play,
+  Radio,
   Plus,
   RefreshCw,
   UserRound,
 } from "lucide-react";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { usePlayer } from "@/features/player/player-context";
+import {
+  StartRadioButton,
+  useStartRadio,
+} from "@/features/player/radio/radio-controls";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor from "@/features/library/album-editor";
 import { useAlbum } from "@/features/library/use-library-entity";
@@ -111,6 +116,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     isPlaying,
     song: currentSong,
   } = usePlayer();
+  const startRadio = useStartRadio();
 
   const albumCoverURL = useMemo(
     () => getLibraryImageUrl(album?.cover_url, getBaseURL),
@@ -285,6 +291,10 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               <Play className="ml-1 w-6 h-6 fill-black text-black" />
             )}
           </button>
+          <StartRadioButton
+            label={`Start radio from ${album.name}`}
+            seed={{ kind: "album", id: album.id }}
+          />
           <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
             <DropdownMenuTrigger asChild>
               <button
@@ -299,6 +309,14 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               <DropdownMenuItem onSelect={playAlbum}>
                 <Play className="h-4 w-4 fill-current" />
                 Play
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() =>
+                  void startRadio({ kind: "album", id: album.id })
+                }
+              >
+                <Radio className="h-4 w-4" />
+                Start radio
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={addAlbumToQueue}>
                 <ListEnd className="h-4 w-4" />

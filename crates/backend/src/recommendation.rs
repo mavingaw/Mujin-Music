@@ -20,6 +20,10 @@ const MAX_SEARCH_AFFINITY_BOOST: f64 = 10.0;
 const RETENTION_BATCH_SIZE: i32 = 256;
 const MAX_EVENT_REFERENCE_CHARACTERS: usize = 160;
 const MAX_EVENT_SOURCE_CHARACTERS: usize = 64;
+/// Tracks at or below this preference score are kept out of Radio.
+const REJECTED_TRACK_SCORE: f64 = -15.0;
+const ARTIST_PENALTY_GRACE: f64 = 20.0;
+const MAX_ARTIST_PENALTY: f64 = 12.0;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct PlaybackEventRequest {
@@ -139,6 +143,9 @@ fn valid_event_type(value: &str) -> bool {
             | "recommendation_impression"
             | "recommendation_selected"
             | "disliked"
+            | "thumbs_up"
+            | "skip_not_now"
+            | "skip_doesnt_fit"
     )
 }
 
@@ -152,8 +159,21 @@ fn event_weight(event_type: &str) -> f64 {
         "manual_selection" => 2.0,
         "early_skip" => -5.0,
         "disliked" => -20.0,
+        // Radio thumbs up: a deliberate "more like this" from the Radio queue.
+        "thumbs_up" => 10.0,
+        // Skip reasons. "Not right now" is a mood, not a verdict, so it only
+        // nudges the track and keeps it out of the next few stations through
+        // the recent-play exclusion. "Doesn't fit" mostly teaches the
+        // transition from the previous track that it was a poor follow-up.
+        "skip_not_now" => -1.0,
+        "skip_doesnt_fit" => -3.0,
         _ => 0.0,
     }
+}
+
+/// Events that count as a skip from the previously played track.
+fn is_skip(event_type: &str) -> bool {
+    matches!(event_type, "early_skip" | "skip_doesnt_fit")
 }
 
 fn is_positive(event_type: &str) -> bool {
@@ -220,7 +240,7 @@ fn persist_playback_event(
     event: &PlaybackEventRequest,
     cache: &LibraryCache,
 ) -> Result<PlaybackEventResult, Box<dyn std::error::Error>> {
-    let previous = if is_positive(&event.event_type) || event.event_type == "early_skip" {
+    let previous = if is_positive(&event.event_type) || is_skip(&event.event_type) {
         event.session_id.as_ref().and_then(|session_id| {
             diesel::sql_query(
                 "SELECT song_id FROM playback_event
@@ -309,7 +329,7 @@ fn persist_playback_event(
         let completed = i32::from(event.event_type == "completed");
         let skipped = i32::from(matches!(
             event.event_type.as_str(),
-            "early_skip" | "disliked"
+            "early_skip" | "disliked" | "skip_doesnt_fit"
         ));
         let queued = i32::from(event.event_type == "manual_queue_add");
         let playlist = i32::from(event.event_type == "playlist_add");
@@ -319,7 +339,7 @@ fn persist_playback_event(
               manual_queue_adds, playlist_adds, preference_score, last_positive_at, last_played_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?,
                      CASE WHEN ? > 0 THEN CURRENT_TIMESTAMP ELSE NULL END,
-                     CASE WHEN ? IN ('manual_selection', 'qualified_play', 'completed', 'early_skip') THEN CURRENT_TIMESTAMP ELSE NULL END)
+                     CASE WHEN ? IN ('manual_selection', 'qualified_play', 'completed', 'early_skip', 'skip_not_now', 'skip_doesnt_fit') THEN CURRENT_TIMESTAMP ELSE NULL END)
              ON CONFLICT(user_id, song_id) DO UPDATE SET
                qualified_plays = qualified_plays + excluded.qualified_plays,
                completions = completions + excluded.completions,
@@ -328,7 +348,7 @@ fn persist_playback_event(
                playlist_adds = playlist_adds + excluded.playlist_adds,
                preference_score = preference_score + excluded.preference_score,
                last_positive_at = CASE WHEN ? > 0 THEN CURRENT_TIMESTAMP ELSE last_positive_at END,
-               last_played_at = CASE WHEN ? IN ('manual_selection', 'qualified_play', 'completed', 'early_skip')
+               last_played_at = CASE WHEN ? IN ('manual_selection', 'qualified_play', 'completed', 'early_skip', 'skip_not_now', 'skip_doesnt_fit')
                                      THEN CURRENT_TIMESTAMP ELSE last_played_at END",
         )
         .bind::<diesel::sql_types::Integer, _>(user_id)
@@ -381,7 +401,7 @@ fn persist_playback_event(
     }
 
     if let Some(from_song) = previous.filter(|song| song != &event.song_id) {
-        let (positive, skipped) = if event.event_type == "early_skip" {
+        let (positive, skipped) = if is_skip(&event.event_type) {
             (0, 1)
         } else {
             (1, 0)
@@ -673,6 +693,189 @@ pub fn search_affinities(
     Ok(affinities)
 }
 
+/// What a Radio station is built around.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RadioSeed {
+    Song(String),
+    Album(String),
+    Artist(String),
+    Genre(String),
+}
+
+impl RadioSeed {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            RadioSeed::Song(_) => "song",
+            RadioSeed::Album(_) => "album",
+            RadioSeed::Artist(_) => "artist",
+            RadioSeed::Genre(_) => "genre",
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            RadioSeed::Song(id)
+            | RadioSeed::Album(id)
+            | RadioSeed::Artist(id)
+            | RadioSeed::Genre(id) => id,
+        }
+    }
+
+    /// Builds a seed from a stored or requested kind/id pair.
+    pub fn from_parts(kind: &str, id: &str) -> Option<Self> {
+        let id = id.to_owned();
+        match kind {
+            "song" => Some(RadioSeed::Song(id)),
+            "album" => Some(RadioSeed::Album(id)),
+            "artist" => Some(RadioSeed::Artist(id)),
+            "genre" => Some(RadioSeed::Genre(id)),
+            _ => None,
+        }
+    }
+
+    /// Display name of the seed in the current catalog, or `None` when the
+    /// seed no longer exists.
+    pub fn display_name(&self, cache: &LibraryCache) -> Option<String> {
+        match self {
+            RadioSeed::Song(id) => cache.song(id).map(|song| song.name.clone()),
+            RadioSeed::Album(id) => cache.album(id).map(|album| album.name.clone()),
+            RadioSeed::Artist(id) => cache.artist(id).map(|artist| artist.name.clone()),
+            RadioSeed::Genre(name) => catalog_genre(cache, name).map(str::to_owned),
+        }
+    }
+}
+
+/// Finds the catalog spelling of a genre, ignoring case and surrounding space.
+pub fn catalog_genre<'a>(cache: &'a LibraryCache, requested: &str) -> Option<&'a str> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    cache
+        .songs_by_genre
+        .keys()
+        .filter(|genre| genre.trim().eq_ignore_ascii_case(requested))
+        .min()
+        .map(String::as_str)
+}
+
+fn add_flat_candidates(
+    candidates: &mut HashMap<String, CandidateScore>,
+    cache: &LibraryCache,
+    indices: Option<&Vec<crate::library::state::CatalogIndex>>,
+    skip_song_id: Option<&str>,
+    score: f64,
+    source: &'static str,
+) {
+    for index in indices.into_iter().flatten().take(300) {
+        if let Some(song_id) = cache.flat_song_id(*index)
+            && Some(song_id) != skip_song_id
+        {
+            add_candidate(candidates, song_id, score, source);
+        }
+    }
+}
+
+fn add_seed_candidates(
+    candidates: &mut HashMap<String, CandidateScore>,
+    seed: &RadioSeed,
+    cache: &LibraryCache,
+) {
+    match seed {
+        RadioSeed::Song(seed_id) => {
+            if let Some((artist_id, album_id)) = cache.song_map.get(seed_id) {
+                add_flat_candidates(
+                    candidates,
+                    cache,
+                    cache.songs_by_artist.get(artist_id),
+                    Some(seed_id),
+                    16.0,
+                    "seed_artist",
+                );
+                for genre in cache.album_genres.get(album_id).into_iter().flatten() {
+                    add_flat_candidates(
+                        candidates,
+                        cache,
+                        cache.songs_by_genre.get(genre),
+                        Some(seed_id),
+                        10.0,
+                        "seed_genre",
+                    );
+                }
+            }
+        }
+        RadioSeed::Album(album_id) => {
+            if let Some(album) = cache.album(album_id) {
+                for song in album.songs.iter().take(100) {
+                    add_candidate(candidates, &song.id, 14.0, "seed_album");
+                }
+            }
+            if let Some(owner) = cache.album_owner(album_id) {
+                add_flat_candidates(
+                    candidates,
+                    cache,
+                    cache.songs_by_artist.get(&owner.id),
+                    None,
+                    12.0,
+                    "seed_artist",
+                );
+            }
+            for genre in cache.album_genres.get(album_id).into_iter().flatten() {
+                add_flat_candidates(
+                    candidates,
+                    cache,
+                    cache.songs_by_genre.get(genre),
+                    None,
+                    10.0,
+                    "seed_genre",
+                );
+            }
+        }
+        RadioSeed::Artist(artist_id) => {
+            add_flat_candidates(
+                candidates,
+                cache,
+                cache.songs_by_artist.get(artist_id),
+                None,
+                20.0,
+                "seed_artist",
+            );
+            let mut genres = HashSet::new();
+            if let Some(artist) = cache.artist(artist_id) {
+                for album in &artist.albums {
+                    for genre in cache.album_genres.get(&album.id).into_iter().flatten() {
+                        genres.insert(genre.as_str());
+                    }
+                }
+            }
+            let mut genres = genres.into_iter().collect::<Vec<_>>();
+            genres.sort_unstable();
+            for genre in genres.into_iter().take(8) {
+                add_flat_candidates(
+                    candidates,
+                    cache,
+                    cache.songs_by_genre.get(genre),
+                    None,
+                    10.0,
+                    "seed_genre",
+                );
+            }
+        }
+        RadioSeed::Genre(requested) => {
+            if let Some(genre) = catalog_genre(cache, requested) {
+                add_flat_candidates(
+                    candidates,
+                    cache,
+                    cache.songs_by_genre.get(genre),
+                    None,
+                    18.0,
+                    "seed_genre",
+                );
+            }
+        }
+    }
+}
+
 pub fn recommend(
     user_id: i32,
     seed_song_id: Option<&str>,
@@ -680,33 +883,33 @@ pub fn recommend(
     pool: &DbPool,
     limit: usize,
 ) -> Result<Vec<RankedCandidate>, Box<dyn std::error::Error>> {
+    let seed = seed_song_id.map(|id| RadioSeed::Song(id.to_owned()));
+    recommend_radio(user_id, seed.as_ref(), cache, pool, limit, &HashSet::new())
+}
+
+/// Ranks Radio picks around `seed` (or the listener's profile without one).
+/// Songs in `exclude` are never returned, and neither are songs the listener
+/// disliked or keeps skipping.
+pub fn recommend_radio(
+    user_id: i32,
+    seed: Option<&RadioSeed>,
+    cache: &LibraryCache,
+    pool: &DbPool,
+    limit: usize,
+    exclude: &HashSet<String>,
+) -> Result<Vec<RankedCandidate>, Box<dyn std::error::Error>> {
     let mut connection = pool.get()?;
     let mut candidates = HashMap::<String, CandidateScore>::new();
+    let seed_song_id = match seed {
+        Some(RadioSeed::Song(id)) => Some(id.as_str()),
+        _ => None,
+    };
+
+    if let Some(seed) = seed {
+        add_seed_candidates(&mut candidates, seed, cache);
+    }
 
     if let Some(seed_id) = seed_song_id {
-        if let Some((artist_id, album_id)) = cache.song_map.get(seed_id) {
-            if let Some(indices) = cache.songs_by_artist.get(artist_id) {
-                for index in indices.iter().take(300) {
-                    if let Some(song_id) = cache.flat_song_id(*index)
-                        && song_id != seed_id
-                    {
-                        add_candidate(&mut candidates, song_id, 16.0, "seed_artist");
-                    }
-                }
-            }
-            for genre in cache.album_genres.get(album_id).into_iter().flatten() {
-                if let Some(indices) = cache.songs_by_genre.get(genre) {
-                    for index in indices.iter().take(300) {
-                        if let Some(song_id) = cache.flat_song_id(*index)
-                            && song_id != seed_id
-                        {
-                            add_candidate(&mut candidates, song_id, 10.0, "seed_genre");
-                        }
-                    }
-                }
-            }
-        }
-
         let transitions = diesel::sql_query(
             "SELECT to_song_id AS song_id,
                     (positive_count * 30.0) - (skip_count * 12.0) AS score
@@ -901,13 +1104,55 @@ pub fn recommend(
     .load::<SongIdRow>(&mut connection)?
     .into_iter()
     .map(|row| row.song_id)
+    .chain(exclude.iter().cloned())
     .collect::<HashSet<_>>();
+
+    // Disliked tracks (one thumbs down, or a run of early skips) never come
+    // back through Radio; explicit plays still work.
+    let rejected = diesel::sql_query(
+        "SELECT song_id FROM user_track_preference
+         WHERE user_id = ? AND preference_score <= ?",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<Double, _>(REJECTED_TRACK_SCORE)
+    .load::<SongIdRow>(&mut connection)?
+    .into_iter()
+    .map(|row| row.song_id);
+    let recent = recent.into_iter().chain(rejected).collect::<HashSet<_>>();
+
+    // Artists the listener keeps turning down sink in proportion. One thumbs
+    // down is about the track, so the penalty starts after more than that.
+    let artist_penalties = diesel::sql_query(
+        "SELECT artist_id, negative_weight - positive_weight AS score
+         FROM user_artist_preference
+         WHERE user_id = ? AND negative_weight - positive_weight > ?",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<Double, _>(ARTIST_PENALTY_GRACE)
+    .load::<ArtistPreferenceRow>(&mut connection)?
+    .into_iter()
+    .map(|row| {
+        let penalty = ((row.score - ARTIST_PENALTY_GRACE) / 4.0).min(MAX_ARTIST_PENALTY);
+        (row.artist_id, penalty)
+    })
+    .collect::<HashMap<_, _>>();
+    if !artist_penalties.is_empty() {
+        for (song_id, candidate) in &mut candidates {
+            if let Some(penalty) = cache
+                .song_map
+                .get(song_id)
+                .and_then(|(artist_id, _)| artist_penalties.get(artist_id))
+            {
+                candidate.score -= penalty;
+            }
+        }
+    }
 
     let event_count = diesel::sql_query(
         "SELECT
            (SELECT COUNT(*) FROM playback_event
             WHERE user_id = ? AND event_type IN
-              ('manual_selection', 'qualified_play', 'completed', 'manual_queue_add', 'playlist_add'))
+              ('manual_selection', 'qualified_play', 'completed', 'manual_queue_add', 'playlist_add', 'thumbs_up'))
            + (SELECT COUNT(*) FROM favorite_song WHERE user_id = ?)
            + (SELECT COUNT(*)
               FROM _playlist_to_song track
@@ -922,7 +1167,7 @@ pub fn recommend(
     .get_result::<CountRow>(&mut connection)?
     .count;
 
-    if seed_song_id.is_none() && event_count < 1 {
+    if seed.is_none() && event_count < 1 {
         return Ok(Vec::new());
     }
 
@@ -960,10 +1205,12 @@ fn rank_candidates(
                 "follows your listening"
             } else if candidate.sources.contains("playlist_cooccurrence") {
                 "fits your playlists"
+            } else if candidate.sources.contains("seed_album") {
+                "from this album"
             } else if candidate.sources.contains("seed_artist") {
                 "from this artist"
             } else if candidate.sources.contains("seed_genre") {
-                "fits this session"
+                "fits this station"
             } else if candidate.sources.contains("favorite") {
                 "from your liked songs"
             } else if candidate.sources.contains("playlist_membership") {
@@ -1697,5 +1944,332 @@ mod tests {
                 .expect("other user event count")
                 .count;
         assert_eq!(other_user, 1);
+    }
+
+    use super::test_support::{radio_pool, radio_test_cache};
+    use super::{RadioSeed, recommend_radio, valid_event_type};
+
+    fn radio_event(key: &str, song_id: &str, event_type: &str) -> PlaybackEventRequest {
+        PlaybackEventRequest {
+            event_key: key.into(),
+            song_id: song_id.into(),
+            event_type: event_type.into(),
+            session_id: Some("radio-session".into()),
+            queue_id: None,
+            source: Some("generated".into()),
+            position_seconds: Some(4.0),
+            duration_seconds: Some(200.0),
+        }
+    }
+
+    fn ids(items: &[super::RankedCandidate]) -> Vec<&str> {
+        items.iter().map(|item| item.song_id.as_str()).collect()
+    }
+
+    #[test]
+    fn radio_feedback_events_are_accepted() {
+        for event in ["thumbs_up", "disliked", "skip_not_now", "skip_doesnt_fit"] {
+            assert!(valid_event_type(event), "{event}");
+        }
+        assert!(super::event_weight("thumbs_up") > super::event_weight("completed"));
+        assert!(super::event_weight("skip_not_now") > super::event_weight("early_skip"));
+        assert!(super::event_weight("disliked") <= super::REJECTED_TRACK_SCORE);
+        assert!(super::is_skip("skip_doesnt_fit"));
+        assert!(!super::is_skip("skip_not_now"));
+    }
+
+    #[test]
+    fn radio_can_be_seeded_from_a_genre_album_or_artist() {
+        let pool = radio_pool();
+        let cache = radio_test_cache();
+
+        let jazz = recommend_radio(
+            1,
+            Some(&RadioSeed::Genre("  jazz ".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::new(),
+        )
+        .expect("genre radio");
+        assert!(!jazz.is_empty());
+        assert!(
+            jazz.iter().all(|item| item.song_id.starts_with('j')),
+            "{:?}",
+            ids(&jazz)
+        );
+
+        let album = recommend_radio(
+            1,
+            Some(&RadioSeed::Album("album-rock-2".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::new(),
+        )
+        .expect("album radio");
+        assert!(matches!(album[0].song_id.as_str(), "r4" | "r5"));
+        assert_eq!(album[0].reason, "from this album");
+        assert!(album.iter().all(|item| !item.song_id.starts_with('j')));
+
+        let artist = recommend_radio(
+            1,
+            Some(&RadioSeed::Artist("artist-rock-1".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::from(["r1".to_owned()]),
+        )
+        .expect("artist radio");
+        assert!(matches!(artist[0].song_id.as_str(), "r2" | "r3"));
+        assert!(artist.iter().all(|item| item.song_id != "r1"));
+        assert!(artist.iter().any(|item| item.song_id == "r4"));
+    }
+
+    #[test]
+    fn thumbs_down_keeps_a_track_out_of_radio_and_thumbs_up_brings_it_in() {
+        let pool = radio_pool();
+        let cache = radio_test_cache();
+        record_playback_event(1, &radio_event("down", "r2", "disliked"), &cache, &pool)
+            .expect("dislike");
+        record_playback_event(1, &radio_event("up", "j2", "thumbs_up"), &cache, &pool)
+            .expect("thumbs up");
+
+        let rock = recommend_radio(
+            1,
+            Some(&RadioSeed::Genre("Rock".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::new(),
+        )
+        .expect("rock radio");
+        assert!(!ids(&rock).contains(&"r2"), "{:?}", ids(&rock));
+        assert!(ids(&rock).contains(&"r3"));
+
+        // A thumbs up alone is enough history for profile Radio.
+        let profile =
+            recommend_radio(1, None, &cache, &pool, 10, &HashSet::new()).expect("profile radio");
+        assert!(ids(&profile).contains(&"j2"), "{:?}", ids(&profile));
+        assert!(!ids(&profile).contains(&"r2"));
+
+        // Repeated thumbs down on one artist sink the rest of their catalogue.
+        let score_of = |items: &[super::RankedCandidate], id: &str| {
+            items
+                .iter()
+                .find(|item| item.song_id == id)
+                .map(|item| item.score)
+                .expect("scored candidate")
+        };
+        let before = score_of(&rock, "r3");
+        record_playback_event(1, &radio_event("down-r1", "r1", "disliked"), &cache, &pool)
+            .expect("repeat dislike");
+        let rock = recommend_radio(
+            1,
+            Some(&RadioSeed::Genre("Rock".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::new(),
+        )
+        .expect("rock radio after repeated dislikes");
+        assert!(score_of(&rock, "r3") < before);
+        assert!(score_of(&rock, "r3") < score_of(&rock, "r4"));
+        assert!(
+            rock.iter()
+                .all(|item| !matches!(item.song_id.as_str(), "r1" | "r2"))
+        );
+
+        // Other listeners are unaffected by this listener's thumbs down.
+        let other = recommend_radio(
+            2,
+            Some(&RadioSeed::Genre("Rock".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::new(),
+        )
+        .expect("other listener radio");
+        assert!(ids(&other).contains(&"r2"));
+    }
+
+    #[test]
+    fn skip_reasons_teach_different_lessons() {
+        #[derive(diesel::QueryableByName)]
+        struct Transition {
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            positive_count: i32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            skip_count: i32,
+        }
+        let pool = radio_pool();
+        let cache = radio_test_cache();
+        record_playback_event(1, &radio_event("q", "r1", "qualified_play"), &cache, &pool)
+            .expect("qualified play");
+        record_playback_event(
+            1,
+            &radio_event("fit", "j1", "skip_doesnt_fit"),
+            &cache,
+            &pool,
+        )
+        .expect("doesn't fit");
+        record_playback_event(1, &radio_event("now", "r3", "skip_not_now"), &cache, &pool)
+            .expect("not now");
+
+        let mut connection = pool.get().expect("transition connection");
+        let transition = diesel::sql_query(
+            "SELECT positive_count, skip_count FROM track_transition
+             WHERE user_id = 1 AND from_song_id = 'r1' AND to_song_id = 'j1'",
+        )
+        .get_result::<Transition>(&mut connection)
+        .expect("doesn't-fit transition");
+        assert_eq!((transition.positive_count, transition.skip_count), (0, 1));
+        let not_now_transitions = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM track_transition WHERE to_song_id = 'r3'",
+        )
+        .get_result::<CountRow>(&mut connection)
+        .expect("not-now transitions")
+        .count;
+        assert_eq!(not_now_transitions, 0);
+        drop(connection);
+
+        // "Not right now" rests the track instead of banning it.
+        let rock = recommend_radio(
+            1,
+            Some(&RadioSeed::Genre("Rock".into())),
+            &cache,
+            &pool,
+            10,
+            &HashSet::new(),
+        )
+        .expect("rock radio");
+        assert!(!ids(&rock).contains(&"r3"));
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    use diesel::connection::SimpleConnection;
+
+    use crate::domain::{Album, Artist, Song};
+    use crate::library::search::SearchIndex;
+    use crate::library::state::LibraryCache;
+    use crate::persistence::connection::DbPool;
+
+    /// Pool with the real migrated schema and two listeners.
+    pub(crate) fn radio_pool() -> DbPool {
+        use diesel::r2d2::{ConnectionManager, Pool};
+
+        let manager = ConnectionManager::<diesel::sqlite::SqliteConnection>::new(":memory:");
+        let pool = Arc::new(Pool::builder().max_size(1).build(manager).unwrap());
+        let mut connection = pool.get().expect("radio schema connection");
+        connection
+            .batch_execute(include_str!(
+                "../migrations/2026-07-19-000000_v1_0_0_baseline/up.sql"
+            ))
+            .expect("baseline schema");
+        connection
+            .batch_execute(include_str!("../migrations/2026-10-25-000000_radio/up.sql"))
+            .expect("radio schema");
+        connection
+            .batch_execute(
+                "INSERT INTO user (id, username, password, bitrate, role)
+                 VALUES (1, 'one', 'x', 0, 'user'), (2, 'two', 'x', 0, 'user');",
+            )
+            .expect("radio listeners");
+        drop(connection);
+        pool
+    }
+
+    /// Two rock artists (three albums) and a jazz artist.
+    pub(crate) fn radio_test_cache() -> LibraryCache {
+        let layout: [(&str, &str, &str, &[&str]); 4] = [
+            ("artist-rock-1", "album-rock-1", "Rock", &["r1", "r2"]),
+            ("artist-rock-1", "album-rock-1b", "Rock", &["r3"]),
+            ("artist-rock-2", "album-rock-2", "Rock", &["r4", "r5"]),
+            ("artist-jazz", "album-jazz", "Jazz", &["j1", "j2", "j3"]),
+        ];
+        let mut artists = Vec::<Artist>::new();
+        let mut song_map = HashMap::new();
+        let mut album_genres = HashMap::new();
+        let mut songs_flat = Vec::new();
+        let mut songs_by_artist = HashMap::<String, Vec<u32>>::new();
+        let mut songs_by_genre = HashMap::<String, Vec<u32>>::new();
+        for (artist_id, album_id, genre, song_ids) in layout {
+            let album = Album {
+                id: album_id.into(),
+                name: format!("{album_id} name"),
+                primary_type: "Album".into(),
+                songs: song_ids
+                    .iter()
+                    .map(|id| Song {
+                        id: (*id).into(),
+                        name: format!("Song {id}"),
+                        artist: artist_id.into(),
+                        duration: 200.0,
+                        ..Song::default()
+                    })
+                    .collect(),
+                ..Album::default()
+            };
+            album_genres.insert(album_id.to_owned(), vec![genre.to_owned()]);
+            for id in song_ids {
+                let index = songs_flat.len() as u32;
+                songs_flat.push((*id).to_owned());
+                song_map.insert(
+                    (*id).to_owned(),
+                    (artist_id.to_owned(), album_id.to_owned()),
+                );
+                songs_by_artist
+                    .entry(artist_id.to_owned())
+                    .or_default()
+                    .push(index);
+                songs_by_genre
+                    .entry(genre.to_owned())
+                    .or_default()
+                    .push(index);
+            }
+            match artists.iter_mut().find(|artist| artist.id == artist_id) {
+                Some(artist) => artist.albums.push(album),
+                None => artists.push(Artist {
+                    id: artist_id.into(),
+                    name: format!("{artist_id} name"),
+                    albums: vec![album],
+                    ..Artist::default()
+                }),
+            }
+        }
+        let mut artist_positions = HashMap::new();
+        let mut album_positions = HashMap::new();
+        let mut song_positions = HashMap::new();
+        for (artist_index, artist) in artists.iter().enumerate() {
+            artist_positions.insert(artist.id.clone(), artist_index as u32);
+            for (album_index, album) in artist.albums.iter().enumerate() {
+                album_positions.insert(album.id.clone(), (artist_index as u32, album_index as u32));
+                for (song_index, song) in album.songs.iter().enumerate() {
+                    song_positions.insert(
+                        song.id.clone(),
+                        (artist_index as u32, album_index as u32, song_index as u32),
+                    );
+                }
+            }
+        }
+        let artists = Arc::new(artists);
+        LibraryCache {
+            search_index: SearchIndex::build(&artists).expect("radio search index"),
+            artists,
+            song_map,
+            album_genres,
+            artist_positions,
+            album_positions,
+            song_positions,
+            songs_flat,
+            songs_by_artist,
+            songs_by_genre,
+            image_paths: HashSet::new(),
+        }
     }
 }

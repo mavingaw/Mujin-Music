@@ -37,6 +37,7 @@ import { usePlayer } from "@/providers/player-provider";
 import { PlaylistPicker } from "@/components/playlist-picker";
 import { useSession } from "@/providers/session-provider";
 import { palette } from "@/constants/colors";
+import { StartRadioAction } from "@/components/radio-ui";
 
 export function AlbumActions({
   albumId,
@@ -182,6 +183,12 @@ export function AlbumActions({
               .catch(() => setOperationError("Could not load this album."));
           }}
         />
+        {session.phase !== "offline" ? (
+          <StartRadioAction
+            seed={{ kind: "album", id: albumId }}
+            onStarted={onClose}
+          />
+        ) : null}
         <DrawerAction
           icon={ListEnd}
           label="Add to queue"

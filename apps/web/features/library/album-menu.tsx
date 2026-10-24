@@ -10,7 +10,8 @@ import {
 import { useSession } from "@/features/account/session-provider";
 import { usePlayer } from "@/features/player/player-context";
 import { getAlbumInfo, type LibraryAlbum } from "@parson/music-sdk";
-import { Disc3, Download, Play, UserRound } from "lucide-react";
+import { Disc3, Download, Play, Radio, UserRound } from "lucide-react";
+import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -29,6 +30,7 @@ export default function AlbumMenu({
   showArtist = true,
 }: AlbumMenuProps) {
   const player = usePlayer();
+  const startRadio = useStartRadio();
   const { session } = useSession();
 
   const loadAlbum = () =>
@@ -62,6 +64,12 @@ export default function AlbumMenu({
         <ContextMenuItem onSelect={() => void play()}>
           <Play className="h-4 w-4" />
           Play
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void startRadio({ kind: "album", id: album_id })}
+        >
+          <Radio className="h-4 w-4" />
+          Start radio
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem asChild>

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/context-menu";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import { usePlayer } from "@/features/player/player-context";
+import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -22,6 +23,7 @@ import {
   Pause,
   Play,
   Plus,
+  Radio,
   RefreshCw,
   UserRound,
   X,
@@ -63,6 +65,7 @@ export default function SongMenu({
   removeFromPlaylistLabel = "Remove from playlist",
 }: SongMenuProps) {
   const player = usePlayer();
+  const startRadio = useStartRadio();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -148,6 +151,12 @@ export default function SongMenu({
               Add to queue
             </ContextMenuItem>
           )}
+          <ContextMenuItem
+            onSelect={() => void startRadio({ kind: "song", id: song_id })}
+          >
+            <Radio className="h-4 w-4" />
+            Start radio
+          </ContextMenuItem>
           {context !== "artist" && <ContextMenuSeparator />}
           {context !== "artist" && (
             <ContextMenuSub>
