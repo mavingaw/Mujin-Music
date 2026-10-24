@@ -47,7 +47,8 @@ Parson does not upload analytics or crash reports.
 
 Music, accounts, playlists, history, and recommendations stay on infrastructure
 you control. External requests are limited to services you use, such as lyrics,
-updates, and casting.
+updates, casting, and online metadata (credits, biographies and reviews from
+MusicBrainz and Wikipedia), which is off until an administrator turns it on.
 
 [Privacy and security](https://parson.dev/docs/accounts-privacy-security)
 

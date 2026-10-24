@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    album, artist, cast, data, editorial, filesystem, genres, home, lyrics, metadata, playback,
+    playlist, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -64,7 +64,10 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .wrap(HttpAuthentication::with_fn(admin_guard))
                 .service(metadata::edit_library_metadata)
                 .service(metadata::edit_album_metadata)
-                .service(metadata::upload_album_cover),
+                .service(metadata::upload_album_cover)
+                .service(editorial::get_enrichment)
+                .service(editorial::put_enrichment)
+                .service(editorial::refresh_enrichment),
         )
         .service(
             web::scope("/data/admin")
@@ -211,7 +214,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "credits"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
@@ -261,6 +264,10 @@ pub async fn build_server_with_shutdown_timeout(
         .expect("new library lifecycle has no active scan");
     let database = web::Data::new(local_app.database);
     data::start_automatic_backups(database.get_ref().clone());
+    tokio::spawn(crate::enrichment::worker::run(
+        database.get_ref().clone(),
+        local_app.library.clone(),
+    ));
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()

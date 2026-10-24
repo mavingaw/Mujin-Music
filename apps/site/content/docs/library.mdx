@@ -27,6 +27,12 @@ Parson uses tags first, then bounded, deterministic inference when tags are inco
 
 Track artists are the performers credited on a recording. Album artists own the release in the library. When album-artist tags are present, Parson uses them. When they are missing, it considers the artists shared across tracks in the same album folder and known aliases. Featuring credits stay attached to tracks without fragmenting the album artist unnecessarily.
 
+### Credits, biographies and reviews
+
+Composer, lyricist, arranger, conductor, performer (with instrument), ensemble, producer, remixer, mixer and engineer tags become credits. They appear on the album's **Credits** tab, under each track title ("Composed by …") and in **View credits…** on a track. Every name links to that person's **Credits** tab, which lists everything they composed, produced or played on in your library, filterable by role. People who only appear in credits get a contributor page instead of a discography.
+
+**Online metadata** (Settings → Library, off by default) adds MusicBrainz relationship credits, release facts such as label and catalog number, Wikipedia biographies, album background and critical reception, and freely licensed artist photos from Wikimedia Commons. Wikipedia text always shows its article and CC BY-SA license; reviews are the article's reception section, not a paid review service. When MusicBrainz has two artists with the same name and nothing in your tags tells them apart, Parson shows no biography rather than a wrong one. You can also keep a private note on any album or artist.
+
 ### Albums and editions
 
 Albums are identified from normalized album title plus resolved album artist. Parson recognizes edition qualifiers such as deluxe, anniversary, remastered, expanded, special, collector's, limited, legacy, reissue, regional, mono/stereo, and bonus editions. It links confident variants into a release group while preserving the edition's visible title and tracks.

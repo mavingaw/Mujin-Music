@@ -1,7 +1,12 @@
 "use client";
 
 import type { LibraryAlbum } from "@parson/music-sdk";
-import { Clock, Pause, Play } from "lucide-react";
+import type { AboutCredit } from "@parson/music-sdk/types";
+import { Clock, Info, Pause, Play } from "lucide-react";
+import { useState } from "react";
+import { CreditName } from "@/features/library/credits/credits-list";
+import { trackCreditLine } from "@/features/library/credits/credit-roles";
+import { TrackCreditsDialog } from "@/features/library/credits/track-credits-dialog";
 import Link from "next/link";
 import SongMenu from "@/features/library/song-menu";
 import {
@@ -23,16 +28,21 @@ export function AlbumTrackList({
   artistName,
   isPlaying,
   onPlay,
+  trackCredits,
 }: {
   activeSongId?: string;
   album: LibraryAlbum;
   artistName: string;
   isPlaying: boolean;
   onPlay: (track: LibraryAlbum["songs"][number]) => void;
+  trackCredits?: Map<string, AboutCredit[]>;
 }) {
+  const [creditsFor, setCreditsFor] = useState<
+    LibraryAlbum["songs"][number] | null
+  >(null);
   return (
     <div className="w-full pb-8">
-      <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_3rem] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
+      <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_5rem] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
         <div className="text-center">#</div>
         <div>Track</div>
         <div className="flex justify-end text-right">
@@ -51,6 +61,8 @@ export function AlbumTrackList({
             trackArtist: track.artist,
           });
           const displayTitle = displaySongTitle(track.name);
+          const credits = trackCredits?.get(track.id) ?? [];
+          const creditLine = trackCreditLine(credits);
           return (
             <SongMenu
               album_id={album.id}
@@ -60,11 +72,12 @@ export function AlbumTrackList({
               artist_name={artistName}
               context="album"
               key={track.id}
+              onViewCredits={() => setCreditsFor(track)}
               song_id={track.id}
               song_name={track.name}
             >
               <div
-                className={`group relative grid min-h-14 grid-cols-[2rem_minmax(0,1fr)_3rem] items-center gap-4 rounded-md px-4 py-3 text-left text-sm transition-colors hover:bg-zinc-800/50 ${
+                className={`group relative grid min-h-14 grid-cols-[2rem_minmax(0,1fr)_5rem] items-center gap-4 rounded-md px-4 py-3 text-left text-sm transition-colors hover:bg-zinc-800/50 ${
                   active ? "bg-white/2" : ""
                 }`}
               >
@@ -134,15 +147,62 @@ export function AlbumTrackList({
                       ))}
                     </span>
                   )}
+                  {creditLine && (
+                    <span className="mt-0.5 truncate text-xs text-zinc-500">
+                      {creditLine.label}{" "}
+                      {creditLine.people.map((person, personIndex) => (
+                        <span
+                          key={`${person.id ?? person.name}-${personIndex}`}
+                        >
+                          {personIndex > 0 && ", "}
+                          <CreditName
+                            className="pointer-events-auto relative z-20 text-zinc-400"
+                            credit={{
+                              ...person,
+                              role:
+                                creditLine.label === "Lyrics by"
+                                  ? "lyricist"
+                                  : "composer",
+                            }}
+                          />
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </div>
-                <div className="pointer-events-none relative z-10 text-right tabular-nums text-zinc-400">
-                  {formatDuration(track.duration)}
+                <div className="relative z-10 flex items-center justify-end gap-2 text-right tabular-nums text-zinc-400">
+                  <button
+                    aria-label={`Credits for ${displayTitle}`}
+                    className="rounded p-1 text-zinc-500 opacity-0 transition-opacity hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
+                    onClick={() => setCreditsFor(track)}
+                    title="View credits"
+                    type="button"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                  <span className="pointer-events-none">
+                    {formatDuration(track.duration)}
+                  </span>
                 </div>
               </div>
             </SongMenu>
           );
         })}
       </div>
+      {creditsFor && (
+        <TrackCreditsDialog
+          artistName={creditsFor.artist || artistName}
+          audio={creditsFor.audio}
+          credits={trackCredits?.get(creditsFor.id) ?? []}
+          isrc={creditsFor.isrc}
+          label={creditsFor.label}
+          onOpenChange={(open) => {
+            if (!open) setCreditsFor(null);
+          }}
+          open
+          title={displaySongTitle(creditsFor.name)}
+        />
+      )}
     </div>
   );
 }

@@ -209,6 +209,7 @@ struct PersonalDataExport {
     favorites: Vec<serde_json::Value>,
     searches: Vec<serde_json::Value>,
     playlists: Vec<serde_json::Value>,
+    notes: Vec<serde_json::Value>,
 }
 
 fn safe_backup_filename(value: &str) -> Option<&str> {
@@ -1335,6 +1336,12 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                   ))) AS value
                  FROM playlist JOIN _playlist_to_user ON _playlist_to_user.a = playlist.id
                  WHERE _playlist_to_user.b = ? ORDER BY playlist.id",
+                &mut connection,
+            )?,
+            notes: object_rows(
+                "SELECT json_object('entity_type', entity_type, 'entity_id', entity_id,
+                  'body', body, 'updated_at', updated_at) AS value
+                 FROM user_note WHERE user_id = ? ORDER BY updated_at DESC",
                 &mut connection,
             )?,
         })

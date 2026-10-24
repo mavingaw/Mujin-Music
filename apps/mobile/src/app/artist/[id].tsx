@@ -1,7 +1,13 @@
 import {
+  creditRoleLabel,
+  creditRolesLabel,
   getAlbumInfos,
+  getArtistAbout,
+  getArtistCredits,
   getArtistInfo,
+  lifeSpanFacts,
   type Album,
+  type Artist,
   type LibraryAlbum,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
@@ -21,6 +27,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
+import { EditorialBlock, NoteBlock } from "@/components/credits";
+import { apiUrl } from "@/lib/runtime";
+import { joinMeta } from "@/lib/credit-links";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import {
@@ -29,14 +38,27 @@ import {
 } from "@/lib/press-feedback";
 
 export default function ArtistScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, tab } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
   const player = usePlayer();
   const [selected, setSelected] = useState<Album | null>(null);
   const artist = useQuery({
     queryKey: ["artist", id],
     queryFn: () => getArtistInfo(id),
+    enabled: !!id && !id.startsWith("mb:"),
+    retry: 1,
+  });
+  const about = useQuery({
+    queryKey: ["artist-about", id],
+    queryFn: () => getArtistAbout(id),
     enabled: !!id,
+    staleTime: 60_000,
+  });
+  const credits = useQuery({
+    queryKey: ["artist-credits", id],
+    queryFn: () => getArtistCredits(id),
+    enabled: !!id,
+    staleTime: 60_000,
   });
   const sections = useMemo(() => {
     const data = artist.data;
@@ -100,13 +122,28 @@ export default function ArtistScreen() {
       return track ? [{ album, track }] : [];
     });
   }, [artist.data, featured.data, featuredAlbumIds]);
-  if (artist.isPending)
+  const contributor: Artist | null =
+    !artist.data && credits.data
+      ? {
+          id: credits.data.artist_id,
+          name: credits.data.name,
+          icon_url: "",
+          followers: 0,
+          albums: [],
+          featured_on_album_ids: [],
+          description: "",
+        }
+      : null;
+  if (
+    (artist.isPending && artist.fetchStatus !== "idle") ||
+    (!artist.data && credits.isPending)
+  )
     return (
       <Screen>
         <ActivityIndicator color="white" style={{ flex: 1 }} />
       </Screen>
     );
-  if (!artist.data)
+  if (!artist.data && !contributor)
     return (
       <Screen>
         <Pressable
@@ -118,7 +155,11 @@ export default function ArtistScreen() {
         </Pressable>
       </Screen>
     );
-  const data = artist.data;
+  const data = (artist.data ?? contributor) as Artist;
+  const facts = lifeSpanFacts(about.data?.facts);
+  const portrait =
+    data.icon_url || (about.data?.image ? apiUrl(about.data.image.url) : null);
+  const creditedAlbums = credits.data?.albums ?? [];
   return (
     <Screen>
       <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
@@ -135,16 +176,33 @@ export default function ArtistScreen() {
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
           <View style={styles.hero}>
-            {data.icon_url ? (
+            {portrait ? (
               <Artwork
-                path={data.icon_url}
+                path={portrait}
                 rounded={70}
                 size={140}
                 style={styles.portrait}
               />
             ) : null}
+            {contributor ? (
+              <Text style={styles.kicker}>Contributor</Text>
+            ) : null}
             <Text style={styles.title}>{data.name}</Text>
-            {data.description ? (
+            {about.data?.facts ? (
+              <Text style={styles.facts}>
+                {joinMeta([
+                  about.data.facts.kind,
+                  ...facts.map((fact) => `${fact.label} ${fact.value}`),
+                ])}
+              </Text>
+            ) : null}
+            {!data.icon_url && about.data?.image ? (
+              <Text style={styles.photoCredit}>
+                Photo: {about.data.image.author}, {about.data.image.license},
+                via Wikimedia Commons
+              </Text>
+            ) : null}
+            {data.description && !about.data?.biography ? (
               <Text numberOfLines={4} style={styles.description}>
                 {data.description}
               </Text>
@@ -172,6 +230,52 @@ export default function ArtistScreen() {
               </View>
             ) : null}
           </View>
+          {about.data?.biography && tab !== "credits" ? (
+            <View style={styles.bio}>
+              <SectionTitle>Biography</SectionTitle>
+              <EditorialBlock text={about.data.biography} />
+            </View>
+          ) : null}
+          {creditedAlbums.length ? (
+            <View>
+              <SectionTitle>Credits</SectionTitle>
+              <Text style={styles.roles}>
+                {(credits.data?.roles ?? [])
+                  .map(
+                    (role) =>
+                      `${creditRoleLabel(role.role, role.instrument)} (${role.track_count})`,
+                  )
+                  .join(" · ")}
+              </Text>
+              <ScrollView
+                contentContainerStyle={styles.rail}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+              >
+                {creditedAlbums.map((entry) => (
+                  <Pressable
+                    accessibilityLabel={`${entry.album.name}, ${creditRolesLabel(entry.roles)}`}
+                    accessibilityRole="button"
+                    key={entry.album.id}
+                    onPress={() => router.push(`/album/${entry.album.id}`)}
+                    style={styles.card}
+                  >
+                    <Artwork
+                      path={entry.album.cover_url}
+                      size={156}
+                      rounded={9}
+                    />
+                    <Text numberOfLines={2} style={styles.albumName}>
+                      {entry.album.name}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.creditRole}>
+                      {creditRolesLabel(entry.roles)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
           {sections.map((section) => (
             <View key={section.key}>
               <SectionTitle>{section.title}</SectionTitle>
@@ -207,6 +311,16 @@ export default function ArtistScreen() {
                   song={track}
                 />
               ))}
+            </View>
+          ) : null}
+          {about.data ? (
+            <View style={styles.bio}>
+              <SectionTitle>Your note</SectionTitle>
+              <NoteBlock
+                entityType="artist"
+                id={data.id}
+                note={about.data.note}
+              />
             </View>
           ) : null}
         </ScrollView>
@@ -277,6 +391,35 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 18,
   },
+  kicker: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginBottom: 6,
+    textTransform: "uppercase",
+  },
+  facts: {
+    color: palette.secondary,
+    fontSize: 13,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  photoCredit: {
+    color: palette.muted,
+    fontSize: 11,
+    marginTop: 6,
+    textAlign: "center",
+  },
+  bio: { marginBottom: 12 },
+  roles: {
+    color: palette.secondary,
+    fontSize: 13,
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  rail: { paddingHorizontal: 20, gap: 16 },
+  creditRole: { color: palette.muted, fontSize: 12, marginTop: 2 },
   errorState: { flex: 1, alignItems: "center", justifyContent: "center" },
   error: { color: palette.secondary },
 });
