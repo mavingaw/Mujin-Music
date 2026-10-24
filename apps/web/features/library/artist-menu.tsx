@@ -12,6 +12,11 @@ import { getArtistInfo } from "@parson/music-sdk";
 import { Play, UserRound } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { useState } from "react";
+import {
+  CreateTagDialog,
+  TagSubmenu,
+} from "@/features/library/focus/tag-submenu";
 
 export default function ArtistMenu({
   artistId,
@@ -21,6 +26,7 @@ export default function ArtistMenu({
   children: React.ReactNode;
 }) {
   const player = usePlayer();
+  const [createTagOpen, setCreateTagOpen] = useState(false);
 
   const play = async () => {
     try {
@@ -51,21 +57,36 @@ export default function ArtistMenu({
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-60">
-        <ContextMenuItem onSelect={() => void play()}>
-          <Play className="h-4 w-4" />
-          Play
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem asChild>
-          <Link href={`/artist?id=${artistId}`}>
-            <UserRound className="h-4 w-4" />
-            View artist
-          </Link>
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent className="w-60">
+          <ContextMenuItem onSelect={() => void play()}>
+            <Play className="h-4 w-4" />
+            Play
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem asChild>
+            <Link href={`/artist?id=${artistId}`}>
+              <UserRound className="h-4 w-4" />
+              View artist
+            </Link>
+          </ContextMenuItem>
+          <TagSubmenu
+            entityId={artistId}
+            entityType="artist"
+            onCreateTag={() => setCreateTagOpen(true)}
+          />
+        </ContextMenuContent>
+      </ContextMenu>
+      {createTagOpen && (
+        <CreateTagDialog
+          entityId={artistId}
+          entityType="artist"
+          onOpenChange={setCreateTagOpen}
+          open={createTagOpen}
+        />
+      )}
+    </>
   );
 }

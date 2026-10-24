@@ -22,13 +22,25 @@ import { usePlayer } from "@/features/player/player-context";
 import getBaseURL from "@/lib/api/server-url";
 import { defaultCover } from "@/lib/images/default-cover";
 import {
+  decodeFocus,
+  emptyFocus,
+  encodeFocus,
+  getFocusPage,
   getLibraryCatalog,
   getLibraryCatalogArtists,
   getPlaylists,
+  withEntity,
+  type FocusEntity,
+  type FocusQuery,
+  type LibraryCatalogAlbum,
   type LibraryCatalogArtist,
   type LibraryCatalogSong,
 } from "@parson/music-sdk";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   Disc3,
   ChevronRight,
@@ -43,7 +55,20 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import FocusBar from "./focus/focus-bar";
+import FocusPanel from "./focus/focus-panel";
+import SmartPlaylistDialog from "./focus/smart-playlist-dialog";
+import {
+  audioBadge,
+  catalogSongsToQueue,
+  focusCountLabel,
+  focusQueryKey,
+  qualityBadgeLabel,
+  shuffled,
+  usesFocusEndpoint,
+} from "./focus/focus-state";
 import { uniqueById } from "./library-items";
 import {
   InfiniteLoad,
@@ -56,6 +81,35 @@ const PAGE_SIZE = 100;
 const views = ["albums", "songs", "artists", "playlists"] as const;
 type LibraryView = (typeof views)[number];
 
+const MAX_PLAY_SONGS = 500;
+
+type FocusedAlbum = LibraryCatalogAlbum & { quality?: string | null };
+type FocusedSong = LibraryCatalogSong & { badge?: string | null };
+
+function entityForView(view: LibraryView): FocusEntity {
+  return view === "playlists" ? "albums" : view;
+}
+
+function libraryURL(view: LibraryView, focus: FocusQuery | null): string {
+  const next = new URLSearchParams(window.location.search);
+  if (view === "albums") next.delete("view");
+  else next.set("view", view);
+  if (focus && view !== "playlists" && usesFocusEndpoint(focus)) {
+    next.set("focus", encodeFocus(focus));
+  } else {
+    next.delete("focus");
+  }
+  return `/library${next.size ? `?${next}` : ""}`;
+}
+
+function writeURL(view: LibraryView, focus: FocusQuery | null) {
+  window.history.replaceState(
+    window.history.state,
+    "",
+    libraryURL(view, focus),
+  );
+}
+
 export default function LibraryOverview() {
   const searchParams = useSearchParams();
   const requestedView = searchParams.get("view");
@@ -64,7 +118,23 @@ export default function LibraryOverview() {
       ? (requestedView as LibraryView)
       : "albums",
   );
-  const catalogEnabled = view === "albums" || view === "songs";
+  const [focus, setFocusState] = useState<FocusQuery>(() =>
+    decodeFocus(
+      searchParams.get("focus"),
+      entityForView(
+        views.includes(requestedView as LibraryView)
+          ? (requestedView as LibraryView)
+          : "albums",
+      ),
+    ),
+  );
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [smartOpen, setSmartOpen] = useState(false);
+  const player = usePlayer();
+  const browsing = view !== "playlists";
+  const focusActive = browsing && usesFocusEndpoint(focus);
+  const catalogEnabled =
+    !focusActive && (view === "albums" || view === "songs");
 
   const catalog = useInfiniteQuery({
     queryKey: ["library", "catalog", view],
@@ -85,7 +155,18 @@ export default function LibraryOverview() {
     queryFn: ({ pageParam }) => getLibraryCatalogArtists(pageParam, PAGE_SIZE),
     getNextPageParam: (lastPage, pages) =>
       lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
-    enabled: view === "artists",
+    enabled: !focusActive && view === "artists",
+  });
+  const focused = useInfiniteQuery({
+    queryKey: ["library", "focus", "page", focusQueryKey(focus)],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => getFocusPage(focus, pageParam, PAGE_SIZE),
+    getNextPageParam: (lastPage, pages) => {
+      const next = pages.length * PAGE_SIZE;
+      return next < lastPage.total ? next : undefined;
+    },
+    enabled: focusActive,
+    placeholderData: keepPreviousData,
   });
   const playlists = useQuery({
     queryKey: ["playlists"],
@@ -94,50 +175,116 @@ export default function LibraryOverview() {
   });
 
   const catalogPages = catalog.data?.pages ?? [];
-  const allAlbums = uniqueById(catalogPages.flatMap((page) => page.albums));
-  const allSongs = uniqueById(catalogPages.flatMap((page) => page.songs));
-  const allArtists = uniqueById(artists.data?.pages.flat() ?? []);
-  const initialLoading =
-    (catalogEnabled && catalog.isPending && !catalog.data) ||
-    (view === "artists" && artists.isPending && !artists.data) ||
-    (view === "playlists" && playlists.isPending);
-  const activeError =
-    (catalogEnabled ? catalog.error : null) ??
-    (view === "artists" ? artists.error : null) ??
-    (view === "playlists" ? playlists.error : null);
+  const focusPages = focused.data?.pages ?? [];
+  const allAlbums: FocusedAlbum[] = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.albums))
+    : uniqueById(catalogPages.flatMap((page) => page.albums));
+  const allSongs: FocusedSong[] = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.songs)).map((song) => ({
+        ...song,
+        badge: audioBadge(song.audio),
+      }))
+    : uniqueById(catalogPages.flatMap((page) => page.songs));
+  const allArtists = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.artists))
+    : uniqueById(artists.data?.pages.flat() ?? []);
+  const lastFocusPage = focusPages[focusPages.length - 1];
+  const lastCatalogPage = catalogPages[catalogPages.length - 1];
+  const countLabel = focusActive
+    ? focusCountLabel(focus, lastFocusPage?.total, lastFocusPage?.libraryTotal)
+    : view === "albums"
+      ? focusCountLabel(focus, lastCatalogPage?.totalAlbums, undefined)
+      : view === "songs"
+        ? focusCountLabel(focus, lastCatalogPage?.totalSongs, undefined)
+        : null;
+
+  const active = focusActive ? focused : view === "artists" ? artists : catalog;
+  const initialLoading = focusActive
+    ? focused.isPending && !focused.data
+    : (catalogEnabled && catalog.isPending && !catalog.data) ||
+      (view === "artists" && artists.isPending && !artists.data) ||
+      (view === "playlists" && playlists.isPending);
+  const activeError = focusActive
+    ? focused.error
+    : ((catalogEnabled ? catalog.error : null) ??
+      (view === "artists" ? artists.error : null) ??
+      (view === "playlists" ? playlists.error : null));
 
   const selectView = (nextView: LibraryView) => {
+    const nextFocus =
+      nextView === "playlists" ? focus : withEntity(focus, nextView);
     setView(nextView);
-    const next = new URLSearchParams(window.location.search);
-    if (nextView === "albums") {
-      next.delete("view");
-    } else {
-      next.set("view", nextView);
+    setFocusState(nextFocus);
+    writeURL(nextView, nextFocus);
+  };
+
+  const setFocus = useCallback((next: FocusQuery) => {
+    const nextView = next.entity as LibraryView;
+    setView(nextView);
+    setFocusState(next);
+    writeURL(nextView, next);
+  }, []);
+
+  const playFocus = async (shuffle: boolean) => {
+    try {
+      const songsQuery = withEntity(focus, "songs");
+      const page = await getFocusPage(songsQuery, 0, 200);
+      let songs = page.songs;
+      for (
+        let offset = songs.length;
+        offset < Math.min(page.total, MAX_PLAY_SONGS);
+        offset += 200
+      ) {
+        const next = await getFocusPage(songsQuery, offset, 200);
+        if (!next.songs.length) break;
+        songs = songs.concat(next.songs);
+      }
+      const queue = catalogSongsToQueue(songs.slice(0, MAX_PLAY_SONGS));
+      const ordered = shuffle ? shuffled(queue) : queue;
+      const first = ordered[0];
+      if (!first) {
+        toast("Nothing to play in this focus.");
+        return;
+      }
+      player.setQueue(ordered);
+      player.setCurrentSongIndex(0);
+      player.setSongCallback(first.song, first.artist, first.album);
+      player.playAudioSource();
+    } catch {
+      toast("Could not play this focus.");
     }
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `/library${next.size ? `?${next}` : ""}`,
-    );
   };
 
   useEffect(() => {
     const syncFromHistory = () => {
-      const requested = new URLSearchParams(window.location.search).get("view");
-      setView(
-        views.includes(requested as LibraryView)
-          ? (requested as LibraryView)
-          : "albums",
-      );
+      const params = new URLSearchParams(window.location.search);
+      const requested = params.get("view");
+      const nextView = views.includes(requested as LibraryView)
+        ? (requested as LibraryView)
+        : "albums";
+      setView(nextView);
+      setFocusState(decodeFocus(params.get("focus"), entityForView(nextView)));
     };
     window.addEventListener("popstate", syncFromHistory);
     return () => window.removeEventListener("popstate", syncFromHistory);
   }, []);
 
+  const clearFocus = () => setFocus(emptyFocus(focus.entity));
+
   return (
     <section className="mx-auto w-full max-w-266 space-y-7">
       <header className="flex items-end justify-between gap-5">
-        <h1 className="text-3xl font-semibold text-white">Library</h1>
+        <div>
+          <h1 className="text-3xl font-semibold text-white">Library</h1>
+          {browsing && countLabel && (
+            <p
+              aria-live="polite"
+              className="mt-1 text-sm tabular-nums text-zinc-500"
+            >
+              {countLabel}
+            </p>
+          )}
+        </div>
       </header>
 
       <div className="flex min-h-11 min-w-0 items-end border-b border-white/8">
@@ -178,6 +325,26 @@ export default function LibraryOverview() {
         )}
       </div>
 
+      {browsing && (
+        <div className="space-y-4">
+          <FocusBar
+            canPlay={view !== "artists" || focusActive}
+            onCreateSmartPlaylist={() => setSmartOpen(true)}
+            onPlay={(shuffle) => void playFocus(shuffle)}
+            onTogglePanel={() => setPanelOpen((open) => !open)}
+            panelOpen={panelOpen}
+            query={focus}
+            setQuery={setFocus}
+          />
+          {panelOpen && <FocusPanel query={focus} setQuery={setFocus} />}
+        </div>
+      )}
+      <SmartPlaylistDialog
+        onOpenChange={setSmartOpen}
+        open={smartOpen}
+        query={focus}
+      />
+
       {activeError && (
         <p className="rounded-lg border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-sm text-amber-100">
           Some items could not be loaded. You can retry below.
@@ -187,28 +354,34 @@ export default function LibraryOverview() {
       {view === "albums" && (
         <AlbumsView
           albums={allAlbums}
-          hasMore={catalog.hasNextPage}
+          focused={focusActive}
+          hasMore={active.hasNextPage}
           loading={initialLoading}
-          loadingMore={catalog.isFetchingNextPage}
-          onLoadMore={() => void catalog.fetchNextPage()}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
         />
       )}
       {view === "songs" && (
         <SongsView
-          songs={allSongs}
-          hasMore={catalog.hasNextPage}
+          focused={focusActive}
+          hasMore={active.hasNextPage}
           loading={initialLoading}
-          loadingMore={catalog.isFetchingNextPage}
-          onLoadMore={() => void catalog.fetchNextPage()}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
+          songs={allSongs}
         />
       )}
       {view === "artists" && (
         <ArtistsView
           artists={allArtists}
-          hasMore={artists.hasNextPage}
-          loading={artists.isPending}
-          loadingMore={artists.isFetchingNextPage}
-          onLoadMore={() => void artists.fetchNextPage()}
+          focused={focusActive}
+          hasMore={active.hasNextPage}
+          loading={initialLoading}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
         />
       )}
       {view === "playlists" && (
@@ -218,6 +391,17 @@ export default function LibraryOverview() {
         />
       )}
     </section>
+  );
+}
+
+function FocusEmpty({ onClear }: { onClear: () => void }) {
+  return (
+    <LibraryMessage
+      action="Clear focus"
+      body="Nothing in your library matches every filter. Remove a filter or switch to Match any."
+      onAction={onClear}
+      title="No matches"
+    />
   );
 }
 
@@ -253,19 +437,26 @@ function LibraryTab({
 
 function AlbumsView({
   albums,
+  focused,
   hasMore,
   loading,
   loadingMore,
+  onClearFocus,
   onLoadMore,
 }: {
-  albums: Awaited<ReturnType<typeof getLibraryCatalog>>["albums"];
+  albums: FocusedAlbum[];
+  focused: boolean;
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
+  onClearFocus: () => void;
   onLoadMore: () => void;
 }) {
   if (loading) {
     return <LibraryLoading compact />;
+  }
+  if (!albums.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
   }
   if (!albums.length) {
     return (
@@ -280,17 +471,27 @@ function AlbumsView({
   return (
     <>
       <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {albums.map((album) => (
-          <AlbumCard
-            key={album.id}
-            album_id={album.id}
-            album_name={album.name}
-            album_cover={album.coverPath}
-            artist_id={album.artistId}
-            artist_name={album.artistName}
-            first_release_date={album.releaseYear}
-          />
-        ))}
+        {albums.map((album) => {
+          const badge =
+            album.quality === "hires" ? qualityBadgeLabel("hires") : null;
+          return (
+            <div className="relative min-w-0" key={album.id}>
+              <AlbumCard
+                album_id={album.id}
+                album_name={album.name}
+                album_cover={album.coverPath}
+                artist_id={album.artistId}
+                artist_name={album.artistName}
+                first_release_date={album.releaseYear}
+              />
+              {badge && (
+                <span className="pointer-events-none absolute left-2 top-2 z-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200 backdrop-blur">
+                  {badge}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
       <InfiniteLoad
         hasMore={hasMore}
@@ -302,20 +503,27 @@ function AlbumsView({
 }
 
 function SongsView({
+  focused,
   songs,
   hasMore,
   loading,
   loadingMore,
+  onClearFocus,
   onLoadMore,
 }: {
-  songs: LibraryCatalogSong[];
+  focused: boolean;
+  songs: FocusedSong[];
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
+  onClearFocus: () => void;
   onLoadMore: () => void;
 }) {
   if (loading) {
     return <LibraryLoading compact />;
+  }
+  if (!songs.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
   }
   if (!songs.length) {
     return (
@@ -343,13 +551,7 @@ function SongsView({
   );
 }
 
-function CatalogSongRow({
-  index,
-  song,
-}: {
-  index: number;
-  song: LibraryCatalogSong;
-}) {
+function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
   const player = usePlayer();
   const active = player.song.id === song.id;
   const artwork = song.coverPath
@@ -430,7 +632,12 @@ function CatalogSongRow({
           {isExplicitSongTitle(song.name) && <ExplicitBadge />}
           <ArtistCreditLinks credits={catalogSongArtistCredits(song)} />
         </p>
-        <span className="pr-2 text-xs tabular-nums text-zinc-600">
+        <span className="flex items-center gap-3 pr-2 text-xs tabular-nums text-zinc-600">
+          {song.badge && (
+            <span className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 md:inline">
+              {song.badge}
+            </span>
+          )}
           {formatDuration(song.durationSeconds)}
         </span>
       </div>
@@ -440,19 +647,26 @@ function CatalogSongRow({
 
 function ArtistsView({
   artists,
+  focused,
   hasMore,
   loading,
   loadingMore,
+  onClearFocus,
   onLoadMore,
 }: {
   artists: LibraryCatalogArtist[];
+  focused: boolean;
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
+  onClearFocus: () => void;
   onLoadMore: () => void;
 }) {
   if (loading) {
     return <LibraryLoading compact />;
+  }
+  if (!artists.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
   }
   if (!artists.length) {
     return (

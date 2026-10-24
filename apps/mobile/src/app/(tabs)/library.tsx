@@ -1,6 +1,12 @@
 import {
+  emptyFocus,
+  focusCountLabel,
+  getFocusPage,
   getLibraryCatalog,
   getLibraryCatalogArtists,
+  usesFocusEndpoint,
+  withEntity,
+  type FocusQuery,
   getFavoriteSongDetails,
   getPlaylists,
   getSongInfos,
@@ -11,6 +17,7 @@ import {
   type PlaylistSummary,
 } from "@parson/music-sdk";
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
@@ -48,20 +55,40 @@ import {
 import { useSession } from "@/providers/session-provider";
 import { usePlayer } from "@/providers/player-provider";
 import { PlaylistCover } from "@/components/playlist-cover";
+import { FocusSheet } from "@/components/focus-sheet";
+import { LibraryFocusBar } from "@/components/library-focus-bar";
+import {
+  focusEntityForSection,
+  type LibrarySection,
+} from "@/lib/library-focus";
 
 const PAGE_SIZE = 100;
 
-type Section =
-  "albums" | "songs" | "downloads" | "liked" | "artists" | "playlists";
+type Section = LibrarySection;
 
 export default function LibraryScreen() {
   const session = useSession();
   const player = usePlayer();
   const client = useQueryClient();
-  const [selectedSection, setSection] = useState<Section>(() =>
+  const [selectedSection, setSelectedSection] = useState<Section>(() =>
     session.phase === "offline" ? "downloads" : "albums",
   );
   const section = session.phase === "offline" ? "downloads" : selectedSection;
+  const [focusQuery, setFocusQuery] = useState<FocusQuery>(() =>
+    emptyFocus("albums"),
+  );
+  const [focusOpen, setFocusOpen] = useState(false);
+  const focusEntity = focusEntityForSection(section);
+  const focusActive = focusEntity !== null && usesFocusEndpoint(focusQuery);
+  const setSection = (next: Section) => {
+    setSelectedSection(next);
+    const entity = focusEntityForSection(next);
+    if (entity) setFocusQuery((current) => withEntity(current, entity));
+  };
+  const applyFocus = (next: FocusQuery) => {
+    setFocusQuery(next);
+    setSelectedSection(next.entity);
+  };
   const [selectedAlbum, setSelectedAlbum] =
     useState<LibraryCatalogAlbum | null>(null);
   const [selectedArtist, setSelectedArtist] =
@@ -87,7 +114,18 @@ export default function LibraryScreen() {
         section === "albums" ? lastPage.totalAlbums : lastPage.totalSongs;
       return next < total ? next : undefined;
     },
-    enabled: section === "albums" || section === "songs",
+    enabled: !focusActive && (section === "albums" || section === "songs"),
+  });
+  const focused = useInfiniteQuery({
+    queryKey: ["library", "focus", "page", "mobile", focusQuery],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => getFocusPage(focusQuery, pageParam, PAGE_SIZE),
+    getNextPageParam: (lastPage, pages) => {
+      const next = pages.length * PAGE_SIZE;
+      return next < lastPage.total ? next : undefined;
+    },
+    enabled: focusActive,
+    placeholderData: keepPreviousData,
   });
   const artists = useInfiniteQuery({
     queryKey: ["library", "catalog", "artists"],
@@ -95,7 +133,7 @@ export default function LibraryScreen() {
     queryFn: ({ pageParam }) => getLibraryCatalogArtists(pageParam, PAGE_SIZE),
     getNextPageParam: (lastPage, pages) =>
       lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
-    enabled: section === "artists",
+    enabled: !focusActive && section === "artists",
   });
   const liked = useInfiniteQuery({
     queryKey: ["favorite-song-details"],
@@ -139,22 +177,50 @@ export default function LibraryScreen() {
     enabled: section === "downloads",
   });
   const catalogPages = catalog.data?.pages ?? [];
-  const albumItems = catalogPages.flatMap((page) => page.albums);
-  const songItems = catalogPages.flatMap((page) => page.songs);
-  const playableSongs = songItems.map(playableCatalogSong);
-  const artistItems = artists.data?.pages.flat() ?? [];
+  const focusPages = focused.data?.pages ?? [];
+  const albumItems: LibraryCatalogAlbum[] = focusActive
+    ? focusPages.flatMap((page) => page.albums)
+    : catalogPages.flatMap((page) => page.albums);
+  const songItems = focusActive
+    ? focusPages.flatMap((page) => page.songs)
+    : catalogPages.flatMap((page) => page.songs);
+  const playableSongs = songItems.map((song) =>
+    playableCatalogSong({ ...song, duration: song.durationSeconds }),
+  );
+  const artistItems: LibraryCatalogArtist[] = focusActive
+    ? focusPages.flatMap((page) => page.artists)
+    : (artists.data?.pages.flat() ?? []);
+  const lastFocusPage = focusPages.at(-1);
+  const lastCatalogPage = catalogPages.at(-1);
+  const focusCount = focusActive
+    ? focusCountLabel(
+        focusQuery,
+        lastFocusPage?.total,
+        lastFocusPage?.libraryTotal,
+      )
+    : section === "albums"
+      ? focusCountLabel(focusQuery, lastCatalogPage?.totalAlbums, undefined)
+      : section === "songs"
+        ? focusCountLabel(focusQuery, lastCatalogPage?.totalSongs, undefined)
+        : null;
   const likedSongs =
     liked.data?.pages.flatMap((page) => page.map((item) => item.song)) ?? [];
   const downloadedItems = groupDownloadedLibrary(downloads.data ?? []);
   const loading =
-    ((section === "albums" || section === "songs") && catalog.isPending) ||
-    (section === "artists" && artists.isPending) ||
+    (focusActive && focused.isPending && !focused.data) ||
+    (!focusActive &&
+      (section === "albums" || section === "songs") &&
+      catalog.isPending) ||
+    (!focusActive && section === "artists" && artists.isPending) ||
     (section === "liked" && liked.isPending) ||
     (section === "downloads" && downloads.isPending) ||
     (section === "playlists" && playlists.isPending);
   const failed =
-    ((section === "albums" || section === "songs") && catalog.isError) ||
-    (section === "artists" && artists.isError) ||
+    (focusActive && focused.isError) ||
+    (!focusActive &&
+      (section === "albums" || section === "songs") &&
+      catalog.isError) ||
+    (!focusActive && section === "artists" && artists.isError) ||
     (section === "liked" && liked.isError) ||
     (section === "downloads" && downloads.isError) ||
     (section === "playlists" && playlists.isError);
@@ -164,7 +230,9 @@ export default function LibraryScreen() {
     (section === "artists" && artistItems.length === 0) ||
     (section === "liked" && likedSongs.length === 0);
   const retry = () => {
-    if (section === "albums" || section === "songs") void catalog.refetch();
+    if (focusActive) void focused.refetch();
+    else if (section === "albums" || section === "songs")
+      void catalog.refetch();
     else if (section === "artists") void artists.refetch();
     else if (section === "liked") void liked.refetch();
     else if (section === "downloads") void downloads.refetch();
@@ -241,6 +309,14 @@ export default function LibraryScreen() {
             </Pressable>
           ))}
         </ScrollView>
+        {focusEntity ? (
+          <LibraryFocusBar
+            countLabel={focusCount}
+            onOpen={() => setFocusOpen(true)}
+            query={focusQuery}
+            setQuery={applyFocus}
+          />
+        ) : null}
         {loading ? (
           <ActivityIndicator color="white" style={{ marginTop: 60 }} />
         ) : failed ? (
@@ -291,7 +367,9 @@ export default function LibraryScreen() {
                 <Text style={styles.emptyDownloadsText}>
                   {section === "liked"
                     ? "Songs you like will appear here."
-                    : "Refresh or index your library from Settings."}
+                    : focusActive
+                      ? "Nothing matches this focus. Remove a filter or switch to Match any."
+                      : "Refresh or index your library from Settings."}
                 </Text>
               </View>
             ) : null}
@@ -397,14 +475,21 @@ export default function LibraryScreen() {
                   <SongRow song={song} queue={likedSongs} />
                 </View>
               ))}
-            {(section === "albums" || section === "songs") &&
+            {focusActive && focused.hasNextPage ? (
+              <LoadMore
+                loading={focused.isFetchingNextPage}
+                onPress={() => void focused.fetchNextPage()}
+              />
+            ) : null}
+            {!focusActive &&
+            (section === "albums" || section === "songs") &&
             catalog.hasNextPage ? (
               <LoadMore
                 loading={catalog.isFetchingNextPage}
                 onPress={() => void catalog.fetchNextPage()}
               />
             ) : null}
-            {section === "artists" && artists.hasNextPage ? (
+            {!focusActive && section === "artists" && artists.hasNextPage ? (
               <LoadMore
                 loading={artists.isFetchingNextPage}
                 onPress={() => void artists.fetchNextPage()}
@@ -501,6 +586,12 @@ export default function LibraryScreen() {
         <PlaylistPicker
           open={creatingPlaylist}
           onClose={() => setCreatingPlaylist(false)}
+        />
+        <FocusSheet
+          onClose={() => setFocusOpen(false)}
+          open={focusOpen}
+          query={focusQuery}
+          setQuery={applyFocus}
         />
       </SafeAreaView>
     </Screen>

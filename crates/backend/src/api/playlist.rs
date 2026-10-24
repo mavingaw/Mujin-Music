@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::api::error::{internal_server_error, not_found};
+use crate::api::focus::{SmartPlaylistInfo, smart_playlists_for_user};
 use crate::api::song::{ResponseSong, SongInfo, fetch_song_info};
 use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
@@ -330,6 +331,9 @@ struct PlaylistSummary {
     song_count: i64,
     total_duration: f64,
     cover_songs: Vec<ResponseSong>,
+    /// The focus a smart playlist's tracks come from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    smart: Option<SmartPlaylistInfo>,
 }
 
 fn full_song(song_id: &str, cache: &LibraryCache) -> Option<ResponseSong> {
@@ -365,11 +369,15 @@ async fn list(
     let list_pool = pool.get_ref().clone();
     match web::block(move || -> Result<_, String> {
         let mut connection = list_pool.get().map_err(|error| error.to_string())?;
-        playlist_list_rows(&mut connection, owner_id).map_err(|error| error.to_string())
+        let rows =
+            playlist_list_rows(&mut connection, owner_id).map_err(|error| error.to_string())?;
+        let smart = smart_playlists_for_user(&mut connection, owner_id)
+            .map_err(|error| error.to_string())?;
+        Ok((rows, smart))
     })
     .await
     {
-        Ok(Ok((items, aggregates, cover_tracks))) => {
+        Ok(Ok(((items, aggregates, cover_tracks), mut smart))) => {
             let aggregate_by_id: HashMap<_, _> = aggregates
                 .into_iter()
                 .map(|row| (row.playlist_id, (row.song_count, row.total_duration)))
@@ -391,6 +399,7 @@ async fn list(
                         song_count,
                         total_duration,
                         cover_songs: covers_by_id.remove(&id).unwrap_or_default(),
+                        smart: smart.remove(&id),
                     }
                 })
                 .collect();
@@ -528,6 +537,7 @@ async fn create(
                 song_count: songs.len() as i64,
                 total_duration: songs.iter().map(|song| song.duration).sum(),
                 cover_songs: songs.into_iter().take(4).collect(),
+                smart: None,
             })
         }
         Ok(Ok(CreatePlaylistResult::CapacityReached)) => {
@@ -599,11 +609,14 @@ async fn detail(
             .limit(MAX_PLAYLISTS_PER_USER)
             .load(&mut connection)
             .map_err(|error| error.to_string())?;
-        Ok(Some((playlist, song_infos, user_ids)))
+        let smart = smart_playlists_for_user(&mut connection, owner_id)
+            .map_err(|error| error.to_string())?
+            .remove(&id);
+        Ok(Some((playlist, song_infos, user_ids, smart)))
     })
     .await
     {
-        Ok(Ok(Some((playlist, song_infos, user_ids)))) => {
+        Ok(Ok(Some((playlist, song_infos, user_ids, smart)))) => {
             let songs: Vec<_> = song_infos
                 .iter()
                 .filter_map(|track| full_song(&track.song_id, cache.as_ref()))
@@ -616,6 +629,7 @@ async fn detail(
                     song_count: songs.len() as i64,
                     total_duration,
                     cover_songs,
+                    smart,
                 },
                 song_infos,
                 songs,

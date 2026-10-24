@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    album, artist, cast, data, filesystem, focus, genres, home, lyrics, metadata, playback,
+    playlist, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -35,6 +35,16 @@ fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .wrap(HttpAuthentication::with_fn(validator))
                 .service(library_catalog)
                 .service(library_catalog_artists),
+        )
+        .service(
+            web::scope("/focus")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(focus::configure_focus),
+        )
+        .service(
+            web::scope("/tags")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(focus::configure_tags),
         )
         .service(
             web::scope("")
@@ -211,7 +221,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "focus"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
