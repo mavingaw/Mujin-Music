@@ -12,7 +12,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { AudioLines, ListMusic, Maximize2, MicVocal } from "lucide-react";
+import {
+  AudioLines,
+  ListMusic,
+  Maximize2,
+  MicVocal,
+  MonitorSpeaker,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -42,6 +48,7 @@ export function PlayerFooter({
   lyricsOpen,
   muted,
   onNext,
+  onHandOffToSpotify,
   onOpenFullscreen,
   onOpenQueue,
   onPrevious,
@@ -76,6 +83,8 @@ export function PlayerFooter({
   lyricsOpen: boolean;
   muted: boolean;
   onNext: () => void;
+  /** Present when Spotify Connect handoff is available. */
+  onHandOffToSpotify?: () => void;
   onOpenFullscreen: () => void;
   onOpenQueue: () => void;
   onPrevious: () => void;
@@ -195,6 +204,12 @@ export function PlayerFooter({
                 <Maximize2 className="h-4 w-4" />
                 Fullscreen
               </DropdownMenuItem>
+              {onHandOffToSpotify && (
+                <DropdownMenuItem onSelect={onHandOffToSpotify}>
+                  <MonitorSpeaker className="h-4 w-4" />
+                  Play on Spotify device…
+                </DropdownMenuItem>
+              )}
             </PlayerMoreMenu>
           </section>
         </div>

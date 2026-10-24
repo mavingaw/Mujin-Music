@@ -3,6 +3,7 @@ pub mod credits;
 pub(crate) mod discovery;
 pub mod identity;
 pub mod indexer;
+pub mod matching;
 pub mod normalize;
 pub mod search;
 pub mod state;
