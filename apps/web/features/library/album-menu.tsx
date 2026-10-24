@@ -14,6 +14,11 @@ import { Disc3, Download, Play, UserRound } from "lucide-react";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { toast } from "sonner";
 import Link from "next/link";
+import { useState } from "react";
+import {
+  CreateTagDialog,
+  TagSubmenu,
+} from "@/features/library/focus/tag-submenu";
 
 type AlbumMenuProps = {
   album_id: string;
@@ -30,6 +35,7 @@ export default function AlbumMenu({
 }: AlbumMenuProps) {
   const player = usePlayer();
   const { session } = useSession();
+  const [createTagOpen, setCreateTagOpen] = useState(false);
 
   const loadAlbum = () =>
     getAlbumInfo(album_id, false) as Promise<LibraryAlbum>;
@@ -56,35 +62,50 @@ export default function AlbumMenu({
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-60">
-        <ContextMenuItem onSelect={() => void play()}>
-          <Play className="h-4 w-4" />
-          Play
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem asChild>
-          <Link href={`/album?id=${album_id}`}>
-            <Disc3 className="h-4 w-4" />
-            View album
-          </Link>
-        </ContextMenuItem>
-        {session?.role === "user" && (
-          <ContextMenuItem onSelect={() => void save()}>
-            <Download className="h-4 w-4" />
-            Download album
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent className="w-60">
+          <ContextMenuItem onSelect={() => void play()}>
+            <Play className="h-4 w-4" />
+            Play
           </ContextMenuItem>
-        )}
-        {showArtist && (
+          <ContextMenuSeparator />
           <ContextMenuItem asChild>
-            <Link href={`/artist?id=${artist_id}`}>
-              <UserRound className="h-4 w-4" />
-              View artist
+            <Link href={`/album?id=${album_id}`}>
+              <Disc3 className="h-4 w-4" />
+              View album
             </Link>
           </ContextMenuItem>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+          <TagSubmenu
+            entityId={album_id}
+            entityType="album"
+            onCreateTag={() => setCreateTagOpen(true)}
+          />
+          {session?.role === "user" && (
+            <ContextMenuItem onSelect={() => void save()}>
+              <Download className="h-4 w-4" />
+              Download album
+            </ContextMenuItem>
+          )}
+          {showArtist && (
+            <ContextMenuItem asChild>
+              <Link href={`/artist?id=${artist_id}`}>
+                <UserRound className="h-4 w-4" />
+                View artist
+              </Link>
+            </ContextMenuItem>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
+      {createTagOpen && (
+        <CreateTagDialog
+          entityId={album_id}
+          entityType="album"
+          onOpenChange={setCreateTagOpen}
+          open={createTagOpen}
+        />
+      )}
+    </>
   );
 }

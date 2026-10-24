@@ -5146,7 +5146,7 @@ fn split_genres(value: &str) -> Vec<String> {
     genres
 }
 
-fn normalize_genre_key(value: &str) -> String {
+pub(crate) fn normalize_genre_key(value: &str) -> String {
     value
         .to_lowercase()
         .chars()

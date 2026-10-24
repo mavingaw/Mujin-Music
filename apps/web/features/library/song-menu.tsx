@@ -11,6 +11,10 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
+import {
+  CreateTagDialog,
+  TagSubmenu,
+} from "@/features/library/focus/tag-submenu";
 import { usePlayer } from "@/features/player/player-context";
 import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -66,6 +70,7 @@ export default function SongMenu({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createTagOpen, setCreateTagOpen] = useState(false);
   const entityLinks = songMenuEntityLinkVisibility(context);
   const playlists = useQuery({
     queryKey: ["playlists"],
@@ -195,6 +200,13 @@ export default function SongMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
+          {context !== "player" && (
+            <TagSubmenu
+              entityId={song_id}
+              entityType="track"
+              onCreateTag={() => setCreateTagOpen(true)}
+            />
+          )}
           {(entityLinks.album || entityLinks.artist) && (
             <ContextMenuSeparator />
           )}
@@ -231,6 +243,14 @@ export default function SongMenu({
         onOpenChange={setCreateOpen}
         open={createOpen}
       />
+      {createTagOpen && (
+        <CreateTagDialog
+          entityId={song_id}
+          entityType="track"
+          onOpenChange={setCreateTagOpen}
+          open={createTagOpen}
+        />
+      )}
     </>
   );
 }

@@ -209,6 +209,8 @@ struct PersonalDataExport {
     favorites: Vec<serde_json::Value>,
     searches: Vec<serde_json::Value>,
     playlists: Vec<serde_json::Value>,
+    tags: Vec<serde_json::Value>,
+    saved_focuses: Vec<serde_json::Value>,
 }
 
 fn safe_backup_filename(value: &str) -> Option<&str> {
@@ -1323,6 +1325,8 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                 "SELECT json_object('id', playlist.id, 'name', playlist.name,
                   'description', playlist.description, 'is_public', playlist.is_public,
                   'created_at', playlist.created_at, 'updated_at', playlist.updated_at,
+                  'smart_focus', (SELECT json(query_json) FROM smart_playlist
+                    WHERE smart_playlist.playlist_id = playlist.id),
                   'songs', json((
                     SELECT json_group_array(json_object(
                       'song_id', _playlist_to_song.b,
@@ -1335,6 +1339,26 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                   ))) AS value
                  FROM playlist JOIN _playlist_to_user ON _playlist_to_user.a = playlist.id
                  WHERE _playlist_to_user.b = ? ORDER BY playlist.id",
+                &mut connection,
+            )?,
+            tags: object_rows(
+                "SELECT json_object('id', user_tag.id, 'name', user_tag.name,
+                  'created_at', user_tag.created_at,
+                  'items', json((
+                    SELECT json_group_array(json_object(
+                      'entity_type', user_tag_item.entity_type,
+                      'entity_id', user_tag_item.entity_id,
+                      'added_at', user_tag_item.added_at
+                    ))
+                    FROM user_tag_item WHERE user_tag_item.tag_id = user_tag.id
+                  ))) AS value
+                 FROM user_tag WHERE user_tag.user_id = ? ORDER BY user_tag.id",
+                &mut connection,
+            )?,
+            saved_focuses: object_rows(
+                "SELECT json_object('name', name, 'view', view, 'query', json(query_json),
+                  'position', position, 'created_at', created_at) AS value
+                 FROM saved_focus WHERE user_id = ? ORDER BY position, id",
                 &mut connection,
             )?,
         })
