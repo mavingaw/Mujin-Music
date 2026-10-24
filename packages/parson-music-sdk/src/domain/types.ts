@@ -48,9 +48,65 @@ export interface Album {
   contributing_artists_ids: string[];
   release_album?: ReleaseAlbum;
   release_group_album?: ReleaseGroupAlbum;
+  /** Most common record label tagged on the album's tracks (full album responses). */
+  label?: string | null;
+  /** Contributor credits merged across the album's tracks (full album responses). */
+  credits?: AlbumCredit[];
 }
 
-export interface LibrarySong {
+/** Technical properties of a track's primary file, read from its stream headers. */
+export interface AudioProperties {
+  /** e.g. `flac`, `alac`, `aac`, `mp3`, `vorbis`, `opus`, `pcm`, `pcm_float`. */
+  codec: string | null;
+  /** e.g. `flac`, `mp4`, `mp3`, `ogg`, `wav`, `aiff`. */
+  container: string | null;
+  /** Hz. */
+  sample_rate: number | null;
+  /** Bits per sample, for lossless and PCM codecs only. */
+  bit_depth: number | null;
+  channels: number | null;
+  /** Average audio bitrate in kbps. */
+  bitrate_kbps: number | null;
+  /** `null` when the codec is unknown. */
+  lossless: boolean | null;
+}
+
+/** Canonical contributor roles the indexer reads from tags. */
+export type CreditRole =
+  | "composer"
+  | "lyricist"
+  | "arranger"
+  | "conductor"
+  | "performer"
+  | "ensemble"
+  | "producer"
+  | "remixer"
+  | "mixer"
+  | "engineer";
+
+/** A contributor credit on a track (the primary and featured artists are not repeated here). */
+export interface Credit {
+  artist_id: string;
+  name: string;
+  role: CreditRole | (string & {});
+  /** Lower-case instrument for `performer` credits, when tagged. */
+  instrument: string | null;
+}
+
+/** A credit on an album, with the tracks it applies to. */
+export interface AlbumCredit extends Credit {
+  track_ids: string[];
+}
+
+/** Fields the server adds to songs once the library has been indexed with parser version 17. */
+export interface SongDetails {
+  audio?: AudioProperties | null;
+  credits?: Credit[];
+  isrc?: string | null;
+  label?: string | null;
+}
+
+export interface LibrarySong extends SongDetails {
   id: string;
   album_id?: string;
   artist_id?: string;
@@ -68,7 +124,7 @@ export interface LibrarySong {
 export type ResponseAlbum = Album & { artist_object: Artist };
 export type ResponseSong = LibrarySong;
 
-export interface BareSong {
+export interface BareSong extends SongDetails {
   id: string;
   name: string;
   artist: string;

@@ -97,6 +97,8 @@ fn response_album(artist: &Artist, album: &Album) -> ResponseAlbum {
         contributing_artists_ids: album.contributing_artists_ids.clone(),
         release_album: album.release_album.clone(),
         release_group_album: album.release_group_album.clone(),
+        label: crate::api::album::album_label(&album.songs),
+        credits: crate::api::album::album_credits(&album.songs),
     }
 }
 
@@ -353,6 +355,10 @@ mod tests {
                 ..Album::default()
             },
             artist_object: Artist::default(),
+            audio: None,
+            credits: Vec::new(),
+            isrc: None,
+            label: None,
         }
     }
 

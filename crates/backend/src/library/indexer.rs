@@ -27,10 +27,11 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::domain::{Album, Artist, Song};
+use crate::domain::{Album, Artist, AudioProperties, Credit, Song, codec_is_lossless};
 use crate::library::artist_names::{
     artist_credit_names, featured_artists_from_title, format_contributing_artists,
 };
+use crate::library::credits::{ARTIST_ROLES, TagCredit, TagCredits, role_rank, split_role_key};
 use crate::library::identity::{
     hash_album, hash_artist, hash_normalized_album, hash_normalized_artist, hash_normalized_song,
     hash_song, normalize_album_identity, normalize_artist_identity, normalize_song_identity,
@@ -45,7 +46,7 @@ use crate::library::storage::get_cover_art_path;
 use crate::persistence::connection::{DbPool, connect};
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
-const TAG_PARSER_VERSION: &str = "16";
+const TAG_PARSER_VERSION: &str = "17";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -269,6 +270,14 @@ struct ParsedFile {
     musicbrainz_album_artist_id: String,
     error: Option<String>,
     embedded_artwork: Option<EmbeddedArtworkRegion>,
+    #[serde(default)]
+    technical: AudioProperties,
+    #[serde(default)]
+    credits: Vec<TagCredit>,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    isrc: String,
     #[serde(skip)]
     tag_parse_us: u64,
     #[serde(skip)]
@@ -783,6 +792,24 @@ struct ExistingFileSnapshot {
     embedded_artwork_offset: Option<i64>,
     #[diesel(sql_type = Nullable<BigInt>)]
     embedded_artwork_length: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    codec: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    container: Option<String>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    sample_rate: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    bit_depth: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    channels: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    bitrate: Option<i32>,
+    #[diesel(sql_type = Text)]
+    credits_json: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    label: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    isrc: Option<String>,
 }
 
 #[derive(Debug, QueryableByName)]
@@ -901,6 +928,93 @@ struct TrackRow {
     path: Option<String>,
     #[diesel(sql_type = Text)]
     track_artists_json: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    codec: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    container: Option<String>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    sample_rate: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    bit_depth: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    channels: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    bitrate: Option<i32>,
+    #[diesel(sql_type = Nullable<Text>)]
+    label: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    isrc: Option<String>,
+}
+
+impl TrackRow {
+    fn audio_properties(&self) -> Option<AudioProperties> {
+        let audio = AudioProperties {
+            codec: self.codec.clone().filter(|codec| !codec.is_empty()),
+            container: self
+                .container
+                .clone()
+                .filter(|container| !container.is_empty()),
+            sample_rate: self
+                .sample_rate
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|value| *value > 0),
+            bit_depth: self
+                .bit_depth
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|value| *value > 0),
+            channels: self
+                .channels
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|value| *value > 0),
+            bitrate_kbps: self
+                .bitrate
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|value| *value > 0),
+            lossless: self.codec.as_deref().and_then(codec_is_lossless),
+        };
+        (!audio.is_empty()).then_some(audio)
+    }
+}
+
+#[derive(Debug, QueryableByName)]
+struct TrackCreditRow {
+    #[diesel(sql_type = Text)]
+    track_id: String,
+    #[diesel(sql_type = Text)]
+    artist_id: String,
+    #[diesel(sql_type = Text)]
+    name: String,
+    #[diesel(sql_type = Text)]
+    role: String,
+}
+
+/// Loads contributor credits (every `track_artist` role other than the
+/// artist's own primary/featured credit), grouped by track in display order.
+fn load_track_credits(conn: &mut SqliteConnection) -> QueryResult<HashMap<String, Vec<Credit>>> {
+    let rows = diesel::sql_query(format!(
+        "SELECT credit.track_id, credit.artist_id, artist.name, credit.role
+         FROM track_artist credit
+         JOIN artist_entity artist ON artist.id = credit.artist_id
+         WHERE credit.role NOT IN ('{}', '{}')
+         ORDER BY credit.track_id, credit.position, artist.name COLLATE NOCASE",
+        ARTIST_ROLES[0], ARTIST_ROLES[1]
+    ))
+    .load::<TrackCreditRow>(conn)?;
+    let mut credits = HashMap::<String, Vec<Credit>>::new();
+    for row in rows {
+        let (role, instrument) = split_role_key(&row.role);
+        credits.entry(row.track_id).or_default().push(Credit {
+            artist_id: row.artist_id,
+            name: row.name,
+            role: role.to_string(),
+            instrument: instrument.map(ToString::to_string),
+        });
+    }
+    for track_credits in credits.values_mut() {
+        // Stable sort keeps tag order within a role.
+        track_credits.sort_by_key(|credit| role_rank(&credit.role));
+    }
+    Ok(credits)
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -1072,6 +1186,12 @@ struct RawAudioMetadata {
     duration_us: u64,
     parse_strategy: ParserStrategy,
     embedded_artwork: Option<EmbeddedArtworkRegion>,
+    technical: AudioProperties,
+    credits: TagCredits,
+    /// Offset of the first audio frame, used to derive an average bitrate.
+    audio_offset: Option<u64>,
+    /// Exact audio payload length (WAV `data`, MP4 `mdat`), when known.
+    audio_bytes: Option<u64>,
 }
 
 fn elapsed_us(duration: Duration) -> u64 {
@@ -2112,7 +2232,8 @@ fn create_cold_parse_stage(conn: &mut SqliteConnection) -> QueryResult<()> {
             cover_url TEXT NOT NULL, musicbrainz_recording_id TEXT NOT NULL,
             musicbrainz_release_id TEXT NOT NULL, musicbrainz_artist_id TEXT NOT NULL,
             musicbrainz_album_artist_id TEXT NOT NULL, error TEXT,
-            embedded_artwork_offset INTEGER, embedded_artwork_length INTEGER
+            embedded_artwork_offset INTEGER, embedded_artwork_length INTEGER,
+            extras_json TEXT NOT NULL
          ) WITHOUT ROWID;",
     )
 }
@@ -2120,7 +2241,7 @@ fn create_cold_parse_stage(conn: &mut SqliteConnection) -> QueryResult<()> {
 fn stage_cold_parsed(conn: &mut SqliteConnection, parsed: &ParsedFile) -> QueryResult<()> {
     diesel::sql_query(
         "INSERT OR REPLACE INTO cold_parsed_stage VALUES
-         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind::<Text, _>(parsed.path.as_ref())
     .bind::<Text, _>(&parsed.title)
@@ -2149,8 +2270,39 @@ fn stage_cold_parsed(conn: &mut SqliteConnection, parsed: &ParsedFile) -> QueryR
             .embedded_artwork
             .and_then(|region| i64::try_from(region.length).ok()),
     )
+    .bind::<Text, _>(file_extras_json(parsed)?)
     .execute(conn)?;
     Ok(())
+}
+
+/// Technical properties, credits, label and ISRC staged as one JSON value
+/// and expanded into `raw_file_metadata` columns on upsert.
+#[derive(Serialize)]
+struct FileExtrasStage<'a> {
+    codec: Option<&'a str>,
+    container: Option<&'a str>,
+    sample_rate: Option<u32>,
+    bit_depth: Option<u8>,
+    channels: Option<u8>,
+    bitrate: Option<u32>,
+    credits: &'a [TagCredit],
+    label: Option<&'a str>,
+    isrc: Option<&'a str>,
+}
+
+fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
+    let technical = &parsed.technical;
+    serialize_stage(&FileExtrasStage {
+        codec: technical.codec.as_deref(),
+        container: technical.container.as_deref(),
+        sample_rate: technical.sample_rate,
+        bit_depth: technical.bit_depth,
+        channels: technical.channels,
+        bitrate: technical.bitrate_kbps,
+        credits: &parsed.credits,
+        label: (!parsed.label.is_empty()).then_some(parsed.label.as_str()),
+        isrc: (!parsed.isrc.is_empty()).then_some(parsed.isrc.as_str()),
+    })
 }
 
 fn parse_autotuned_prefix(
@@ -2418,6 +2570,7 @@ impl ColdParsePipeline {
 struct MpegFrameHeader {
     bitrate_kbps: u32,
     sample_rate: u32,
+    channels: u8,
     samples_per_frame: u32,
     xing_offset: usize,
 }
@@ -2469,6 +2622,7 @@ fn parse_mpeg_frame_header(bytes: [u8; 4]) -> Option<MpegFrameHeader> {
     Some(MpegFrameHeader {
         bitrate_kbps: if mpeg1 { MPEG1_LAYER3 } else { MPEG2_LAYER3 }[bitrate_index],
         sample_rate,
+        channels: if mono { 1 } else { 2 },
         samples_per_frame: if mpeg1 { 1152 } else { 576 },
         xing_offset: 4 + usize::from(has_crc) * 2 + side_information,
     })
@@ -2543,14 +2697,46 @@ fn find_first_mpeg_frame<R: Read + Seek>(
     Ok(None)
 }
 
+#[cfg(test)]
 fn mp3_duration<R: Read + Seek>(
     reader: &mut R,
     file_length: u64,
 ) -> std::io::Result<(f64, DurationSource)> {
-    let Some((frame_offset, header, first_frame)) = find_first_mpeg_frame(reader)? else {
-        return Ok((0.0, DurationSource::Unavailable));
-    };
+    mp3_stream_info(reader, file_length).map(|info| (info.duration, info.source))
+}
 
+struct Mp3StreamInfo {
+    duration: f64,
+    source: DurationSource,
+    first_frame: Option<(u64, MpegFrameHeader)>,
+}
+
+fn mp3_stream_info<R: Read + Seek>(
+    reader: &mut R,
+    file_length: u64,
+) -> std::io::Result<Mp3StreamInfo> {
+    let Some((frame_offset, header, first_frame)) = find_first_mpeg_frame(reader)? else {
+        return Ok(Mp3StreamInfo {
+            duration: 0.0,
+            source: DurationSource::Unavailable,
+            first_frame: None,
+        });
+    };
+    let (duration, source) =
+        mp3_duration_from_frame(frame_offset, header, &first_frame, file_length);
+    Ok(Mp3StreamInfo {
+        duration,
+        source,
+        first_frame: Some((frame_offset, header)),
+    })
+}
+
+fn mp3_duration_from_frame(
+    frame_offset: u64,
+    header: MpegFrameHeader,
+    first_frame: &[u8],
+    file_length: u64,
+) -> (f64, DurationSource) {
     let mut candidates = Vec::with_capacity(2);
     if first_frame.len() >= header.xing_offset + 18 {
         candidates.push(&first_frame[header.xing_offset..]);
@@ -2573,16 +2759,16 @@ fn mp3_duration<R: Read + Seek>(
         if let Some(frames) = frames.filter(|frames| *frames > 0) {
             let seconds =
                 frames as f64 * header.samples_per_frame as f64 / header.sample_rate as f64;
-            return Ok((seconds, DurationSource::HeaderDerived));
+            return (seconds, DurationSource::HeaderDerived);
         }
     }
 
     if header.bitrate_kbps > 0 && file_length > frame_offset {
         let seconds =
             (file_length - frame_offset) as f64 * 8.0 / (header.bitrate_kbps as f64 * 1000.0);
-        return Ok((seconds, DurationSource::Estimated));
+        return (seconds, DurationSource::Estimated);
     }
-    Ok((0.0, DurationSource::Unavailable))
+    (0.0, DurationSource::Unavailable)
 }
 
 fn is_disc_directory(path: &Path) -> bool {
@@ -3148,6 +3334,25 @@ fn wanted_id3_text_frame(id: &[u8]) -> bool {
             | b"TYE"
             | b"TRK"
             | b"TPA"
+            // Credits, label and ISRC.
+            | b"TCOM"
+            | b"TEXT"
+            | b"TPE3"
+            | b"TPE4"
+            | b"TIPL"
+            | b"TMCL"
+            | b"IPLS"
+            | b"TPUB"
+            | b"TSRC"
+            | b"TXXX"
+            | b"TCM"
+            | b"TXT"
+            | b"TP3"
+            | b"TP4"
+            | b"IPL"
+            | b"TPB"
+            | b"TRC"
+            | b"TXX"
     )
 }
 
@@ -3272,6 +3477,32 @@ fn populate_id3_metadata(metadata: &mut RawAudioMetadata, tag: &id3::Tag) {
         .or_else(|| tag.year().map(|year| year.to_string()));
     metadata.track_number = tag.track().unwrap_or_default().min(u16::MAX.into()) as u16;
     metadata.disc_number = tag.disc().unwrap_or_default().min(u16::MAX.into()) as u16;
+    populate_id3_credits(&mut metadata.credits, tag);
+}
+
+fn populate_id3_credits(credits: &mut TagCredits, tag: &id3::Tag) {
+    use id3::Content;
+    for frame in tag.frames() {
+        match frame.content() {
+            Content::Text(value) => {
+                credits.apply_id3_frame(frame.id(), value);
+            }
+            Content::ExtendedText(extended) => {
+                credits.apply_named(&extended.description, &extended.value);
+            }
+            Content::InvolvedPeopleList(list) => {
+                let musicians = frame.id() == "TMCL";
+                for item in &list.items {
+                    if musicians {
+                        credits.apply_musician(&item.involvement, &item.involvee);
+                    } else {
+                        credits.apply_involvement(&item.involvement, &item.involvee);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_mp3<R: Read + Seek>(reader: &mut R, file_length: u64) -> Result<RawAudioMetadata, String> {
@@ -3310,11 +3541,21 @@ fn parse_mp3<R: Read + Seek>(reader: &mut R, file_length: u64) -> Result<RawAudi
     }
     metadata.tag_parse_us = elapsed_us(tag_started.elapsed());
     let duration_started = Instant::now();
-    let (duration, source) =
-        mp3_duration(reader, file_length).map_err(|error| error.to_string())?;
+    let info = mp3_stream_info(reader, file_length).map_err(|error| error.to_string())?;
     metadata.duration_us = elapsed_us(duration_started.elapsed());
-    metadata.duration_seconds = duration;
-    metadata.duration_source = Some(source);
+    metadata.duration_seconds = info.duration;
+    metadata.duration_source = Some(info.source);
+    metadata.technical.codec = Some("mp3".into());
+    metadata.technical.container = Some("mp3".into());
+    if let Some((frame_offset, header)) = info.first_frame {
+        metadata.technical.sample_rate = Some(header.sample_rate);
+        metadata.technical.channels = Some(header.channels);
+        metadata.audio_offset = Some(frame_offset);
+        // A frame-count header marks VBR; derive its average from the stream.
+        if info.source != DurationSource::HeaderDerived {
+            metadata.technical.bitrate_kbps = Some(header.bitrate_kbps).filter(|kbps| *kbps > 0);
+        }
+    }
     Ok(metadata)
 }
 
@@ -3333,6 +3574,7 @@ fn populate_tag_metadata(metadata: &mut RawAudioMetadata, tag: &lofty::tag::Tag)
     metadata.release_date = tag.date().map(|date| date.to_string());
     metadata.track_number = tag.track().unwrap_or_default().min(u16::MAX.into()) as u16;
     metadata.disc_number = tag.disk().unwrap_or_default().min(u16::MAX.into()) as u16;
+    populate_lofty_credits(&mut metadata.credits, tag);
 }
 
 fn read_u32_le<R: Read>(reader: &mut R) -> Result<u32, String> {
@@ -3400,7 +3642,9 @@ fn apply_vorbis_comment(metadata: &mut RawAudioMetadata, comment: &[u8]) {
         "DISCNUMBER" if metadata.disc_number == 0 => {
             metadata.disc_number = parse_number_prefix(value);
         }
-        _ => {}
+        _ => {
+            metadata.credits.apply_named(key, value);
+        }
     }
 }
 
@@ -3475,11 +3719,21 @@ fn parse_flac_fast<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata, S
                         .expect("FLAC packed STREAMINFO fields"),
                 );
                 let sample_rate = (packed >> 44) & 0x0f_ffff;
+                let channels = ((packed >> 41) & 0x7) + 1;
+                let bits_per_sample = ((packed >> 36) & 0x1f) + 1;
                 let total_samples = packed & 0x0f_ffff_ffff;
                 if sample_rate > 0 && total_samples > 0 {
                     metadata.duration_seconds = total_samples as f64 / sample_rate as f64;
                     metadata.duration_source = Some(DurationSource::Exact);
                 }
+                metadata.technical = AudioProperties {
+                    codec: Some("flac".into()),
+                    container: Some("flac".into()),
+                    sample_rate: u32::try_from(sample_rate).ok().filter(|rate| *rate > 0),
+                    bit_depth: u8::try_from(bits_per_sample).ok(),
+                    channels: u8::try_from(channels).ok(),
+                    ..AudioProperties::default()
+                };
                 saw_streaminfo = true;
             }
             4 => {
@@ -3561,6 +3815,7 @@ fn parse_flac_fast<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata, S
             _ => seek_forward(reader, block_len)?,
         }
         if last {
+            metadata.audio_offset = reader.stream_position().ok();
             break;
         }
     }
@@ -3689,6 +3944,32 @@ fn parse_ogg_fast<R: Read + Seek>(
         parse_strategy: strategy,
         ..RawAudioMetadata::default()
     };
+    metadata.technical = if strategy == ParserStrategy::OggVorbisFast {
+        let nominal = identification
+            .get(20..24)
+            .map(|bytes| i32::from_le_bytes(bytes.try_into().expect("Vorbis bitrate")))
+            .unwrap_or_default();
+        AudioProperties {
+            codec: Some("vorbis".into()),
+            container: Some("ogg".into()),
+            sample_rate: Some(sample_rate).filter(|rate| *rate > 0),
+            channels: Some(identification[11]).filter(|channels| *channels > 0),
+            bitrate_kbps: u32::try_from(nominal / 1000).ok().filter(|kbps| *kbps > 0),
+            ..AudioProperties::default()
+        }
+    } else {
+        let input_rate = identification
+            .get(12..16)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("Opus input rate")))
+            .unwrap_or_default();
+        AudioProperties {
+            codec: Some("opus".into()),
+            container: Some("ogg".into()),
+            sample_rate: Some(if input_rate > 0 { input_rate } else { 48_000 }),
+            channels: Some(identification[9]).filter(|channels| *channels > 0),
+            ..AudioProperties::default()
+        }
+    };
     for packet in packets.iter().take(4) {
         parse_vorbis_comment_packet(&mut metadata, packet)?;
     }
@@ -3740,6 +4021,7 @@ fn parse_wav_fast<R: Read + Seek>(
     };
     let mut byte_rate = 0_u32;
     let mut data_bytes = 0_u64;
+    metadata.technical.container = Some("wav".into());
     while reader
         .stream_position()
         .map_err(|error| error.to_string())?
@@ -3752,11 +4034,39 @@ fn parse_wav_fast<R: Read + Seek>(
             .map_err(|error| error.to_string())?;
         match &kind {
             b"fmt " if size >= 12 => {
-                let mut format = [0; 12];
+                let mut format = [0; 26];
+                let available = (size as usize).min(format.len());
                 reader
-                    .read_exact(&mut format)
+                    .read_exact(&mut format[..available])
                     .map_err(|error| error.to_string())?;
                 byte_rate = u32::from_le_bytes(format[8..12].try_into().expect("byte rate"));
+                let mut format_tag = u16::from_le_bytes([format[0], format[1]]);
+                // WAVE_FORMAT_EXTENSIBLE keeps the real tag in its sub-format GUID.
+                if format_tag == 0xfffe && available >= 26 {
+                    format_tag = u16::from_le_bytes([format[24], format[25]]);
+                }
+                let bits = if available >= 16 {
+                    u16::from_le_bytes([format[14], format[15]])
+                } else {
+                    0
+                };
+                metadata.technical.codec = match format_tag {
+                    1 => Some("pcm"),
+                    3 => Some("pcm_float"),
+                    0x55 => Some("mp3"),
+                    _ => None,
+                }
+                .map(ToString::to_string);
+                metadata.technical.channels =
+                    u8::try_from(u16::from_le_bytes([format[2], format[3]]))
+                        .ok()
+                        .filter(|channels| *channels > 0);
+                metadata.technical.sample_rate =
+                    Some(u32::from_le_bytes(format[4..8].try_into().expect("rate")))
+                        .filter(|rate| *rate > 0);
+                if matches!(format_tag, 1 | 3) {
+                    metadata.technical.bit_depth = u8::try_from(bits).ok().filter(|bits| *bits > 0);
+                }
             }
             b"data" => data_bytes = u64::from(size),
             _ => {}
@@ -3772,6 +4082,7 @@ fn parse_wav_fast<R: Read + Seek>(
     if byte_rate > 0 && data_bytes > 0 {
         metadata.duration_seconds = data_bytes as f64 / byte_rate as f64;
         metadata.duration_source = Some(DurationSource::Exact);
+        metadata.audio_bytes = Some(data_bytes);
     } else {
         metadata.duration_source = Some(DurationSource::Unavailable);
     }
@@ -3819,16 +4130,46 @@ fn parse_aiff_fast<R: Read + Seek>(
             .stream_position()
             .map_err(|error| error.to_string())?;
         if &kind == b"COMM" && size >= 18 {
-            let mut comm = [0; 18];
+            let mut comm = [0; 22];
+            let available = if &form[8..] == b"AIFC" && size >= 22 {
+                22
+            } else {
+                18
+            };
             reader
-                .read_exact(&mut comm)
+                .read_exact(&mut comm[..available])
                 .map_err(|error| error.to_string())?;
+            let channels = u16::from_be_bytes([comm[0], comm[1]]);
             let frames = u32::from_be_bytes(comm[2..6].try_into().expect("AIFF frames"));
+            let bits = u16::from_be_bytes([comm[6], comm[7]]);
             let rate = extended_80_rate(comm[8..18].try_into().expect("AIFF rate"));
             if rate > 0.0 && frames > 0 {
                 metadata.duration_seconds = frames as f64 / rate;
                 metadata.duration_source = Some(DurationSource::Exact);
             }
+            let codec = if available == 22 {
+                match &comm[18..22] {
+                    b"NONE" | b"sowt" | b"twos" | b"raw " | b"in24" | b"in32" => "pcm".to_string(),
+                    b"fl32" | b"FL32" | b"fl64" | b"FL64" => "pcm_float".to_string(),
+                    other => String::from_utf8_lossy(other).trim().to_ascii_lowercase(),
+                }
+            } else {
+                "pcm".to_string()
+            };
+            let pcm = codec.starts_with("pcm");
+            let sample_rate = (rate.is_finite() && rate >= 1.0).then(|| rate.round() as u32);
+            metadata.technical = AudioProperties {
+                bitrate_kbps: sample_rate
+                    .filter(|_| pcm)
+                    .map(|rate| rate * u32::from(channels) * u32::from(bits) / 1000)
+                    .filter(|kbps| *kbps > 0),
+                codec: Some(codec),
+                container: Some("aiff".into()),
+                sample_rate,
+                bit_depth: u8::try_from(bits).ok().filter(|bits| *bits > 0 && pcm),
+                channels: u8::try_from(channels).ok().filter(|channels| *channels > 0),
+                lossless: None,
+            };
         }
         reader
             .seek(SeekFrom::Start(
@@ -3937,6 +4278,11 @@ fn apply_mp4_value(
             }
         }
         b"\xa9day" if metadata.release_date.is_none() => metadata.release_date = text(),
+        b"\xa9wrt" => {
+            if let Some(value) = text() {
+                metadata.credits.apply_named("COMPOSER", &value);
+            }
+        }
         b"trkn" if value.len() >= 4 => {
             metadata.track_number = u16::from_be_bytes([value[2], value[3]]);
         }
@@ -3971,8 +4317,36 @@ fn parse_mp4_ilst<R: Read + Seek>(
         reader
             .seek(SeekFrom::Start(item.content_start))
             .map_err(|error| error.to_string())?;
+        // iTunes freeform items (`----`) carry `mean`, `name` and `data`.
+        let mut freeform_name = None;
         while let Some(data) = read_mp4_atom(reader, item.end)? {
-            if data.kind == *b"data" && data.end.saturating_sub(data.content_start) >= 8 {
+            let content_len = data.end.saturating_sub(data.content_start);
+            if item.kind == *b"----" && data.kind == *b"name" && (4..=256).contains(&content_len) {
+                let mut name = vec![0_u8; content_len as usize];
+                reader
+                    .read_exact(&mut name)
+                    .map_err(|error| error.to_string())?;
+                freeform_name = String::from_utf8(name.split_off(4)).ok();
+            } else if item.kind == *b"----" && data.kind == *b"data" && content_len >= 8 {
+                let mut header = [0_u8; 8];
+                reader
+                    .read_exact(&mut header)
+                    .map_err(|error| error.to_string())?;
+                let data_type = u32::from_be_bytes(header[..4].try_into().expect("MP4 data type"))
+                    & 0x00ff_ffff;
+                let value_len = content_len - 8;
+                if let Some(name) = freeform_name.as_deref()
+                    && value_len <= 4096
+                {
+                    let mut value = vec![0_u8; value_len as usize];
+                    reader
+                        .read_exact(&mut value)
+                        .map_err(|error| error.to_string())?;
+                    if let Some(text) = mp4_text(data_type, &value) {
+                        metadata.credits.apply_named(name, &text);
+                    }
+                }
+            } else if data.kind == *b"data" && data.end.saturating_sub(data.content_start) >= 8 {
                 let mut header = [0_u8; 8];
                 reader
                     .read_exact(&mut header)
@@ -4068,9 +4442,185 @@ fn parse_mp4_meta<R: Read + Seek>(
     Ok(false)
 }
 
+/// Finds a direct child atom of `parent` by type.
+fn find_mp4_child<R: Read + Seek>(
+    reader: &mut R,
+    parent: Mp4Atom,
+    kind: &[u8; 4],
+) -> Result<Option<Mp4Atom>, String> {
+    reader
+        .seek(SeekFrom::Start(parent.content_start))
+        .map_err(|error| error.to_string())?;
+    while let Some(child) = read_mp4_atom(reader, parent.end)? {
+        if &child.kind == kind {
+            return Ok(Some(child));
+        }
+        reader
+            .seek(SeekFrom::Start(child.end))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(None)
+}
+
+/// Reads an MPEG-4 descriptor length (one to four 7-bit groups).
+fn read_mp4_descriptor_length(bytes: &[u8], offset: &mut usize) -> Option<usize> {
+    let mut length = 0_usize;
+    for _ in 0..4 {
+        let byte = *bytes.get(*offset)?;
+        *offset += 1;
+        length = (length << 7) | usize::from(byte & 0x7f);
+        if byte & 0x80 == 0 {
+            return Some(length);
+        }
+    }
+    Some(length)
+}
+
+/// Returns (object type, average bitrate in bps) from an `esds` payload.
+fn parse_mp4_esds(bytes: &[u8]) -> Option<(u8, u32)> {
+    // Skip the FullBox version and flags.
+    let mut offset = 4;
+    if *bytes.get(offset)? != 0x03 {
+        return None;
+    }
+    offset += 1;
+    read_mp4_descriptor_length(bytes, &mut offset)?;
+    let flags = *bytes.get(offset + 2)?;
+    offset += 3;
+    if flags & 0x80 != 0 {
+        offset += 2;
+    }
+    if flags & 0x40 != 0 {
+        offset += 1 + usize::from(*bytes.get(offset)?);
+    }
+    if flags & 0x20 != 0 {
+        offset += 2;
+    }
+    if *bytes.get(offset)? != 0x04 {
+        return None;
+    }
+    offset += 1;
+    read_mp4_descriptor_length(bytes, &mut offset)?;
+    let object_type = *bytes.get(offset)?;
+    let average = bytes.get(offset + 9..offset + 13)?;
+    Some((
+        object_type,
+        u32::from_be_bytes(average.try_into().expect("esds average bitrate")),
+    ))
+}
+
+/// Reads codec, rate, depth and channels from the first `stsd` audio entry.
+fn parse_mp4_sample_description<R: Read + Seek>(
+    reader: &mut R,
+    media: Mp4Atom,
+) -> Result<Option<AudioProperties>, String> {
+    const MAX_ENTRY_BYTES: u64 = 64 * 1024;
+    let Some(minf) = find_mp4_child(reader, media, b"minf")? else {
+        return Ok(None);
+    };
+    let Some(stbl) = find_mp4_child(reader, minf, b"stbl")? else {
+        return Ok(None);
+    };
+    let Some(stsd) = find_mp4_child(reader, stbl, b"stsd")? else {
+        return Ok(None);
+    };
+    // FullBox version/flags and entry count precede the first entry.
+    reader
+        .seek(SeekFrom::Start(stsd.content_start + 8))
+        .map_err(|error| error.to_string())?;
+    let Some(entry) = read_mp4_atom(reader, stsd.end)? else {
+        return Ok(None);
+    };
+    let entry_len = entry.end.saturating_sub(entry.content_start);
+    if !(28..=MAX_ENTRY_BYTES).contains(&entry_len) {
+        return Ok(None);
+    }
+    let mut bytes = vec![0_u8; entry_len as usize];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    let version = u16::from_be_bytes([bytes[8], bytes[9]]);
+    let channels = u16::from_be_bytes([bytes[16], bytes[17]]);
+    let sample_size = u16::from_be_bytes([bytes[18], bytes[19]]);
+    let sample_rate = u32::from_be_bytes(bytes[24..28].try_into().expect("MP4 rate")) >> 16;
+    let mut technical = AudioProperties {
+        container: Some("mp4".into()),
+        sample_rate: Some(sample_rate).filter(|rate| *rate > 0),
+        channels: u8::try_from(channels).ok().filter(|channels| *channels > 0),
+        ..AudioProperties::default()
+    };
+    technical.codec = Some(
+        match &entry.kind {
+            b"mp4a" => "aac",
+            b"alac" => "alac",
+            b"fLaC" => "flac",
+            b"Opus" => "opus",
+            b"ac-3" => "ac3",
+            b"ec-3" => "eac3",
+            b".mp3" => "mp3",
+            b"lpcm" | b"sowt" | b"twos" | b"in24" | b"in32" => "pcm",
+            b"fl32" | b"fl64" => "pcm_float",
+            other => {
+                return Ok(Some(AudioProperties {
+                    codec: std::str::from_utf8(other)
+                        .ok()
+                        .map(|codec| codec.trim().to_ascii_lowercase()),
+                    ..technical
+                }));
+            }
+        }
+        .to_string(),
+    );
+    // QuickTime sound description v1 adds 16 bytes before child atoms.
+    let mut child = if version == 1 { 44 } else { 28 };
+    while child + 8 <= bytes.len() {
+        let size = u32::from_be_bytes(bytes[child..child + 4].try_into().expect("size")) as usize;
+        if size < 8 || child + size > bytes.len() {
+            break;
+        }
+        let kind = &bytes[child + 4..child + 8];
+        let payload = &bytes[child + 8..child + size];
+        match kind {
+            b"esds" => {
+                if let Some((object_type, average)) = parse_mp4_esds(payload) {
+                    if matches!(object_type, 0x69 | 0x6b) {
+                        technical.codec = Some("mp3".into());
+                    }
+                    technical.bitrate_kbps = Some(average / 1000).filter(|kbps| *kbps > 0);
+                }
+            }
+            // ALACSpecificConfig after the FullBox header.
+            b"alac" if payload.len() >= 28 => {
+                let config = &payload[4..];
+                technical.bit_depth = Some(config[5]).filter(|depth| *depth > 0);
+                technical.channels = Some(config[9]).filter(|channels| *channels > 0);
+                // Encoders often store the uncompressed rate in avgBitRate, so
+                // the lossless bitrate is derived from the `mdat` size instead.
+                let rate = u32::from_be_bytes(config[20..24].try_into().expect("ALAC rate"));
+                if rate > 0 {
+                    technical.sample_rate = Some(rate);
+                }
+            }
+            // FLAC STREAMINFO inside dfLa, after the FullBox and block header.
+            b"dfLa" if payload.len() >= 4 + 4 + 18 => {
+                let packed =
+                    u64::from_be_bytes(payload[18..26].try_into().expect("FLAC packed STREAMINFO"));
+                technical.bit_depth = u8::try_from(((packed >> 36) & 0x1f) + 1).ok();
+            }
+            _ => {}
+        }
+        child += size;
+    }
+    if technical.codec.as_deref() == Some("pcm") && sample_size > 0 {
+        technical.bit_depth = u8::try_from(sample_size).ok();
+    }
+    Ok(Some(technical))
+}
+
 fn parse_mp4_audio_track_duration<R: Read + Seek>(
     reader: &mut R,
     track: Mp4Atom,
+    metadata: &mut RawAudioMetadata,
 ) -> Result<Option<f64>, String> {
     reader
         .seek(SeekFrom::Start(track.content_start))
@@ -4107,6 +4657,11 @@ fn parse_mp4_audio_track_duration<R: Read + Seek>(
                 .map_err(|error| error.to_string())?;
         }
         if is_audio && let Some(mdhd) = mdhd {
+            if metadata.technical.codec.is_none()
+                && let Some(technical) = parse_mp4_sample_description(reader, child)?
+            {
+                metadata.technical = technical;
+            }
             return parse_mp4_duration(reader, mdhd);
         }
         reader
@@ -4131,7 +4686,9 @@ fn parse_mp4_children<R: Read + Seek>(
         match &atom.kind {
             b"mvhd" => *duration = parse_mp4_duration(reader, atom)?,
             b"trak" => {
-                if let Some(audio_duration) = parse_mp4_audio_track_duration(reader, atom)? {
+                if let Some(audio_duration) =
+                    parse_mp4_audio_track_duration(reader, atom, metadata)?
+                {
                     *duration = Some(audio_duration);
                 }
             }
@@ -4177,6 +4734,10 @@ fn parse_mp4_fast<R: Read + Seek>(
     while let Some(atom) = read_mp4_atom(reader, file_length)? {
         match &atom.kind {
             b"ftyp" => saw_ftyp = true,
+            b"mdat" => {
+                let length = atom.end.saturating_sub(atom.content_start);
+                metadata.audio_bytes = Some(metadata.audio_bytes.unwrap_or_default() + length);
+            }
             b"moov" => {
                 saw_moov = true;
                 let _ = parse_mp4_children(
@@ -4206,6 +4767,118 @@ fn parse_mp4_fast<R: Read + Seek>(
     Ok(metadata)
 }
 
+fn container_for_format(format: AudioFormat) -> Option<&'static str> {
+    match format {
+        AudioFormat::Mp3 => Some("mp3"),
+        AudioFormat::Flac => Some("flac"),
+        AudioFormat::Ogg | AudioFormat::Opus => Some("ogg"),
+        AudioFormat::M4a | AudioFormat::Alac => Some("mp4"),
+        AudioFormat::Wav => Some("wav"),
+        AudioFormat::Aiff => Some("aiff"),
+        AudioFormat::Unknown => None,
+    }
+}
+
+/// Bitrate in kbps the way lofty computes it: bytes * 8 / milliseconds.
+fn average_bitrate_kbps(bytes: u64, duration_seconds: f64) -> Option<u32> {
+    let millis = (duration_seconds * 1000.0) as u64;
+    (bytes > 0 && millis > 0)
+        .then(|| u32::try_from(bytes.saturating_mul(8) / millis).ok())
+        .flatten()
+        .filter(|kbps| *kbps > 0)
+}
+
+/// Fills technical properties a fast path could not read from stream headers.
+fn finish_technical_properties(
+    mut technical: AudioProperties,
+    format: AudioFormat,
+    audio_offset: Option<u64>,
+    audio_bytes: Option<u64>,
+    size_bytes: i64,
+    duration_seconds: f64,
+) -> AudioProperties {
+    if technical.container.is_none() {
+        technical.container = container_for_format(format).map(ToString::to_string);
+    }
+    if technical.codec.is_none() {
+        technical.codec = match format {
+            AudioFormat::Mp3 => Some("mp3"),
+            AudioFormat::Flac => Some("flac"),
+            AudioFormat::Alac => Some("alac"),
+            AudioFormat::Opus => Some("opus"),
+            _ => None,
+        }
+        .map(ToString::to_string);
+    }
+    if technical.bitrate_kbps.is_none() && duration_seconds.is_finite() {
+        let size = u64::try_from(size_bytes).unwrap_or_default();
+        let payload = audio_bytes
+            .or_else(|| audio_offset.map(|offset| size.saturating_sub(offset)))
+            .unwrap_or(size);
+        technical.bitrate_kbps = average_bitrate_kbps(payload, duration_seconds);
+    }
+    technical.lossless = None;
+    technical
+}
+
+/// Reads the tag credits lofty exposes through its generic item keys.
+fn populate_lofty_credits(credits: &mut TagCredits, tag: &lofty::tag::Tag) {
+    use lofty::tag::ItemKey;
+    for (key, role) in [
+        (ItemKey::Composer, "COMPOSER"),
+        (ItemKey::Lyricist, "LYRICIST"),
+        (ItemKey::Arranger, "ARRANGER"),
+        (ItemKey::Conductor, "CONDUCTOR"),
+        (ItemKey::Performer, "PERFORMER"),
+        (ItemKey::Producer, "PRODUCER"),
+        (ItemKey::Remixer, "REMIXER"),
+        (ItemKey::MixEngineer, "MIXER"),
+        (ItemKey::MixDj, "DJMIXER"),
+        (ItemKey::Engineer, "ENGINEER"),
+        (ItemKey::Label, "LABEL"),
+        (ItemKey::Publisher, "PUBLISHER"),
+        (ItemKey::Isrc, "ISRC"),
+    ] {
+        for value in tag.get_strings(key) {
+            credits.apply_named(role, value);
+        }
+    }
+}
+
+fn lofty_technical_properties(
+    file_type: lofty::file::FileType,
+    properties: &lofty::properties::FileProperties,
+) -> AudioProperties {
+    use lofty::file::FileType;
+    let (codec, container) = match file_type {
+        FileType::Aac => (Some("aac"), "aac"),
+        FileType::Aiff => (Some("pcm"), "aiff"),
+        FileType::Ape => (Some("ape"), "ape"),
+        FileType::Flac => (Some("flac"), "flac"),
+        FileType::Mpeg => (Some("mp3"), "mp3"),
+        FileType::Mp4 => (None, "mp4"),
+        FileType::Mpc => (Some("musepack"), "mpc"),
+        FileType::Opus => (Some("opus"), "ogg"),
+        FileType::Vorbis => (Some("vorbis"), "ogg"),
+        FileType::Speex => (Some("speex"), "ogg"),
+        FileType::Wav => (Some("pcm"), "wav"),
+        FileType::WavPack => (Some("wavpack"), "wavpack"),
+        _ => (None, ""),
+    };
+    AudioProperties {
+        codec: codec.map(ToString::to_string),
+        container: (!container.is_empty()).then(|| container.to_string()),
+        sample_rate: properties.sample_rate().filter(|rate| *rate > 0),
+        bit_depth: properties.bit_depth().filter(|depth| *depth > 0),
+        channels: properties.channels().filter(|channels| *channels > 0),
+        bitrate_kbps: properties
+            .audio_bitrate()
+            .or_else(|| properties.overall_bitrate())
+            .filter(|bitrate| *bitrate > 0),
+        lossless: None,
+    }
+}
+
 fn parse_with_lofty<R: Read + Seek>(reader: R) -> Result<RawAudioMetadata, String> {
     let tag_started = Instant::now();
     let probe = Probe::new(reader)
@@ -4228,6 +4901,8 @@ fn parse_with_lofty<R: Read + Seek>(reader: R) -> Result<RawAudioMetadata, Strin
     {
         populate_tag_metadata(&mut metadata, tag);
     }
+    metadata.technical =
+        lofty_technical_properties(tagged_file.file_type(), tagged_file.properties());
     metadata.tag_parse_us = elapsed_us(tag_started.elapsed());
     let duration_started = Instant::now();
     metadata.duration_seconds = tagged_file.properties().duration().as_secs_f64();
@@ -4414,6 +5089,14 @@ fn parsed_file_from_result(
         .as_deref()
         .and_then(normalized_release_date)
         .unwrap_or_default();
+    let technical = finish_technical_properties(
+        metadata.technical,
+        file.format,
+        metadata.audio_offset,
+        metadata.audio_bytes,
+        file.size_bytes,
+        metadata.duration_seconds,
+    );
     ParsedFile {
         path: file.path.clone(),
         title,
@@ -4435,6 +5118,10 @@ fn parsed_file_from_result(
         musicbrainz_album_artist_id: String::new(),
         error,
         embedded_artwork: metadata.embedded_artwork,
+        technical,
+        label: metadata.credits.label().unwrap_or_default().to_string(),
+        isrc: metadata.credits.isrc.clone().unwrap_or_default(),
+        credits: metadata.credits.credits,
         tag_parse_us: metadata.tag_parse_us,
         duration_us: metadata.duration_us,
         parse_strategy: metadata.parse_strategy,
@@ -4513,6 +5200,22 @@ fn snapshot_to_parsed(snapshot: &ExistingFileSnapshot) -> ParsedFile {
                     length: u64::try_from(length).ok()?,
                 })
             }),
+        technical: AudioProperties {
+            codec: snapshot.codec.clone(),
+            container: snapshot.container.clone(),
+            sample_rate: snapshot
+                .sample_rate
+                .and_then(|value| u32::try_from(value).ok()),
+            bit_depth: snapshot
+                .bit_depth
+                .and_then(|value| u8::try_from(value).ok()),
+            channels: snapshot.channels.and_then(|value| u8::try_from(value).ok()),
+            bitrate_kbps: snapshot.bitrate.and_then(|value| u32::try_from(value).ok()),
+            lossless: None,
+        },
+        credits: serde_json::from_str(&snapshot.credits_json).unwrap_or_default(),
+        label: snapshot.label.clone().unwrap_or_default(),
+        isrc: snapshot.isrc.clone().unwrap_or_default(),
         tag_parse_us: 0,
         duration_us: 0,
         parse_strategy: ParserStrategy::Reused,
@@ -6015,7 +6718,9 @@ fn existing_snapshots(
                 rfm.cover_url, rfm.parser_version, rfm.cover_resolver_version, rfm.classification_version,
                 rfm.musicbrainz_recording_id, rfm.musicbrainz_release_id,
                 rfm.musicbrainz_artist_id, rfm.musicbrainz_album_artist_id, rfm.error,
-                rfm.embedded_artwork_offset, rfm.embedded_artwork_length
+                rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
+                rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
+                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.root_id = {root_id}"
@@ -6033,7 +6738,9 @@ fn all_available_snapshots(conn: &mut SqliteConnection) -> QueryResult<Vec<Exist
                 rfm.cover_url, rfm.parser_version, rfm.cover_resolver_version, rfm.classification_version,
                 rfm.musicbrainz_recording_id, rfm.musicbrainz_release_id,
                 rfm.musicbrainz_artist_id, rfm.musicbrainz_album_artist_id, rfm.error,
-                rfm.embedded_artwork_offset, rfm.embedded_artwork_length
+                rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
+                rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
+                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.availability = 'available'",
@@ -6083,6 +6790,7 @@ struct FileMetadataStageRow<'a> {
     error: Option<&'a str>,
     embedded_artwork_offset: Option<i64>,
     embedded_artwork_length: Option<i64>,
+    extras_json: String,
 }
 
 struct PersistFileMetadataContext<'a> {
@@ -6138,7 +6846,7 @@ fn stage_file_metadata(
              track_number INTEGER NOT NULL, disc_number INTEGER NOT NULL, duration_seconds REAL NOT NULL, duration_source TEXT NOT NULL,
              musicbrainz_recording_id TEXT NOT NULL, musicbrainz_release_id TEXT NOT NULL,
              musicbrainz_artist_id TEXT NOT NULL, musicbrainz_album_artist_id TEXT NOT NULL, error TEXT,
-             embedded_artwork_offset INTEGER, embedded_artwork_length INTEGER
+             embedded_artwork_offset INTEGER, embedded_artwork_length INTEGER, extras_json TEXT NOT NULL
          ) WITHOUT ROWID;
          CREATE INDEX file_metadata_stage_identity
              ON file_metadata_stage(stable_identity) WHERE stable_identity IS NOT NULL;",
@@ -6155,7 +6863,8 @@ fn stage_file_metadata(
                         cold.duration_seconds, cold.duration_source,
                         cold.musicbrainz_recording_id, cold.musicbrainz_release_id,
                         cold.musicbrainz_artist_id, cold.musicbrainz_album_artist_id,
-                        cold.error, cold.embedded_artwork_offset, cold.embedded_artwork_length
+                        cold.error, cold.embedded_artwork_offset, cold.embedded_artwork_length,
+                        cold.extras_json
                  FROM cold_parsed_stage cold WHERE cold.path = ?",
             )
             .bind::<Text, _>(file.path.as_ref())
@@ -6177,7 +6886,7 @@ fn stage_file_metadata(
             .iter()
             .filter_map(|file| {
                 let parsed = parsed_by_path.get(file.path.as_ref())?;
-                Some(FileMetadataStageRow {
+                Some(Ok(FileMetadataStageRow {
                     path: &file.path,
                     directory: &file.directory,
                     file_name: &file.file_name,
@@ -6217,13 +6926,17 @@ fn stage_file_metadata(
                     embedded_artwork_length: parsed
                         .embedded_artwork
                         .and_then(|region| i64::try_from(region.length).ok()),
-                })
+                    extras_json: match file_extras_json(parsed) {
+                        Ok(extras) => extras,
+                        Err(error) => return Some(Err(error)),
+                    },
+                }))
             })
-            .collect::<Vec<_>>();
+            .collect::<QueryResult<Vec<_>>>()?;
         for row in rows {
             diesel::sql_query(
             "INSERT INTO file_metadata_stage VALUES
-             (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind::<Text, _>(row.path)
         .bind::<Text, _>(row.directory)
@@ -6256,6 +6969,7 @@ fn stage_file_metadata(
         .bind::<Nullable<Text>, _>(row.error)
         .bind::<Nullable<BigInt>, _>(row.embedded_artwork_offset)
         .bind::<Nullable<BigInt>, _>(row.embedded_artwork_length)
+        .bind::<Text, _>(row.extras_json)
         .execute(conn)?;
         }
     }
@@ -6363,13 +7077,19 @@ fn upsert_file_metadata(
              parser_version, cover_resolver_version, classification_version,
              track_number, disc_number, duration_seconds, duration_source, musicbrainz_recording_id,
              musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id, error,
-             embedded_artwork_offset, embedded_artwork_length)
+             embedded_artwork_offset, embedded_artwork_length,
+             codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc)
          SELECT file.id, stage.title, stage.album, stage.track_artists_json, stage.album_artists_json,
                 stage.genres_json, stage.release_date, stage.cover_url, stage.parser_version,
                 stage.cover_resolver_version, stage.classification_version,
                 stage.track_number, stage.disc_number, stage.duration_seconds, stage.duration_source, stage.musicbrainz_recording_id,
                 stage.musicbrainz_release_id, stage.musicbrainz_artist_id, stage.musicbrainz_album_artist_id, stage.error,
-                stage.embedded_artwork_offset, stage.embedded_artwork_length
+                stage.embedded_artwork_offset, stage.embedded_artwork_length,
+                json_extract(stage.extras_json, '$.codec'), json_extract(stage.extras_json, '$.container'),
+                json_extract(stage.extras_json, '$.sample_rate'), json_extract(stage.extras_json, '$.bit_depth'),
+                json_extract(stage.extras_json, '$.channels'), json_extract(stage.extras_json, '$.bitrate'),
+                COALESCE(json_extract(stage.extras_json, '$.credits'), '[]'),
+                json_extract(stage.extras_json, '$.label'), json_extract(stage.extras_json, '$.isrc')
          FROM file_metadata_stage stage JOIN file_entry file USING(path) WHERE stage.was_parsed
          ON CONFLICT(file_id) DO UPDATE SET
              title = excluded.title, album = excluded.album, track_artists_json = excluded.track_artists_json,
@@ -6388,6 +7108,10 @@ fn upsert_file_metadata(
              musicbrainz_album_artist_id = excluded.musicbrainz_album_artist_id, error = excluded.error,
              embedded_artwork_offset = excluded.embedded_artwork_offset,
              embedded_artwork_length = excluded.embedded_artwork_length,
+             codec = excluded.codec, container = excluded.container,
+             sample_rate = excluded.sample_rate, bit_depth = excluded.bit_depth,
+             channels = excluded.channels, bitrate = excluded.bitrate,
+             credits_json = excluded.credits_json, label = excluded.label, isrc = excluded.isrc,
              parsed_at = CURRENT_TIMESTAMP
          WHERE raw_file_metadata.title IS NOT excluded.title OR raw_file_metadata.album IS NOT excluded.album
             OR raw_file_metadata.track_artists_json IS NOT excluded.track_artists_json
@@ -6404,7 +7128,16 @@ fn upsert_file_metadata(
             OR raw_file_metadata.musicbrainz_release_id IS NOT excluded.musicbrainz_release_id
             OR raw_file_metadata.musicbrainz_artist_id IS NOT excluded.musicbrainz_artist_id
             OR raw_file_metadata.musicbrainz_album_artist_id IS NOT excluded.musicbrainz_album_artist_id
-            OR raw_file_metadata.error IS NOT excluded.error;
+            OR raw_file_metadata.error IS NOT excluded.error
+            OR raw_file_metadata.codec IS NOT excluded.codec
+            OR raw_file_metadata.container IS NOT excluded.container
+            OR raw_file_metadata.sample_rate IS NOT excluded.sample_rate
+            OR raw_file_metadata.bit_depth IS NOT excluded.bit_depth
+            OR raw_file_metadata.channels IS NOT excluded.channels
+            OR raw_file_metadata.bitrate IS NOT excluded.bitrate
+            OR raw_file_metadata.credits_json IS NOT excluded.credits_json
+            OR raw_file_metadata.label IS NOT excluded.label
+            OR raw_file_metadata.isrc IS NOT excluded.isrc;
 
          DELETE FROM duration_repair_queue
          WHERE file_id IN (
@@ -6597,7 +7330,7 @@ struct LibraryTrackArtistStageRow {
     name: String,
     normalized_name: String,
     position: i32,
-    role: &'static str,
+    role: String,
 }
 
 struct StagePreparedTracksInputs<'borrow, 'data> {
@@ -6808,7 +7541,7 @@ fn stage_prepared_tracks(
                 name: track_artist_name.to_string(),
                 normalized_name: prepared.normalized_track_artist.to_string(),
                 position: 0,
-                role: "primary",
+                role: "primary".to_string(),
             });
             for (position, credited_artist) in credited_artists.into_iter().enumerate() {
                 let normalized_name = normalize_artist_identity(&credited_artist);
@@ -6826,9 +7559,24 @@ fn stage_prepared_tracks(
                         name: credited_artist,
                         normalized_name,
                         position: position.saturating_add(1) as i32,
-                        role: "featured",
+                        role: "featured".to_string(),
                     });
                 }
+            }
+            // Contributor credits share track_artist with a role per credit.
+            for (position, credit) in parsed.credits.iter().enumerate() {
+                let normalized_name = normalize_artist_identity(&credit.name);
+                if normalized_name.is_empty() {
+                    continue;
+                }
+                track_artist_rows.push(LibraryTrackArtistStageRow {
+                    track_id: track_id.to_string(),
+                    artist_id: hash_normalized_artist(&normalized_name),
+                    name: credit.name.clone(),
+                    normalized_name,
+                    position: position as i32,
+                    role: credit.role_key(),
+                });
             }
             for genre in &prepared.genres {
                 genre_rows.push(LibraryGenreStageRow {
@@ -7391,7 +8139,8 @@ fn apply_normalized_stage(
              INSERT INTO library_search_document (entity_type, entity_id, title, subtitle, artwork_uri, normalized_text, keywords)
              SELECT 'artist', album_artist_id, MIN(album_artist_name), 'Artist', '', MIN(album_artist_normalized), MIN(album_artist_normalized) FROM library_rebuild_stage GROUP BY album_artist_id
              UNION SELECT 'artist', track_artist_id, MIN(track_artist_name), 'Artist', '', MIN(track_artist_normalized), MIN(track_artist_normalized) FROM library_rebuild_stage GROUP BY track_artist_id
-             UNION SELECT 'artist', artist_id, MIN(name), 'Artist', '', MIN(normalized_name), MIN(normalized_name) FROM library_track_artist_stage GROUP BY artist_id
+             UNION SELECT 'artist', artist_id, MIN(name), 'Artist', '', MIN(normalized_name), MIN(normalized_name) FROM library_track_artist_stage
+                 WHERE role IN ('primary', 'featured') GROUP BY artist_id
              UNION SELECT 'album', album_id, MIN(album_title), MIN(album_artist_name), MIN(artwork_uri), MIN(album_search_text), MIN(album_search_text) FROM library_rebuild_stage GROUP BY album_id
              UNION SELECT 'song', track_id, MIN(track_title), MIN(song_subtitle), MIN(artwork_uri), MIN(song_search_text), MIN(song_search_text) FROM library_rebuild_stage GROUP BY track_id
              ON CONFLICT(entity_type, entity_id) DO UPDATE SET title = excluded.title, subtitle = excluded.subtitle,
@@ -7437,6 +8186,9 @@ fn apply_normalized_stage(
                      (entity_type, entity_id, title, subtitle, artwork_uri, normalized_text, keywords)
                  SELECT 'artist', id, name, 'Artist', '', normalized_name, normalized_name
                  FROM artist_entity WHERE id IN (SELECT id FROM affected_artist)
+                   AND (EXISTS (SELECT 1 FROM album_artist WHERE artist_id = artist_entity.id)
+                        OR EXISTS (SELECT 1 FROM track_artist
+                                   WHERE artist_id = artist_entity.id AND role IN ('primary', 'featured')))
                  ON CONFLICT(entity_type, entity_id) DO UPDATE SET
                      title = excluded.title, subtitle = excluded.subtitle,
                      artwork_uri = excluded.artwork_uri, normalized_text = excluded.normalized_text,
@@ -8844,6 +9596,26 @@ fn select_instant_preview_records(mut parsed: Vec<ParsedFile>) -> Vec<ParsedFile
         .collect()
 }
 
+fn preview_audio_properties(technical: &AudioProperties) -> Option<AudioProperties> {
+    let mut audio = technical.clone();
+    audio.lossless = audio.codec.as_deref().and_then(codec_is_lossless);
+    (!audio.is_empty()).then_some(audio)
+}
+
+fn preview_credits(credits: &[TagCredit]) -> Vec<Credit> {
+    let mut credits = credits
+        .iter()
+        .map(|credit| Credit {
+            artist_id: hash_artist(&credit.name),
+            name: credit.name.clone(),
+            role: credit.role.clone(),
+            instrument: credit.instrument.clone(),
+        })
+        .collect::<Vec<_>>();
+    credits.sort_by_key(|credit| role_rank(&credit.role));
+    credits
+}
+
 fn preview_catalog_from_parsed(parsed_files: &[ParsedFile], artist_limit: usize) -> Vec<Artist> {
     let mut artists = Vec::<Artist>::new();
     let mut artist_positions = HashMap::<String, usize>::new();
@@ -8923,6 +9695,10 @@ fn preview_catalog_from_parsed(parsed_files: &[ParsedFile], artist_limit: usize)
                 track_number: parsed.track_number,
                 path: parsed.path.to_string(),
                 duration: parsed.duration_seconds,
+                audio: preview_audio_properties(&parsed.technical),
+                isrc: (!parsed.isrc.is_empty()).then(|| parsed.isrc.clone()),
+                label: (!parsed.label.is_empty()).then(|| parsed.label.clone()),
+                credits: preview_credits(&parsed.credits),
             });
         }
     }
@@ -9155,16 +9931,7 @@ pub fn export_library_from_database(
     let export_started = Instant::now();
     let mut conn = pool.get()?;
     let overrides = load_metadata_overrides(&mut conn)?;
-    let artist_rows = diesel::sql_query(
-        "SELECT artist.id, artist.name, COALESCE(art.uri, '') AS icon_url,
-                artist.followers, COALESCE(artist.description, '') AS description
-         FROM artist_entity artist
-         LEFT JOIN artwork art ON art.id = artist.artwork_id
-         WHERE EXISTS (SELECT 1 FROM album_artist albums WHERE albums.artist_id = artist.id)
-            OR EXISTS (SELECT 1 FROM track_artist tracks WHERE tracks.artist_id = artist.id)
-         ORDER BY artist.name COLLATE NOCASE",
-    )
-    .load::<ArtistViewRow>(&mut conn)?;
+    let artist_rows = load_catalog_artist_rows(&mut conn)?;
     let mut featured_albums_by_artist = load_appearance_albums_by_artist(&mut conn)?;
     // Load the release graph with two set-based queries.
     let mut albums_by_artist = export_albums_by_artist(&mut conn, &overrides)?;
@@ -9398,6 +10165,10 @@ mod external_library_tests {
             musicbrainz_album_artist_id: String::new(),
             error: None,
             embedded_artwork: None,
+            technical: crate::domain::AudioProperties::default(),
+            credits: Vec::new(),
+            label: String::new(),
+            isrc: String::new(),
             tag_parse_us: 0,
             duration_us: 0,
             parse_strategy: ParserStrategy::Test,
@@ -9470,22 +10241,25 @@ mod external_library_tests {
                  );
                  CREATE TABLE artist_entity (id TEXT PRIMARY KEY, name TEXT NOT NULL);
                  CREATE TABLE track_artist (
-                     track_id TEXT NOT NULL, artist_id TEXT NOT NULL, role TEXT NOT NULL
+                     track_id TEXT NOT NULL, artist_id TEXT NOT NULL, role TEXT NOT NULL,
+                     position INTEGER NOT NULL DEFAULT 0
                  );
                  CREATE TABLE file_entry (id INTEGER PRIMARY KEY, path TEXT NOT NULL);
                  CREATE TABLE track_file (
                      track_id TEXT NOT NULL, file_id INTEGER NOT NULL, is_primary BOOLEAN NOT NULL
                  );
                  CREATE TABLE raw_file_metadata (
-                     file_id INTEGER PRIMARY KEY, track_artists_json TEXT NOT NULL
+                     file_id INTEGER PRIMARY KEY, track_artists_json TEXT NOT NULL,
+                     codec TEXT, container TEXT, sample_rate INTEGER, bit_depth INTEGER,
+                     channels INTEGER, bitrate INTEGER, label TEXT, isrc TEXT
                  );
                  INSERT INTO artist_entity VALUES ('primary', 'Primary Artist');
                  INSERT INTO track_entity VALUES
                      ('track', 'Featured Recording', 'release', 'featured recording', 2, 1, 245);
-                 INSERT INTO track_artist VALUES ('track', 'primary', 'primary');
+                 INSERT INTO track_artist (track_id, artist_id, role) VALUES ('track', 'primary', 'primary');
                  INSERT INTO file_entry VALUES (1, '/music/release/02.flac');
                  INSERT INTO track_file VALUES ('track', 1, true);
-                 INSERT INTO raw_file_metadata VALUES
+                 INSERT INTO raw_file_metadata (file_id, track_artists_json) VALUES
                      (1, '[\"Primary Artist feat. Guest Artist\", \"Primary Artist\"]');",
             )
             .expect("track credit fixture");
@@ -9812,6 +10586,15 @@ mod external_library_tests {
             error: None,
             embedded_artwork_offset: None,
             embedded_artwork_length: None,
+            codec: Some("mp3".into()),
+            container: Some("mp3".into()),
+            sample_rate: Some(44_100),
+            bit_depth: None,
+            channels: Some(2),
+            bitrate: Some(128),
+            credits_json: "[]".into(),
+            label: None,
+            isrc: None,
         }
     }
 
@@ -12314,6 +13097,22 @@ struct ArtistAlbumRow {
     album_id: String,
 }
 
+/// Artists shown in the catalog: album owners and track (featured) artists.
+/// Contributor-only credits such as composers stay out of the artist list.
+fn load_catalog_artist_rows(conn: &mut SqliteConnection) -> QueryResult<Vec<ArtistViewRow>> {
+    diesel::sql_query(
+        "SELECT artist.id, artist.name, COALESCE(art.uri, '') AS icon_url,
+                artist.followers, COALESCE(artist.description, '') AS description
+         FROM artist_entity artist
+         LEFT JOIN artwork art ON art.id = artist.artwork_id
+         WHERE EXISTS (SELECT 1 FROM album_artist albums WHERE albums.artist_id = artist.id)
+            OR EXISTS (SELECT 1 FROM track_artist tracks
+                       WHERE tracks.artist_id = artist.id AND tracks.role IN ('primary', 'featured'))
+         ORDER BY artist.name COLLATE NOCASE",
+    )
+    .load::<ArtistViewRow>(conn)
+}
+
 fn load_appearance_albums_by_artist(
     conn: &mut SqliteConnection,
 ) -> QueryResult<HashMap<String, Vec<String>>> {
@@ -12458,7 +13257,9 @@ fn export_all_tracks(
     let rows = diesel::sql_query(
         "SELECT t.album_id, t.id, t.title, COALESCE(ar.name, 'Unknown Artist') AS artist,
                 t.track_number, t.duration_seconds, fe.path,
-                COALESCE(rfm.track_artists_json, '[]') AS track_artists_json
+                COALESCE(rfm.track_artists_json, '[]') AS track_artists_json,
+                rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
+                rfm.bitrate, rfm.label, rfm.isrc
          FROM track_entity t
          LEFT JOIN track_artist ta ON ta.track_id = t.id AND ta.role = 'primary'
          LEFT JOIN artist_entity ar ON ar.id = ta.artist_id
@@ -12468,6 +13269,7 @@ fn export_all_tracks(
          ORDER BY t.album_id, t.disc_number, t.track_number, t.normalized_title",
     )
     .load::<TrackRow>(conn)?;
+    let mut credits_by_track = load_track_credits(conn)?;
     let query_us = elapsed_us(query_started.elapsed());
 
     let mut tracks_by_album = HashMap::with_capacity(rows.len().saturating_div(8).max(1));
@@ -12484,8 +13286,14 @@ fn export_all_tracks(
             .iter()
             .map(|artist| hash_artist(artist))
             .collect::<Vec<_>>();
+        let audio = row.audio_properties();
+        let credits = credits_by_track.remove(&row.id).unwrap_or_default();
         let song = Song {
             id: row.id.clone(),
+            audio,
+            credits,
+            isrc: row.isrc.filter(|isrc| !isrc.is_empty()),
+            label: row.label.filter(|label| !label.is_empty()),
             name: value_override(overrides, "track", &row.id, "name", row.title),
             artist: value_override(overrides, "track", &row.id, "artist", row.artist),
             contributing_artists: typed_override(
@@ -12536,4 +13344,611 @@ fn export_all_tracks(
         "track export completed"
     );
     Ok(tracks_by_album)
+}
+
+#[cfg(test)]
+mod technical_and_credit_tests {
+    //! Technical properties and tag credits, checked against lofty's
+    //! `AudioProperties` for ffmpeg-generated fixtures in `testdata/audio`
+    //! (regenerate them with `testdata/audio/generate.sh`).
+
+    use std::collections::{HashMap, HashSet};
+    use std::io::Cursor;
+
+    use diesel::connection::SimpleConnection;
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::probe::Probe;
+    use lofty::tag::ItemKey;
+
+    use super::*;
+
+    struct Fixture {
+        name: &'static str,
+        bytes: &'static [u8],
+        codec: &'static str,
+        container: &'static str,
+        sample_rate: u32,
+        bit_depth: Option<u8>,
+        channels: u8,
+    }
+
+    macro_rules! fixture {
+        ($name:literal, $codec:literal, $container:literal, $rate:literal, $depth:expr, $channels:literal) => {
+            Fixture {
+                name: $name,
+                bytes: include_bytes!(concat!("../../testdata/audio/", $name)),
+                codec: $codec,
+                container: $container,
+                sample_rate: $rate,
+                bit_depth: $depth,
+                channels: $channels,
+            }
+        };
+    }
+
+    fn fixtures() -> Vec<Fixture> {
+        vec![
+            fixture!(
+                "flac-96k-24bit-stereo.flac",
+                "flac",
+                "flac",
+                96_000,
+                Some(24),
+                2
+            ),
+            fixture!(
+                "flac-44k-16bit-mono.flac",
+                "flac",
+                "flac",
+                44_100,
+                Some(16),
+                1
+            ),
+            fixture!("mp3-44k-cbr192-stereo.mp3", "mp3", "mp3", 44_100, None, 2),
+            fixture!("mp3-48k-vbr-mono.mp3", "mp3", "mp3", 48_000, None, 1),
+            fixture!(
+                "alac-48k-24bit-stereo.m4a",
+                "alac",
+                "mp4",
+                48_000,
+                Some(24),
+                2
+            ),
+            fixture!(
+                "alac-44k-16bit-mono.m4a",
+                "alac",
+                "mp4",
+                44_100,
+                Some(16),
+                1
+            ),
+            fixture!("aac-44k-stereo.m4a", "aac", "mp4", 44_100, None, 2),
+            fixture!("vorbis-44k-stereo.ogg", "vorbis", "ogg", 44_100, None, 2),
+            fixture!("opus-48k-mono.opus", "opus", "ogg", 48_000, None, 1),
+            fixture!("wav-22k-16bit-mono.wav", "pcm", "wav", 22_050, Some(16), 1),
+            fixture!(
+                "aiff-48k-24bit-stereo.aiff",
+                "pcm",
+                "aiff",
+                48_000,
+                Some(24),
+                2
+            ),
+        ]
+    }
+
+    fn discovered(name: &str, size: usize) -> DiscoveredFile {
+        let path = format!("/fixtures/{name}");
+        let extension = name.rsplit('.').next().unwrap_or_default();
+        DiscoveredFile {
+            native_path: PathBuf::from(&path),
+            native_directory: PathBuf::from("/fixtures"),
+            path: path.as_str().into(),
+            directory: "/fixtures".into(),
+            file_name: name.into(),
+            format: AudioFormat::from_extension(extension),
+            size_bytes: size as i64,
+            modified_at_ns: 0,
+            stable_identity: None,
+            tag_fingerprint: None,
+        }
+    }
+
+    /// Parses bytes the way a cold scan does, through the format fast path.
+    fn parse_bytes(name: &str, bytes: Vec<u8>) -> ParsedFile {
+        let file = discovered(name, bytes.len());
+        let mut reader = Cursor::new(bytes);
+        let (parsed, fallbacks, fast_path_error) = parse_audio_reader(&file, &mut reader);
+        assert_eq!(fallbacks, 0, "{name} fell back: {fast_path_error:?}");
+        let parsed = parsed_file_from_result(&file, "", parsed, ParseIoTelemetry::default());
+        assert!(parsed.error.is_none(), "{name}: {:?}", parsed.error);
+        parsed
+    }
+
+    fn lofty_properties(bytes: &[u8]) -> lofty::properties::FileProperties {
+        Probe::new(Cursor::new(bytes.to_vec()))
+            .options(ParseOptions::new().read_cover_art(false))
+            .guess_file_type()
+            .expect("probe fixture")
+            .read()
+            .expect("lofty fixture")
+            .properties()
+            .clone()
+    }
+
+    #[test]
+    fn fast_paths_report_the_same_technical_properties_as_lofty() {
+        for fixture in fixtures() {
+            let parsed = parse_bytes(fixture.name, fixture.bytes.to_vec());
+            let technical = &parsed.technical;
+            let lofty = lofty_properties(fixture.bytes);
+            let name = fixture.name;
+
+            assert_eq!(technical.codec.as_deref(), Some(fixture.codec), "{name}");
+            assert_eq!(
+                technical.container.as_deref(),
+                Some(fixture.container),
+                "{name}"
+            );
+            assert_eq!(technical.sample_rate, Some(fixture.sample_rate), "{name}");
+            assert_eq!(technical.channels, Some(fixture.channels), "{name}");
+            assert_eq!(technical.bit_depth, fixture.bit_depth, "{name}");
+            assert_eq!(
+                technical.sample_rate,
+                lofty.sample_rate(),
+                "{name} vs lofty"
+            );
+            assert_eq!(technical.channels, lofty.channels(), "{name} vs lofty");
+            if let Some(depth) = lofty.bit_depth() {
+                assert_eq!(technical.bit_depth, Some(depth), "{name} vs lofty");
+            }
+            let bitrate = technical.bitrate_kbps.expect("bitrate") as f64;
+            let expected = lofty
+                .audio_bitrate()
+                .or(lofty.overall_bitrate())
+                .expect("lofty bitrate") as f64;
+            assert!(
+                (bitrate - expected).abs() <= (expected * 0.15).max(8.0),
+                "{name}: {bitrate} kbps vs lofty {expected} kbps"
+            );
+            assert!(
+                (parsed.duration_seconds - 0.3).abs() < 0.05,
+                "{name}: duration {}",
+                parsed.duration_seconds
+            );
+        }
+    }
+
+    #[test]
+    fn lofty_fallback_reports_technical_properties() {
+        for fixture in fixtures() {
+            let metadata =
+                parse_with_lofty(Cursor::new(fixture.bytes.to_vec())).expect("lofty parse");
+            assert_eq!(
+                metadata.technical.sample_rate,
+                Some(fixture.sample_rate),
+                "{}",
+                fixture.name
+            );
+            assert_eq!(metadata.technical.channels, Some(fixture.channels));
+            assert_eq!(
+                metadata.technical.container.as_deref(),
+                Some(fixture.container),
+                "{}",
+                fixture.name
+            );
+            if fixture.container != "mp4" {
+                assert_eq!(metadata.technical.codec.as_deref(), Some(fixture.codec));
+            }
+        }
+    }
+
+    #[test]
+    fn known_bitrates_come_from_stream_headers() {
+        let cbr = fixtures()
+            .into_iter()
+            .find(|fixture| fixture.name.starts_with("mp3-44k-cbr192"))
+            .unwrap();
+        let parsed = parse_bytes(cbr.name, cbr.bytes.to_vec());
+        assert_eq!(parsed.technical.bitrate_kbps, Some(192));
+        let wav = fixtures()
+            .into_iter()
+            .find(|fixture| fixture.name.starts_with("wav-"))
+            .unwrap();
+        let parsed = parse_bytes(wav.name, wav.bytes.to_vec());
+        // 22 050 Hz * 16 bit * 1 channel.
+        assert_eq!(parsed.technical.bitrate_kbps, Some(352));
+    }
+
+    fn credit_keys(parsed: &ParsedFile) -> Vec<(String, String)> {
+        parsed
+            .credits
+            .iter()
+            .map(|credit| (credit.role_key(), credit.name.clone()))
+            .collect()
+    }
+
+    fn keys(values: &[(&str, &str)]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .map(|(role, name)| (role.to_string(), name.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn flac_vorbis_comments_yield_credits_label_and_isrc() {
+        let parsed = parse_bytes(
+            "flac-96k-24bit-stereo.flac",
+            include_bytes!("../../testdata/audio/flac-96k-24bit-stereo.flac").to_vec(),
+        );
+        assert_eq!(parsed.title, "Fixture");
+        assert_eq!(parsed.track_artists, ["Fixture Artist"]);
+        assert_eq!(
+            credit_keys(&parsed),
+            keys(&[
+                ("composer", "Clara Composer"),
+                ("conductor", "Carl Conductor"),
+                ("producer", "Pat Producer"),
+                ("performer:piano", "Piper Pianist"),
+                ("remixer", "Rémy Remixer"),
+            ])
+        );
+        assert_eq!(parsed.label, "Fixture Records");
+        assert_eq!(parsed.isrc, "USRC17607839");
+    }
+
+    #[test]
+    fn ogg_and_mp4_composer_tags_are_credits() {
+        let vorbis = parse_bytes(
+            "vorbis-44k-stereo.ogg",
+            include_bytes!("../../testdata/audio/vorbis-44k-stereo.ogg").to_vec(),
+        );
+        assert_eq!(
+            credit_keys(&vorbis),
+            keys(&[("composer", "Clara Composer")])
+        );
+        let alac = parse_bytes(
+            "alac-48k-24bit-stereo.m4a",
+            include_bytes!("../../testdata/audio/alac-48k-24bit-stereo.m4a").to_vec(),
+        );
+        assert_eq!(credit_keys(&alac), keys(&[("composer", "Clara Composer")]));
+    }
+
+    #[test]
+    fn mp4_freeform_credit_atoms_written_by_lofty_are_read_by_the_fast_path() {
+        let source = include_bytes!("../../testdata/audio/alac-44k-16bit-mono.m4a").to_vec();
+        let mut tagged = Probe::new(Cursor::new(source.clone()))
+            .guess_file_type()
+            .unwrap()
+            .read()
+            .unwrap();
+        let tag = tagged.primary_tag_mut().expect("MP4 ilst");
+        tag.insert_text(ItemKey::Composer, "Clara Composer".into());
+        tag.insert_text(ItemKey::Conductor, "Carl Conductor".into());
+        tag.insert_text(ItemKey::Producer, "Pat Producer".into());
+        tag.insert_text(ItemKey::Remixer, "Rémy Remixer".into());
+        tag.insert_text(ItemKey::Label, "Fixture Records".into());
+        tag.insert_text(ItemKey::Isrc, "USRC17607839".into());
+        let mut output = Cursor::new(source);
+        tagged
+            .save_to(&mut output, WriteOptions::default())
+            .expect("write MP4 credits");
+
+        let parsed = parse_bytes("alac-44k-16bit-mono.m4a", output.into_inner());
+
+        assert_eq!(parsed.parse_strategy, ParserStrategy::Mp4Fast);
+        let mut credits = credit_keys(&parsed);
+        credits.sort();
+        assert_eq!(
+            credits,
+            keys(&[
+                ("composer", "Clara Composer"),
+                ("conductor", "Carl Conductor"),
+                ("producer", "Pat Producer"),
+                ("remixer", "Rémy Remixer"),
+            ])
+        );
+        assert_eq!(parsed.label, "Fixture Records");
+        assert_eq!(parsed.isrc, "USRC17607839");
+        assert_eq!(parsed.technical.codec.as_deref(), Some("alac"));
+    }
+
+    #[test]
+    fn id3_credit_frames_map_to_roles_for_v23_and_v24() {
+        use id3::frame::{
+            Content, ExtendedText, Frame, InvolvedPeopleList, InvolvedPeopleListItem,
+        };
+        use id3::{Tag, TagLike, Version};
+
+        let audio = include_bytes!("../../testdata/audio/mp3-44k-cbr192-stereo.mp3");
+        let people = |pairs: &[(&str, &str)]| {
+            Content::InvolvedPeopleList(InvolvedPeopleList {
+                items: pairs
+                    .iter()
+                    .map(|(involvement, involvee)| InvolvedPeopleListItem {
+                        involvement: involvement.to_string(),
+                        involvee: involvee.to_string(),
+                    })
+                    .collect(),
+            })
+        };
+        for version in [Version::Id3v23, Version::Id3v24] {
+            let mut tag = Tag::new();
+            tag.set_title("Fixture");
+            tag.set_artist("Fixture Artist");
+            tag.set_text("TCOM", "Clara Composer");
+            tag.set_text("TEXT", "Lyle Lyricist");
+            tag.set_text("TPE3", "Carl Conductor");
+            tag.set_text("TPE4", "Rémy Remixer");
+            tag.set_text("TPUB", "Fixture Records");
+            tag.set_text("TSRC", "USRC17607839");
+            let involved = if version == Version::Id3v24 {
+                "TIPL"
+            } else {
+                "IPLS"
+            };
+            tag.add_frame(Frame::with_content(
+                involved,
+                people(&[("producer", "Pat Producer"), ("mix", "Max Mixer")]),
+            ));
+            if version == Version::Id3v24 {
+                tag.add_frame(Frame::with_content(
+                    "TMCL",
+                    people(&[("Piano", "Piper Pianist"), ("vocals", "Vic Vocalist")]),
+                ));
+            }
+            tag.add_frame(ExtendedText {
+                description: "PRODUCER".into(),
+                value: "Pat Producer".into(),
+            });
+            tag.add_frame(ExtendedText {
+                description: "ENGINEER".into(),
+                value: "Erin Engineer".into(),
+            });
+            let mut bytes = Vec::new();
+            tag.write_to(&mut bytes, version)
+                .expect("encode ID3 credits");
+            bytes.extend_from_slice(audio);
+
+            let parsed = parse_bytes("mp3-44k-cbr192-stereo.mp3", bytes);
+
+            let mut credits = credit_keys(&parsed);
+            credits.sort();
+            let mut expected = vec![
+                ("composer", "Clara Composer"),
+                ("conductor", "Carl Conductor"),
+                ("engineer", "Erin Engineer"),
+                ("lyricist", "Lyle Lyricist"),
+                ("mixer", "Max Mixer"),
+                ("producer", "Pat Producer"),
+                ("remixer", "Rémy Remixer"),
+            ];
+            if version == Version::Id3v24 {
+                expected.extend([
+                    ("performer:piano", "Piper Pianist"),
+                    ("performer:vocals", "Vic Vocalist"),
+                ]);
+            }
+            let mut expected = keys(&expected);
+            expected.sort();
+            assert_eq!(credits, expected, "{version:?}");
+            assert_eq!(parsed.label, "Fixture Records", "{version:?}");
+            assert_eq!(parsed.isrc, "USRC17607839", "{version:?}");
+            assert_eq!(parsed.technical.sample_rate, Some(44_100));
+            assert_eq!(parsed.technical.bitrate_kbps, Some(192));
+        }
+    }
+
+    fn catalog_schema() -> SqliteConnection {
+        let mut connection = SqliteConnection::establish(":memory:").expect("catalog database");
+        connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-07-19-000000_v1_0_0_baseline/up.sql"
+            ))
+            .expect("baseline schema");
+        connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-10-24-000000_track_technical_and_credits/up.sql"
+            ))
+            .expect("technical and credits schema");
+        connection
+    }
+
+    fn credited_track() -> ParsedFile {
+        let mut parsed = parse_bytes(
+            "flac-96k-24bit-stereo.flac",
+            include_bytes!("../../testdata/audio/flac-96k-24bit-stereo.flac").to_vec(),
+        );
+        parsed.album_artists = vec!["Fixture Artist".into()];
+        parsed.track_number = 1;
+        parsed
+    }
+
+    #[test]
+    fn credits_are_stored_as_track_artist_roles_without_joining_the_artist_list() {
+        let mut connection = catalog_schema();
+        let parsed = vec![credited_track()];
+        let changed_paths = HashSet::from([parsed[0].path.as_ref()]);
+        reconcile_normalized_tables(
+            &mut connection,
+            ReconcileInputs {
+                root_id: 0,
+                parsed_files: &parsed,
+                file_ids: &HashMap::new(),
+                discovered_files: &HashMap::new(),
+                artwork_hashes: &HashMap::new(),
+                phase: LibraryIndexPhase::Enriched,
+                mode: IndexMode::Repair,
+                changed_paths: &changed_paths,
+            },
+        )
+        .expect("normalize credited track");
+
+        #[derive(QueryableByName)]
+        struct RoleRow {
+            #[diesel(sql_type = Text)]
+            name: String,
+            #[diesel(sql_type = Text)]
+            role: String,
+        }
+        let mut roles = diesel::sql_query(
+            "SELECT artist.name, credit.role FROM track_artist credit
+             JOIN artist_entity artist ON artist.id = credit.artist_id",
+        )
+        .load::<RoleRow>(&mut connection)
+        .expect("track artist roles")
+        .into_iter()
+        .map(|row| (row.role, row.name))
+        .collect::<Vec<_>>();
+        roles.sort();
+        let mut expected = keys(&[
+            ("primary", "Fixture Artist"),
+            ("composer", "Clara Composer"),
+            ("conductor", "Carl Conductor"),
+            ("producer", "Pat Producer"),
+            ("performer:piano", "Piper Pianist"),
+            ("remixer", "Rémy Remixer"),
+        ]);
+        expected.sort();
+        assert_eq!(roles, expected);
+
+        let catalog_artists = load_catalog_artist_rows(&mut connection)
+            .expect("catalog artists")
+            .into_iter()
+            .map(|row| row.name)
+            .collect::<Vec<_>>();
+        assert_eq!(catalog_artists, ["Fixture Artist"]);
+        assert!(
+            load_appearance_albums_by_artist(&mut connection)
+                .expect("appearances")
+                .is_empty()
+        );
+        let search_artists = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM library_search_document WHERE entity_type = 'artist'",
+        )
+        .get_result::<CountRow>(&mut connection)
+        .expect("artist search documents")
+        .count;
+        assert_eq!(search_artists, 1);
+
+        let credits = load_track_credits(&mut connection).expect("track credits");
+        let track_credits = credits.values().next().expect("one credited track");
+        let summary = track_credits
+            .iter()
+            .map(|credit| {
+                (
+                    credit.role.as_str(),
+                    credit.name.as_str(),
+                    credit.instrument.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                ("composer", "Clara Composer", None),
+                ("conductor", "Carl Conductor", None),
+                ("performer", "Piper Pianist", Some("piano")),
+                ("producer", "Pat Producer", None),
+                ("remixer", "Rémy Remixer", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn technical_properties_and_credits_survive_the_raw_metadata_round_trip() {
+        let mut connection = catalog_schema();
+        let parsed = credited_track();
+        let file = discovered("flac-96k-24bit-stereo.flac", 32_182);
+        let files = vec![file.clone()];
+        connection
+            .batch_execute(
+                "INSERT INTO library_root (id, path) VALUES (1, '/fixtures');
+                 INSERT INTO library_scan_job (id, root_id, status) VALUES (1, 1, 'running');
+                 CREATE TEMP TABLE current_scan_path (path TEXT PRIMARY KEY) WITHOUT ROWID;
+                 CREATE TEMP TABLE changed_scan_path (path TEXT PRIMARY KEY) WITHOUT ROWID;",
+            )
+            .expect("scan staging tables");
+        let parsed_by_path = HashMap::from([(file.path.as_ref(), &parsed)]);
+        let changed = HashSet::from([file.path.as_ref()]);
+        persist_file_metadata_batch(
+            &mut connection,
+            &files,
+            &parsed_by_path,
+            PersistFileMetadataContext {
+                root_id: 1,
+                scan_job_id: 1,
+                changed_paths: &changed,
+                phase: LibraryIndexPhase::Enriched,
+                stream_staged: false,
+            },
+        )
+        .expect("persist raw metadata");
+
+        let snapshots = existing_snapshots(&mut connection, 1).expect("snapshots");
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.codec.as_deref(), Some("flac"));
+        assert_eq!(snapshot.container.as_deref(), Some("flac"));
+        assert_eq!(snapshot.sample_rate, Some(96_000));
+        assert_eq!(snapshot.bit_depth, Some(24));
+        assert_eq!(snapshot.channels, Some(2));
+        assert!(snapshot.bitrate.is_some_and(|bitrate| bitrate > 0));
+        assert_eq!(snapshot.label.as_deref(), Some("Fixture Records"));
+        assert_eq!(snapshot.isrc.as_deref(), Some("USRC17607839"));
+
+        let reused = snapshot_to_parsed(snapshot);
+        assert_eq!(reused.technical, parsed.technical);
+        assert_eq!(reused.credits, parsed.credits);
+        assert_eq!(reused.label, parsed.label);
+        assert_eq!(reused.isrc, parsed.isrc);
+    }
+
+    #[test]
+    fn exported_songs_carry_audio_properties_and_credits() {
+        let mut connection = catalog_schema();
+        let parsed = vec![credited_track()];
+        let changed_paths = HashSet::from([parsed[0].path.as_ref()]);
+        connection
+            .batch_execute(
+                "INSERT INTO library_root (id, path) VALUES (1, '/fixtures');
+                 INSERT INTO file_entry (id, root_id, path, directory, file_name, extension, size_bytes, modified_at_ns)
+                 VALUES (7, 1, '/fixtures/flac-96k-24bit-stereo.flac', '/fixtures', 'flac-96k-24bit-stereo.flac', 'flac', 1, 0);
+                 INSERT INTO raw_file_metadata (file_id, codec, container, sample_rate, bit_depth, channels, bitrate, label, isrc)
+                 VALUES (7, 'flac', 'flac', 96000, 24, 2, 3100, 'Fixture Records', 'USRC17607839');",
+            )
+            .expect("file fixture");
+        let file_ids = HashMap::from([(parsed[0].path.to_string(), 7)]);
+        reconcile_normalized_tables(
+            &mut connection,
+            ReconcileInputs {
+                root_id: 1,
+                parsed_files: &parsed,
+                file_ids: &file_ids,
+                discovered_files: &HashMap::new(),
+                artwork_hashes: &HashMap::new(),
+                phase: LibraryIndexPhase::Enriched,
+                mode: IndexMode::Repair,
+                changed_paths: &changed_paths,
+            },
+        )
+        .expect("normalize credited track");
+
+        let tracks = export_all_tracks(&mut connection, &HashMap::new()).expect("export");
+        let song = tracks.values().flatten().next().expect("exported song");
+        let audio = song.audio.as_ref().expect("audio properties");
+        assert_eq!(audio.codec.as_deref(), Some("flac"));
+        assert_eq!(audio.sample_rate, Some(96_000));
+        assert_eq!(audio.bit_depth, Some(24));
+        assert_eq!(audio.bitrate_kbps, Some(3100));
+        assert_eq!(audio.lossless, Some(true));
+        assert_eq!(song.label.as_deref(), Some("Fixture Records"));
+        assert_eq!(song.isrc.as_deref(), Some("USRC17607839"));
+        assert_eq!(song.credits.len(), 5);
+        assert_eq!(song.credits[0].role, "composer");
+        let json = serde_json::to_value(song).expect("song JSON");
+        assert_eq!(json["audio"]["sample_rate"], 96_000);
+        assert_eq!(json["credits"][2]["instrument"], "piano");
+    }
 }

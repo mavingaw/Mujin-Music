@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::api::song::{ResponseSong, response_song};
-use crate::domain::{Album, Artist, ReleaseAlbum, ReleaseGroupAlbum};
+use crate::domain::{Album, Artist, Credit, ReleaseAlbum, ReleaseGroupAlbum, Song};
+use crate::library::credits::role_rank;
 use crate::library::normalize::dedupe_and_sort_album_songs;
 use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_response};
 
@@ -27,6 +28,60 @@ pub struct ResponseAlbum {
     pub contributing_artists_ids: Vec<String>,
     pub release_album: Option<ReleaseAlbum>,
     pub release_group_album: Option<ReleaseGroupAlbum>,
+    /// Most common record label tagged on the album's tracks.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Contributor credits merged across tracks, in role display order.
+    #[serde(default)]
+    pub credits: Vec<AlbumCredit>,
+}
+
+/// A contributor credit on an album with the tracks it applies to.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AlbumCredit {
+    #[serde(flatten)]
+    pub credit: Credit,
+    pub track_ids: Vec<String>,
+}
+
+/// Picks the label most tracks carry; ties go to the earliest track.
+pub(crate) fn album_label(songs: &[Song]) -> Option<String> {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for label in songs.iter().filter_map(|song| song.label.as_deref()) {
+        match counts.iter_mut().find(|(existing, _)| *existing == label) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((label, 1)),
+        }
+    }
+    let best = counts.iter().map(|(_, count)| *count).max()?;
+    counts
+        .into_iter()
+        .find(|(_, count)| *count == best)
+        .map(|(label, _)| label.to_string())
+}
+
+pub(crate) fn album_credits(songs: &[Song]) -> Vec<AlbumCredit> {
+    let mut credits: Vec<AlbumCredit> = Vec::new();
+    for song in songs {
+        for credit in &song.credits {
+            match credits
+                .iter_mut()
+                .find(|existing| existing.credit == *credit)
+            {
+                Some(existing) => {
+                    if !existing.track_ids.contains(&song.id) {
+                        existing.track_ids.push(song.id.clone());
+                    }
+                }
+                None => credits.push(AlbumCredit {
+                    credit: credit.clone(),
+                    track_ids: vec![song.id.clone()],
+                }),
+            }
+        }
+    }
+    credits.sort_by_key(|credit| role_rank(&credit.credit.role));
+    credits
 }
 
 fn response_album(album: &Album, artist: &Artist) -> ResponseAlbum {
@@ -37,6 +92,8 @@ fn response_album(album: &Album, artist: &Artist) -> ResponseAlbum {
         .iter()
         .map(|song| response_song(song, &album, artist))
         .collect();
+    let label = album_label(&album.songs);
+    let credits = album_credits(&album.songs);
 
     ResponseAlbum {
         id: album.id,
@@ -53,6 +110,8 @@ fn response_album(album: &Album, artist: &Artist) -> ResponseAlbum {
         contributing_artists_ids: album.contributing_artists_ids,
         release_album: album.release_album,
         release_group_album: album.release_group_album,
+        label,
+        credits,
     }
 }
 
@@ -208,7 +267,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{AlbumInfo, fetch_album_info, response_album};
-    use crate::domain::{Album, Artist, Song};
+    use crate::domain::{Album, Artist, Credit, Song};
     use crate::library::search::SearchIndex;
     use crate::library::state::LibraryCache;
 
@@ -291,6 +350,80 @@ mod tests {
             }
             AlbumInfo::Bare(_) => panic!("expected full album"),
         }
+    }
+
+    #[test]
+    fn full_album_responses_merge_track_credits_and_pick_the_common_label() {
+        let composer = Credit {
+            artist_id: "composer".into(),
+            name: "Clara Composer".into(),
+            role: "composer".into(),
+            instrument: None,
+        };
+        let pianist = Credit {
+            artist_id: "pianist".into(),
+            name: "Piper Pianist".into(),
+            role: "performer".into(),
+            instrument: Some("piano".into()),
+        };
+        let producer = Credit {
+            artist_id: "producer".into(),
+            name: "Pat Producer".into(),
+            role: "producer".into(),
+            instrument: None,
+        };
+        let album = Album {
+            id: "album".into(),
+            songs: vec![
+                Song {
+                    id: "one".into(),
+                    track_number: 1,
+                    label: Some("Small Label".into()),
+                    credits: vec![producer.clone(), composer.clone()],
+                    ..Song::default()
+                },
+                Song {
+                    id: "two".into(),
+                    track_number: 2,
+                    label: Some("Main Label".into()),
+                    credits: vec![composer.clone(), pianist.clone()],
+                    ..Song::default()
+                },
+                Song {
+                    id: "three".into(),
+                    track_number: 3,
+                    label: Some("Main Label".into()),
+                    ..Song::default()
+                },
+            ],
+            ..Album::default()
+        };
+        let artist = Artist {
+            id: "artist".into(),
+            ..Artist::default()
+        };
+
+        let response = response_album(&album, &artist);
+
+        assert_eq!(response.label.as_deref(), Some("Main Label"));
+        let credits = response
+            .credits
+            .iter()
+            .map(|credit| (credit.credit.name.as_str(), credit.track_ids.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            credits,
+            [
+                ("Clara Composer", vec!["one".to_string(), "two".to_string()]),
+                ("Piper Pianist", vec!["two".to_string()]),
+                ("Pat Producer", vec!["one".to_string()]),
+            ]
+        );
+        let json = serde_json::to_value(&response.credits[1]).unwrap();
+        assert_eq!(json["role"], "performer");
+        assert_eq!(json["instrument"], "piano");
+        assert_eq!(json["track_ids"][0], "two");
+        assert_eq!(response.songs[1].credits.len(), 2);
     }
 
     #[test]

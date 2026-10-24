@@ -42,6 +42,9 @@ struct QueueSong {
     artist_object: QueueArtist,
     origin: String,
     queue_position: i32,
+    /// Technical properties for signal-path displays; omitted when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio: Option<crate::domain::AudioProperties>,
 }
 
 #[derive(Serialize)]
@@ -184,6 +187,7 @@ fn hydrate_queue_item(
         },
         origin: row.origin,
         queue_position: row.position,
+        audio: song.audio.clone(),
     })
 }
 
@@ -675,6 +679,7 @@ mod tests {
             },
             origin: "manual".into(),
             queue_position: 0,
+            audio: None,
         };
         let json = serde_json::to_value(item).expect("queue item JSON");
         assert!(json.get("path").is_none());
