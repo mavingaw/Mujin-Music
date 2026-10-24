@@ -18,4 +18,5 @@ pub mod recommendation;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod settings;
+pub mod signal_path;
 pub mod startup;

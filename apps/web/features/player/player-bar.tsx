@@ -21,6 +21,8 @@ import {
   isExplicitSongTitle,
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
+import { useSignalPath } from "./signal-path";
+import { SignalPathLight } from "./signal-path-popover";
 
 export default function PlayerBar() {
   const {
@@ -50,6 +52,9 @@ export default function PlayerBar() {
     volume,
     audioPreset,
     audioPresets,
+    signal,
+    volumeLevelingMode,
+    setVolumeLevelingMode,
   } = usePlayer();
   const currentTime = usePlayerClock();
   const cast = useCastOutput();
@@ -132,8 +137,28 @@ export default function PlayerBar() {
   }, []);
   const closeQueue = useCallback(() => setQueueOpen(false), []);
   const cover = effectiveCover;
-  const playbackRate =
-    audioPresets.find((preset) => preset.id === audioPreset)?.rate ?? 1;
+  const activePreset =
+    audioPresets.find((preset) => preset.id === audioPreset) ?? null;
+  const playbackRate = activePreset?.rate ?? 1;
+  const signalSongId = castItem?.song_id || song.id;
+  const { path: signalPath, loading: signalLoading } = useSignalPath({
+    audio: effectiveSong.audio,
+    castDeviceName: cast.session?.receiver_name,
+    casting,
+    muted: effectiveMuted,
+    preset: activePreset,
+    signal,
+    songId: signalSongId,
+    volume: effectiveVolume,
+  });
+  const signalProps = {
+    casting,
+    levelingMode: volumeLevelingMode,
+    loading: signalLoading,
+    onLevelingModeChange: setVolumeLevelingMode,
+    path: signalPath,
+    streamBitrate: signal.streamBitrate,
+  };
 
   usePlayerShortcuts({
     currentTime: effectiveCurrentTime,
@@ -249,6 +274,7 @@ export default function PlayerBar() {
           playbackRate={playbackRate}
           queue={queue}
           queueOpen={queueOpen}
+          signalBadge={<SignalPathLight variant="pill" {...signalProps} />}
           slowedReverb={slowedReverb}
           songId={castItem?.song_id || song.id}
           title={displayTitle}
@@ -334,6 +360,7 @@ export default function PlayerBar() {
         onVolumeChange={changeVolume}
         playbackRate={playbackRate}
         queueOpen={queueOpen}
+        signalLight={<SignalPathLight {...signalProps} />}
         slowedReverb={slowedReverb}
         songId={castItem?.song_id || song.id}
         title={displayTitle}

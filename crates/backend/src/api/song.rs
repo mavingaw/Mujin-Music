@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::api::error::{internal_server_error, not_found};
-use crate::domain::{Album, Artist, AudioProperties, Credit, Song};
+use crate::domain::{Album, Artist, AudioProperties, Credit, Loudness, Song};
 
 const MAX_COLLECTION_RESPONSE_SIZE: usize = 100;
 const MAX_BATCH_LOOKUP_IDS: usize = 500;
@@ -31,6 +31,9 @@ pub struct ResponseSong {
     pub isrc: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    /// ReplayGain tags, for client volume leveling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<Loudness>,
 }
 
 pub(crate) fn response_song(song: &Song, album: &Album, artist: &Artist) -> ResponseSong {
@@ -49,6 +52,7 @@ pub(crate) fn response_song(song: &Song, album: &Album, artist: &Artist) -> Resp
         credits: song.credits.clone(),
         isrc: song.isrc.clone(),
         label: song.label.clone(),
+        loudness: song.loudness,
     }
 }
 

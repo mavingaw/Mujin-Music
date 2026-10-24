@@ -29,6 +29,8 @@ export function useAudioEngine() {
   const resumeOnReconnect = useRef(false);
   const backgroundWasPlaying = useRef(false);
   const volumeRef = useRef(1);
+  // Linear volume-leveling gain, folded into the element volume.
+  const levelingGainRef = useRef(1);
   const mutedRef = useRef(false);
   const recovered = useRef(false);
   const presetRef = useRef<AudioPreset>(audioPresets[0]!);
@@ -39,6 +41,11 @@ export function useAudioEngine() {
   const [error, setError] = useState<string | null>(null);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  const [graphSampleRate, setGraphSampleRate] = useState<number | null>(null);
+  const elementVolume = useCallback(
+    () => Math.min(1, Math.max(0, volumeRef.current * levelingGainRef.current)),
+    [],
+  );
 
   const discardPreloadedAudio = useCallback(() => {
     const element = preloadedAudio.current;
@@ -49,14 +56,17 @@ export function useAudioEngine() {
     preloadedSource.current = "";
   }, []);
 
-  const configureAudioElement = useCallback((element: HTMLAudioElement) => {
-    element.crossOrigin = "anonymous";
-    element.volume = volumeRef.current;
-    element.muted = mutedRef.current;
-    setPitchPreservation(element, presetRef.current.preservePitch);
-    element.defaultPlaybackRate = presetRef.current.rate;
-    element.playbackRate = presetRef.current.rate;
-  }, []);
+  const configureAudioElement = useCallback(
+    (element: HTMLAudioElement) => {
+      element.crossOrigin = "anonymous";
+      element.volume = elementVolume();
+      element.muted = mutedRef.current;
+      setPitchPreservation(element, presetRef.current.preservePitch);
+      element.defaultPlaybackRate = presetRef.current.rate;
+      element.playbackRate = presetRef.current.rate;
+    },
+    [elementVolume],
+  );
 
   const preloadAudioSource = useCallback(
     (next: string | null) => {
@@ -127,6 +137,7 @@ export function useAudioEngine() {
         wetConnected: false,
         wetGain,
       };
+      setGraphSampleRate(context.sampleRate);
     } catch (cause) {
       console.error("Unable to initialize slowed reverb audio graph", cause);
       return null;
@@ -184,6 +195,7 @@ export function useAudioEngine() {
         if (graph.current) {
           void graph.current.context.close().catch(() => {});
           graph.current = null;
+          setGraphSampleRate(null);
         }
         setAudioVersion((version) => version + 1);
         return;
@@ -260,20 +272,32 @@ export function useAudioEngine() {
       .finally(() => window.clearTimeout(startTimeout));
   }, [applyPreset, recoverAudioElement]);
 
-  const setAudioVolume = useCallback((value: number | string) => {
-    const next = boundedVolume(value);
-    if (next === null) return;
-    if (audio.current) audio.current.volume = next;
-    if (preloadedAudio.current) preloadedAudio.current.volume = next;
-    volumeRef.current = next;
-    setVolume(next);
-    if (next > 0) {
-      mutedRef.current = false;
-      if (audio.current) audio.current.muted = false;
-      if (preloadedAudio.current) preloadedAudio.current.muted = false;
-      setMuted(false);
-    }
-  }, []);
+  const setAudioVolume = useCallback(
+    (value: number | string) => {
+      const next = boundedVolume(value);
+      if (next === null) return;
+      volumeRef.current = next;
+      if (audio.current) audio.current.volume = elementVolume();
+      if (preloadedAudio.current)
+        preloadedAudio.current.volume = elementVolume();
+      setVolume(next);
+      if (next > 0) {
+        mutedRef.current = false;
+        if (audio.current) audio.current.muted = false;
+        if (preloadedAudio.current) preloadedAudio.current.muted = false;
+        setMuted(false);
+      }
+    },
+    [elementVolume],
+  );
+  /** Applies a linear volume-leveling gain to the playing element. */
+  const setLevelingGain = useCallback(
+    (gain: number) => {
+      levelingGainRef.current = Number.isFinite(gain) && gain > 0 ? gain : 1;
+      if (audio.current) audio.current.volume = elementVolume();
+    },
+    [elementVolume],
+  );
   const toggleMute = useCallback(() => {
     if (!audio.current) return;
     audio.current.muted = !audio.current.muted;
@@ -317,6 +341,7 @@ export function useAudioEngine() {
     backgroundWasPlaying,
     error,
     graph,
+    graphSampleRate,
     isPlaying,
     muted,
     playAudioSource,
@@ -327,6 +352,7 @@ export function useAudioEngine() {
     setError,
     setIsPlaying,
     setAudioVolume,
+    setLevelingGain,
     slowedReverb: audioPreset !== "original",
     source,
     toggleMute,

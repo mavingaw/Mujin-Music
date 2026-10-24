@@ -49,6 +49,37 @@ pub struct Song {
     /// Record label tagged on the primary file.
     #[serde(default)]
     pub label: Option<String>,
+    /// ReplayGain loudness tags of the primary file.
+    #[serde(default)]
+    pub loudness: Option<Loudness>,
+}
+
+/// ReplayGain loudness tags. Gains are in dB relative to the ReplayGain 2.0
+/// reference (-18 LUFS); peaks are linear sample peaks (1.0 = full scale).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Loudness {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_gain_db: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_peak: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_gain_db: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_peak: Option<f32>,
+}
+
+// Parsed values are always finite, so equality is total.
+impl Eq for Loudness {}
+
+impl Loudness {
+    pub fn is_empty(&self) -> bool {
+        self.track_gain_db.is_none() && self.album_gain_db.is_none()
+    }
+
+    /// `Some(self)` when a gain is present.
+    pub fn non_empty(self) -> Option<Self> {
+        (!self.is_empty()).then_some(self)
+    }
 }
 
 /// Technical properties of an audio file, as read from its stream headers.

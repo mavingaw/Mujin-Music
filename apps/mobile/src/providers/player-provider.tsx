@@ -8,6 +8,7 @@ import {
   type LibrarySong,
   type PlaybackEventType,
   type PlayerAudioPresetId,
+  type VolumeLevelingMode,
 } from "@parson/music-sdk";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
@@ -66,6 +67,14 @@ import {
 import { useSession } from "@/providers/session-provider";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCastOutput } from "@/hooks/use-cast-output";
+import {
+  nativeLeveling,
+  parseVolumeLevelingMode,
+  playsInAlbumContext,
+  signalPlatform,
+  VOLUME_LEVELING_STORAGE_KEY,
+  type MobileSignalState,
+} from "@/lib/signal-path";
 
 type RepeatMode = "none" | "one" | "all";
 export type AudioPreset = PlayerAudioPresetId;
@@ -121,6 +130,10 @@ type PlayerContextValue = {
   cycleRepeat: () => void;
   toggleShuffle: () => void;
   setAudioPreset: (preset: AudioPreset) => void;
+  /** What this device does to the stream, for the signal path. */
+  signal: MobileSignalState;
+  volumeLevelingMode: VolumeLevelingMode;
+  setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
 };
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -552,6 +565,10 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   const [shuffle, setShuffle] = useState(false);
   const originalQueue = useRef<LibrarySong[]>([]);
   const [audioPreset, setAudioPresetState] = useState<AudioPreset>("original");
+  const [volumeLevelingMode, setVolumeLevelingModeState] =
+    useState<VolumeLevelingMode>("off");
+  // Linear volume-leveling gain applied by the graph or the Android player.
+  const levelGainRef = useRef(1);
   const [playbackSource, setPlaybackSource] = useState<PlaybackSource | null>(
     null,
   );
@@ -560,6 +577,25 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     session.instanceId && session.claims?.sub
       ? `parson.player-state.${session.instanceId}.${session.claims.sub}`
       : null;
+
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem(VOLUME_LEVELING_STORAGE_KEY)
+      .then((value) => {
+        if (active) setVolumeLevelingModeState(parseVolumeLevelingMode(value));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const setVolumeLevelingMode = useCallback((mode: VolumeLevelingMode) => {
+    setVolumeLevelingModeState(mode);
+    void AsyncStorage.setItem(VOLUME_LEVELING_STORAGE_KEY, mode).catch(
+      () => {},
+    );
+  }, []);
 
   useEffect(() => {
     if (!queueStorageKey) {
@@ -712,8 +748,9 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       const graph = graphRef.current;
       if (!graph || !audioContext) return;
       const now = audioContext.currentTime;
-      graph.dryGain.gain.setTargetAtTime(next.dry, now, 0.025);
-      graph.wetGain.gain.setTargetAtTime(next.wet, now, 0.025);
+      const level = levelGainRef.current;
+      graph.dryGain.gain.setTargetAtTime(next.dry * level, now, 0.025);
+      graph.wetGain.gain.setTargetAtTime(next.wet * level, now, 0.025);
       if (next.wet > 0 && graph.source && !graph.wetConnected) {
         graph.source.connect(graph.convolver);
         graph.wetConnected = true;
@@ -1006,6 +1043,55 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     androidPlayerRef.current?.clearLockScreenControls();
   }, [cast.casting]);
 
+  const platform = signalPlatform(Platform.OS);
+  const currentId = current?.id;
+  const currentLoudness = current?.loudness;
+  const albumIds = useMemo(
+    () => queue.map((song) => song.album_object?.id),
+    [queue],
+  );
+  const leveling = useMemo(
+    () =>
+      nativeLeveling(
+        currentLoudness,
+        volumeLevelingMode,
+        platform,
+        playsInAlbumContext(albumIds, currentIndex),
+      ),
+    [albumIds, currentIndex, currentLoudness, platform, volumeLevelingMode],
+  );
+  useEffect(() => {
+    levelGainRef.current = leveling.gain;
+    const androidPlayer = androidPlayerRef.current;
+    if (androidPlayer) androidPlayer.volume = Math.min(1, leveling.gain);
+    else applyPreset(audioPreset);
+  }, [applyPreset, audioPreset, leveling.gain, playbackSource]);
+  const streamBitrate = session.claims?.bitrate ?? 0;
+  const signal = useMemo<MobileSignalState>(
+    () => ({
+      platform,
+      localFile: Boolean(
+        playbackSource && currentId && downloadedSongUri(currentId),
+      ),
+      streamBitrate,
+      contextSampleRate: audioContext?.sampleRate ?? null,
+      leveling: leveling.result,
+      levelingUnavailable: leveling.unavailable,
+      casting: cast.casting,
+      castDeviceName: cast.deviceName,
+    }),
+    [
+      audioContext,
+      cast.casting,
+      cast.deviceName,
+      currentId,
+      leveling,
+      platform,
+      streamBitrate,
+      playbackSource,
+    ],
+  );
+
   const next = useCallback(() => {
     if (!queue.length) return;
     const nextIndex = currentIndex + 1;
@@ -1243,6 +1329,9 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       cycleRepeat,
       toggleShuffle,
       setAudioPreset,
+      signal,
+      volumeLevelingMode,
+      setVolumeLevelingMode,
     };
   }, [
     addNext,
@@ -1274,8 +1363,11 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     shuffle,
     seek,
     setAudioPreset,
+    setVolumeLevelingMode,
+    signal,
     toggleShuffle,
     toggle,
+    volumeLevelingMode,
   ]);
   const position = useMemo(
     () => ({

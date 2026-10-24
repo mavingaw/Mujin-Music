@@ -1,0 +1,729 @@
+//! Server leg of the playback signal path.
+//!
+//! Describes what happens to a track between the file on disk and the bytes
+//! the server sends: the source format, any requested DSP, conversions the
+//! encoder forces, the lossy encode and the HTTP transport. Clients append
+//! their own leg (decoder, Web Audio graph, volume, output device) and show
+//! the combined path behind a quality light, following Roon's colours:
+//! lossless (purple), enhanced (blue), high quality (green), low quality
+//! (yellow).
+//!
+//! Everything here is pure so the classification can be unit tested without
+//! a library, ffmpeg or HTTP.
+
+use serde::{Deserialize, Serialize};
+
+use crate::domain::{AudioProperties, codec_is_lossless};
+
+/// Quality of one stage, or of a whole path (the worst stage wins).
+///
+/// Ordered worst to best so `min` picks the overall quality.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalQuality {
+    /// A lossy format is involved (yellow).
+    LowQuality,
+    /// Unrequested but high-fidelity changes: compatibility conversions,
+    /// software volume, an OS mixer (green).
+    HighQuality,
+    /// Processing the listener asked for, such as DSP or leveling (blue).
+    Enhanced,
+    /// Bits arrive unmodified (purple).
+    Lossless,
+}
+
+/// Broad stage category, used by clients to choose an icon.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageKind {
+    Source,
+    Dsp,
+    Conversion,
+    Encode,
+    Transport,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct SignalStage {
+    /// Stable key, e.g. `source`, `dsp`, `resample`, `downmix`, `encode`.
+    pub id: &'static str,
+    pub kind: StageKind,
+    pub title: String,
+    pub detail: String,
+    /// `None` when the stage cannot be classified (unknown codec).
+    pub quality: Option<SignalQuality>,
+    /// Plain-language explanation shown when the stage is selected.
+    pub explanation: String,
+}
+
+/// Format at one end of the server leg.
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SignalFormat {
+    pub codec: Option<String>,
+    pub container: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub channels: Option<u8>,
+    pub bitrate_kbps: Option<u32>,
+    pub lossless: Option<bool>,
+    /// True for lossless audio above CD resolution (more than 16 bit or
+    /// 48 kHz).
+    pub high_res: bool,
+    /// Short label, e.g. `FLAC 96kHz 24bit 2ch`.
+    pub summary: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamTarget {
+    /// A Parson client playing the stream URL itself.
+    Direct,
+    /// A Google Cast receiver fed by the server.
+    Cast,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryMode {
+    /// The file's own bytes.
+    Original,
+    /// An ffmpeg MP3 encode.
+    Transcode,
+}
+
+/// A server-side DSP effect as the signal path presents it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DspEffect {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// What the effect does, e.g. `Echo-based reverb, 20% wet`.
+    pub detail: &'static str,
+    /// Sample rate the effect chain outputs, when it fixes one.
+    pub output_sample_rate: Option<u32>,
+}
+
+/// What the client asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerLegRequest {
+    /// Requested MP3 bitrate in kbps; 0 asks for the original file.
+    pub bitrate_kbps: u32,
+    pub effect: Option<DspEffect>,
+    pub target: StreamTarget,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ServerSignalPath {
+    pub song_id: String,
+    pub target: StreamTarget,
+    pub mode: DeliveryMode,
+    /// Worst classified stage of the server leg.
+    pub quality: SignalQuality,
+    pub source: SignalFormat,
+    pub delivered: SignalFormat,
+    /// MIME type of the response body.
+    pub content_type: String,
+    pub requested_bitrate_kbps: u32,
+    pub effect: Option<&'static str>,
+    pub stages: Vec<SignalStage>,
+}
+
+/// Bitrate the stream is transcoded at, or `None` for the original bytes.
+///
+/// Server DSP always renders through a 192 kbps MP3 encode.
+pub fn transcode_bitrate(bitrate_kbps: u32, effect_active: bool) -> Option<u32> {
+    if effect_active {
+        Some(192)
+    } else if bitrate_kbps > 0 {
+        Some(bitrate_kbps)
+    } else {
+        None
+    }
+}
+
+/// Whether a Cast receiver gets the file as-is (by extension).
+pub fn cast_plays_directly(extension: Option<&str>) -> bool {
+    extension
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|extension| matches!(extension.as_str(), "mp3" | "aac" | "m4a" | "mp4"))
+}
+
+/// Bitrate a Cast receiver is transcoded at when it cannot take the file.
+pub const CAST_TRANSCODE_BITRATE: u32 = 192;
+
+/// Sample rates the MP3 encoder accepts.
+const MP3_SAMPLE_RATES: [u32; 9] = [
+    8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
+];
+
+/// Sample rate ffmpeg picks for an MP3 encode of `rate`: the rate itself
+/// when supported, 48 kHz above that, otherwise the closest supported rate.
+pub fn mp3_output_rate(rate: u32) -> u32 {
+    if MP3_SAMPLE_RATES.contains(&rate) {
+        return rate;
+    }
+    if rate > 48_000 {
+        return 48_000;
+    }
+    MP3_SAMPLE_RATES
+        .iter()
+        .copied()
+        .min_by_key(|candidate| candidate.abs_diff(rate))
+        .unwrap_or(44_100)
+}
+
+/// `44.1kHz`, `96kHz`, `352.8kHz`.
+pub fn format_rate(rate: u32) -> String {
+    let khz = f64::from(rate) / 1000.0;
+    if (khz - khz.round()).abs() < 1e-9 {
+        format!("{}kHz", khz.round() as u64)
+    } else {
+        let text = format!("{khz:.1}");
+        format!("{text}kHz")
+    }
+}
+
+fn codec_label(codec: &str) -> String {
+    match codec {
+        "flac" => "FLAC".into(),
+        "alac" => "ALAC".into(),
+        "aac" => "AAC".into(),
+        "mp3" => "MP3".into(),
+        "vorbis" => "Ogg Vorbis".into(),
+        "opus" => "Opus".into(),
+        "pcm" => "PCM".into(),
+        "pcm_float" => "PCM float".into(),
+        "wavpack" => "WavPack".into(),
+        "ape" => "Monkey's Audio".into(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+fn container_label(container: &str) -> String {
+    match container {
+        "mp4" => "MP4".into(),
+        "wav" => "WAV".into(),
+        "aiff" => "AIFF".into(),
+        "ogg" => "Ogg".into(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+/// Codec guessed from a file extension when the indexer has no properties.
+fn codec_from_extension(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "flac" => Some("flac"),
+        "mp3" => Some("mp3"),
+        "wav" | "aif" | "aiff" | "aifc" => Some("pcm"),
+        "ogg" | "oga" => Some("vorbis"),
+        "opus" => Some("opus"),
+        "aac" => Some("aac"),
+        "wv" => Some("wavpack"),
+        "ape" => Some("ape"),
+        _ => None,
+    }
+}
+
+fn is_high_res(lossless: Option<bool>, sample_rate: Option<u32>, bit_depth: Option<u8>) -> bool {
+    lossless == Some(true)
+        && (sample_rate.is_some_and(|rate| rate > 48_000)
+            || bit_depth.is_some_and(|depth| depth > 16))
+}
+
+fn summarize(format: &SignalFormat) -> String {
+    let mut parts = Vec::new();
+    let codec = format.codec.as_deref().map(codec_label);
+    match (&codec, format.container.as_deref()) {
+        (Some(codec), Some(container))
+            if matches!((codec.as_str(), container), ("ALAC" | "AAC", "mp4")) =>
+        {
+            parts.push(format!("{codec} ({})", container_label(container)));
+        }
+        (Some(codec), Some("wav" | "aiff")) if codec == "PCM" => {
+            parts.push(container_label(format.container.as_deref().unwrap_or("")));
+        }
+        (Some(codec), _) => parts.push(codec.clone()),
+        (None, Some(container)) => parts.push(container_label(container)),
+        (None, None) => parts.push("Unknown format".into()),
+    }
+    if let Some(rate) = format.sample_rate {
+        parts.push(format_rate(rate));
+    }
+    if let Some(depth) = format.bit_depth {
+        parts.push(format!("{depth}bit"));
+    }
+    if let Some(channels) = format.channels {
+        parts.push(format!("{channels}ch"));
+    }
+    if format.lossless != Some(true)
+        && let Some(bitrate) = format.bitrate_kbps
+    {
+        parts.push(format!("{bitrate}kbps"));
+    }
+    parts.join(" ")
+}
+
+fn source_format(audio: Option<&AudioProperties>, extension: Option<&str>) -> SignalFormat {
+    let audio = audio.cloned().unwrap_or_default();
+    let codec = audio.codec.clone().or_else(|| {
+        extension
+            .and_then(codec_from_extension)
+            .map(ToString::to_string)
+    });
+    let lossless = audio
+        .lossless
+        .or_else(|| codec.as_deref().and_then(codec_is_lossless));
+    let mut format = SignalFormat {
+        codec,
+        container: audio.container.clone(),
+        sample_rate: audio.sample_rate,
+        bit_depth: audio.bit_depth,
+        channels: audio.channels,
+        bitrate_kbps: audio.bitrate_kbps,
+        lossless,
+        high_res: is_high_res(lossless, audio.sample_rate, audio.bit_depth),
+        summary: String::new(),
+    };
+    format.summary = summarize(&format);
+    format
+}
+
+fn source_stage(format: &SignalFormat, indexed: bool) -> SignalStage {
+    let (quality, explanation) = match format.lossless {
+        Some(true) if format.high_res => (
+            Some(SignalQuality::Lossless),
+            "A lossless file above CD resolution. Every sample in the file is available to the rest of the path.".to_string(),
+        ),
+        Some(true) => (
+            Some(SignalQuality::Lossless),
+            "A lossless file: decoding it reproduces the original samples exactly.".to_string(),
+        ),
+        Some(false) => (
+            Some(SignalQuality::LowQuality),
+            "A lossy file. Detail was discarded when it was encoded, so the path can be no better than low quality, whatever happens later.".to_string(),
+        ),
+        None => (
+            None,
+            "Parson could not identify this file's codec, so it cannot say whether the source is lossless.".to_string(),
+        ),
+    };
+    let detail = if indexed {
+        format.summary.clone()
+    } else {
+        format!(
+            "{} (from the file name; rescan the library for full details)",
+            format.summary
+        )
+    };
+    SignalStage {
+        id: "source",
+        kind: StageKind::Source,
+        title: "Source".into(),
+        detail,
+        quality,
+        explanation,
+    }
+}
+
+/// Builds the server leg for one song and request.
+pub fn describe_server_leg(
+    song_id: &str,
+    audio: Option<&AudioProperties>,
+    extension: Option<&str>,
+    content_type: &str,
+    request: &ServerLegRequest,
+) -> ServerSignalPath {
+    let indexed = audio.is_some_and(|audio| !audio.is_empty());
+    let source = source_format(audio, extension);
+    let mut stages = vec![source_stage(&source, indexed)];
+
+    let effect = request.effect.as_ref();
+    let mut transcode = transcode_bitrate(request.bitrate_kbps, effect.is_some());
+    let mut cast_conversion = false;
+    if request.target == StreamTarget::Cast
+        && transcode.is_none()
+        && !cast_plays_directly(extension)
+    {
+        transcode = Some(CAST_TRANSCODE_BITRATE);
+        cast_conversion = true;
+    }
+
+    let Some(bitrate) = transcode else {
+        stages.push(SignalStage {
+            id: "server",
+            kind: StageKind::Transport,
+            title: "Parson server".into(),
+            detail: "Original file, streamed byte for byte".into(),
+            quality: Some(SignalQuality::Lossless),
+            explanation: "The server sends the file exactly as it is on disk, with byte-range seeking. Nothing is decoded or re-encoded on the server.".into(),
+        });
+        let quality = overall(&stages);
+        return ServerSignalPath {
+            song_id: song_id.to_string(),
+            target: request.target,
+            mode: DeliveryMode::Original,
+            quality,
+            delivered: source.clone(),
+            source,
+            content_type: content_type.to_string(),
+            requested_bitrate_kbps: request.bitrate_kbps,
+            effect: None,
+            stages,
+        };
+    };
+
+    let mut rate = source.sample_rate;
+    if let Some(effect) = effect {
+        stages.push(SignalStage {
+            id: "dsp",
+            kind: StageKind::Dsp,
+            title: effect.label.to_string(),
+            detail: effect.detail.to_string(),
+            quality: Some(SignalQuality::Enhanced),
+            explanation: "Server-side DSP you chose. It changes the audio on purpose, so the path is enhanced rather than lossless.".into(),
+        });
+        if let Some(effect_rate) = effect.output_sample_rate {
+            if rate.is_some_and(|rate| rate != effect_rate) || rate.is_none() {
+                stages.push(SignalStage {
+                    id: "dsp-resample",
+                    kind: StageKind::Conversion,
+                    title: "Sample rate conversion".into(),
+                    detail: match rate {
+                        Some(rate) => format!("{} to {}", format_rate(rate), format_rate(effect_rate)),
+                        None => format!("to {}", format_rate(effect_rate)),
+                    },
+                    quality: Some(SignalQuality::Enhanced),
+                    explanation: "The effect works at a fixed rate, so the audio is resampled before it is processed.".into(),
+                });
+            }
+            rate = Some(effect_rate);
+        }
+    }
+
+    if let Some(current) = rate {
+        let target_rate = mp3_output_rate(current);
+        if target_rate != current {
+            stages.push(SignalStage {
+                id: "resample",
+                kind: StageKind::Conversion,
+                title: "Sample rate conversion".into(),
+                detail: format!("{} to {}", format_rate(current), format_rate(target_rate)),
+                quality: Some(SignalQuality::HighQuality),
+                explanation: "MP3 cannot carry this sample rate, so the server converts it for compatibility. The conversion is high quality but not lossless.".into(),
+            });
+            rate = Some(target_rate);
+        }
+    }
+
+    let channels = source.channels.map(|channels| channels.min(2));
+    if let Some(source_channels) = source.channels.filter(|channels| *channels > 2) {
+        stages.push(SignalStage {
+            id: "downmix",
+            kind: StageKind::Conversion,
+            title: "Downmix".into(),
+            detail: format!("{source_channels}ch to stereo"),
+            quality: Some(SignalQuality::HighQuality),
+            explanation:
+                "MP3 carries at most two channels, so the surround channels are folded into stereo."
+                    .into(),
+        });
+    }
+
+    let lossy_source = source.lossless == Some(false);
+    let reason = if cast_conversion {
+        "Converted because Cast receivers cannot be relied on to play this format."
+    } else if effect.is_some() {
+        "Server DSP is rendered into an MP3 stream."
+    } else {
+        "You chose a streaming bitrate in Settings; set it to Original for lossless playback."
+    };
+    let mut explanation = format!(
+        "The server decodes the file and re-encodes it as a {bitrate} kbps MP3 with LAME. {reason}"
+    );
+    if lossy_source {
+        explanation.push_str(
+            " The source is already lossy, so this is a second lossy generation and loses further detail.",
+        );
+        if source
+            .bitrate_kbps
+            .is_some_and(|source_bitrate| bitrate > source_bitrate)
+        {
+            explanation.push_str(
+                " The target bitrate is higher than the source's, which adds data but no detail.",
+            );
+        }
+    }
+    stages.push(SignalStage {
+        id: "encode",
+        kind: StageKind::Encode,
+        title: if cast_conversion {
+            "Transcode for Cast".into()
+        } else {
+            "Transcode".into()
+        },
+        detail: format!("MP3 {bitrate}kbps (LAME)"),
+        quality: Some(SignalQuality::LowQuality),
+        explanation,
+    });
+    stages.push(SignalStage {
+        id: "server",
+        kind: StageKind::Transport,
+        title: "Parson server".into(),
+        detail: "Transcoded stream, cached for seeking".into(),
+        quality: Some(SignalQuality::Lossless),
+        explanation: "The encoded stream is written to the transcode cache as it is produced, so later plays and seeks reuse it.".into(),
+    });
+
+    let mut delivered = SignalFormat {
+        codec: Some("mp3".into()),
+        container: Some("mp3".into()),
+        sample_rate: rate,
+        bit_depth: None,
+        channels,
+        bitrate_kbps: Some(bitrate),
+        lossless: Some(false),
+        high_res: false,
+        summary: String::new(),
+    };
+    delivered.summary = summarize(&delivered);
+    let quality = overall(&stages);
+    ServerSignalPath {
+        song_id: song_id.to_string(),
+        target: request.target,
+        mode: DeliveryMode::Transcode,
+        quality,
+        source,
+        delivered,
+        content_type: "audio/mpeg".into(),
+        requested_bitrate_kbps: request.bitrate_kbps,
+        effect: effect.map(|effect| effect.id),
+        stages,
+    }
+}
+
+/// Worst classified stage. A path whose source is unclassified cannot be
+/// called lossless, so it is capped at high quality.
+pub fn overall(stages: &[SignalStage]) -> SignalQuality {
+    let worst = stages
+        .iter()
+        .filter_map(|stage| stage.quality)
+        .min()
+        .unwrap_or(SignalQuality::HighQuality);
+    let source_unknown = stages
+        .iter()
+        .any(|stage| stage.kind == StageKind::Source && stage.quality.is_none());
+    if source_unknown {
+        worst.min(SignalQuality::HighQuality)
+    } else {
+        worst
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flac(rate: u32, depth: u8, channels: u8) -> AudioProperties {
+        AudioProperties {
+            codec: Some("flac".into()),
+            container: Some("flac".into()),
+            sample_rate: Some(rate),
+            bit_depth: Some(depth),
+            channels: Some(channels),
+            bitrate_kbps: Some(2_100),
+            lossless: Some(true),
+        }
+    }
+
+    fn mp3(bitrate: u32) -> AudioProperties {
+        AudioProperties {
+            codec: Some("mp3".into()),
+            container: Some("mp3".into()),
+            sample_rate: Some(44_100),
+            bit_depth: None,
+            channels: Some(2),
+            bitrate_kbps: Some(bitrate),
+            lossless: Some(false),
+        }
+    }
+
+    fn direct(bitrate_kbps: u32) -> ServerLegRequest {
+        ServerLegRequest {
+            bitrate_kbps,
+            effect: None,
+            target: StreamTarget::Direct,
+        }
+    }
+
+    fn ids(path: &ServerSignalPath) -> Vec<&'static str> {
+        path.stages.iter().map(|stage| stage.id).collect()
+    }
+
+    #[test]
+    fn original_lossless_files_stay_lossless_and_flag_high_res() {
+        let audio = flac(96_000, 24, 2);
+        let path = describe_server_leg("s", Some(&audio), Some("flac"), "audio/flac", &direct(0));
+        assert_eq!(path.mode, DeliveryMode::Original);
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        assert!(path.source.high_res);
+        assert_eq!(path.source.summary, "FLAC 96kHz 24bit 2ch");
+        assert_eq!(path.delivered, path.source);
+        assert_eq!(ids(&path), ["source", "server"]);
+        assert_eq!(path.content_type, "audio/flac");
+
+        let cd = flac(44_100, 16, 2);
+        let path = describe_server_leg("s", Some(&cd), Some("flac"), "audio/flac", &direct(0));
+        assert!(!path.source.high_res);
+        assert_eq!(path.source.summary, "FLAC 44.1kHz 16bit 2ch");
+    }
+
+    #[test]
+    fn lossy_sources_are_low_quality_even_when_untouched() {
+        let audio = mp3(320);
+        let path = describe_server_leg("s", Some(&audio), Some("mp3"), "audio/mpeg", &direct(0));
+        assert_eq!(path.quality, SignalQuality::LowQuality);
+        assert_eq!(path.source.summary, "MP3 44.1kHz 2ch 320kbps");
+    }
+
+    #[test]
+    fn bitrate_transcodes_resample_high_rates_and_downmix_surround() {
+        let audio = flac(192_000, 24, 6);
+        let path = describe_server_leg("s", Some(&audio), Some("flac"), "audio/flac", &direct(256));
+        assert_eq!(path.mode, DeliveryMode::Transcode);
+        assert_eq!(path.quality, SignalQuality::LowQuality);
+        assert_eq!(
+            ids(&path),
+            ["source", "resample", "downmix", "encode", "server"]
+        );
+        assert_eq!(path.stages[1].detail, "192kHz to 48kHz");
+        assert_eq!(path.stages[1].quality, Some(SignalQuality::HighQuality));
+        assert_eq!(path.stages[2].detail, "6ch to stereo");
+        assert_eq!(path.stages[3].detail, "MP3 256kbps (LAME)");
+        assert_eq!(path.delivered.summary, "MP3 48kHz 2ch 256kbps");
+        assert_eq!(path.content_type, "audio/mpeg");
+    }
+
+    #[test]
+    fn re_encoding_lossy_sources_explains_the_generation_loss() {
+        let audio = mp3(128);
+        let path = describe_server_leg("s", Some(&audio), Some("mp3"), "audio/mpeg", &direct(320));
+        let encode = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "encode")
+            .unwrap();
+        assert!(encode.explanation.contains("second lossy generation"));
+        assert!(encode.explanation.contains("adds data but no detail"));
+    }
+
+    #[test]
+    fn server_dsp_is_enhanced_but_its_mp3_render_is_low_quality() {
+        let audio = flac(48_000, 24, 2);
+        let request = ServerLegRequest {
+            bitrate_kbps: 0,
+            effect: Some(DspEffect {
+                id: "pitch_down",
+                label: "Pitch down",
+                detail: "0.82x pitch",
+                output_sample_rate: Some(44_100),
+            }),
+            target: StreamTarget::Direct,
+        };
+        let path = describe_server_leg("s", Some(&audio), Some("flac"), "audio/flac", &request);
+        assert_eq!(
+            ids(&path),
+            ["source", "dsp", "dsp-resample", "encode", "server"]
+        );
+        assert_eq!(path.stages[1].quality, Some(SignalQuality::Enhanced));
+        assert_eq!(path.stages[2].detail, "48kHz to 44.1kHz");
+        assert_eq!(path.delivered.sample_rate, Some(44_100));
+        assert_eq!(path.delivered.bitrate_kbps, Some(192));
+        assert_eq!(path.effect, Some("pitch_down"));
+        assert_eq!(path.quality, SignalQuality::LowQuality);
+    }
+
+    #[test]
+    fn cast_targets_convert_formats_receivers_may_not_play() {
+        let audio = flac(44_100, 16, 2);
+        let cast = ServerLegRequest {
+            bitrate_kbps: 0,
+            effect: None,
+            target: StreamTarget::Cast,
+        };
+        let path = describe_server_leg("s", Some(&audio), Some("flac"), "audio/flac", &cast);
+        assert_eq!(path.mode, DeliveryMode::Transcode);
+        assert_eq!(path.stages[1].title, "Transcode for Cast");
+        assert_eq!(path.delivered.bitrate_kbps, Some(CAST_TRANSCODE_BITRATE));
+
+        let audio = mp3(256);
+        let path = describe_server_leg("s", Some(&audio), Some("MP3"), "audio/mpeg", &cast);
+        assert_eq!(path.mode, DeliveryMode::Original);
+    }
+
+    #[test]
+    fn unindexed_files_fall_back_to_the_extension_and_cap_the_quality() {
+        let path = describe_server_leg("s", None, Some("flac"), "audio/flac", &direct(0));
+        assert_eq!(path.source.codec.as_deref(), Some("flac"));
+        assert_eq!(path.source.lossless, Some(true));
+        assert!(path.stages[0].detail.contains("rescan"));
+        assert_eq!(path.quality, SignalQuality::Lossless);
+
+        let path = describe_server_leg("s", None, Some("m4a"), "audio/mp4", &direct(0));
+        assert_eq!(path.stages[0].quality, None);
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+        assert_eq!(path.source.summary, "Unknown format");
+    }
+
+    #[test]
+    fn container_and_rate_labels_read_like_roon() {
+        let alac = AudioProperties {
+            codec: Some("alac".into()),
+            container: Some("mp4".into()),
+            sample_rate: Some(88_200),
+            bit_depth: Some(24),
+            channels: Some(2),
+            bitrate_kbps: Some(3_000),
+            lossless: Some(true),
+        };
+        let path = describe_server_leg("s", Some(&alac), Some("m4a"), "audio/mp4", &direct(0));
+        assert_eq!(path.source.summary, "ALAC (MP4) 88.2kHz 24bit 2ch");
+        assert_eq!(format_rate(352_800), "352.8kHz");
+        assert_eq!(format_rate(8_000), "8kHz");
+        let wav = AudioProperties {
+            codec: Some("pcm".into()),
+            container: Some("wav".into()),
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(2),
+            bitrate_kbps: Some(1_411),
+            lossless: Some(true),
+        };
+        let path = describe_server_leg("s", Some(&wav), Some("wav"), "audio/wav", &direct(0));
+        assert_eq!(path.source.summary, "WAV 44.1kHz 16bit 2ch");
+    }
+
+    #[test]
+    fn mp3_rates_follow_ffmpeg_negotiation() {
+        assert_eq!(mp3_output_rate(44_100), 44_100);
+        assert_eq!(mp3_output_rate(88_200), 48_000);
+        assert_eq!(mp3_output_rate(96_000), 48_000);
+        assert_eq!(mp3_output_rate(22_050), 22_050);
+        assert_eq!(mp3_output_rate(37_800), 32_000);
+    }
+
+    #[test]
+    fn quality_serializes_with_roon_names() {
+        let json = serde_json::to_string(&[
+            SignalQuality::Lossless,
+            SignalQuality::Enhanced,
+            SignalQuality::HighQuality,
+            SignalQuality::LowQuality,
+        ])
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"["lossless","enhanced","high_quality","low_quality"]"#
+        );
+        assert!(SignalQuality::LowQuality < SignalQuality::HighQuality);
+        assert!(SignalQuality::Enhanced < SignalQuality::Lossless);
+    }
+}

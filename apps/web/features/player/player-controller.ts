@@ -27,6 +27,11 @@ import {
   useTransientPlayerError,
 } from "./player-effects";
 import { useAudioEngine } from "./use-audio-engine";
+import {
+  elementLeveling,
+  playsInAlbumContext,
+  useVolumeLevelingMode,
+} from "./volume-leveling";
 import type { Player } from "./player-api";
 import { usePlaybackTelemetry } from "./player-telemetry";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
@@ -53,6 +58,7 @@ export function usePlayerController() {
     backgroundWasPlaying,
     error,
     graph,
+    graphSampleRate,
     isPlaying,
     muted,
     playAudioSource,
@@ -63,6 +69,7 @@ export function usePlayerController() {
     setAudioVolume,
     setError,
     setIsPlaying,
+    setLevelingGain,
     slowedReverb,
     source,
     toggleMute,
@@ -83,6 +90,9 @@ export function usePlayerController() {
   const playbackGeneration = useRef(0);
   const radioRequest = useRef(0);
   const compatibilityRetry = useRef(false);
+  // Bitrate of the stream actually loaded (0 = original file).
+  const [streamBitrate, setStreamBitrate] = useState(0);
+  const [volumeLevelingMode, setVolumeLevelingMode] = useVolumeLevelingMode();
   const queuePositionSync = useRef<Promise<void>>(Promise.resolve());
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -120,6 +130,7 @@ export function usePlayerController() {
       setArtistState(normalized.artist_object);
       setAlbumState(normalized.album_object);
       setImageSrc(cover(normalized.album_object.cover_url));
+      setStreamBitrate(session?.bitrate ?? 0);
       setAudioSource(streamUrl(normalized.id, session?.bitrate ?? 0));
       if (
         currentOrigin.current === "manual" &&
@@ -301,6 +312,7 @@ export function usePlayerController() {
       ) {
         compatibilityRetry.current = true;
         setError("Direct playback failed; retrying a compatible audio stream.");
+        setStreamBitrate(192);
         setAudioSource(streamUrl(activeSongId, 192));
         playAudioSource();
         return true;
@@ -456,6 +468,23 @@ export function usePlayerController() {
     song.id,
   ]);
 
+  const leveling = useMemo(
+    () =>
+      elementLeveling(
+        song.loudness,
+        volumeLevelingMode,
+        volume,
+        playsInAlbumContext(
+          queue.map((item) => item.album.id || item.song.album_object.id),
+          queue[index.current]?.song.id === song.id ? index.current : -1,
+        ),
+      ),
+    [queue, song.id, song.loudness, volume, volumeLevelingMode],
+  );
+  useEffect(() => {
+    setLevelingGain(leveling.gain);
+  }, [leveling.gain, setLevelingGain]);
+
   useTransientPlayerError(error, setError);
   useAudioEvents({
     audio,
@@ -513,6 +542,15 @@ export function usePlayerController() {
       audioPreset,
       audioPresets,
       looping,
+      signal: {
+        streamBitrate,
+        engine: graphSampleRate ? "web-audio" : "media-element",
+        contextSampleRate: graphSampleRate,
+        leveling: leveling.result,
+        levelingUnavailable: leveling.unavailable,
+      },
+      volumeLevelingMode,
+      setVolumeLevelingMode,
       setSongCallback,
       setQueue,
       addNextToQueue,
@@ -558,6 +596,8 @@ export function usePlayerController() {
       imageSrc,
       isPlaying,
       error,
+      graphSampleRate,
+      leveling,
       looping,
       muted,
       audioPreset,
@@ -573,10 +613,13 @@ export function usePlayerController() {
       setAudioVolume,
       setAudioPreset,
       setQueue,
+      setVolumeLevelingMode,
       addNextToQueue,
       addToQueue,
       setSongCallback,
       song,
+      streamBitrate,
+      volumeLevelingMode,
       toggleMute,
       toggleLoop,
       toggleSlowedReverb,

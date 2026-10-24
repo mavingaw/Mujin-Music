@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
@@ -79,6 +80,7 @@ export function FullscreenPlayer({
   playbackRate,
   queue,
   queueOpen,
+  signalBadge,
   slowedReverb,
   songId,
   title,
@@ -127,6 +129,8 @@ export function FullscreenPlayer({
   songId: string;
   title: string;
   explicit: boolean;
+  /** Signal path pill shown under the artist. */
+  signalBadge?: ReactNode;
   timedLyrics: TimedLyric[];
   volume: number;
 }) {
@@ -309,6 +313,9 @@ export function FullscreenPlayer({
                         onNavigate={onClose}
                       />
                     </p>
+                    {signalBadge ? (
+                      <div className="mt-4 flex min-w-0">{signalBadge}</div>
+                    ) : null}
                   </div>
                 </div>
               )}

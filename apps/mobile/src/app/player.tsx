@@ -71,6 +71,9 @@ import { PlaylistPicker } from "@/components/playlist-picker";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
 import { CastOutputButton } from "@/components/cast-output-button";
+import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
+import { useSignalPath } from "@/hooks/use-signal-path";
+import type { SignalPath } from "@parson/music-sdk";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -151,6 +154,8 @@ function NowPlayingPanel({
   onQueue,
   onLyrics,
   onSound,
+  onSignalPath,
+  signalPath,
   notice,
   online,
 }: {
@@ -162,6 +167,8 @@ function NowPlayingPanel({
   onQueue: () => void;
   onLyrics: () => void;
   onSound: () => void;
+  onSignalPath: () => void;
+  signalPath: SignalPath | null;
   notice?: string | null;
   online: boolean;
 }) {
@@ -202,6 +209,7 @@ function NowPlayingPanel({
           >
             {song.artist}
           </Text>
+          <SignalPathBadge onPress={onSignalPath} path={signalPath} />
         </View>
         <Pressable
           {...immediateBorderlessPressFeedback}
@@ -728,6 +736,8 @@ export default function PlayerScreen() {
   const [panel, setPanel] = useState<Panel>("player");
   const [actions, setActions] = useState(false);
   const [soundOptions, setSoundOptions] = useState(false);
+  const [signalPathOpen, setSignalPathOpen] = useState(false);
+  const signalPath = useSignalPath(player.current);
   const [favoriteErrorSong, setFavoriteErrorSong] = useState<string | null>(
     null,
   );
@@ -846,6 +856,8 @@ export default function PlayerScreen() {
               onQueue={() => setPanel("queue")}
               onLyrics={() => setPanel("lyrics")}
               onSound={() => setSoundOptions(true)}
+              onSignalPath={() => setSignalPathOpen(true)}
+              signalPath={signalPath.path}
               notice={
                 player.error ??
                 (favoriteErrorSong === song.id
@@ -879,6 +891,18 @@ export default function PlayerScreen() {
             onSoundClose={() => setSoundOptions(false)}
             online={session.phase === "ready"}
           />
+          <ActionDrawer
+            open={signalPathOpen}
+            onClose={() => setSignalPathOpen(false)}
+          >
+            <SignalPathContent
+              casting={player.signal.casting}
+              levelingMode={player.volumeLevelingMode}
+              loading={signalPath.loading}
+              onLevelingModeChange={player.setVolumeLevelingMode}
+              path={signalPath.path}
+            />
+          </ActionDrawer>
         </SafeAreaView>
       </AnimatedLinearGradient>
     </GestureDetector>
