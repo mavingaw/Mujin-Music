@@ -46,6 +46,17 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { uniqueById } from "./library-items";
 import {
+  SourceFilterChips,
+  StreamingLibraryEmpty,
+  StreamingTrackList,
+  useLibrarySources,
+} from "@/features/streaming/library-sources";
+import {
+  localAlbumEntry,
+  mergeLibraryAlbums,
+  type LibraryAlbumEntry,
+} from "@/features/streaming/streaming-model";
+import {
   InfiniteLoad,
   LibraryLoading,
   LibraryMessage,
@@ -94,8 +105,25 @@ export default function LibraryOverview() {
   });
 
   const catalogPages = catalog.data?.pages ?? [];
-  const allAlbums = uniqueById(catalogPages.flatMap((page) => page.albums));
+  const localAlbums = uniqueById(catalogPages.flatMap((page) => page.albums));
   const allSongs = uniqueById(catalogPages.flatMap((page) => page.songs));
+  const albumSources = useLibrarySources("album");
+  const trackSources = useLibrarySources("track");
+  const sources = view === "songs" ? trackSources : albumSources;
+  const streamingFilter =
+    sources.source === "tidal" || sources.source === "qobuz"
+      ? sources.source
+      : null;
+  const allAlbums: LibraryAlbumEntry[] =
+    sources.source === "local"
+      ? localAlbums.map(localAlbumEntry)
+      : streamingFilter
+        ? albumSources.albums
+        : mergeLibraryAlbums(
+            localAlbums.map(localAlbumEntry),
+            albumSources.albums,
+            !catalog.hasNextPage,
+          );
   const allArtists = uniqueById(artists.data?.pages.flat() ?? []);
   const initialLoading =
     (catalogEnabled && catalog.isPending && !catalog.data) ||
@@ -184,24 +212,55 @@ export default function LibraryOverview() {
         </p>
       )}
 
-      {view === "albums" && (
-        <AlbumsView
-          albums={allAlbums}
-          hasMore={catalog.hasNextPage}
-          loading={initialLoading}
-          loadingMore={catalog.isFetchingNextPage}
-          onLoadMore={() => void catalog.fetchNextPage()}
+      {(view === "albums" || view === "songs") && sources.showFilters && (
+        <SourceFilterChips
+          available={sources.available}
+          onChange={(next) => {
+            albumSources.setSource(next);
+            trackSources.setSource(next);
+          }}
+          source={sources.source}
         />
       )}
-      {view === "songs" && (
-        <SongsView
-          songs={allSongs}
-          hasMore={catalog.hasNextPage}
-          loading={initialLoading}
-          loadingMore={catalog.isFetchingNextPage}
-          onLoadMore={() => void catalog.fetchNextPage()}
-        />
-      )}
+
+      {view === "albums" &&
+        (streamingFilter && !albumSources.loading && !allAlbums.length ? (
+          <StreamingLibraryEmpty kind="albums" provider={streamingFilter} />
+        ) : (
+          <AlbumsView
+            albums={allAlbums}
+            hasMore={streamingFilter ? false : catalog.hasNextPage}
+            loading={streamingFilter ? albumSources.loading : initialLoading}
+            loadingMore={catalog.isFetchingNextPage}
+            onLoadMore={() => void catalog.fetchNextPage()}
+          />
+        ))}
+      {view === "songs" &&
+        (streamingFilter ? (
+          trackSources.loading ? (
+            <LibraryLoading compact />
+          ) : trackSources.tracks.length ? (
+            <StreamingTrackList tracks={trackSources.tracks} />
+          ) : (
+            <StreamingLibraryEmpty kind="tracks" provider={streamingFilter} />
+          )
+        ) : (
+          <>
+            <SongsView
+              songs={allSongs}
+              hasMore={catalog.hasNextPage}
+              loading={initialLoading}
+              loadingMore={catalog.isFetchingNextPage}
+              onLoadMore={() => void catalog.fetchNextPage()}
+            />
+            {sources.source === "all" && !catalog.hasNextPage && (
+              <StreamingTrackList
+                title="Streaming tracks in your library"
+                tracks={trackSources.tracks}
+              />
+            )}
+          </>
+        ))}
       {view === "artists" && (
         <ArtistsView
           artists={allArtists}
@@ -258,7 +317,7 @@ function AlbumsView({
   loadingMore,
   onLoadMore,
 }: {
-  albums: Awaited<ReturnType<typeof getLibraryCatalog>>["albums"];
+  albums: LibraryAlbumEntry[];
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
@@ -282,13 +341,15 @@ function AlbumsView({
       <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {albums.map((album) => (
           <AlbumCard
-            key={album.id}
+            key={album.key}
             album_id={album.id}
             album_name={album.name}
-            album_cover={album.coverPath}
+            album_cover={album.cover}
             artist_id={album.artistId}
             artist_name={album.artistName}
-            first_release_date={album.releaseYear}
+            first_release_date={album.year}
+            formatLabel={album.formatLabel}
+            source={album.source ?? undefined}
           />
         ))}
       </div>

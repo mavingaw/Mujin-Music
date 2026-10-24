@@ -1,6 +1,6 @@
 "use client";
 
-import { createPlaybackQueue } from "@parson/music-sdk";
+import { createPlaybackQueue, isStreamingId } from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/features/account/session-provider";
@@ -41,9 +41,11 @@ import {
   moveQueueItem,
 } from "./player-queue-reorder";
 const cover = (path?: string) =>
-  path
-    ? `${getBaseURL()}/media/images/${encodeURIComponent(path)}`
-    : defaultCover;
+  !path
+    ? defaultCover
+    : /^(https:\/\/|data:image\/)/i.test(path)
+      ? path
+      : `${getBaseURL()}/media/images/${encodeURIComponent(path)}`;
 
 export function usePlayerController() {
   const {
@@ -124,7 +126,9 @@ export function usePlayerController() {
       if (
         currentOrigin.current === "manual" &&
         !persistedQueue.current &&
-        queueRef.current.length
+        queueRef.current.length &&
+        // Server queues and radio cover the local library only.
+        !isStreamingId(normalized.id)
       ) {
         const explicitSongIds = queueRef.current
           .slice(index.current)
@@ -399,7 +403,7 @@ export function usePlayerController() {
       playItem(index.current + 1);
       return;
     }
-    if (song.id) {
+    if (song.id && !isStreamingId(song.id)) {
       const generation = playbackGeneration.current;
       const request = ++radioRequest.current;
       void createPlaybackQueue({

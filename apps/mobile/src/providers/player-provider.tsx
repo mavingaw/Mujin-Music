@@ -1,5 +1,6 @@
 import {
   createPlaybackQueue,
+  isStreamingId,
   fillReverbImpulseChannel,
   getPlayerAudioPreset,
   playerAudioPresets,
@@ -643,7 +644,13 @@ export function PlayerProvider({ children }: PropsWithChildren) {
 
   const sendPlaybackEvent = useCallback(
     (eventType: PlaybackEventType) => {
-      if (!current?.id || !session.claims?.sub || session.phase === "offline")
+      if (
+        !current?.id ||
+        !session.claims?.sub ||
+        session.phase === "offline" ||
+        // History and recommendations cover the local library only.
+        isStreamingId(current.id)
+      )
         return;
       if (!playbackSessionId.current) {
         playbackSessionId.current = `mobile-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1120,7 +1127,11 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       loadAt(queue, currentIndex + 1, true, true, playbackOrigin.current);
     else if (repeat === "all")
       loadAt(queue, 0, true, true, playbackOrigin.current);
-    else if (current?.id && session.phase === "ready") {
+    else if (
+      current?.id &&
+      session.phase === "ready" &&
+      !isStreamingId(current.id)
+    ) {
       desiredPlaying.current = false;
       const endingSongId = current.id;
       const request = ++radioRequest.current;

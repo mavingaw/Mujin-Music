@@ -1,0 +1,3100 @@
+[
+  {
+    "method": "POST",
+    "url": "https://auth.tidal.com/v1/oauth2/device_authorization",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "deviceCode": "recorded-device-code",
+          "userCode": "PRSN7",
+          "verificationUri": "link.tidal.com",
+          "verificationUriComplete": "link.tidal.com/PRSN7",
+          "expiresIn": 300,
+          "interval": 2
+        }
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "url": "https://auth.tidal.com/v1/oauth2/token",
+    "replies": [
+      {
+        "status": 400,
+        "body": {
+          "status": 400,
+          "error": "authorization_pending",
+          "sub_status": 1002,
+          "error_description": "Device Authorization code is not authorized yet"
+        }
+      },
+      {
+        "status": 200,
+        "body": {
+          "access_token": "recorded-access-token",
+          "refresh_token": "recorded-refresh-token",
+          "token_type": "Bearer",
+          "expires_in": 604800,
+          "user_id": 5550101,
+          "user": {
+            "userId": 5550101,
+            "email": "listener@example.test",
+            "countryCode": "GB",
+            "username": "recorded.listener"
+          }
+        }
+      }
+    ],
+    "form": [["grant_type", "urn:ietf:params:oauth:grant-type:device_code"]]
+  },
+  {
+    "method": "POST",
+    "url": "https://auth.tidal.com/v1/oauth2/token",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "access_token": "recorded-access-token-2",
+          "token_type": "Bearer",
+          "expires_in": 604800
+        }
+      }
+    ],
+    "form": [["grant_type", "refresh_token"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/search",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "artists": {
+            "limit": 10,
+            "offset": 0,
+            "totalNumberOfItems": 3,
+            "items": [
+              {
+                "id": 400100,
+                "name": "Mara Vell",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              }
+            ]
+          },
+          "albums": {
+            "limit": 10,
+            "offset": 0,
+            "totalNumberOfItems": 4,
+            "items": [
+              {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "duration": 1014,
+                "numberOfTracks": 4,
+                "releaseDate": "2024-03-08",
+                "copyright": "(P) 2024 Mara Vell",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+                "explicit": false,
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "version": null,
+                "url": "http://www.tidal.com/album/300100"
+              },
+              {
+                "id": 300200,
+                "title": "Paper Moons",
+                "duration": 675,
+                "numberOfTracks": 3,
+                "releaseDate": "2021-09-17",
+                "copyright": "(P) 2021 Mara Vell",
+                "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8",
+                "explicit": false,
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "version": null,
+                "url": "http://www.tidal.com/album/300200"
+              },
+              {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "duration": 821,
+                "numberOfTracks": 3,
+                "releaseDate": "2023-11-03",
+                "copyright": "(P) 2023 The Lantern Choir",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85",
+                "explicit": false,
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "version": null,
+                "url": "http://www.tidal.com/album/300300"
+              },
+              {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "duration": 1175,
+                "numberOfTracks": 4,
+                "releaseDate": "2022-05-20",
+                "copyright": "(P) 2022 Okonkwo Quartet",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+                "explicit": false,
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "version": null,
+                "url": "http://www.tidal.com/album/300400"
+              }
+            ]
+          },
+          "tracks": {
+            "limit": 10,
+            "offset": 0,
+            "totalNumberOfItems": 14,
+            "items": [
+              {
+                "id": 300101,
+                "title": "Harbor Lights",
+                "duration": 241,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              },
+              {
+                "id": 300102,
+                "title": "Salt in the Wiring",
+                "duration": 198,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              },
+              {
+                "id": 300103,
+                "title": "Kept the Porch Light On",
+                "duration": 263,
+                "trackNumber": 3,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010003",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              },
+              {
+                "id": 300104,
+                "title": "Breakwater",
+                "duration": 312,
+                "trackNumber": 4,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010004",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              },
+              {
+                "id": 300201,
+                "title": "Paper Moons",
+                "duration": 222,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0020001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300200,
+                  "title": "Paper Moons",
+                  "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+                }
+              },
+              {
+                "id": 300202,
+                "title": "Atlas of Small Rooms",
+                "duration": 205,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0020002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300200,
+                  "title": "Paper Moons",
+                  "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+                }
+              },
+              {
+                "id": 300203,
+                "title": "Northern Line",
+                "duration": 248,
+                "trackNumber": 3,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0020003",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300200,
+                  "title": "Paper Moons",
+                  "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+                }
+              },
+              {
+                "id": 300301,
+                "title": "Low Tide Hymn",
+                "duration": 287,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0030001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "album": {
+                  "id": 300300,
+                  "title": "Low Tide Hymns",
+                  "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+                }
+              },
+              {
+                "id": 300302,
+                "title": "Lanterns on the Shingle",
+                "duration": 233,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0030002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "album": {
+                  "id": 300300,
+                  "title": "Low Tide Hymns",
+                  "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+                }
+              },
+              {
+                "id": 300303,
+                "title": "Evensong for Gulls",
+                "duration": 301,
+                "trackNumber": 3,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0030003",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "album": {
+                  "id": 300300,
+                  "title": "Low Tide Hymns",
+                  "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+                }
+              },
+              {
+                "id": 300401,
+                "title": "Blue Hour Shuffle",
+                "duration": 276,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0040001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "album": {
+                  "id": 300400,
+                  "title": "Night Shift Standards",
+                  "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+                }
+              },
+              {
+                "id": 300402,
+                "title": "Last Bus Home",
+                "duration": 341,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0040002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "album": {
+                  "id": 300400,
+                  "title": "Night Shift Standards",
+                  "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+                }
+              },
+              {
+                "id": 300403,
+                "title": "Paper Moons (Live)",
+                "duration": 295,
+                "trackNumber": 3,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0040003",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "album": {
+                  "id": 300400,
+                  "title": "Night Shift Standards",
+                  "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+                }
+              },
+              {
+                "id": 300404,
+                "title": "Quiet Streets",
+                "duration": 263,
+                "trackNumber": 4,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0040004",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "album": {
+                  "id": 300400,
+                  "title": "Night Shift Standards",
+                  "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300100/tracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 100,
+          "offset": 0,
+          "totalNumberOfItems": 4,
+          "items": [
+            {
+              "id": 300101,
+              "title": "Harbor Lights",
+              "duration": 241,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300102,
+              "title": "Salt in the Wiring",
+              "duration": 198,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300103,
+              "title": "Kept the Porch Light On",
+              "duration": 263,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300104,
+              "title": "Breakwater",
+              "duration": 312,
+              "trackNumber": 4,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010004",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300100",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300100,
+          "title": "Harbor Lights",
+          "duration": 1014,
+          "numberOfTracks": 4,
+          "releaseDate": "2024-03-08",
+          "copyright": "(P) 2024 Mara Vell",
+          "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+          "explicit": false,
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "version": null,
+          "url": "http://www.tidal.com/album/300100"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300101",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300101,
+          "title": "Harbor Lights",
+          "duration": 241,
+          "trackNumber": 1,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0010001",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300100,
+            "title": "Harbor Lights",
+            "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300102",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300102,
+          "title": "Salt in the Wiring",
+          "duration": 198,
+          "trackNumber": 2,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0010002",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300100,
+            "title": "Harbor Lights",
+            "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300103",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300103,
+          "title": "Kept the Porch Light On",
+          "duration": 263,
+          "trackNumber": 3,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0010003",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300100,
+            "title": "Harbor Lights",
+            "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300104",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300104,
+          "title": "Breakwater",
+          "duration": 312,
+          "trackNumber": 4,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0010004",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300100,
+            "title": "Harbor Lights",
+            "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300200/tracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 100,
+          "offset": 0,
+          "totalNumberOfItems": 3,
+          "items": [
+            {
+              "id": 300201,
+              "title": "Paper Moons",
+              "duration": 222,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0020001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300200,
+                "title": "Paper Moons",
+                "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+              }
+            },
+            {
+              "id": 300202,
+              "title": "Atlas of Small Rooms",
+              "duration": 205,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0020002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300200,
+                "title": "Paper Moons",
+                "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+              }
+            },
+            {
+              "id": 300203,
+              "title": "Northern Line",
+              "duration": 248,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0020003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300200,
+                "title": "Paper Moons",
+                "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300200",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300200,
+          "title": "Paper Moons",
+          "duration": 675,
+          "numberOfTracks": 3,
+          "releaseDate": "2021-09-17",
+          "copyright": "(P) 2021 Mara Vell",
+          "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8",
+          "explicit": false,
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "version": null,
+          "url": "http://www.tidal.com/album/300200"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300201",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300201,
+          "title": "Paper Moons",
+          "duration": 222,
+          "trackNumber": 1,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0020001",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300200,
+            "title": "Paper Moons",
+            "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300202",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300202,
+          "title": "Atlas of Small Rooms",
+          "duration": 205,
+          "trackNumber": 2,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0020002",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300200,
+            "title": "Paper Moons",
+            "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300203",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300203,
+          "title": "Northern Line",
+          "duration": 248,
+          "trackNumber": 3,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0020003",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400100,
+            "name": "Mara Vell",
+            "type": "MAIN",
+            "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+          },
+          "artists": [
+            {
+              "id": 400100,
+              "name": "Mara Vell",
+              "type": "MAIN",
+              "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+            }
+          ],
+          "album": {
+            "id": 300200,
+            "title": "Paper Moons",
+            "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300300/tracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 100,
+          "offset": 0,
+          "totalNumberOfItems": 3,
+          "items": [
+            {
+              "id": 300301,
+              "title": "Low Tide Hymn",
+              "duration": 287,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0030001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "album": {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+              }
+            },
+            {
+              "id": 300302,
+              "title": "Lanterns on the Shingle",
+              "duration": 233,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0030002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "album": {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+              }
+            },
+            {
+              "id": 300303,
+              "title": "Evensong for Gulls",
+              "duration": 301,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0030003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "album": {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300300",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300300,
+          "title": "Low Tide Hymns",
+          "duration": 821,
+          "numberOfTracks": 3,
+          "releaseDate": "2023-11-03",
+          "copyright": "(P) 2023 The Lantern Choir",
+          "cover": "9081faae-4cbe-6b51-b401-8718ed213f85",
+          "explicit": false,
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "artist": {
+            "id": 400200,
+            "name": "The Lantern Choir",
+            "type": "MAIN",
+            "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+          },
+          "artists": [
+            {
+              "id": 400200,
+              "name": "The Lantern Choir",
+              "type": "MAIN",
+              "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+            }
+          ],
+          "version": null,
+          "url": "http://www.tidal.com/album/300300"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300301",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300301,
+          "title": "Low Tide Hymn",
+          "duration": 287,
+          "trackNumber": 1,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0030001",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400200,
+            "name": "The Lantern Choir",
+            "type": "MAIN",
+            "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+          },
+          "artists": [
+            {
+              "id": 400200,
+              "name": "The Lantern Choir",
+              "type": "MAIN",
+              "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+            }
+          ],
+          "album": {
+            "id": 300300,
+            "title": "Low Tide Hymns",
+            "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300302",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300302,
+          "title": "Lanterns on the Shingle",
+          "duration": 233,
+          "trackNumber": 2,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0030002",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400200,
+            "name": "The Lantern Choir",
+            "type": "MAIN",
+            "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+          },
+          "artists": [
+            {
+              "id": 400200,
+              "name": "The Lantern Choir",
+              "type": "MAIN",
+              "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+            }
+          ],
+          "album": {
+            "id": 300300,
+            "title": "Low Tide Hymns",
+            "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300303",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300303,
+          "title": "Evensong for Gulls",
+          "duration": 301,
+          "trackNumber": 3,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0030003",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400200,
+            "name": "The Lantern Choir",
+            "type": "MAIN",
+            "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+          },
+          "artists": [
+            {
+              "id": 400200,
+              "name": "The Lantern Choir",
+              "type": "MAIN",
+              "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+            }
+          ],
+          "album": {
+            "id": 300300,
+            "title": "Low Tide Hymns",
+            "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300400/tracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 100,
+          "offset": 0,
+          "totalNumberOfItems": 4,
+          "items": [
+            {
+              "id": 300401,
+              "title": "Blue Hour Shuffle",
+              "duration": 276,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            },
+            {
+              "id": 300402,
+              "title": "Last Bus Home",
+              "duration": 341,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            },
+            {
+              "id": 300403,
+              "title": "Paper Moons (Live)",
+              "duration": 295,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            },
+            {
+              "id": 300404,
+              "title": "Quiet Streets",
+              "duration": 263,
+              "trackNumber": 4,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040004",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/albums/300400",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300400,
+          "title": "Night Shift Standards",
+          "duration": 1175,
+          "numberOfTracks": 4,
+          "releaseDate": "2022-05-20",
+          "copyright": "(P) 2022 Okonkwo Quartet",
+          "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+          "explicit": false,
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "artist": {
+            "id": 400300,
+            "name": "Okonkwo Quartet",
+            "type": "MAIN",
+            "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+          },
+          "artists": [
+            {
+              "id": 400300,
+              "name": "Okonkwo Quartet",
+              "type": "MAIN",
+              "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+            }
+          ],
+          "version": null,
+          "url": "http://www.tidal.com/album/300400"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300401",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300401,
+          "title": "Blue Hour Shuffle",
+          "duration": 276,
+          "trackNumber": 1,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0040001",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400300,
+            "name": "Okonkwo Quartet",
+            "type": "MAIN",
+            "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+          },
+          "artists": [
+            {
+              "id": 400300,
+              "name": "Okonkwo Quartet",
+              "type": "MAIN",
+              "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+            }
+          ],
+          "album": {
+            "id": 300400,
+            "title": "Night Shift Standards",
+            "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300402",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300402,
+          "title": "Last Bus Home",
+          "duration": 341,
+          "trackNumber": 2,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0040002",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400300,
+            "name": "Okonkwo Quartet",
+            "type": "MAIN",
+            "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+          },
+          "artists": [
+            {
+              "id": 400300,
+              "name": "Okonkwo Quartet",
+              "type": "MAIN",
+              "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+            }
+          ],
+          "album": {
+            "id": 300400,
+            "title": "Night Shift Standards",
+            "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300403",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300403,
+          "title": "Paper Moons (Live)",
+          "duration": 295,
+          "trackNumber": 3,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0040003",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400300,
+            "name": "Okonkwo Quartet",
+            "type": "MAIN",
+            "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+          },
+          "artists": [
+            {
+              "id": 400300,
+              "name": "Okonkwo Quartet",
+              "type": "MAIN",
+              "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+            }
+          ],
+          "album": {
+            "id": 300400,
+            "title": "Night Shift Standards",
+            "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300404",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 300404,
+          "title": "Quiet Streets",
+          "duration": 263,
+          "trackNumber": 4,
+          "volumeNumber": 1,
+          "explicit": false,
+          "isrc": "GBPRS0040004",
+          "audioQuality": "LOSSLESS",
+          "mediaMetadata": {
+            "tags": ["LOSSLESS"]
+          },
+          "allowStreaming": true,
+          "streamReady": true,
+          "version": null,
+          "artist": {
+            "id": 400300,
+            "name": "Okonkwo Quartet",
+            "type": "MAIN",
+            "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+          },
+          "artists": [
+            {
+              "id": 400300,
+              "name": "Okonkwo Quartet",
+              "type": "MAIN",
+              "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+            }
+          ],
+          "album": {
+            "id": 300400,
+            "title": "Night Shift Standards",
+            "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400100/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "id": 300100,
+              "title": "Harbor Lights",
+              "duration": 1014,
+              "numberOfTracks": 4,
+              "releaseDate": "2024-03-08",
+              "copyright": "(P) 2024 Mara Vell",
+              "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300100"
+            },
+            {
+              "id": 300200,
+              "title": "Paper Moons",
+              "duration": 675,
+              "numberOfTracks": 3,
+              "releaseDate": "2021-09-17",
+              "copyright": "(P) 2021 Mara Vell",
+              "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300200"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400100/toptracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 10,
+          "offset": 0,
+          "totalNumberOfItems": 3,
+          "items": [
+            {
+              "id": 300101,
+              "title": "Harbor Lights",
+              "duration": 241,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300102,
+              "title": "Salt in the Wiring",
+              "duration": 198,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300103,
+              "title": "Kept the Porch Light On",
+              "duration": 263,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300104,
+              "title": "Breakwater",
+              "duration": 312,
+              "trackNumber": 4,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0010004",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+              }
+            },
+            {
+              "id": 300201,
+              "title": "Paper Moons",
+              "duration": 222,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0020001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "album": {
+                "id": 300200,
+                "title": "Paper Moons",
+                "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400100",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 400100,
+          "name": "Mara Vell",
+          "picture": "2335d06c-deac-720f-c506-0327a82b2708",
+          "url": "http://www.tidal.com/artist/400100"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400200/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 1,
+          "items": [
+            {
+              "id": 300300,
+              "title": "Low Tide Hymns",
+              "duration": 821,
+              "numberOfTracks": 3,
+              "releaseDate": "2023-11-03",
+              "copyright": "(P) 2023 The Lantern Choir",
+              "cover": "9081faae-4cbe-6b51-b401-8718ed213f85",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300300"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400200/toptracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 10,
+          "offset": 0,
+          "totalNumberOfItems": 3,
+          "items": [
+            {
+              "id": 300301,
+              "title": "Low Tide Hymn",
+              "duration": 287,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0030001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "album": {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+              }
+            },
+            {
+              "id": 300302,
+              "title": "Lanterns on the Shingle",
+              "duration": 233,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0030002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "album": {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+              }
+            },
+            {
+              "id": 300303,
+              "title": "Evensong for Gulls",
+              "duration": 301,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0030003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "album": {
+                "id": 300300,
+                "title": "Low Tide Hymns",
+                "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400200",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 400200,
+          "name": "The Lantern Choir",
+          "picture": "57154386-5d85-c811-3b9b-affbbb8680a8",
+          "url": "http://www.tidal.com/artist/400200"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400300/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 1,
+          "items": [
+            {
+              "id": 300400,
+              "title": "Night Shift Standards",
+              "duration": 1175,
+              "numberOfTracks": 4,
+              "releaseDate": "2022-05-20",
+              "copyright": "(P) 2022 Okonkwo Quartet",
+              "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300400"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400300/toptracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 10,
+          "offset": 0,
+          "totalNumberOfItems": 3,
+          "items": [
+            {
+              "id": 300401,
+              "title": "Blue Hour Shuffle",
+              "duration": 276,
+              "trackNumber": 1,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040001",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            },
+            {
+              "id": 300402,
+              "title": "Last Bus Home",
+              "duration": 341,
+              "trackNumber": 2,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040002",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            },
+            {
+              "id": 300403,
+              "title": "Paper Moons (Live)",
+              "duration": 295,
+              "trackNumber": 3,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040003",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            },
+            {
+              "id": 300404,
+              "title": "Quiet Streets",
+              "duration": 263,
+              "trackNumber": 4,
+              "volumeNumber": 1,
+              "explicit": false,
+              "isrc": "GBPRS0040004",
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "allowStreaming": true,
+              "streamReady": true,
+              "version": null,
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "album": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/artists/400300",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 400300,
+          "name": "Okonkwo Quartet",
+          "picture": "1260878b-ac1c-142e-1a45-4c161491c208",
+          "url": "http://www.tidal.com/artist/400300"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/featured/new/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 4,
+          "items": [
+            {
+              "id": 300100,
+              "title": "Harbor Lights",
+              "duration": 1014,
+              "numberOfTracks": 4,
+              "releaseDate": "2024-03-08",
+              "copyright": "(P) 2024 Mara Vell",
+              "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300100"
+            },
+            {
+              "id": 300200,
+              "title": "Paper Moons",
+              "duration": 675,
+              "numberOfTracks": 3,
+              "releaseDate": "2021-09-17",
+              "copyright": "(P) 2021 Mara Vell",
+              "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300200"
+            },
+            {
+              "id": 300300,
+              "title": "Low Tide Hymns",
+              "duration": 821,
+              "numberOfTracks": 3,
+              "releaseDate": "2023-11-03",
+              "copyright": "(P) 2023 The Lantern Choir",
+              "cover": "9081faae-4cbe-6b51-b401-8718ed213f85",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300300"
+            },
+            {
+              "id": 300400,
+              "title": "Night Shift Standards",
+              "duration": 1175,
+              "numberOfTracks": 4,
+              "releaseDate": "2022-05-20",
+              "copyright": "(P) 2022 Okonkwo Quartet",
+              "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300400"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/users/5550101/favorites/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "created": "2026-09-30T18:12:00.000+0000",
+              "item": {
+                "id": 300100,
+                "title": "Harbor Lights",
+                "duration": 1014,
+                "numberOfTracks": 4,
+                "releaseDate": "2024-03-08",
+                "copyright": "(P) 2024 Mara Vell",
+                "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+                "explicit": false,
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "version": null,
+                "url": "http://www.tidal.com/album/300100"
+              }
+            },
+            {
+              "created": "2026-09-30T18:12:00.000+0000",
+              "item": {
+                "id": 300400,
+                "title": "Night Shift Standards",
+                "duration": 1175,
+                "numberOfTracks": 4,
+                "releaseDate": "2022-05-20",
+                "copyright": "(P) 2022 Okonkwo Quartet",
+                "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+                "explicit": false,
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "version": null,
+                "url": "http://www.tidal.com/album/300400"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/users/5550101/favorites/tracks",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "created": "2026-09-30T18:12:00.000+0000",
+              "item": {
+                "id": 300301,
+                "title": "Low Tide Hymn",
+                "duration": 287,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0030001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "album": {
+                  "id": 300300,
+                  "title": "Low Tide Hymns",
+                  "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+                }
+              }
+            },
+            {
+              "created": "2026-09-30T18:12:00.000+0000",
+              "item": {
+                "id": 300302,
+                "title": "Lanterns on the Shingle",
+                "duration": 233,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0030002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "album": {
+                  "id": 300300,
+                  "title": "Low Tide Hymns",
+                  "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "url": "https://api.tidal.com/v1/users/5550101/favorites/*",
+    "replies": [
+      {
+        "status": 200,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "method": "DELETE",
+    "url": "https://api.tidal.com/v1/users/5550101/favorites/*",
+    "replies": [
+      {
+        "status": 200,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300101/playbackinfopostpaywall",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "trackId": 300101,
+          "assetPresentation": "FULL",
+          "audioMode": "STEREO",
+          "audioQuality": "LOSSLESS",
+          "manifestMimeType": "application/vnd.tidal.bts",
+          "manifest": "eyJtaW1lVHlwZSI6ICJhdWRpby9mbGFjIiwgImNvZGVjcyI6ICJmbGFjIiwgImVuY3J5cHRpb25UeXBlIjogIk5PTkUiLCAidXJscyI6IFsiaHR0cHM6Ly9zcC1yZWNvcmRlZC5hdWRpby50aWRhbC50ZXN0LzMwMDEwMS5mbGFjIl19",
+          "bitDepth": 16,
+          "sampleRate": 44100
+        }
+      }
+    ],
+    "query": [["audioquality", "LOSSLESS"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/tracks/300101/playbackinfopostpaywall",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "trackId": 300101,
+          "assetPresentation": "FULL",
+          "audioMode": "STEREO",
+          "audioQuality": "HI_RES_LOSSLESS",
+          "manifestMimeType": "application/dash+xml",
+          "manifest": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48TVBEIHhtbG5zPSJ1cm46bXBlZzpkYXNoOnNjaGVtYTptcGQ6MjAxMSIgcHJvZmlsZXM9InVybjptcGVnOmRhc2g6cHJvZmlsZTppc29mZi1tYWluOjIwMTEiIHR5cGU9InN0YXRpYyIgbWVkaWFQcmVzZW50YXRpb25EdXJhdGlvbj0iUFQ0TTFTIj48UGVyaW9kIGlkPSIwIj48QWRhcHRhdGlvblNldCBpZD0iMCIgY29udGVudFR5cGU9ImF1ZGlvIiBtaW1lVHlwZT0iYXVkaW8vbXA0IiBzZWdtZW50QWxpZ25tZW50PSJ0cnVlIj48UmVwcmVzZW50YXRpb24gaWQ9IkZMQUMsOTYwMDAsMjQiIGNvZGVjcz0iZmxhYyIgYmFuZHdpZHRoPSIzNDU2Nzg5IiBhdWRpb1NhbXBsaW5nUmF0ZT0iOTYwMDAiPjxTZWdtZW50VGVtcGxhdGUgdGltZXNjYWxlPSI5NjAwMCIgaW5pdGlhbGl6YXRpb249Imh0dHBzOi8vc3AtcmVjb3JkZWQuYXVkaW8udGlkYWwudGVzdC9oci8zMDAxMDEvMC5tcDQ/dG9rZW49YSZhbXA7c2lnPWIiIG1lZGlhPSJodHRwczovL3NwLXJlY29yZGVkLmF1ZGlvLnRpZGFsLnRlc3QvaHIvMzAwMTAxLyROdW1iZXIkLm1wND90b2tlbj1hJmFtcDtzaWc9YiIgc3RhcnROdW1iZXI9IjEiPjxTZWdtZW50VGltZWxpbmU+PFMgZD0iMzg0MDAwIiByPSIyIi8+PFMgZD0iMTIwMDAiLz48L1NlZ21lbnRUaW1lbGluZT48L1NlZ21lbnRUZW1wbGF0ZT48L1JlcHJlc2VudGF0aW9uPjwvQWRhcHRhdGlvblNldD48L1BlcmlvZD48L01QRD4=",
+          "bitDepth": 24,
+          "sampleRate": 96000
+        }
+      }
+    ],
+    "query": [["audioquality", "HI_RES_LOSSLESS"]]
+  }
+]

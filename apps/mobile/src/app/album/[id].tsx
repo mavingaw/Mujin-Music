@@ -1,4 +1,8 @@
-import { getAlbumInfo, type LibraryAlbum } from "@parson/music-sdk";
+import {
+  getAlbumInfo,
+  isStreamingId,
+  type LibraryAlbum,
+} from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, MoreHorizontal, Play, Shuffle } from "lucide-react-native";
@@ -17,6 +21,7 @@ import { Artwork } from "@/components/artwork";
 import { AlbumActions } from "@/components/album-actions";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { Screen, SongRow } from "@/components/music-ui";
+import { StreamingAlbumScreen } from "@/components/streaming-album-screen";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { formatCollectionDuration } from "@/lib/format";
@@ -27,6 +32,11 @@ import {
 
 export default function AlbumScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  if (isStreamingId(id)) return <StreamingAlbumScreen id={id} />;
+  return <LibraryAlbumScreen id={id} />;
+}
+
+function LibraryAlbumScreen({ id }: { id: string }) {
   const router = useRouter();
   const player = usePlayer();
   const album = useQuery({

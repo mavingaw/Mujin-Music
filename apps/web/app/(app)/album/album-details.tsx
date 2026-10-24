@@ -5,8 +5,10 @@ import { getLibraryImageUrl } from "@/lib/images/image-url";
 import {
   addAlbumToPlaylist as addAlbumTracksToPlaylist,
   getPlaylists,
+  isStreamingId,
   type LibraryAlbum,
 } from "@parson/music-sdk";
+import StreamingAlbumDetails from "@/features/streaming/streaming-album";
 import type { Artist } from "@parson/music-sdk/types";
 import Image from "next/image";
 import Link from "next/link";
@@ -74,7 +76,15 @@ type AlbumDetailsProps = {
   devAlbum?: LibraryAlbum;
 };
 
-export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
+export default function AlbumDetails(props: AlbumDetailsProps = {}) {
+  const id = useSearchParams()?.get("id");
+  if (!props.devAlbum && isStreamingId(id)) {
+    return <StreamingAlbumDetails id={id ?? ""} />;
+  }
+  return <LibraryAlbumDetails {...props} />;
+}
+
+function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const searchParams = useSearchParams();
   const id = searchParams?.get("id");
   const { session } = useSession();

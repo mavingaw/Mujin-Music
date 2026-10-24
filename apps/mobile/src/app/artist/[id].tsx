@@ -1,4 +1,5 @@
 import {
+  isStreamingId,
   getAlbumInfos,
   getArtistInfo,
   type Album,
@@ -20,6 +21,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
+import { StreamingArtistScreen } from "@/components/streaming-artist-screen";
 import { AlbumActions } from "@/components/album-actions";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
@@ -30,6 +32,11 @@ import {
 
 export default function ArtistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  if (isStreamingId(id)) return <StreamingArtistScreen id={id} />;
+  return <LibraryArtistScreen id={id} />;
+}
+
+function LibraryArtistScreen({ id }: { id: string }) {
   const router = useRouter();
   const player = usePlayer();
   const [selected, setSelected] = useState<Album | null>(null);

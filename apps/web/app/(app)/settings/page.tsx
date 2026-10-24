@@ -6,13 +6,16 @@ import AdvancedSettings from "@/features/settings/advanced-settings";
 import LibrarySettings from "@/features/settings/library-settings";
 import UserForm from "@/features/settings/user-form";
 import { useSession } from "@/features/account/session-provider";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
+import ServicesSettings from "@/features/streaming/services-settings";
+import { useSearchParams } from "next/navigation";
 
 const settingsTabs = [
   "account",
   "playback",
+  "services",
   "library",
   "data",
   "users",
@@ -23,6 +26,7 @@ type SettingsTab = (typeof settingsTabs)[number];
 const labels: Record<SettingsTab, string> = {
   account: "Account",
   playback: "Playback",
+  services: "Services",
   library: "Library",
   data: "Data",
   users: "Users",
@@ -30,12 +34,25 @@ const labels: Record<SettingsTab, string> = {
 };
 
 export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsContent />
+    </Suspense>
+  );
+}
+
+function SettingsContent() {
   const { session } = useSession();
   const isAdmin = session?.role === "admin";
-  const [activeTab, setActiveTab] = useState<SettingsTab>("account");
+  const requestedTab = useSearchParams().get("tab");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+    settingsTabs.includes(requestedTab as SettingsTab)
+      ? (requestedTab as SettingsTab)
+      : "account",
+  );
   const availableTabs = isAdmin
     ? settingsTabs
-    : (["account", "playback", "data"] as const);
+    : (["account", "playback", "services", "data"] as const);
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -72,6 +89,7 @@ export default function SettingsPage() {
           {activeTab === "playback" && (
             <BitrateForm initialBitrate={session?.bitrate ?? 0} />
           )}
+          {activeTab === "services" && <ServicesSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && <LibrarySettings />}
           {isAdmin && activeTab === "users" && <UserForm />}

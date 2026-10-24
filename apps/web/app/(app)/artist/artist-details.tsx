@@ -3,7 +3,12 @@
 import { AlbumArtFallback, getLibraryImageUrl } from "@/lib/images/image-url";
 import getBaseURL from "@/lib/api/server-url";
 import { Album, Artist } from "@parson/music-sdk/types";
-import { getAlbumInfos, type LibraryAlbum } from "@parson/music-sdk";
+import {
+  getAlbumInfos,
+  isStreamingId,
+  type LibraryAlbum,
+} from "@parson/music-sdk";
+import StreamingArtistDetails from "@/features/streaming/streaming-artist";
 import { useArtist } from "@/features/library/use-library-entity";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
 import { isExplicitSongTitle } from "@/features/library/song-presentation";
@@ -31,7 +36,15 @@ const sortAlbumsByReleaseDate = (albums: Album[]) =>
     return safeRight - safeLeft;
   });
 
-export default function ArtistDetails({
+export default function ArtistDetails(props: ArtistDetailsProps = {}) {
+  const id = useSearchParams()?.get("id");
+  if (!props.devArtist && isStreamingId(id)) {
+    return <StreamingArtistDetails id={id ?? ""} />;
+  }
+  return <LibraryArtistDetails {...props} />;
+}
+
+function LibraryArtistDetails({
   devArtist,
   devAlbums,
 }: ArtistDetailsProps = {}) {
