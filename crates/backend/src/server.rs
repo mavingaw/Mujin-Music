@@ -17,7 +17,7 @@ use crate::api::library::{
 };
 use crate::api::{
     album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    providers, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -83,6 +83,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
+        .configure(providers::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -211,7 +212,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "streaming_services"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
@@ -261,6 +262,10 @@ pub async fn build_server_with_shutdown_timeout(
         .expect("new library lifecycle has no active scan");
     let database = web::Data::new(local_app.database);
     data::start_automatic_backups(database.get_ref().clone());
+    let streaming_services = web::Data::new(
+        crate::providers::hub::StreamingHub::from_env(database.get_ref().clone())
+            .map_err(std::io::Error::other)?,
+    );
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
@@ -296,6 +301,7 @@ pub async fn build_server_with_shutdown_timeout(
             .app_data(database.clone())
             .app_data(library.clone())
             .app_data(lyrics_service.clone())
+            .app_data(streaming_services.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())

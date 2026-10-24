@@ -2,6 +2,7 @@
 
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
 import type { Player } from "./player-api";
 import { ListMusic, Play, X } from "lucide-react";
 import Image from "next/image";
@@ -165,9 +166,8 @@ export function PlayerQueueList({
     >
       {queue.map((item, index) => {
         const active = item.song.id === currentSongId;
-        const cover = item.album.cover_url
-          ? `${getBaseURL()}/media/images/${encodeURIComponent(item.album.cover_url)}`
-          : defaultCover;
+        const cover =
+          getLibraryImageUrl(item.album.cover_url, getBaseURL) ?? defaultCover;
         return (
           <button
             aria-current={active ? "true" : undefined}

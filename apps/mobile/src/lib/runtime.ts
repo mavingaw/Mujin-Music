@@ -115,7 +115,7 @@ export function imageUrl(path?: string | null) {
     normalized.includes("snf.png?")
   )
     return null;
-  if (/^https?:\/\//i.test(image)) return image;
+  if (/^(https?:\/\/|data:image\/)/i.test(image)) return image;
   return `${runtime.origin}/media/images/${encodeURIComponent(image)}`;
 }
 

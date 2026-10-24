@@ -2397,6 +2397,11 @@ async fn stream_song(
         return bad_request("Invalid bitrate.", "invalid_bitrate");
     }
 
+    // TIDAL and Qobuz tracks share the stream route under provider-scoped ids.
+    if let Some((provider, raw_id)) = crate::providers::parse_entity_id(&song_key) {
+        return crate::api::providers::stream_provider_track(&req, provider, raw_id, bitrate).await;
+    }
+
     stream_song_profile(&req, &song_key, bitrate, audio_effect, &lifecycle).await
 }
 
@@ -2419,6 +2424,13 @@ async fn head_stream_song(
     }
 
     let song_key = path.into_inner();
+    if crate::providers::parse_entity_id(&song_key).is_some() {
+        // Resolving a streaming-service URL costs an API call, so HEAD only
+        // confirms the route; the GET reports format and length.
+        return HttpResponse::Ok()
+            .insert_header((header::ACCEPT_RANGES, "bytes"))
+            .finish();
+    }
     let (song_id, song_path) = match resolve_stream_song_with_refresh(&song_key, &lifecycle).await {
         Ok(resolved) => resolved,
         Err(response) => return response,

@@ -14,6 +14,7 @@ export * from "./resources/library";
 export * from "./resources/lyrics";
 export * from "./resources/playlists";
 export * from "./resources/playback";
+export * from "./resources/providers";
 export * from "./resources/search";
 export * from "./resources/songs";
 export * from "./resources/users";
