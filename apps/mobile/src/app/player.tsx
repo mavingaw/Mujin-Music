@@ -71,6 +71,7 @@ import { PlaylistPicker } from "@/components/playlist-picker";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
 import { CastOutputButton } from "@/components/cast-output-button";
+import { ZoneButton } from "@/components/zone-sheet";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -295,6 +296,9 @@ function NowPlayingPanel({
       <View style={styles.panelButtons}>
         <View style={styles.castButton}>
           <CastOutputButton />
+        </View>
+        <View style={styles.castButton}>
+          <ZoneButton />
         </View>
         <Pressable
           {...immediatePressFeedback}

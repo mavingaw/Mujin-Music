@@ -17,3 +17,4 @@ export * from "./resources/playback";
 export * from "./resources/search";
 export * from "./resources/songs";
 export * from "./resources/users";
+export * from "./resources/zones";

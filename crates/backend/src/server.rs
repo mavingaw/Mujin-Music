@@ -17,7 +17,7 @@ use crate::api::library::{
 };
 use crate::api::{
     album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    search, setup, song, user, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -80,6 +80,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(playlist::configure)
         .configure(playback::configure)
         .configure(cast::configure)
+        .configure(zones::configure)
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
@@ -211,7 +212,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
@@ -237,6 +238,25 @@ async fn nearby_servers() -> HttpResponse {
             }))
         }
     }
+}
+
+fn build_zone_service(
+    database: crate::persistence::connection::DbPool,
+    port: u16,
+) -> crate::zones::ZoneService {
+    let sonos = crate::sonos::SonosConfig::from_env().and_then(|config| {
+        match crate::sonos::SonosController::new(config) {
+            Ok(controller) => Some(std::sync::Arc::new(controller)),
+            Err(error) => {
+                tracing::warn!(%error, "Sonos support is unavailable");
+                None
+            }
+        }
+    });
+    let service = crate::zones::ZoneService::new(sonos, Some(database));
+    service.set_port(port);
+    service.load_settings();
+    service
 }
 
 /// Builds and binds the HTTP server without awaiting it.
@@ -285,6 +305,8 @@ pub async fn build_server_with_shutdown_timeout(
         });
     }
     let bind_port = settings::port().map_err(std::io::Error::other)?;
+    let zone_service = web::Data::new(build_zone_service(database.get_ref().clone(), bind_port));
+    tokio::spawn(zone_service.clone().into_inner().run());
     let bind_address = settings::bind_address().map_err(std::io::Error::other)?;
     let worker_count = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get().clamp(2, 4))
@@ -296,6 +318,7 @@ pub async fn build_server_with_shutdown_timeout(
             .app_data(database.clone())
             .app_data(library.clone())
             .app_data(lyrics_service.clone())
+            .app_data(zone_service.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())
@@ -323,6 +346,7 @@ pub async fn build_server_with_shutdown_timeout(
                 "/api/v1/cast/media/{song}/stream",
                 web::get().to(cast::cast_media),
             )
+            .configure(zones::configure_device_routes)
             .service(library_routes_at("/api/v1/library"))
             .service(music_routes_at("/api/v1"))
             .service(

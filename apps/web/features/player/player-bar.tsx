@@ -21,6 +21,15 @@ import {
   isExplicitSongTitle,
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
+import getBaseURL from "@/lib/api/server-url";
+import { zoneStatusLabel } from "@parson/music-sdk";
+import { useZones } from "./zones/zones-provider";
+import { ZonePickerButton } from "./zones/zone-picker";
+import {
+  useZoneClock,
+  useZoneQueue,
+  useZoneSong,
+} from "./zones/use-remote-zone";
 
 export default function PlayerBar() {
   const {
@@ -60,23 +69,56 @@ export default function PlayerBar() {
     enabled: Boolean(castItem?.song_id),
     staleTime: 5 * 60_000,
   }).data;
-  const effectiveSong = castSong || song;
-  const casting = Boolean(cast.session && castItem);
-  const effectiveCurrentTime = casting
-    ? (cast.session?.position_ms ?? 0) / 1000
-    : currentTime;
-  const effectiveDuration = casting
-    ? (cast.session?.duration_ms || castItem?.duration_ms || 0) / 1000
-    : duration;
-  const effectivePlaying = casting ? Boolean(cast.session?.playing) : isPlaying;
-  const effectiveVolume = casting ? (cast.session?.volume ?? volume) : volume;
-  const effectiveMuted = casting ? Boolean(cast.session?.muted) : muted;
-  const effectiveCover = castItem?.artwork_url || imageSrc || defaultCover;
-  const effectiveTitle = castItem?.title || effectiveSong.name;
-  const effectiveArtist =
-    castItem?.artist ||
-    effectiveSong.artist_object.name ||
-    effectiveSong.artist;
+  // A remote zone (another device, Sonos, a group) takes over the bar.
+  const zones = useZones();
+  const remote = zones.remoteZone;
+  const remoteSong = useZoneSong(remote);
+  const remoteQueue = useZoneQueue(remote);
+  const remoteTime = useZoneClock(remote, zones.fetchedAt);
+  const remoteNow = remote?.now_playing ?? null;
+  const effectiveSong = (remote ? remoteSong : castSong) || song;
+  const casting = !remote && Boolean(cast.session && castItem);
+  const effectiveCurrentTime = remote
+    ? remoteTime
+    : casting
+      ? (cast.session?.position_ms ?? 0) / 1000
+      : currentTime;
+  const effectiveDuration = remote
+    ? (remote.duration_ms || remoteNow?.duration_ms || 0) / 1000
+    : casting
+      ? (cast.session?.duration_ms || castItem?.duration_ms || 0) / 1000
+      : duration;
+  const effectivePlaying = remote
+    ? remote.status === "playing"
+    : casting
+      ? Boolean(cast.session?.playing)
+      : isPlaying;
+  const effectiveVolume = remote
+    ? (remote.volume?.level ?? 0) / 100
+    : casting
+      ? (cast.session?.volume ?? volume)
+      : volume;
+  const effectiveMuted = remote
+    ? Boolean(remote.volume?.muted)
+    : casting
+      ? Boolean(cast.session?.muted)
+      : muted;
+  const remoteCover = remoteNow?.cover_url
+    ? `${getBaseURL()}/media/images/${encodeURIComponent(remoteNow.cover_url)}`
+    : defaultCover;
+  const effectiveCover = remote
+    ? remoteCover
+    : castItem?.artwork_url || imageSrc || defaultCover;
+  const effectiveTitle = remote
+    ? remoteNow?.title || `Nothing playing in ${remote.name}`
+    : castItem?.title || effectiveSong.name;
+  const effectiveArtist = remote
+    ? remoteNow?.artist ||
+      (remoteNow ? "" : zoneStatusLabel(remote)) ||
+      effectiveSong.artist
+    : castItem?.artist ||
+      effectiveSong.artist_object.name ||
+      effectiveSong.artist;
   const displayTitle = displaySongTitle(effectiveTitle);
   const artistCredits = trackArtistCreditParts({
     albumArtist: effectiveSong.artist_object.name || effectiveArtist,
@@ -89,38 +131,72 @@ export default function PlayerBar() {
     { id: effectiveSong.artist_object.id || artist.id, name: effectiveArtist },
   ];
   const displayArtist = artistCredits.map((credit) => credit.name).join(", ");
-  const togglePlayback = casting
-    ? () => cast.send({ command: cast.session?.playing ? "pause" : "play" })
-    : togglePlayPause;
-  const next = casting ? () => cast.send({ command: "next" }) : playNextSong;
-  const previous = casting
-    ? () => cast.send({ command: "previous" })
-    : playPreviousSong;
-  const seek = casting
+  const sendRemote = (command: Parameters<typeof zones.send>[1]) => {
+    if (!remote) return;
+    void zones.send(remote.id, command).catch(() => {});
+  };
+  const togglePlayback = remote
+    ? () => sendRemote({ command: effectivePlaying ? "pause" : "play" })
+    : casting
+      ? () => cast.send({ command: cast.session?.playing ? "pause" : "play" })
+      : togglePlayPause;
+  const next = remote
+    ? () => sendRemote({ command: "next" })
+    : casting
+      ? () => cast.send({ command: "next" })
+      : playNextSong;
+  const previous = remote
+    ? () => sendRemote({ command: "previous" })
+    : casting
+      ? () => cast.send({ command: "previous" })
+      : playPreviousSong;
+  const seek = remote
     ? (value: number | string) => {
         const seconds = Number(value);
         if (Number.isFinite(seconds)) {
-          cast.send({
+          sendRemote({
             command: "seek",
             position_ms: Math.max(0, Math.round(seconds * 1000)),
           });
         }
       }
-    : handleTimeChange;
-  const changeVolume = casting
+    : casting
+      ? (value: number | string) => {
+          const seconds = Number(value);
+          if (Number.isFinite(seconds)) {
+            cast.send({
+              command: "seek",
+              position_ms: Math.max(0, Math.round(seconds * 1000)),
+            });
+          }
+        }
+      : handleTimeChange;
+  const changeVolume = remote
     ? (value: number | string) => {
-        const level = Number(value) / 100;
+        const level = Math.round(Number(value));
         if (Number.isFinite(level)) {
-          cast.send({
+          sendRemote({
             command: "set_volume",
-            volume: Math.min(1, Math.max(0, level)),
+            volume: Math.min(remote.volume?.max ?? 100, Math.max(0, level)),
           });
         }
       }
-    : setAudioVolume;
-  const toggleOutputMute = casting
-    ? () => cast.send({ command: "set_mute", muted: !cast.session?.muted })
-    : toggleMute;
+    : casting
+      ? (value: number | string) => {
+          const level = Number(value) / 100;
+          if (Number.isFinite(level)) {
+            cast.send({
+              command: "set_volume",
+              volume: Math.min(1, Math.max(0, level)),
+            });
+          }
+        }
+      : setAudioVolume;
+  const toggleOutputMute = remote
+    ? () => sendRemote({ command: "set_mute", muted: !remote.volume?.muted })
+    : casting
+      ? () => cast.send({ command: "set_mute", muted: !cast.session?.muted })
+      : toggleMute;
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -138,7 +214,7 @@ export default function PlayerBar() {
   usePlayerShortcuts({
     currentTime: effectiveCurrentTime,
     duration: effectiveDuration,
-    enabled: Boolean(song.id || castItem),
+    enabled: Boolean(song.id || castItem || remote),
     onNext: next,
     onPrevious: previous,
     onRepeat: toggleLoop,
@@ -191,8 +267,21 @@ export default function PlayerBar() {
   }, [closeLyrics, fullscreenOpen, lyricsOpen]);
   useCloseLyricsOnNavigation(closeLyrics);
 
-  if (!song.id && !castItem) {
-    return null;
+  const playerQueue = remote ? remoteQueue : queue;
+  const selectQueueItem = remote
+    ? (index: number) => sendRemote({ command: "jump", queue_position: index })
+    : playQueueItem;
+  const reorderPlayerQueue = remote ? () => {} : reorderQueue;
+  const queueSongId = remote ? (remoteNow?.song_id ?? "") : song.id;
+
+  if (!song.id && !castItem && !remote) {
+    // Nothing plays here: keep the zone picker reachable so a remote zone
+    // can be chosen and controlled.
+    return zones.zones.length > 1 ? (
+      <div className="fixed bottom-22 right-3 z-50 rounded-full border border-white/10 bg-[#080808] p-1 shadow-2xl md:bottom-5 md:right-5">
+        <ZonePickerButton />
+      </div>
+    ) : null;
   }
 
   return (
@@ -208,7 +297,7 @@ export default function PlayerBar() {
           cover={cover}
           currentTime={effectiveCurrentTime}
           duration={effectiveDuration}
-          readPosition={casting ? undefined : getPlaybackPosition}
+          readPosition={casting || remote ? undefined : getPlaybackPosition}
           isPlaying={effectivePlaying}
           looping={looping}
           lyricsOpen={lyricsOpen}
@@ -234,9 +323,9 @@ export default function PlayerBar() {
           }}
           onPrevious={previous}
           onRetryLyrics={retryLyrics}
-          onReorderQueue={reorderQueue}
+          onReorderQueue={reorderPlayerQueue}
           onSelectQueueItem={(index) => {
-            playQueueItem(index);
+            selectQueueItem(index);
             setLyricsOpen(false);
             setQueueOpen(false);
           }}
@@ -247,14 +336,15 @@ export default function PlayerBar() {
           onToggleSound={toggleSlowedReverb}
           onVolumeChange={changeVolume}
           playbackRate={playbackRate}
-          queue={queue}
+          queue={playerQueue}
           queueOpen={queueOpen}
           slowedReverb={slowedReverb}
-          songId={castItem?.song_id || song.id}
+          songId={remote ? queueSongId : castItem?.song_id || song.id}
           title={displayTitle}
           explicit={isExplicitSongTitle(effectiveTitle)}
           timedLyrics={timedLyrics}
           volume={effectiveVolume}
+          zonePicker={<ZonePickerButton compact />}
         />
       )}
 
@@ -276,11 +366,11 @@ export default function PlayerBar() {
 
       {queueOpen && !fullscreenOpen && (
         <PlayerQueue
-          currentSongId={song.id}
+          currentSongId={queueSongId}
           onClose={closeQueue}
-          onReorder={reorderQueue}
-          onSelect={(index) => playQueueItem(index)}
-          queue={queue}
+          onReorder={reorderPlayerQueue}
+          onSelect={(index) => selectQueueItem(index)}
+          queue={playerQueue}
         />
       )}
 
@@ -312,7 +402,7 @@ export default function PlayerBar() {
         currentTime={effectiveCurrentTime}
         duration={effectiveDuration}
         readPosition={
-          casting || fullscreenOpen ? undefined : getPlaybackPosition
+          casting || remote || fullscreenOpen ? undefined : getPlaybackPosition
         }
         isPlaying={effectivePlaying}
         lyricsOpen={lyricsOpen}
@@ -335,10 +425,12 @@ export default function PlayerBar() {
         playbackRate={playbackRate}
         queueOpen={queueOpen}
         slowedReverb={slowedReverb}
-        songId={castItem?.song_id || song.id}
+        songId={remote ? queueSongId : castItem?.song_id || song.id}
         title={displayTitle}
         explicit={isExplicitSongTitle(effectiveTitle)}
         volume={effectiveVolume}
+        zonePicker={<ZonePickerButton />}
+        zoneLabel={remote ? remote.name : null}
       />
     </>
   );
