@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { usePlayer } from "@/features/player/player-context";
+import { AlbumFormat } from "@/features/player/signal-path-popover";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor from "@/features/library/album-editor";
 import { useAlbum } from "@/features/library/use-library-entity";
@@ -268,6 +269,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               <span>
                 {album.songs.length} songs, {formatTotalDuration(totalDuration)}
               </span>
+              <AlbumFormat audios={album.songs.map((song) => song.audio)} />
             </div>
           </div>
         </div>

@@ -15,7 +15,7 @@ import {
 import { AudioLines, ListMusic, Maximize2, MicVocal } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
 import {
@@ -54,6 +54,7 @@ export function PlayerFooter({
   onVolumeChange,
   playbackRate,
   queueOpen,
+  signalLight,
   slowedReverb,
   songId,
   title,
@@ -88,6 +89,8 @@ export function PlayerFooter({
   onVolumeChange: (value: number) => void;
   playbackRate: number;
   queueOpen: boolean;
+  /** The signal path quality light, shown beside the transport. */
+  signalLight?: ReactNode;
   slowedReverb: boolean;
   songId: string;
   title: string;
@@ -122,14 +125,22 @@ export function PlayerFooter({
             explicit={explicit}
           />
           <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
-            <PlaybackControls
-              compact
-              prominent
-              isPlaying={isPlaying}
-              onNext={onNext}
-              onPrevious={onPrevious}
-              onToggle={onTogglePlayback}
-            />
+            <div className="flex items-center gap-1.5">
+              {signalLight ? (
+                <span className="hidden md:contents">{signalLight}</span>
+              ) : null}
+              <PlaybackControls
+                compact
+                prominent
+                isPlaying={isPlaying}
+                onNext={onNext}
+                onPrevious={onPrevious}
+                onToggle={onTogglePlayback}
+              />
+              {signalLight ? (
+                <span aria-hidden="true" className="hidden h-8 w-8 md:block" />
+              ) : null}
+            </div>
             <Timeline
               className="hidden w-full md:flex"
               currentTime={currentTime}

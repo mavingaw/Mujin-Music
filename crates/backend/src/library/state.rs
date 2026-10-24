@@ -135,7 +135,7 @@ pub struct LibraryCache {
 
 // Version 7 stores accent-folded identities and primary-track appearance relationships.
 // Version 9 adds per-song audio properties, contributor credits, label and ISRC.
-const CATALOG_CACHE_SCHEMA_VERSION: u32 = 9;
+const CATALOG_CACHE_SCHEMA_VERSION: u32 = 10;
 const MAX_DECOMPRESSED_CATALOG_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 static CACHE_PERSIST_REQUEST: AtomicU64 = AtomicU64::new(0);
 static CACHE_PERSIST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();

@@ -13,6 +13,7 @@ export function useCastOutput(_options: CastOutputOptions) {
     () => ({
       casting: false,
       currentIndex: -1,
+      deviceName: null as string | null,
       currentTime: 0,
       duration: 0,
       isPlaying: false,

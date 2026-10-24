@@ -45,6 +45,9 @@ struct QueueSong {
     /// Technical properties for signal-path displays; omitted when unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<crate::domain::AudioProperties>,
+    /// ReplayGain tags for client volume leveling; omitted when untagged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loudness: Option<crate::domain::Loudness>,
 }
 
 #[derive(Serialize)]
@@ -188,6 +191,7 @@ fn hydrate_queue_item(
         origin: row.origin,
         queue_position: row.position,
         audio: song.audio.clone(),
+        loudness: song.loudness,
     })
 }
 
@@ -680,6 +684,7 @@ mod tests {
             origin: "manual".into(),
             queue_position: 0,
             audio: None,
+            loudness: None,
         };
         let json = serde_json::to_value(item).expect("queue item JSON");
         assert!(json.get("path").is_none());

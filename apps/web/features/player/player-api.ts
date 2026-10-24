@@ -1,5 +1,9 @@
 "use client";
 
+import type {
+  VolumeLevelingMode,
+  VolumeLevelingResult,
+} from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { createContext, useContext } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
@@ -21,6 +25,10 @@ export type Player = {
   audioPreset: AudioPresetId;
   audioPresets: readonly AudioPreset[];
   looping: boolean;
+  /** What this client does to the stream, for the signal path. */
+  signal: PlayerSignalState;
+  volumeLevelingMode: VolumeLevelingMode;
+  setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
   setSongCallback: (
     song: PlayerInput,
     artist?: Partial<Artist>,
@@ -43,6 +51,16 @@ export type Player = {
   toggleSlowedReverb: () => void;
   setAudioPreset: (preset: AudioPresetId) => void;
   toggleLoop: () => void;
+};
+
+export type PlayerSignalState = {
+  /** Bitrate of the loaded stream in kbps, 0 for the original file. */
+  streamBitrate: number;
+  engine: "media-element" | "web-audio";
+  /** `AudioContext.sampleRate` while the Web Audio graph is active. */
+  contextSampleRate: number | null;
+  leveling: VolumeLevelingResult | null;
+  levelingUnavailable: boolean;
 };
 
 export const PlayerContext = createContext<Omit<Player, "currentTime"> | null>(

@@ -13,7 +13,7 @@ use crate::api::image::{create_signed_image_url, image};
 use crate::api::library::{
     head_stream_song, index, library_catalog, library_catalog_artists,
     library_classification_diagnostics, library_readiness, library_refresh, library_roots,
-    remove_library_root, stream_song,
+    remove_library_root, song_signal_path, stream_song,
 };
 use crate::api::{
     album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
@@ -54,6 +54,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .service(create_signed_image_url)
         .service(head_stream_song)
         .service(stream_song)
+        .service(song_signal_path)
         .service(
             web::scope("/filesystem")
                 .wrap(HttpAuthentication::with_fn(admin_guard))

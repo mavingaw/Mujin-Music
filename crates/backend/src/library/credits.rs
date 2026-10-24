@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::Loudness;
 use crate::library::identity::normalize_artist_identity;
 
 /// Roles the indexer writes to `track_artist.role` for an artist's own
@@ -81,6 +82,19 @@ enum TagField {
     /// A record label; lower values win when several label fields exist.
     Label(u8),
     Isrc,
+    /// A ReplayGain value.
+    Loudness(LoudnessField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoudnessField {
+    TrackGain,
+    TrackPeak,
+    AlbumGain,
+    AlbumPeak,
+    /// Opus `R128_*_GAIN`: Q7.8 fixed point relative to -23 LUFS.
+    R128Track,
+    R128Album,
 }
 
 /// Maps a Vorbis comment key, ID3 `TXXX` description or iTunes freeform name
@@ -108,6 +122,12 @@ fn named_field(key: &str) -> Option<TagField> {
         "ORGANIZATION" | "ORGANISATION" => TagField::Label(1),
         "PUBLISHER" => TagField::Label(2),
         "ISRC" => TagField::Isrc,
+        "REPLAYGAINTRACKGAIN" => TagField::Loudness(LoudnessField::TrackGain),
+        "REPLAYGAINTRACKPEAK" => TagField::Loudness(LoudnessField::TrackPeak),
+        "REPLAYGAINALBUMGAIN" => TagField::Loudness(LoudnessField::AlbumGain),
+        "REPLAYGAINALBUMPEAK" => TagField::Loudness(LoudnessField::AlbumPeak),
+        "R128TRACKGAIN" => TagField::Loudness(LoudnessField::R128Track),
+        "R128ALBUMGAIN" => TagField::Loudness(LoudnessField::R128Album),
         _ => return None,
     })
 }
@@ -175,12 +195,45 @@ fn split_values(value: &str) -> impl Iterator<Item = &str> {
         .filter(|value| !value.is_empty())
 }
 
-/// Credits, label and ISRC collected while reading one file's tags.
+/// Credits, label, ISRC and ReplayGain collected while reading one file's tags.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TagCredits {
     pub credits: Vec<TagCredit>,
     label: Option<(u8, String)>,
     pub isrc: Option<String>,
+    pub loudness: Loudness,
+    track_gain_from_tag: bool,
+    album_gain_from_tag: bool,
+}
+
+/// Parses a ReplayGain gain such as `-6.40 dB` or `+1.2dB`.
+pub fn parse_replay_gain_db(value: &str) -> Option<f32> {
+    let value = value.trim();
+    let number = value
+        .strip_suffix("dB")
+        .or_else(|| value.strip_suffix("db"))
+        .or_else(|| value.strip_suffix("DB"))
+        .unwrap_or(value)
+        .trim();
+    let gain = number.parse::<f32>().ok()?;
+    (gain.is_finite() && (-60.0..=30.0).contains(&gain)).then_some(gain)
+}
+
+/// Parses a linear ReplayGain peak such as `0.988`.
+pub fn parse_replay_gain_peak(value: &str) -> Option<f32> {
+    let peak = value.trim().parse::<f32>().ok()?;
+    (peak.is_finite() && peak > 0.0 && peak <= 10.0).then_some(peak)
+}
+
+/// Converts an Opus `R128_*_GAIN` (Q7.8, relative to -23 LUFS) to a
+/// ReplayGain 2.0 gain (relative to -18 LUFS).
+pub fn r128_to_replay_gain_db(value: &str) -> Option<f32> {
+    let raw = value.trim().parse::<i32>().ok()?;
+    if !(-32768..=32767).contains(&raw) {
+        return None;
+    }
+    let gain = raw as f32 / 256.0 + 5.0;
+    (-60.0..=30.0).contains(&gain).then_some(gain)
 }
 
 impl TagCredits {
@@ -214,6 +267,51 @@ impl TagCredits {
             TagField::Isrc => {
                 if self.isrc.is_none() {
                     self.isrc = split_values(value).find_map(normalize_isrc);
+                }
+            }
+            TagField::Loudness(field) => self.apply_loudness(field, value),
+        }
+    }
+
+    /// ReplayGain tags win over Opus R128 gains; the first value of each
+    /// field is kept.
+    fn apply_loudness(&mut self, field: LoudnessField, value: &str) {
+        let loudness = &mut self.loudness;
+        match field {
+            LoudnessField::TrackGain => {
+                if let Some(gain) = parse_replay_gain_db(value) {
+                    if !self.track_gain_from_tag {
+                        loudness.track_gain_db = Some(gain);
+                    }
+                    self.track_gain_from_tag = true;
+                }
+            }
+            LoudnessField::AlbumGain => {
+                if let Some(gain) = parse_replay_gain_db(value) {
+                    if !self.album_gain_from_tag {
+                        loudness.album_gain_db = Some(gain);
+                    }
+                    self.album_gain_from_tag = true;
+                }
+            }
+            LoudnessField::TrackPeak => {
+                if loudness.track_peak.is_none() {
+                    loudness.track_peak = parse_replay_gain_peak(value);
+                }
+            }
+            LoudnessField::AlbumPeak => {
+                if loudness.album_peak.is_none() {
+                    loudness.album_peak = parse_replay_gain_peak(value);
+                }
+            }
+            LoudnessField::R128Track => {
+                if !self.track_gain_from_tag && loudness.track_gain_db.is_none() {
+                    loudness.track_gain_db = r128_to_replay_gain_db(value);
+                }
+            }
+            LoudnessField::R128Album => {
+                if !self.album_gain_from_tag && loudness.album_gain_db.is_none() {
+                    loudness.album_gain_db = r128_to_replay_gain_db(value);
                 }
             }
         }
@@ -305,6 +403,31 @@ pub fn normalize_isrc(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_gain_tags_parse_and_win_over_opus_r128_gains() {
+        let mut tags = TagCredits::default();
+        assert!(tags.apply_named("R128_TRACK_GAIN", "-1024"));
+        assert_eq!(tags.loudness.track_gain_db, Some(1.0));
+        assert!(tags.apply_named("replaygain_track_gain", "-6.40 dB"));
+        assert!(tags.apply_named("REPLAYGAIN_TRACK_GAIN", "-1.00 dB"));
+        assert!(tags.apply_named("REPLAYGAIN_TRACK_PEAK", "0.988312"));
+        assert!(tags.apply_named("REPLAYGAIN_ALBUM_GAIN", "+2.5dB"));
+        assert!(tags.apply_named("R128_ALBUM_GAIN", "0"));
+        assert!(tags.apply_named("REPLAYGAIN_ALBUM_PEAK", "nan"));
+        assert_eq!(tags.loudness.track_gain_db, Some(-6.4));
+        assert_eq!(tags.loudness.track_peak, Some(0.988312));
+        assert_eq!(tags.loudness.album_gain_db, Some(2.5));
+        assert_eq!(tags.loudness.album_peak, None);
+
+        let mut opus = TagCredits::default();
+        opus.apply_named("R128_ALBUM_GAIN", "512");
+        assert_eq!(opus.loudness.album_gain_db, Some(7.0));
+        assert_eq!(parse_replay_gain_db("loud"), None);
+        assert_eq!(parse_replay_gain_db("-99 dB"), None);
+        assert_eq!(parse_replay_gain_peak("0"), None);
+        assert_eq!(r128_to_replay_gain_db("99999"), None);
+    }
 
     #[test]
     fn vorbis_keys_map_to_canonical_roles() {
