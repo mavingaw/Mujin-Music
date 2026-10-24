@@ -8,6 +8,7 @@ pub mod filesystem;
 pub mod genres;
 pub mod home;
 pub mod image;
+pub mod imports;
 pub mod library;
 pub mod lyrics;
 pub mod metadata;

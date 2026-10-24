@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    album, artist, cast, data, filesystem, genres, home, imports, lyrics, metadata, playback,
+    playlist, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -83,6 +83,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
+        .configure(imports::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -211,7 +212,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "imports"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),

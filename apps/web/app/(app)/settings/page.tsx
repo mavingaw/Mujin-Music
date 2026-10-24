@@ -9,10 +9,12 @@ import { useSession } from "@/features/account/session-provider";
 import { useState } from "react";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
+import ConnectionsSettings from "@/features/imports/connections-settings";
 
 const settingsTabs = [
   "account",
   "playback",
+  "connections",
   "library",
   "data",
   "users",
@@ -23,6 +25,7 @@ type SettingsTab = (typeof settingsTabs)[number];
 const labels: Record<SettingsTab, string> = {
   account: "Account",
   playback: "Playback",
+  connections: "Connections",
   library: "Library",
   data: "Data",
   users: "Users",
@@ -35,7 +38,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
   const availableTabs = isAdmin
     ? settingsTabs
-    : (["account", "playback", "data"] as const);
+    : (["account", "playback", "connections", "data"] as const);
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -72,6 +75,7 @@ export default function SettingsPage() {
           {activeTab === "playback" && (
             <BitrateForm initialBitrate={session?.bitrate ?? 0} />
           )}
+          {activeTab === "connections" && <ConnectionsSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && <LibrarySettings />}
           {isAdmin && activeTab === "users" && <UserForm />}

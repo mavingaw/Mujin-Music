@@ -10,6 +10,8 @@ pub mod discovery;
 pub mod domain;
 #[cfg(feature = "server")]
 pub mod http;
+#[cfg(feature = "server")]
+pub mod imports;
 pub mod library;
 pub mod persistence;
 mod playlist_rules;
