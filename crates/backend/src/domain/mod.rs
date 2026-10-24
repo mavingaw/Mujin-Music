@@ -38,6 +38,67 @@ pub struct Song {
     pub track_number: u16,
     pub path: String,
     pub duration: f64,
+    /// Technical properties of the primary file, when the indexer read them.
+    #[serde(default)]
+    pub audio: Option<AudioProperties>,
+    /// Contributor credits (composer, producer, performer, ...) from tags.
+    #[serde(default)]
+    pub credits: Vec<Credit>,
+    #[serde(default)]
+    pub isrc: Option<String>,
+    /// Record label tagged on the primary file.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Technical properties of an audio file, as read from its stream headers.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioProperties {
+    /// Codec, e.g. `flac`, `alac`, `aac`, `mp3`, `vorbis`, `opus`, `pcm`.
+    pub codec: Option<String>,
+    /// Container, e.g. `flac`, `mp4`, `mp3`, `ogg`, `wav`, `aiff`.
+    pub container: Option<String>,
+    /// Sample rate in Hz.
+    pub sample_rate: Option<u32>,
+    /// Bits per sample for lossless and PCM codecs.
+    pub bit_depth: Option<u8>,
+    pub channels: Option<u8>,
+    /// Average audio bitrate in kbps.
+    pub bitrate_kbps: Option<u32>,
+    /// Whether the codec is lossless (`None` when the codec is unknown).
+    pub lossless: Option<bool>,
+}
+
+impl AudioProperties {
+    pub fn is_empty(&self) -> bool {
+        self.codec.is_none()
+            && self.container.is_none()
+            && self.sample_rate.is_none()
+            && self.bit_depth.is_none()
+            && self.channels.is_none()
+            && self.bitrate_kbps.is_none()
+    }
+}
+
+/// Whether a codec name reported in [`AudioProperties::codec`] is lossless.
+pub fn codec_is_lossless(codec: &str) -> Option<bool> {
+    match codec {
+        "flac" | "alac" | "pcm" | "pcm_float" | "wavpack" | "ape" | "tta" => Some(true),
+        "mp3" | "aac" | "vorbis" | "opus" | "speex" | "musepack" | "ac3" | "eac3" => Some(false),
+        _ => None,
+    }
+}
+
+/// A contributor credit on a track.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Credit {
+    pub artist_id: String,
+    pub name: String,
+    /// Canonical role, e.g. `composer`, `conductor`, `producer`, `performer`.
+    pub role: String,
+    /// Instrument for `performer` credits, lower case, when tagged.
+    #[serde(default)]
+    pub instrument: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

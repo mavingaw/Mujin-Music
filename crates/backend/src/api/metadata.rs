@@ -307,22 +307,13 @@ fn response_album(album: &Album, artist: &Artist) -> ResponseAlbum {
         contributing_artists_ids: album.contributing_artists_ids.clone(),
         release_album: album.release_album.clone(),
         release_group_album: album.release_group_album.clone(),
+        label: crate::api::album::album_label(&album.songs),
+        credits: crate::api::album::album_credits(&album.songs),
     }
 }
 
 fn response_song(song: &crate::domain::Song, album: &Album, artist: &Artist) -> ResponseSong {
-    ResponseSong {
-        id: song.id.clone(),
-        name: song.name.clone(),
-        artist: song.artist.clone(),
-        contributing_artists: song.contributing_artists.clone(),
-        contributing_artist_ids: song.contributing_artist_ids.clone(),
-        track_number: song.track_number,
-        path: song.path.clone(),
-        duration: song.duration,
-        album_object: crate::api::album_reference(album),
-        artist_object: crate::api::artist_reference(artist),
-    }
+    crate::api::song::response_song(song, album, artist)
 }
 
 fn locate_song(library: &[Artist], song_id: &str) -> Option<(usize, usize, usize)> {

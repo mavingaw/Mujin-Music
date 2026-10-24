@@ -1,5 +1,5 @@
 import api, { isApiError } from "../core/http";
-import type { AlbumInfo, ArtistInfo } from "../domain/types";
+import type { AlbumInfo, ArtistInfo, AudioProperties } from "../domain/types";
 
 export interface PlaybackQueueSong {
   id: string;
@@ -13,6 +13,8 @@ export interface PlaybackQueueSong {
   artist_object: ArtistInfo;
   origin: "manual" | "generated";
   queue_position: number;
+  /** Omitted when the server has not read the file's stream headers. */
+  audio?: AudioProperties;
 }
 
 export interface PlaybackQueue {
