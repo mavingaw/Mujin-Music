@@ -15,7 +15,11 @@ import {
   type DspAudioContext,
   type DspSettings,
 } from "./dsp";
-import { buildSignalPath, type ClientSignalLeg } from "./signal-path";
+import {
+  buildSignalPath,
+  overallSignalQuality,
+  type ClientSignalLeg,
+} from "./signal-path";
 
 function withEq(gains: number[], extra: Partial<DspSettings> = {}) {
   const settings = defaultDspSettings();
@@ -238,6 +242,12 @@ describe("DSP chain graph", () => {
 });
 
 describe("DSP stages in the signal path", () => {
+  // The browser's shared-mode output is high quality on its own, so the
+  // chain's own rating is read from the stages before it.
+  const chainQuality = (path: ReturnType<typeof buildSignalPath>) =>
+    overallSignalQuality(
+      path.stages.filter((stage) => stage.kind !== "output"),
+    );
   const leg: ClientSignalLeg = {
     platform: "web",
     engine: "web-audio",
@@ -285,7 +295,8 @@ describe("DSP stages in the signal path", () => {
     expect(stage("dsp-crossfeed").detail).toBe(
       "Medium: 700 Hz, −6.0 dB, 0.3 ms",
     );
-    expect(path.quality).toBe("enhanced");
+    expect(chainQuality(path)).toBe("enhanced");
+    expect(path.quality).toBe("high_quality");
     expect(path.description).toContain("Parametric EQ (4 bands");
   });
 
@@ -295,7 +306,8 @@ describe("DSP stages in the signal path", () => {
     expect(path.stages.some((stage) => stage.id.startsWith("dsp-"))).toBe(
       false,
     );
-    expect(path.quality).toBe("lossless");
+    expect(chainQuality(path)).toBe("lossless");
+    expect(path.bitPerfectToOutput).toBeTrue();
   });
 
   test("a chosen upsampling rate is enhanced, a forced one is not", () => {
@@ -314,12 +326,12 @@ describe("DSP stages in the signal path", () => {
         quality: "enhanced",
       }),
     );
-    expect(chosen.quality).toBe("enhanced");
+    expect(chainQuality(chosen)).toBe("enhanced");
     const forced = buildSignalPath(
       null,
       { ...leg, contextSampleRate: 48_000, deviceSampleRate: 48_000 },
       audio,
     );
-    expect(forced.quality).toBe("high_quality");
+    expect(chainQuality(forced)).toBe("high_quality");
   });
 });

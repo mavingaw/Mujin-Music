@@ -72,6 +72,7 @@ import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
 import { CastOutputButton } from "@/components/cast-output-button";
 import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
+import { ServerOutputs } from "@/components/server-outputs";
 import { dspAvailable } from "@/lib/signal-path";
 import { useSignalPath } from "@/hooks/use-signal-path";
 import type { SignalPath } from "@parson/music-sdk";
@@ -905,10 +906,28 @@ export default function PlayerScreen() {
               dsp={dspAvailable(player.signal.platform) ? player.dsp : null}
               onDspChange={player.setDsp}
             />
+            {session.phase === "ready" && !player.signal.casting ? (
+              <PlayerServerOutputs />
+            ) : null}
           </ActionDrawer>
         </SafeAreaView>
       </AnimatedLinearGradient>
     </GestureDetector>
+  );
+}
+
+/** Hands the playing track to one of the server's bit-perfect outputs. */
+function PlayerServerOutputs() {
+  const player = usePlayer();
+  const { currentTime } = usePlayerPosition();
+  return (
+    <ServerOutputs
+      onHandOff={() => {
+        if (player.isPlaying) player.toggle();
+      }}
+      positionSeconds={currentTime}
+      songId={player.current?.id ?? null}
+    />
   );
 }
 

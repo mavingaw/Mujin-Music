@@ -59,13 +59,13 @@ export interface SignalFormat {
   summary: string;
 }
 
-export type SignalStreamTarget = "direct" | "cast";
+export type SignalStreamTarget = "direct" | "cast" | "native";
 
 /** Server leg returned by `GET /media/songs/{id}/signal-path`. */
 export interface ServerSignalPath {
   song_id: string;
   target: SignalStreamTarget;
-  mode: "original" | "transcode";
+  mode: "original" | "transcode" | "native";
   quality: SignalQuality;
   source: SignalFormat;
   delivered: SignalFormat;
@@ -128,12 +128,20 @@ export interface ClientSignalLeg {
         /** The user picked this device rather than the system default. */
         chosen?: boolean;
       }
-    | { kind: "cast"; name?: string | null };
+    | { kind: "cast"; name?: string | null }
+    /**
+     * A device attached to the server, played by the server itself. The
+     * server leg then covers the whole path, so this client adds nothing.
+     */
+    | { kind: "native"; name?: string | null };
 }
 
 export interface SignalPath {
   quality: SignalQuality;
-  /** Lossless source above CD resolution. */
+  /**
+   * Lossless source above CD resolution, and the path is not lossy: a
+   * high-resolution file transcoded to MP3 is not high resolution.
+   */
   highRes: boolean;
   /** Source format, when known. */
   source: SignalFormat | null;
@@ -147,6 +155,11 @@ export interface SignalPath {
    * output (OS mixer or Cast device) exactly as they are in the file.
    */
   bitPerfectToOutput: boolean;
+  /**
+   * The whole path is lossless including the output stage, which is only
+   * possible on a server output opened in exclusive mode.
+   */
+  bitPerfect: boolean;
   /**
    * One sentence naming what decided the light, built from the stages
    * present: what you asked for, what you did not, what was lossy.
@@ -415,6 +428,7 @@ function clientStages(
   delivered: SignalFormat | null,
 ): SignalStage[] {
   const stages: SignalStage[] = [];
+  if (client.output.kind === "native") return stages;
   const casting = client.output.kind === "cast";
   const deviceName = casting
     ? client.output.name || "Cast device"
@@ -634,11 +648,20 @@ function clientStages(
       detail: client.deviceSampleRate
         ? `${mixer}, ${formatSampleRate(client.deviceSampleRate)}`
         : mixer,
-      quality: "lossless",
-      explanation: `Parson hands the samples to ${name} without changing them. ${
+      // Roon rates an OS mixer output "High quality": in shared mode the
+      // system may resample, apply its volume and mix in other sounds, and
+      // nothing tells Parson which formats the device itself accepts.
+      quality: "high_quality",
+      explanation: `${name} is reached through the ${
+        client.platform === "ios"
+          ? "iOS audio session"
+          : client.platform === "android"
+            ? "Android audio mixer"
+            : "system mixer in shared mode"
+      }, so the system can resample the audio, apply its volume and mix in other sounds after Parson hands it over. ${
         client.platform === "web" || client.platform === "desktop"
-          ? "Browsers open devices in shared mode, so other apps' sounds and the system volume can still be mixed in after this point; Parson cannot see past the handoff."
-          : "The system can still mix in other sounds after this point; Parson cannot see past the handoff."
+          ? "For a bit-perfect path, play on a server output in exclusive mode (Settings → Audio outputs)."
+          : "Phones always play through the system mixer; play on a server output for a bit-perfect path."
       }`,
     });
   }
@@ -687,26 +710,37 @@ export function describeSignalPath(
   const by = (wanted: SignalQuality) =>
     stages.filter((stage) => stage.quality === wanted);
   const enhanced = by("enhanced");
-  const high = by("high_quality");
+  const outputStage = stages.find((stage) => stage.kind === "output");
+  const sharedOutput =
+    outputStage?.quality === "high_quality" ? outputStage : null;
+  const high = by("high_quality").filter((stage) => stage !== sharedOutput);
   const output = options.output ?? "the output";
   const asked = enhanced.length
     ? `processing you asked for: ${listTitles(enhanced)}`
     : "";
   switch (quality) {
     case "lossless":
-      return `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
+      return outputStage?.id === "native-output"
+        ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, in exclusive mode at ${outputStage.detail.split(", ").at(-1)}.`
+        : `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
     case "enhanced":
       return `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
     case "high_quality": {
       const unknown = stages.some(
         (stage) => stage.kind === "source" && !stage.quality,
       );
+      const mixer = sharedOutput
+        ? `${output} is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.`
+        : "";
       const changed = high.length
         ? `The audio is changed in ways you did not ask for, with very little loss: ${listTitles(high)}.`
         : unknown
           ? "Parson cannot tell whether the source is lossless, so the path is rated high quality at best."
-          : "The path is rated high quality.";
-      return asked ? `${changed} It also applies ${asked}.` : changed;
+          : mixer
+            ? ""
+            : "The path is rated high quality.";
+      const sentence = [changed, mixer].filter(Boolean).join(" ");
+      return asked ? `${sentence} It also applies ${asked}.` : sentence;
     }
     case "low_quality": {
       const lossy = stages.find((stage) => stage.quality === "low_quality");
@@ -753,19 +787,22 @@ export function buildSignalPath(
     }
   }
   stages.push(...clientStages(client, delivered));
-  const highRes = Boolean(source?.high_res);
+  const rated = carryLossyGeneration(stages);
+  const quality = overallSignalQuality(rated);
+  // A transcoded MP3 is not hi-res, whatever the file it came from.
+  const highRes = Boolean(source?.high_res) && quality !== "low_quality";
   const outputStage = stages.find((stage) => stage.kind === "output");
   const description = describeSignalPath(stages, {
     highRes,
     output: outputStage?.title,
   });
-  const rated = carryLossyGeneration(stages);
   const beforeOutput = rated.filter((stage) => stage.kind !== "output");
   return {
     bitPerfectToOutput:
       beforeOutput.length > 0 &&
       beforeOutput.every((stage) => stage.quality === "lossless"),
-    quality: overallSignalQuality(rated),
+    bitPerfect: quality === "lossless" && outputStage?.id === "native-output",
+    quality,
     highRes,
     source,
     delivered,

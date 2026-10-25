@@ -413,7 +413,7 @@ export function DspPanel({
             </label>
             <select
               className={cn(fieldClass, "min-w-0 flex-1")}
-              disabled={!output.selectable}
+              disabled={!output.selectable && !output.serverDevices.length}
               id={outputSelectId}
               onChange={(event) => output.select(event.target.value)}
               value={output.selectedId}
@@ -426,13 +426,28 @@ export function DspPanel({
                       .label.replace(/^Default\s*[-–]\s*/i, "")})`
                   : ""}
               </option>
-              {output.devices
-                .filter((device) => device.id !== "default")
-                .map((device, index) => (
-                  <option key={device.id} value={device.id}>
-                    {device.label || `Output ${index + 1}`}
-                  </option>
-                ))}
+              {output.selectable
+                ? output.devices
+                    .filter((device) => device.id !== "default")
+                    .map((device, index) => (
+                      <option key={device.id} value={device.id}>
+                        {device.label || `Output ${index + 1}`}
+                      </option>
+                    ))
+                : null}
+              {output.serverDevices.length ? (
+                <optgroup label="Server outputs (exclusive, bit-perfect)">
+                  {output.serverDevices.map((device) => (
+                    <option
+                      disabled={!device.formats}
+                      key={device.id}
+                      value={`server:${device.id}`}
+                    >
+                      {device.name} · {device.mode_label}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
             {output.labelsHidden ? (
               <button
@@ -443,7 +458,20 @@ export function DspPanel({
                 Show device names
               </button>
             ) : null}
-            {!output.selectable ? (
+            {output.serverOutputId ? (
+              <p className="w-full text-[11px] leading-4 text-zinc-500">
+                The server plays this output itself, with fixed volume, so the
+                browser DSP below does not apply. Set Exclusive Mode and format
+                limits in{" "}
+                <a
+                  className="text-zinc-300 underline underline-offset-2"
+                  href="/settings?tab=outputs"
+                >
+                  Settings → Audio outputs
+                </a>
+                .
+              </p>
+            ) : !output.selectable ? (
               <p className="w-full text-[11px] text-zinc-500">
                 This browser always plays through the system default output.
               </p>

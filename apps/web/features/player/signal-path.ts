@@ -47,20 +47,23 @@ export function webClientLeg(input: WebSignalInput): ClientSignalLeg {
     deviceSampleRate: input.signal.deviceSampleRate,
     output: input.casting
       ? { kind: "cast", name: input.castDeviceName }
-      : {
-          kind: "system",
-          name: input.signal.outputName,
-          chosen: input.signal.outputChosen,
-        },
+      : input.signal.native
+        ? { kind: "native", name: input.signal.native.name }
+        : {
+            kind: "system",
+            name: input.signal.outputName,
+            chosen: input.signal.outputChosen,
+          },
   };
 }
 
 export function signalPathQueryKey(
   songId: string,
   bitrate: number,
-  target: "direct" | "cast",
+  target: "direct" | "cast" | "native",
+  device: string | null = null,
 ) {
-  return ["signal-path", songId, bitrate, target] as const;
+  return ["signal-path", songId, bitrate, target, device] as const;
 }
 
 /** Server leg (fetched) plus this client's leg for the playing track. */
@@ -72,11 +75,13 @@ export function useSignalPath({
   audio?: AudioProperties | null;
   songId: string;
 }): { path: SignalPath | null; loading: boolean } {
-  const bitrate = input.casting ? 0 : input.signal.streamBitrate;
-  const target = input.casting ? "cast" : "direct";
+  const native = input.casting ? null : input.signal.native;
+  const bitrate = input.casting || native ? 0 : input.signal.streamBitrate;
+  const target = input.casting ? "cast" : native ? "native" : "direct";
+  const device = native?.deviceId ?? null;
   const server = useQuery<ServerSignalPath>({
-    queryKey: signalPathQueryKey(songId, bitrate, target),
-    queryFn: () => getSongSignalPath(songId, { bitrate, target }),
+    queryKey: signalPathQueryKey(songId, bitrate, target, device),
+    queryFn: () => getSongSignalPath(songId, { bitrate, target, device }),
     enabled: Boolean(songId),
     retry: 1,
     staleTime: 60_000,
@@ -84,8 +89,9 @@ export function useSignalPath({
   const desktop = typeof window !== "undefined" && hasDesktopBridge();
   const path = useMemo(() => {
     if (!songId) return null;
+    // The playing session's own path is authoritative for a server output.
     return buildSignalPath(
-      server.data ?? null,
+      native?.signalPath ?? server.data ?? null,
       webClientLeg({ ...input, desktop }),
       audio,
     );

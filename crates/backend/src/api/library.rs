@@ -1960,6 +1960,7 @@ mod reliability_tests {
             ("/media/songs/song-1/signal-path?bitrate=999", 400),
             ("/media/songs/missing/signal-path", 404),
             ("/media/songs/song-1/signal-path?target=sonos", 400),
+            ("/media/songs/song-1/signal-path?target=native", 400),
         ] {
             let response =
                 test::call_service(&app, test::TestRequest::get().uri(uri).to_request()).await;
@@ -2660,6 +2661,8 @@ pub struct SignalPathQuery {
     pub slowed_reverb: Option<bool>,
     pub audio_effect: Option<StreamAudioEffect>,
     pub target: Option<StreamTarget>,
+    /// Server output device, for `target=native`.
+    pub device: Option<String>,
 }
 
 /// Describes the server leg of the signal path for a stream request with
@@ -2669,6 +2672,7 @@ pub async fn song_signal_path(
     path: web::Path<String>,
     query: web::Query<SignalPathQuery>,
     lifecycle: web::Data<LibraryLifecycle>,
+    native: Option<web::Data<crate::native_output::NativeOutputs>>,
 ) -> HttpResponse {
     let bitrate = query.bitrate;
     if bitrate > MAX_STREAM_BITRATE || (bitrate > 0 && bitrate < MIN_STREAM_BITRATE) {
@@ -2688,6 +2692,26 @@ pub async fn song_signal_path(
     let Some(song) = cache.song(&path) else {
         return not_found("Song not found.", "song_not_found");
     };
+    if query.target == Some(StreamTarget::Native) {
+        let Some(device) = query.device.clone().filter(|device| !device.is_empty()) else {
+            return bad_request("A server output device is required.", "device_required");
+        };
+        let outputs = native
+            .map(|data| data.into_inner())
+            .unwrap_or_else(crate::native_output::global);
+        let song = song.clone();
+        return match web::block(move || outputs.describe(&device, &song)).await {
+            Ok(Ok((_, path))) => HttpResponse::Ok().json(path),
+            Ok(Err(error @ crate::native_output::NativeError::UnknownDevice)) => {
+                not_found(error.to_string(), error.code())
+            }
+            Ok(Err(error)) => bad_request(error.to_string(), error.code()),
+            Err(_) => crate::api::error::internal_server_error(
+                "The audio output task stopped.",
+                "native_output_task_failed",
+            ),
+        };
+    }
     let song_path = Path::new(&song.path);
     let extension = song_path
         .extension()

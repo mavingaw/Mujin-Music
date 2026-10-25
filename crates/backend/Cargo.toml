@@ -75,6 +75,7 @@ unicode-normalization = "0.1.25"
 uuid = { version = "1.27.0", features = ["v4", "fast-rng", "macro-diagnostics", "serde"] }
 jwalk = "0.9.0"
 parson-core = { path = "../parson-core" }
+parson-output = { path = "../parson-output" }
 webp = { version = "0.3.1", optional = true }
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 zstd = "0.14.1"
