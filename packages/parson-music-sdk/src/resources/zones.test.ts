@@ -33,6 +33,8 @@ import {
   formatSampleRate,
   pauseAllZones,
   zoneKindLabel,
+  streamQuality,
+  streamQualityText,
   zoneQualityLabel,
   type Zone,
 } from "./zones";
@@ -623,4 +625,42 @@ test("pause all and output discovery call the zone API", async () => {
     {},
     { timeout: 20_000 },
   );
+});
+
+test("signal path ratings read like Roon's quality light", () => {
+  const playing = (stream: NonNullable<Zone["output"]>["stream"]) =>
+    zone({
+      kind: "sonos",
+      output: {
+        max_sample_rate: 48_000,
+        max_bit_depth: 24,
+        formats: ["FLAC"],
+        note: "",
+        stream,
+      },
+    });
+  const sonos = playing({
+    source: "FLAC 96 kHz/24-bit",
+    output: "FLAC 48 kHz/24-bit to Living Room (Sonos Five)",
+    bit_perfect: false,
+    steps: ["Sample rate conversion 96 kHz to 48 kHz (linear phase)"],
+    quality: "high",
+  });
+  expect(zoneQualityLabel(sonos)).toBe("High quality");
+  const ogg = playing({
+    source: "Ogg Vorbis 44.1 kHz",
+    output: "FLAC 44.1 kHz/24-bit to Den (Sonos One)",
+    bit_perfect: false,
+    steps: ["Decoded Ogg Vorbis to 24-bit PCM"],
+    quality: "low",
+  });
+  expect(zoneQualityLabel(ogg)).toBe("Low quality");
+  expect(streamQualityText("enhanced").label).toBe("Enhanced");
+  // Servers from before the rating still get a sensible one.
+  expect(
+    streamQuality({ source: "", output: "", bit_perfect: true, steps: [] }),
+  ).toBe("lossless");
+  expect(
+    streamQuality({ source: "", output: "", bit_perfect: false, steps: [] }),
+  ).toBe("high");
 });

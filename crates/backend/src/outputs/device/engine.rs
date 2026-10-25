@@ -543,6 +543,17 @@ impl Player {
             }
             let bit_perfect =
                 active.exact && steps.is_empty() && settings.volume_mode != VolumeMode::Software;
+            let reduced = active
+                .track
+                .source
+                .bit_depth
+                .is_some_and(|bits| bits > active.format.format.bits());
+            let quality = crate::zones::StreamQuality::rate(
+                active.track.source.lossless(),
+                source_rate != active.format.sample_rate || reduced || software,
+                active.track.gain_db.is_some_and(|gain| gain.abs() >= 0.05)
+                    || active.track.dsp.is_active(),
+            );
             ZoneStreamInfo {
                 source: describe_source(&active.track.source),
                 output: format!(
@@ -559,6 +570,7 @@ impl Player {
                 ),
                 bit_perfect,
                 steps,
+                quality,
             }
         });
         lock(&self.shared).state.stream = info;

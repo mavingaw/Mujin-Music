@@ -328,7 +328,7 @@ async fn upnp_renderer_plays_gapless_converts_and_follows_the_queue_end_to_end()
     assert_eq!((output.max_sample_rate, output.max_bit_depth), (96_000, 24));
     assert_eq!(
         output.note,
-        "This renderer plays up to 96 kHz/24-bit. FLAC and MP3 within that stream untouched; anything else is converted to 24-bit FLAC at up to 96 kHz."
+        "This renderer plays up to 96 kHz/24-bit. FLAC and MP3 within that reach it untouched. Anything else is sent as FLAC: higher sample rates become the nearest rate it takes in the same family (44.1 or 48 kHz multiples), lossless files keep their own bit depth up to 24-bit, and lossy files (Ogg Vorbis, Opus) are decoded to 24-bit."
     );
     assert!(
         listed
@@ -412,7 +412,11 @@ async fn upnp_renderer_plays_gapless_converts_and_follows_the_queue_end_to_end()
         .expect("signal path");
     assert!(stream.bit_perfect);
     assert_eq!(stream.source, "FLAC 96 kHz/24-bit");
-    assert_eq!(stream.output, "Original file to Living Room Streamer");
+    assert_eq!(
+        stream.output,
+        "Original FLAC file, untouched, to Living Room Streamer"
+    );
+    assert_eq!(stream.quality, crate::zones::StreamQuality::Lossless);
 
     // --- Volume on the renderer's own 0..30 scale; mute.
     service
@@ -480,12 +484,17 @@ async fn upnp_renderer_plays_gapless_converts_and_follows_the_queue_end_to_end()
         .and_then(|output| output.stream)
         .expect("signal path");
     assert!(!stream.bit_perfect);
+    assert!(stream.output.starts_with("FLAC 96 kHz/24-bit to "));
     assert!(
         stream
             .steps
             .iter()
-            .any(|step| step.contains("Converted to FLAC 96 kHz/24-bit"))
+            .any(|step| step.starts_with("Sample rate conversion")
+                && step.ends_with("to 96 kHz (linear phase)")),
+        "{:?}",
+        stream.steps
     );
+    assert_eq!(stream.quality, crate::zones::StreamQuality::High);
 
     // --- Queue edits reach the renderer's next track.
     service
@@ -1308,7 +1317,7 @@ async fn chromecast_zone_reports_limits_takes_commands_and_serves_receiver_flac(
     assert_eq!(cast["output"]["max_sample_rate"], 96_000);
     assert_eq!(
         cast["output"]["note"],
-        "Chromecast plays up to 96 kHz/24-bit. FLAC, MP3 and AAC within that stream untouched; anything else is converted to 24-bit FLAC at up to 96 kHz."
+        "Chromecast plays up to 96 kHz/24-bit. FLAC, MP3 and AAC within that reach it untouched. Anything else is sent as FLAC: higher sample rates become the nearest rate it takes in the same family (44.1 or 48 kHz multiples), lossless files keep their own bit depth up to 24-bit, and lossy files (Ogg Vorbis, Opus) are decoded to 24-bit."
     );
 
     // Remote control from the zone API reaches the session the sender polls.

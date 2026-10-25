@@ -8,6 +8,8 @@ import {
   dspSummary,
   formatSampleRate,
   levelingModeLabel,
+  streamQuality,
+  streamQualityText,
   volumeModeLabel,
   zoneIconName,
   zoneSettingsDraft,
@@ -18,6 +20,8 @@ import {
   type ZoneLevelingMode,
   type ZoneDsp,
   type ZoneSettingsDraft,
+  type ZoneStreamInfo,
+  type ZoneStreamQuality,
   type ZoneVolumeMode,
 } from "@parson/music-sdk";
 import {
@@ -482,24 +486,7 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
         {zone.output ? (
           <Section title="Signal path">
             <Text style={styles.note}>{zone.output.note}</Text>
-            {stream ? (
-              <>
-                <Text
-                  style={[
-                    styles.rowTitle,
-                    styles.spaced,
-                    { color: stream.bit_perfect ? palette.success : "#fbbf24" },
-                  ]}
-                >
-                  {stream.bit_perfect ? "Bit-perfect" : "Processed"}
-                </Text>
-                {[stream.source, ...stream.steps, stream.output].map((step) => (
-                  <Text key={step} style={styles.note}>
-                    {step}
-                  </Text>
-                ))}
-              </>
-            ) : null}
+            {stream ? <SignalPathStages stream={stream} /> : null}
           </Section>
         ) : null}
 
@@ -635,7 +622,107 @@ function Stepper({
   );
 }
 
+/** Roon's quality-light colours: purple, blue, green, yellow. */
+const QUALITY_COLORS: Record<ZoneStreamQuality, string> = {
+  lossless: "#e879f9",
+  enhanced: "#38bdf8",
+  high: "#34d399",
+  low: "#fcd34d",
+};
+
+/** The quality light, then source, each step in order, and the output. */
+function SignalPathStages({ stream }: { stream: ZoneStreamInfo }) {
+  const quality = streamQuality(stream);
+  const text = streamQualityText(quality);
+  const color = QUALITY_COLORS[quality];
+  const stages = [
+    { kicker: "Source", label: stream.source },
+    ...stream.steps.map((label) => ({ kicker: null, label })),
+    { kicker: "Output", label: stream.output },
+  ];
+  return (
+    <View style={styles.spaced}>
+      <View style={[styles.qualityCard, { borderColor: `${color}55` }]}>
+        <View
+          style={[
+            styles.qualityLight,
+            { backgroundColor: color, shadowColor: color },
+          ]}
+        />
+        <View style={styles.switchText}>
+          <Text style={[styles.rowTitle, { color }]}>
+            {stream.bit_perfect ? `${text.label} · Bit-perfect` : text.label}
+          </Text>
+          <Text style={styles.note}>
+            {stream.bit_perfect
+              ? "Every sample of the file reaches the output untouched."
+              : text.description}
+          </Text>
+        </View>
+      </View>
+      {stages.map((stage, index) => (
+        <View key={`${index}-${stage.label}`} style={styles.stage}>
+          <View
+            style={[
+              styles.stageDot,
+              stage.kicker ? { borderColor: color } : null,
+            ]}
+          />
+          <View style={styles.switchText}>
+            {stage.kicker ? (
+              <Text style={styles.stageKicker}>{stage.kicker}</Text>
+            ) : null}
+            <Text style={stage.kicker ? styles.rowTitle : styles.note}>
+              {stage.label}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  qualityCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    backgroundColor: "rgba(255,255,255,0.03)",
+  },
+  qualityLight: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginTop: 5,
+    shadowOpacity: 0.8,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  stage: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingVertical: 4,
+  },
+  stageDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.2)",
+    marginTop: 4,
+  },
+  stageKicker: {
+    color: "#71717a",
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+  },
   sheet: { flex: 1, backgroundColor: palette.background, paddingTop: 16 },
   header: {
     flexDirection: "row",
