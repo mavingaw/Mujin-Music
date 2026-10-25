@@ -1,20 +1,19 @@
 //! `/providers`: TIDAL and Qobuz sign-in, catalog, library and streaming.
 
-use std::sync::OnceLock;
-use std::time::Duration;
-
 use actix_web::http::{StatusCode, header};
-use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, put, web};
-use bytes::Bytes;
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, delete, get, patch, post, put, web};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::api::auth::authenticated_user_id;
-use crate::api::error::json_error;
+use crate::api::auth::{Claims, authenticated_user_id};
+use crate::api::error::{forbidden, json_error};
 use crate::providers::hub::{HubError, LibraryRequest, StreamingHub, user_message};
+pub(crate) use crate::providers::media::byte_range;
+use crate::providers::media::{self, MediaError};
 use crate::providers::store::{LibraryItemRow, LibrarySort};
 use crate::providers::{
     BrowseSection, ItemKind, ProviderError, ProviderId, ResolvedStream, StreamQuality,
-    StreamSource, entity_id, sandbox, valid_raw_id,
+    StreamSource, entity_id, probe, sandbox, valid_raw_id,
 };
 
 const MAX_SEARCH_QUERY_CHARACTERS: usize = 200;
@@ -44,6 +43,7 @@ pub fn hub_error_response(error: HubError) -> HttpResponse {
         },
         HubError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "provider_storage_failed"),
         HubError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid_provider_request"),
+        HubError::CredentialsRequired(_) => (StatusCode::CONFLICT, "provider_credentials_required"),
     };
     if status.is_server_error() {
         tracing::warn!(%error, code, "streaming provider request failed");
@@ -453,6 +453,112 @@ async fn browse(
     )
 }
 
+#[get("/{provider}/playlists")]
+async fn playlists(
+    request: HttpRequest,
+    path: web::Path<String>,
+    page: web::Query<PageParameters>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let (user_id, provider) = user_and_provider!(request, &path);
+    respond(
+        hub.playlists(
+            user_id,
+            provider,
+            page.offset.unwrap_or(0).min(10_000),
+            page.limit.unwrap_or(50).clamp(1, 100),
+        )
+        .await,
+    )
+}
+
+#[get("/{provider}/playlists/{id}")]
+async fn playlist(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
+        return unknown_provider();
+    };
+    respond(hub.playlist(user_id, provider, raw).await)
+}
+
+#[derive(Serialize)]
+struct PlaylistCopiesResponse {
+    copies: Vec<crate::providers::hub::PlaylistCopy>,
+}
+
+#[get("/playlist-copies")]
+async fn playlist_copies(request: HttpRequest, hub: web::Data<StreamingHub>) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    respond(
+        hub.playlist_copies(user_id)
+            .await
+            .map(|copies| PlaylistCopiesResponse { copies }),
+    )
+}
+
+/// A saved copy of a service playlist, with its tracks.
+#[get("/{provider}/playlists/{id}/copy")]
+async fn playlist_copy(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
+        return unknown_provider();
+    };
+    respond(hub.playlist_copy(user_id, provider, raw).await)
+}
+
+/// Saves (or refreshes) a copy. The service playlist is not changed.
+#[put("/{provider}/playlists/{id}/copy")]
+async fn save_playlist_copy(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
+        return unknown_provider();
+    };
+    respond(hub.save_playlist_copy(user_id, provider, raw).await)
+}
+
+#[delete("/{provider}/playlists/{id}/copy")]
+async fn remove_playlist_copy(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
+        return unknown_provider();
+    };
+    match hub.remove_playlist_copy(user_id, provider, raw).await {
+        Ok(()) => HttpResponse::NoContent().finish(),
+        Err(error) => hub_error_response(error),
+    }
+}
+
 #[put("/{provider}/library/{kind}/{id}")]
 async fn add_to_library(
     request: HttpRequest,
@@ -521,9 +627,153 @@ async fn stream_info(
     }
 }
 
+/// Server-wide credentials are an owner setting.
+fn require_admin(request: &HttpRequest) -> Result<i32, HttpResponse> {
+    let user_id = authenticated_user_id(request)?;
+    let is_admin = request
+        .extensions()
+        .get::<Claims>()
+        .is_some_and(|claims| claims.role == "admin");
+    if is_admin {
+        Ok(user_id)
+    } else {
+        Err(forbidden(
+            "Only the server owner can change the server's streaming credentials.",
+            "admin_required",
+        ))
+    }
+}
+
+#[derive(Serialize)]
+struct ServerCredentialsResponse {
+    providers: Vec<crate::providers::hub::ServerCredentialStatus>,
+}
+
+#[get("/server-credentials")]
+async fn list_server_credentials(
+    request: HttpRequest,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    if let Err(response) = require_admin(&request) {
+        return response;
+    }
+    HttpResponse::Ok().json(ServerCredentialsResponse {
+        providers: hub.server_credentials_status(),
+    })
+}
+
+#[derive(Deserialize)]
+struct ServerCredentialsRequest {
+    client_id: Option<String>,
+    client_secret: Option<String>,
+}
+
+#[put("/{provider}/server-credentials")]
+async fn save_server_credentials(
+    request: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<ServerCredentialsRequest>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let admin_id = match require_admin(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some(provider) = ProviderId::parse(&path) else {
+        return unknown_provider();
+    };
+    let body = body.into_inner();
+    respond(
+        hub.save_server_credentials(admin_id, provider, body.client_id, body.client_secret)
+            .await
+            .map(|providers| ServerCredentialsResponse { providers }),
+    )
+}
+
+#[delete("/{provider}/server-credentials")]
+async fn remove_server_credentials(
+    request: HttpRequest,
+    path: web::Path<String>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    if let Err(response) = require_admin(&request) {
+        return response;
+    }
+    let Some(provider) = ProviderId::parse(&path) else {
+        return unknown_provider();
+    };
+    respond(
+        hub.remove_server_credentials(provider)
+            .await
+            .map(|providers| ServerCredentialsResponse { providers }),
+    )
+}
+
+#[derive(Deserialize, Default)]
+struct CheckRequest {
+    track_id: Option<String>,
+}
+
+/// Signs in, syncs favorites and reads a real stream's delivered format.
+#[post("/{provider}/check")]
+async fn check_connection(
+    request: HttpRequest,
+    path: web::Path<String>,
+    body: Option<web::Json<CheckRequest>>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let (user_id, provider) = user_and_provider!(request, &path);
+    let track = match body.and_then(|body| body.into_inner().track_id) {
+        Some(id) => match crate::providers::parse_entity_id(&id) {
+            Some((owner, raw)) if owner == provider => Some(raw),
+            None if valid_raw_id(&id) => Some(id),
+            _ => return hub_error_response(HubError::Invalid("Unknown track id.")),
+        },
+        None => None,
+    };
+    respond(hub.check_connection(user_id, provider, track).await)
+}
+
+/// The format the listener's latest stream of this track actually
+/// delivered, read from its bytes by the media proxy.
+#[get("/{provider}/tracks/{id}/delivery")]
+async fn stream_delivery(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
+        return unknown_provider();
+    };
+    match hub.delivery(user_id, &entity_id(provider, &raw)) {
+        Some(delivery) => HttpResponse::Ok().json(delivery),
+        None => json_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "This track has not streamed yet.",
+            "delivery_unknown",
+        ),
+    }
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/providers")
+            .service(list_server_credentials)
+            .service(save_server_credentials)
+            .service(remove_server_credentials)
+            .service(check_connection)
+            .service(stream_delivery)
+            .service(playlist_copies)
+            .service(playlists)
+            .service(playlist_copy)
+            .service(save_playlist_copy)
+            .service(remove_playlist_copy)
+            .service(playlist)
             .service(list_providers)
             .service(search)
             .service(library)
@@ -542,40 +792,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(update_provider)
             .service(remove_provider),
     );
-}
-
-fn media_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(6))
-            .read_timeout(Duration::from_secs(30))
-            .user_agent(concat!("Parson/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default()
-    })
-}
-
-/// Parses a single `bytes=` range against a known length.
-fn byte_range(header: Option<&str>, length: u64) -> Option<(u64, u64)> {
-    let spec = header?.trim().strip_prefix("bytes=")?;
-    if spec.contains(',') || length == 0 {
-        return None;
-    }
-    let (start, end) = spec.split_once('-')?;
-    let (start, end) = if start.is_empty() {
-        let suffix = end.parse::<u64>().ok()?.min(length);
-        (length - suffix, length - 1)
-    } else {
-        let start = start.parse::<u64>().ok()?;
-        let end = if end.is_empty() {
-            length - 1
-        } else {
-            end.parse::<u64>().ok()?.min(length - 1)
-        };
-        (start, end)
-    };
-    (start <= end && start < length).then_some((start, end))
 }
 
 fn serve_bytes(request: &HttpRequest, body: Vec<u8>, content_type: &str) -> HttpResponse {
@@ -605,63 +821,8 @@ fn serve_bytes(request: &HttpRequest, body: Vec<u8>, content_type: &str) -> Http
     }
 }
 
-fn chunk_stream(
-    response: reqwest::Response,
-) -> impl futures::Stream<Item = Result<Bytes, actix_web::Error>> {
-    futures::stream::unfold(Some(response), |state| async move {
-        let mut response = state?;
-        match response.chunk().await {
-            Ok(Some(chunk)) => Some((Ok(chunk), Some(response))),
-            Ok(None) => None,
-            Err(error) => Some((
-                Err(actix_web::error::ErrorBadGateway(error.without_url())),
-                None,
-            )),
-        }
-    })
-}
-
-fn segmented_stream(
-    urls: Vec<String>,
-) -> impl futures::Stream<Item = Result<Bytes, actix_web::Error>> {
-    futures::stream::unfold(
-        (urls.into_iter(), None::<reqwest::Response>),
-        |(mut urls, mut current)| async move {
-            loop {
-                if let Some(mut response) = current.take() {
-                    match response.chunk().await {
-                        Ok(Some(chunk)) => return Some((Ok(chunk), (urls, Some(response)))),
-                        Ok(None) => {}
-                        Err(error) => {
-                            return Some((
-                                Err(actix_web::error::ErrorBadGateway(error.without_url())),
-                                (urls, None),
-                            ));
-                        }
-                    }
-                }
-                let url = urls.next()?;
-                match media_client().get(&url).send().await {
-                    Ok(response) if response.status().is_success() => current = Some(response),
-                    Ok(response) => {
-                        return Some((
-                            Err(actix_web::error::ErrorBadGateway(format!(
-                                "segment answered HTTP {}",
-                                response.status().as_u16()
-                            ))),
-                            (Vec::new().into_iter(), None),
-                        ));
-                    }
-                    Err(error) => {
-                        return Some((
-                            Err(actix_web::error::ErrorBadGateway(error.without_url())),
-                            (Vec::new().into_iter(), None),
-                        ));
-                    }
-                }
-            }
-        },
-    )
+fn proxy_error(error: MediaError) -> actix_web::Error {
+    actix_web::error::ErrorBadGateway(error.to_string())
 }
 
 fn format_headers(
@@ -690,6 +851,7 @@ pub async fn stream_provider_track(
     let Some(hub) = request.app_data::<web::Data<StreamingHub>>() else {
         return hub_error_response(HubError::Provider(ProviderError::NotConnected));
     };
+    let track_id = entity_id(provider, &raw_id);
     let stream = match hub
         .resolve_stream(user_id, provider, raw_id, bitrate > 0)
         .await
@@ -697,9 +859,19 @@ pub async fn stream_provider_track(
         Ok(stream) => stream,
         Err(error) => return hub_error_response(error),
     };
+    let range = request
+        .headers()
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let probe_this = media::starts_at_beginning(range.as_deref());
     match &stream.source {
         StreamSource::SandboxTone { seed, seconds } => {
             let body = sandbox::preview_wav(*seed, *seconds, stream.requested);
+            if probe_this {
+                let probed = probe::probe(&body[..body.len().min(probe::PROBE_BYTES)]);
+                hub.record_delivery(user_id, track_id, &stream, probed);
+            }
             let mut response = serve_bytes(request, body, "audio/wav");
             for (name, value) in [
                 ("x-parson-stream-format", stream.format.label.clone()),
@@ -717,35 +889,42 @@ pub async fn stream_provider_track(
             response
         }
         StreamSource::Progressive { url, mime } => {
-            let mut upstream = media_client().get(url);
-            if let Some(range) = request.headers().get(header::RANGE) {
-                upstream = upstream.header(header::RANGE.as_str(), range.as_bytes());
-            }
-            let response = match upstream.send().await {
+            let response = match hub.media().open(url.clone(), range).await {
                 Ok(response) => response,
+                Err(MediaError::Status(status)) => {
+                    return hub_error_response(HubError::Provider(ProviderError::Upstream(status)));
+                }
                 Err(error) => {
-                    tracing::warn!(error = %error.without_url(), "streaming media request failed");
+                    tracing::warn!(%error, "streaming media request failed");
                     return hub_error_response(HubError::Provider(ProviderError::Upstream(502)));
                 }
             };
-            let status = response.status().as_u16();
-            if !(200..300).contains(&status) {
-                return hub_error_response(HubError::Provider(ProviderError::Upstream(status)));
-            }
             let mut builder = format_headers(
-                HttpResponse::build(StatusCode::from_u16(status).unwrap_or(StatusCode::OK)),
+                HttpResponse::build(
+                    StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK),
+                ),
                 &stream,
             );
             builder.insert_header((header::CONTENT_TYPE, mime.clone()));
             builder.insert_header((header::ACCEPT_RANGES, "bytes"));
-            for name in [header::CONTENT_LENGTH, header::CONTENT_RANGE] {
-                if let Some(value) = response.headers().get(name.as_str())
-                    && let Ok(value) = header::HeaderValue::from_bytes(value.as_bytes())
-                {
-                    builder.insert_header((name, value));
-                }
+            if let Some(length) = response.content_length {
+                builder.insert_header((header::CONTENT_LENGTH, length.to_string()));
             }
-            builder.streaming(chunk_stream(response))
+            if let Some(range) = response.content_range {
+                builder.insert_header((header::CONTENT_RANGE, range));
+            }
+            let body = if probe_this {
+                recorded(
+                    hub.clone(),
+                    user_id,
+                    track_id,
+                    stream.clone(),
+                    response.body,
+                )
+            } else {
+                response.body
+            };
+            builder.streaming(body.map(|chunk| chunk.map_err(proxy_error)))
         }
         StreamSource::Segmented {
             mime,
@@ -759,9 +938,40 @@ pub async fn stream_provider_track(
                 .collect::<Vec<_>>();
             let mut builder = format_headers(HttpResponse::Ok(), &stream);
             builder.insert_header((header::CONTENT_TYPE, mime.clone()));
-            builder.streaming(segmented_stream(urls))
+            let body = recorded(
+                hub.clone(),
+                user_id,
+                track_id,
+                stream.clone(),
+                media::segmented(hub.media(), urls),
+            );
+            builder.streaming(body.map(|chunk| chunk.map_err(proxy_error)))
         }
     }
+}
+
+/// Reads the delivered format from the bytes as they pass through.
+fn recorded(
+    hub: web::Data<StreamingHub>,
+    user_id: i32,
+    track_id: String,
+    stream: ResolvedStream,
+    body: media::MediaBody,
+) -> media::MediaBody {
+    media::tap(body, move |probed| {
+        let delivery = hub.record_delivery(user_id, track_id, &stream, probed);
+        if !delivery.matches_announced {
+            tracing::info!(
+                track = delivery.track_id,
+                announced = delivery.announced.label,
+                delivered = delivery
+                    .delivered
+                    .as_ref()
+                    .map(|format| format.label.as_str()),
+                "stream delivered a different format than announced"
+            );
+        }
+    })
 }
 
 #[cfg(test)]
@@ -782,6 +992,7 @@ mod tests {
     use crate::api::auth::Claims;
     use crate::persistence::connection::DbPool;
     use crate::providers::hub::StreamingHub;
+    use crate::providers::media::FixtureMedia;
     use crate::providers::transport::{FixtureReply, FixtureRoute, FixtureTransport, Method};
     use crate::providers::vault::TokenVault;
     use crate::providers::{ProviderId, parse_entity_id};
@@ -822,13 +1033,17 @@ mod tests {
     }
 
     fn claims(user: i32) -> Claims {
+        claims_as(user, "user")
+    }
+
+    fn claims_as(user: i32, role: &str) -> Claims {
         Claims {
             sub: user.to_string(),
             exp: usize::MAX,
             username: format!("user{user}"),
             bitrate: 0,
             token_type: "access".into(),
-            role: "user".into(),
+            role: role.into(),
             token_version: 0,
             session_id: None,
         }
@@ -849,6 +1064,23 @@ mod tests {
                     .app_data(web::Data::new($hub))
                     .wrap_fn(move |request, service| {
                         request.extensions_mut().insert(claims($user));
+                        service.call(request)
+                    })
+                    .configure(configure)
+                    .route("/media/songs/{song}/stream", web::get().to(stream_route)),
+            )
+            .await
+        };
+    }
+
+    /// An app over a shared hub, for one user and role.
+    macro_rules! app_as {
+        ($data:expr, $user:expr, $role:expr) => {
+            test::init_service(
+                App::new()
+                    .app_data($data.clone())
+                    .wrap_fn(move |request, service| {
+                        request.extensions_mut().insert(claims_as($user, $role));
                         service.call(request)
                     })
                     .configure(configure)
@@ -1288,6 +1520,689 @@ mod tests {
             albums[0]["cover_url"]
                 .as_str()
                 .is_some_and(|url| url.starts_with("data:image/svg+xml"))
+        );
+    }
+
+    const QOBUZ_HIRES_URL: &str =
+        "https://streaming-qobuz-std.akamaized.test/file?uid=recorded&fmt=27";
+    const HIRES_192_FLAC: &[u8] = include_bytes!("../providers/fixtures/media/hires-192.flac");
+    const HIRES_96_DASH: &[u8] = include_bytes!("../providers/fixtures/media/hires-96-dash.mp4");
+
+    /// Splits a fragmented MP4 into its init segment and its media
+    /// fragments, as a DASH packager serves them.
+    fn split_init_segment(file: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut at = 0;
+        while at + 8 <= file.len() {
+            let size = u32::from_be_bytes(file[at..at + 4].try_into().expect("size")) as usize;
+            let kind = &file[at + 4..at + 8];
+            at += size;
+            if kind == b"moov" {
+                break;
+            }
+        }
+        (file[..at].to_vec(), file[at..].to_vec())
+    }
+
+    fn tidal_dash_media() -> Arc<FixtureMedia> {
+        let (init, fragments) = split_init_segment(HIRES_96_DASH);
+        let base = "https://sp-recorded.audio.tidal.test/hr/300101";
+        let mut media = FixtureMedia::new()
+            .with(&format!("{base}/0.mp4?token=a&sig=b"), init)
+            .with(&format!("{base}/1.mp4?token=a&sig=b"), fragments);
+        for number in 2..=4 {
+            media = media.with(&format!("{base}/{number}.mp4?token=a&sig=b"), Vec::new());
+        }
+        Arc::new(media)
+    }
+
+    #[actix_web::test]
+    async fn server_credentials_let_subscribers_skip_the_credentials_step() {
+        let pool = pool();
+        let data = web::Data::new(hub(pool.clone(), false).0);
+        let admin = app_as!(data, 1, "admin");
+        let listener = app_as!(data, 2, "user");
+
+        let (status, _) = call!(
+            &listener,
+            test::TestRequest::get().uri("/providers/server-credentials"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = call!(
+            &listener,
+            test::TestRequest::put()
+                .uri("/providers/qobuz/server-credentials")
+                .set_json(json!({"client_id": "100000001", "client_secret": "x"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "only the owner sets them");
+
+        let (status, body) = call!(
+            &admin,
+            test::TestRequest::put()
+                .uri("/providers/qobuz/server-credentials")
+                .set_json(json!({"client_id": "100000001", "client_secret": "server-app-secret"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.to_string().contains("server-app-secret"));
+        let qobuz = &body["providers"][1];
+        assert_eq!(qobuz["provider"], "qobuz");
+        assert_eq!(qobuz["configured"], true);
+        assert_eq!(qobuz["source"], "settings");
+        assert_eq!(qobuz["client_id_hint"], "•••• 0001");
+        assert_eq!(qobuz["has_secret"], true);
+        let (status, _) = call!(
+            &admin,
+            test::TestRequest::put()
+                .uri("/providers/tidal/server-credentials")
+                .set_json(json!({"client_id": "server-tidal-client"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A listener with no credentials of their own goes straight to the
+        // service sign-in.
+        let (_, body) = call!(&listener, test::TestRequest::get().uri("/providers")).await;
+        assert_eq!(body["providers"][1]["server_credentials_available"], true);
+        assert_eq!(body["providers"][1]["credentials"]["configured"], false);
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::post()
+                .uri("/providers/qobuz/sign-in")
+                .set_json(json!({"username": "listener@example.test", "password": "pw"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "signed_in");
+        assert_eq!(body["credentials"]["uses_server_credentials"], true);
+        assert_eq!(body["credentials"]["client_id_hint"], Value::Null);
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::post().uri("/providers/tidal/sign-in"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            body["user_code"]
+                .as_str()
+                .is_some_and(|code| !code.is_empty())
+        );
+
+        // Sealed at rest, and loaded again after a restart.
+        let blobs: Vec<Vec<u8>> = {
+            use diesel::RunQueryDsl;
+            #[derive(diesel::QueryableByName)]
+            struct Blob {
+                #[diesel(sql_type = diesel::sql_types::Binary)]
+                sealed_credentials: Vec<u8>,
+            }
+            let mut connection = pool.get().expect("connection");
+            diesel::sql_query("SELECT sealed_credentials FROM provider_server_credential")
+                .load::<Blob>(&mut connection)
+                .expect("rows")
+                .into_iter()
+                .map(|row| row.sealed_credentials)
+                .collect()
+        };
+        assert_eq!(blobs.len(), 2);
+        for blob in &blobs {
+            for secret in [&b"server-app-secret"[..], b"server-tidal-client"] {
+                assert!(!blob.windows(secret.len()).any(|window| window == secret));
+            }
+        }
+        let restarted = hub(pool.clone(), false).0;
+        restarted.load_server_credentials().expect("load");
+        assert!(
+            restarted
+                .server_credentials_status()
+                .iter()
+                .all(|status| status.configured)
+        );
+
+        // Removing them leaves listeners who relied on them disconnected,
+        // not silently on someone else's credentials.
+        let (status, body) = call!(
+            &admin,
+            test::TestRequest::delete().uri("/providers/qobuz/server-credentials"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["providers"][1]["configured"], false);
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::get().uri("/providers/qobuz/search?q=kites"),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK, "{body}");
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::post()
+                .uri("/providers/qobuz/sign-in")
+                .set_json(json!({"username": "listener@example.test", "password": "pw"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    }
+
+    #[actix_web::test]
+    async fn environment_credentials_cannot_be_overridden_from_settings() {
+        let pool = pool();
+        let environment = HashMap::from([(
+            ProviderId::Tidal,
+            crate::providers::ClientCredentials {
+                client_id: "deployment-client".into(),
+                client_secret: None,
+            },
+        )]);
+        let hub = StreamingHub::new(
+            pool,
+            TokenVault::new([5; 32]),
+            Arc::new(crate::providers::sandbox::transport()),
+            false,
+            environment,
+        );
+        let data = web::Data::new(hub);
+        let admin = app_as!(data, 1, "admin");
+        let (_, body) = call!(
+            &admin,
+            test::TestRequest::get().uri("/providers/server-credentials"),
+        )
+        .await;
+        assert_eq!(body["providers"][0]["source"], "environment");
+        for request in [
+            test::TestRequest::put()
+                .uri("/providers/tidal/server-credentials")
+                .set_json(json!({"client_id": "other"})),
+            test::TestRequest::delete().uri("/providers/tidal/server-credentials"),
+        ] {
+            let (status, _) = call!(&admin, request).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[actix_web::test]
+    async fn qobuz_hi_res_streams_report_the_format_read_from_the_bytes() {
+        let pool = pool();
+        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, HIRES_192_FLAC.to_vec()));
+        let hub = signed_in_app_state(&pool).await.with_media(media.clone());
+        let app = app!(hub, 1);
+
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/tracks/7700001/delivery"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "nothing streamed yet");
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-parson-stream-format")
+                .and_then(|value| value.to_str().ok()),
+            Some("24/192 FLAC")
+        );
+        let body = test::read_body(response).await;
+        assert_eq!(&body[..], HIRES_192_FLAC, "bytes pass through unchanged");
+        assert_eq!(media.requests(), vec![(QOBUZ_HIRES_URL.to_string(), None)]);
+
+        let (status, delivery) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/tracks/7700001/delivery"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(delivery["requested"], "hi_res_max");
+        assert_eq!(delivery["announced"]["label"], "24/192 FLAC");
+        assert_eq!(delivery["delivered"]["label"], "24/192 FLAC");
+        assert_eq!(delivery["delivered"]["bit_depth"], 24);
+        assert_eq!(delivery["delivered"]["sample_rate"], 192_000);
+        assert_eq!(delivery["delivered"]["channels"], 2);
+        assert_eq!(delivery["container"], "flac");
+        assert_eq!(delivery["frame_verified"], true);
+        assert_eq!(delivery["matches_announced"], true);
+
+        // Seeking forwards the range and keeps the delivered format.
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream")
+                .insert_header(("range", "bytes=1000-1999"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-range")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("bytes 1000-1999/{}", HIRES_192_FLAC.len()).as_str())
+        );
+        assert_eq!(
+            &test::read_body(response).await[..],
+            &HIRES_192_FLAC[1000..2000]
+        );
+        let (_, delivery) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/tracks/7700001/delivery"),
+        )
+        .await;
+        assert_eq!(delivery["delivered"]["label"], "24/192 FLAC");
+    }
+
+    #[actix_web::test]
+    async fn tidal_max_dash_streams_are_read_through_the_proxy() {
+        let pool = pool();
+        let hub = signed_in_app_state(&pool)
+            .await
+            .with_media(tidal_dash_media());
+        let app = app!(hub, 1);
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = test::read_body(response).await;
+        assert_eq!(&body[..], HIRES_96_DASH, "segments play back to back");
+        let (_, delivery) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/tracks/300101/delivery"),
+        )
+        .await;
+        assert_eq!(delivery["requested"], "hi_res_max");
+        assert_eq!(delivery["container"], "mp4");
+        assert_eq!(delivery["delivered"]["codec"], "flac");
+        assert_eq!(delivery["delivered"]["label"], "24/96 FLAC");
+        assert_eq!(delivery["frame_verified"], true);
+        assert_eq!(delivery["matches_announced"], true);
+    }
+
+    #[actix_web::test]
+    async fn mismatched_streams_show_what_actually_arrived() {
+        use crate::providers::probe::tests::{flac_file, frame_header};
+        let pool = pool();
+        let cd = flac_file(44_100, 2, 16, &frame_header(9, 1, 4));
+        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, cd));
+        let hub = signed_in_app_state(&pool).await.with_media(media);
+        let app = app!(hub, 1);
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream")
+                .to_request(),
+        )
+        .await;
+        test::read_body(response).await;
+        let (_, delivery) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/tracks/7700001/delivery"),
+        )
+        .await;
+        assert_eq!(delivery["announced"]["label"], "24/192 FLAC");
+        assert_eq!(delivery["delivered"]["label"], "16/44.1 FLAC");
+        assert_eq!(delivery["matches_announced"], false);
+    }
+
+    #[actix_web::test]
+    async fn connection_check_signs_in_syncs_favorites_and_reads_a_stream() {
+        let pool = pool();
+        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, HIRES_192_FLAC.to_vec()));
+        let hub = signed_in_app_state(&pool).await.with_media(media.clone());
+        let data = web::Data::new(hub);
+        let app = app_as!(data, 1, "user");
+        let (status, check) = call!(
+            &app,
+            test::TestRequest::post().uri("/providers/qobuz/check"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{check}");
+        assert_eq!(check["ok"], true, "{check}");
+        let steps = check["steps"].as_array().expect("steps");
+        assert_eq!(
+            steps
+                .iter()
+                .map(|step| step["id"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!("session"), json!("favorites"), json!("stream")]
+        );
+        assert!(steps.iter().all(|step| step["ok"] == true));
+        assert!(
+            steps[0]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("Recorded Listener"))
+        );
+        assert_eq!(check["delivery"]["delivered"]["label"], "24/192 FLAC");
+        assert!(
+            steps[2]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("first audio frame verified"))
+        );
+        // The check reads only the start of the stream.
+        assert_eq!(
+            media.requests(),
+            vec![(
+                QOBUZ_HIRES_URL.to_string(),
+                Some(format!(
+                    "bytes=0-{}",
+                    crate::providers::probe::PROBE_BYTES - 1
+                ))
+            )]
+        );
+
+        let (status, check) = call!(
+            &app,
+            test::TestRequest::post()
+                .uri("/providers/qobuz/check")
+                .set_json(json!({"track_id": "tidal:300101"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{check}");
+
+        let other = app_as!(data, 2, "user");
+        let (status, check) = call!(
+            &other,
+            test::TestRequest::post().uri("/providers/qobuz/check"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(check["ok"], false);
+        assert_eq!(check["steps"].as_array().map(Vec::len), Some(1));
+        assert_eq!(check["steps"][0]["ok"], false);
+    }
+
+    #[actix_web::test]
+    async fn sandbox_checks_say_the_preview_is_not_a_real_stream() {
+        let pool = pool();
+        let (hub, _) = hub(pool, true);
+        hub.save_credentials(
+            1,
+            ProviderId::Qobuz,
+            Some("sandbox".into()),
+            Some("sandbox".into()),
+            false,
+        )
+        .await
+        .expect("credentials");
+        hub.qobuz_sign_in(1, "sandbox", "sandbox")
+            .await
+            .expect("sign in");
+        let check = hub
+            .check_connection(1, ProviderId::Qobuz, None)
+            .await
+            .expect("check");
+        let delivery = check.delivery.expect("delivery");
+        assert!(delivery.sandbox);
+        assert!(!delivery.matches_announced);
+        assert_eq!(
+            delivery.delivered.map(|format| format.label),
+            Some("16/44.1 PCM".to_string())
+        );
+        assert!(check.steps[2].detail.contains("Sandbox preview tone"));
+    }
+
+    #[actix_web::test]
+    async fn service_playlists_are_read_only_with_saved_copies() {
+        let pool = pool();
+        let (hub, transport) = hub(pool.clone(), false);
+        let hub = {
+            let hub = hub;
+            hub.save_credentials(1, ProviderId::Tidal, Some("client".into()), None, false)
+                .await
+                .expect("tidal credentials");
+            hub.start_tidal_sign_in(1).await.expect("start");
+            hub.poll_tidal_sign_in(1).await.expect("pending");
+            hub.poll_tidal_sign_in(1).await.expect("approved");
+            hub.save_credentials(
+                1,
+                ProviderId::Qobuz,
+                Some("100000001".into()),
+                Some("app-secret".into()),
+                false,
+            )
+            .await
+            .expect("qobuz credentials");
+            hub.qobuz_sign_in(1, "listener@example.test", "pw")
+                .await
+                .expect("qobuz sign-in");
+            hub
+        };
+        let app = app!(hub, 1);
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/playlists"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let lists = body["playlists"].as_array().expect("playlists");
+        assert_eq!(lists.len(), 2);
+        assert_eq!(lists[0]["title"], "Late Night Hi-Res");
+        assert_eq!(lists[0]["own"], true);
+        assert_eq!(lists[0]["track_count"], 4);
+        assert_eq!(lists[1]["owner"], "TIDAL");
+        assert_eq!(lists[1]["own"], false);
+        assert_eq!(lists[0]["saved_copy_at"], Value::Null);
+        let id = lists[0]["id"].as_str().expect("id").to_string();
+        let raw = id.strip_prefix("tidal:").expect("tidal id").to_string();
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri(&format!("/providers/tidal/playlists/{raw}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let tracks = body["tracks"].as_array().expect("tracks");
+        assert_eq!(tracks.len(), 4);
+        assert_eq!(tracks[0]["id"], "tidal:300101");
+        assert_eq!(tracks[0]["title"], "Harbor Lights");
+
+        let (status, copy) = call!(
+            &app,
+            test::TestRequest::put().uri(&format!("/providers/tidal/playlists/{raw}/copy")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{copy}");
+        assert_eq!(copy["title"], "Late Night Hi-Res");
+        assert_eq!(copy["track_count"], 4);
+        assert!(
+            transport.requests().iter().all(
+                |request| request.method == Method::Get || !request.url.contains("/playlists/")
+            ),
+            "Parson never writes to service playlists"
+        );
+
+        let (_, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/playlist-copies"),
+        )
+        .await;
+        assert_eq!(body["copies"].as_array().map(Vec::len), Some(1));
+        assert!(
+            body["copies"][0].get("playlist").is_none(),
+            "lists stay light"
+        );
+        let (_, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/playlists"),
+        )
+        .await;
+        assert!(body["playlists"][0]["saved_copy_at"].as_i64().is_some());
+
+        // The copy keeps its tracks when the service playlist disappears.
+        transport.prepend(FixtureRoute {
+            method: Method::Get,
+            url: format!("https://api.tidal.com/v1/playlists/{raw}"),
+            query: Vec::new(),
+            form: Vec::new(),
+            replies: [FixtureReply {
+                status: 404,
+                body: json!({"status": 404}),
+            }]
+            .into(),
+        });
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get().uri(&format!("/providers/tidal/playlists/{raw}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, copy) = call!(
+            &app,
+            test::TestRequest::get().uri(&format!("/providers/tidal/playlists/{raw}/copy")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(copy["playlist"]["tracks"].as_array().map(Vec::len), Some(4));
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/playlists"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["playlists"][0]["title"], "Hi-Res Mornings");
+        assert_eq!(body["playlists"][0]["own"], true);
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/playlists/9100001"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["tracks"].as_array().map(Vec::len), Some(4));
+        assert_eq!(body["tracks"][0]["format"]["label"], "24/192 FLAC");
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::delete()
+                .uri(&format!("/providers/tidal/playlists/{raw}/copy"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get().uri(&format!("/providers/tidal/playlists/{raw}/copy")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    fn live(name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    /// End-to-end check against real accounts. No accounts exist in CI, so
+    /// it is ignored by default. Run it with your own subscription:
+    ///
+    /// ```sh
+    /// PARSON_LIVE_QOBUZ_APP_ID=… PARSON_LIVE_QOBUZ_APP_SECRET=… \
+    /// PARSON_LIVE_QOBUZ_EMAIL=… PARSON_LIVE_QOBUZ_PASSWORD=… \
+    /// PARSON_LIVE_TIDAL_CLIENT_ID=… \
+    ///   cargo test -p parson-music live_accounts -- --ignored --nocapture
+    /// ```
+    ///
+    /// Each service signs in (TIDAL prints a link to approve within five
+    /// minutes), syncs favorites, resolves a favorite at the highest quality
+    /// and reads the delivered format from the real stream's bytes.
+    #[actix_web::test]
+    #[ignore = "needs real TIDAL or Qobuz accounts; see the doc comment"]
+    async fn live_accounts_sign_in_sync_favorites_and_stream_hi_res() {
+        let pool = pool();
+        let transport =
+            Arc::new(crate::providers::transport::ReqwestTransport::new().expect("http client"));
+        let hub = StreamingHub::new(
+            pool,
+            TokenVault::new([5; 32]),
+            transport,
+            false,
+            HashMap::new(),
+        )
+        .with_media(Arc::new(
+            crate::providers::media::ReqwestMedia::new().expect("media client"),
+        ));
+        let mut ran = false;
+        if let (Some(app), Some(secret), Some(email), Some(password)) = (
+            live("PARSON_LIVE_QOBUZ_APP_ID"),
+            live("PARSON_LIVE_QOBUZ_APP_SECRET"),
+            live("PARSON_LIVE_QOBUZ_EMAIL"),
+            live("PARSON_LIVE_QOBUZ_PASSWORD"),
+        ) {
+            ran = true;
+            hub.save_credentials(1, ProviderId::Qobuz, Some(app), Some(secret), false)
+                .await
+                .expect("qobuz credentials");
+            hub.qobuz_sign_in(1, &email, &password)
+                .await
+                .expect("qobuz sign-in");
+            let check = hub
+                .check_connection(1, ProviderId::Qobuz, live("PARSON_LIVE_QOBUZ_TRACK"))
+                .await
+                .expect("qobuz check");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&check).unwrap_or_default()
+            );
+            assert!(check.ok, "Qobuz check failed: {:?}", check.steps);
+            let delivered = check.delivery.and_then(|delivery| delivery.delivered);
+            assert!(delivered.is_some_and(|format| format.lossless));
+        }
+        if let Some(client) = live("PARSON_LIVE_TIDAL_CLIENT_ID") {
+            ran = true;
+            hub.save_credentials(
+                1,
+                ProviderId::Tidal,
+                Some(client),
+                live("PARSON_LIVE_TIDAL_CLIENT_SECRET"),
+                false,
+            )
+            .await
+            .expect("tidal credentials");
+            let pending = hub.start_tidal_sign_in(1).await.expect("device code");
+            println!(
+                "Approve Parson on TIDAL: {} (code {})",
+                pending
+                    .verification_uri_complete
+                    .as_deref()
+                    .unwrap_or(&pending.verification_uri),
+                pending.user_code
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            loop {
+                let outcome = hub.poll_tidal_sign_in(1).await.expect("poll");
+                if outcome.status == "signed_in" {
+                    break;
+                }
+                assert_eq!(outcome.status, "pending", "TIDAL sign-in ended");
+                assert!(std::time::Instant::now() < deadline, "not approved in time");
+                tokio::time::sleep(std::time::Duration::from_secs(outcome.interval)).await;
+            }
+            let check = hub
+                .check_connection(1, ProviderId::Tidal, live("PARSON_LIVE_TIDAL_TRACK"))
+                .await
+                .expect("tidal check");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&check).unwrap_or_default()
+            );
+            assert!(check.ok, "TIDAL check failed: {:?}", check.steps);
+        }
+        assert!(
+            ran,
+            "set PARSON_LIVE_QOBUZ_* or PARSON_LIVE_TIDAL_CLIENT_ID"
         );
     }
 

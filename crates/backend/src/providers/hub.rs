@@ -2,12 +2,14 @@
 //! library add/remove/sync and stream resolution for every provider.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use diesel::sqlite::SqliteConnection;
 use serde::Serialize;
 
 use super::artwork::ArtworkMode;
+use super::media::{self, MediaTransport, ReqwestMedia};
+use super::probe::{PROBE_BYTES, ProbedFormat};
 use super::qobuz::QobuzClient;
 use super::store::{
     self, AccountRow, AccountStatus, ItemOrigin, LibraryCounts, LibraryItemRow, LibraryQuery,
@@ -18,9 +20,9 @@ use super::transport::{ReqwestTransport, Transport};
 use super::vault::{SealPurpose, TokenVault};
 use super::{
     AudioFormat, BrowsePage, BrowseSection, ClientCredentials, ItemKind, ProviderAlbum,
-    ProviderArtist, ProviderContext, ProviderError, ProviderId, ProviderSession, ProviderTrack,
-    QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource, StreamingProvider,
-    sandbox, unix_now,
+    ProviderArtist, ProviderContext, ProviderError, ProviderId, ProviderPlaylist, ProviderSession,
+    ProviderTrack, QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource,
+    StreamingProvider, sandbox, unix_now,
 };
 use crate::persistence::connection::DbPool;
 
@@ -31,12 +33,18 @@ const REFRESH_MARGIN_SECONDS: i64 = 120;
 const MAX_SYNC_ITEMS: u32 = 2_000;
 const SYNC_PAGE: u32 = 100;
 const MAX_CREDENTIAL_CHARACTERS: usize = 256;
+/// Server-wide credentials are sealed under this user id, which no account
+/// can have (SQLite ids start at 1).
+const SERVER_SCOPE_USER: i32 = 0;
+const MAX_DELIVERIES: usize = 512;
 
 #[derive(Debug)]
 pub enum HubError {
     Provider(ProviderError),
     Database(String),
     Invalid(&'static str),
+    /// Neither the listener nor the server has credentials for this service.
+    CredentialsRequired(ProviderId),
 }
 
 impl From<ProviderError> for HubError {
@@ -51,6 +59,9 @@ impl std::fmt::Display for HubError {
             Self::Provider(error) => error.fmt(formatter),
             Self::Database(error) => write!(formatter, "database error: {error}"),
             Self::Invalid(message) => formatter.write_str(message),
+            Self::CredentialsRequired(provider) => {
+                write!(formatter, "no {} credentials", provider.display_name())
+            }
         }
     }
 }
@@ -150,13 +161,138 @@ pub struct LibraryRequest {
     pub limit: i64,
 }
 
+/// Where a server-wide credential came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialSource {
+    /// `PARSON_TIDAL_CLIENT_ID` and friends; read-only in Settings.
+    Environment,
+    /// Saved by an admin in Settings > Services.
+    Settings,
+}
+
+#[derive(Clone, Debug)]
+struct ServerCredential {
+    credentials: ClientCredentials,
+    source: CredentialSource,
+    updated_at: Option<i64>,
+}
+
+/// What admins see about the server-wide credentials. Never the values.
+#[derive(Clone, Debug, Serialize)]
+pub struct ServerCredentialStatus {
+    pub provider: ProviderId,
+    pub name: &'static str,
+    pub configured: bool,
+    pub source: Option<CredentialSource>,
+    pub client_id_hint: Option<String>,
+    pub has_secret: bool,
+    pub updated_at: Option<i64>,
+}
+
+/// The format a listener's stream actually delivered, read from its bytes
+/// by the media proxy, beside what the service announced.
+#[derive(Clone, Debug, Serialize)]
+pub struct DeliveredStream {
+    pub track_id: String,
+    pub requested: StreamQuality,
+    /// What the service said it would send.
+    pub announced: AudioFormat,
+    /// What arrived, read from the stream headers. `None` when the bytes
+    /// could not be read as a known format.
+    pub delivered: Option<AudioFormat>,
+    pub container: Option<&'static str>,
+    /// Whether the first audio frame was parsed and agrees with the header.
+    pub frame_verified: bool,
+    /// Whether the delivered format agrees with the announced one.
+    pub matches_announced: bool,
+    pub sandbox: bool,
+    pub at: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CheckStep {
+    /// `session`, `favorites` or `stream`.
+    pub id: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// The result of "Check connection": sign-in, favorites sync and a real
+/// stream read through the media proxy.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConnectionCheck {
+    pub provider: ProviderId,
+    pub ok: bool,
+    pub sandbox: bool,
+    pub account_name: Option<String>,
+    pub plan: Option<String>,
+    pub steps: Vec<CheckStep>,
+    pub sync: Option<SyncReport>,
+    pub track: Option<ProviderTrack>,
+    pub delivery: Option<DeliveredStream>,
+    pub checked_at: i64,
+}
+
+/// A service playlist, with when the listener last saved a copy of it.
+#[derive(Clone, Debug, Serialize)]
+pub struct PlaylistView {
+    #[serde(flatten)]
+    pub playlist: ProviderPlaylist,
+    pub saved_copy_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PlaylistViews {
+    pub playlists: Vec<PlaylistView>,
+    pub total: Option<u32>,
+}
+
+/// A read-only copy of a service playlist kept in Parson.
+#[derive(Clone, Debug, Serialize)]
+pub struct PlaylistCopy {
+    pub id: String,
+    pub provider: ProviderId,
+    pub title: String,
+    pub owner: Option<String>,
+    pub cover_url: Option<String>,
+    pub track_count: i32,
+    pub duration: f64,
+    pub saved_at: i64,
+    /// The saved tracks; only on a single copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<ProviderPlaylist>,
+}
+
+impl PlaylistCopy {
+    fn from_row(row: store::PlaylistCopyRow, with_tracks: bool) -> Option<Self> {
+        let provider = ProviderId::parse(&row.provider)?;
+        let playlist = with_tracks
+            .then(|| serde_json::from_str::<ProviderPlaylist>(&row.payload).ok())
+            .flatten();
+        Some(Self {
+            id: super::entity_id(provider, &row.provider_playlist_id),
+            provider,
+            title: row.title,
+            owner: row.owner,
+            cover_url: row.cover_url,
+            track_count: row.track_count,
+            duration: row.duration,
+            saved_at: row.saved_at,
+            playlist,
+        })
+    }
+}
+
 pub struct StreamingHub {
     pool: DbPool,
     vault: TokenVault,
     tidal: TidalClient,
     qobuz: QobuzClient,
     sandbox: bool,
-    server_credentials: HashMap<ProviderId, ClientCredentials>,
+    server_credentials: RwLock<HashMap<ProviderId, ServerCredential>>,
+    media: Arc<dyn MediaTransport>,
+    deliveries: Mutex<HashMap<(i32, String), DeliveredStream>>,
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -207,6 +343,37 @@ fn hint(value: &str) -> String {
     format!("•••• {tail}")
 }
 
+fn validated_credentials(
+    provider: ProviderId,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> HubResult<ClientCredentials> {
+    let client_id = client_id
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    let client_secret = client_secret
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if !valid_credential(&client_id) || client_id == SERVER_CREDENTIALS_MARKER {
+        return Err(HubError::Invalid("Enter a valid client or app ID."));
+    }
+    if client_secret
+        .as_deref()
+        .is_some_and(|secret| !valid_credential(secret))
+    {
+        return Err(HubError::Invalid("Enter a valid client or app secret."));
+    }
+    if provider == ProviderId::Qobuz && client_secret.is_none() {
+        return Err(HubError::Invalid(
+            "Qobuz needs both an app ID and an app secret to stream.",
+        ));
+    }
+    Ok(ClientCredentials {
+        client_id,
+        client_secret,
+    })
+}
+
 impl StreamingHub {
     pub fn from_env(pool: DbPool) -> Result<Self, String> {
         let key = crate::settings::streaming_token_key()
@@ -218,13 +385,18 @@ impl StreamingHub {
         } else {
             Arc::new(ReqwestTransport::new().map_err(|error| error.to_string())?)
         };
-        Ok(Self::new(
+        let media: Arc<dyn MediaTransport> =
+            Arc::new(ReqwestMedia::new().map_err(|error| error.to_string())?);
+        let hub = Self::new(
             pool,
             TokenVault::new(key),
             transport,
             sandbox,
             server_credentials_from_env(),
-        ))
+        )
+        .with_media(media);
+        hub.load_server_credentials()?;
+        Ok(hub)
     }
 
     pub fn new(
@@ -239,14 +411,200 @@ impl StreamingHub {
         } else {
             ArtworkMode::Live
         };
+        let server_credentials = server_credentials
+            .into_iter()
+            .map(|(provider, credentials)| {
+                (
+                    provider,
+                    ServerCredential {
+                        credentials,
+                        source: CredentialSource::Environment,
+                        updated_at: None,
+                    },
+                )
+            })
+            .collect();
         Self {
             pool,
             vault,
             tidal: TidalClient::new(transport.clone(), artwork),
             qobuz: QobuzClient::new(transport, artwork),
             sandbox,
-            server_credentials,
+            server_credentials: RwLock::new(server_credentials),
+            media: Arc::new(media::FixtureMedia::new()),
+            deliveries: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Replaces how stream bytes are fetched (live HTTP in the server,
+    /// recorded media files in tests).
+    pub fn with_media(mut self, media: Arc<dyn MediaTransport>) -> Self {
+        self.media = media;
+        self
+    }
+
+    pub fn media(&self) -> Arc<dyn MediaTransport> {
+        self.media.clone()
+    }
+
+    /// Loads credentials an admin saved in Settings. Environment variables
+    /// win, so a deployment's configuration cannot be overridden from the UI.
+    pub fn load_server_credentials(&self) -> Result<(), String> {
+        let rows = {
+            let mut connection = self.pool.get().map_err(|error| error.to_string())?;
+            store::server_credentials(&mut connection).map_err(|error| error.to_string())?
+        };
+        let mut map = self
+            .server_credentials
+            .write()
+            .map_err(|_| "server credentials lock poisoned".to_string())?;
+        for row in rows {
+            let Some(provider) = ProviderId::parse(&row.provider) else {
+                continue;
+            };
+            if map.contains_key(&provider) {
+                continue;
+            }
+            match self.vault.open::<ClientCredentials>(
+                SERVER_SCOPE_USER,
+                provider,
+                SealPurpose::ServerCredentials,
+                &row.sealed_credentials,
+            ) {
+                Ok(credentials) => {
+                    map.insert(
+                        provider,
+                        ServerCredential {
+                            credentials,
+                            source: CredentialSource::Settings,
+                            updated_at: Some(row.updated_at),
+                        },
+                    );
+                }
+                Err(_) => tracing::warn!(
+                    provider = provider.as_str(),
+                    "saved server credentials could not be opened; add them again in Settings"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    fn server_credential(&self, provider: ProviderId) -> Option<ServerCredential> {
+        self.server_credentials
+            .read()
+            .ok()
+            .and_then(|map| map.get(&provider).cloned())
+    }
+
+    fn has_server_credentials(&self, provider: ProviderId) -> bool {
+        self.server_credential(provider).is_some()
+    }
+
+    pub fn server_credentials_status(&self) -> Vec<ServerCredentialStatus> {
+        ProviderId::ALL
+            .into_iter()
+            .map(|provider| {
+                let credential = self.server_credential(provider);
+                ServerCredentialStatus {
+                    provider,
+                    name: provider.display_name(),
+                    configured: credential.is_some(),
+                    source: credential.as_ref().map(|credential| credential.source),
+                    client_id_hint: credential
+                        .as_ref()
+                        .map(|credential| hint(&credential.credentials.client_id)),
+                    has_secret: credential
+                        .as_ref()
+                        .is_some_and(|credential| credential.credentials.client_secret.is_some()),
+                    updated_at: credential.and_then(|credential| credential.updated_at),
+                }
+            })
+            .collect()
+    }
+
+    fn environment_owned(&self, provider: ProviderId) -> bool {
+        self.server_credential(provider)
+            .is_some_and(|credential| credential.source == CredentialSource::Environment)
+    }
+
+    /// Saves server-wide credentials (admins only; checked by the route).
+    pub async fn save_server_credentials(
+        &self,
+        admin_id: i32,
+        provider: ProviderId,
+        client_id: Option<String>,
+        client_secret: Option<String>,
+    ) -> HubResult<Vec<ServerCredentialStatus>> {
+        if self.environment_owned(provider) {
+            return Err(HubError::Invalid(
+                "These credentials are set by the server's environment variables. Change them there.",
+            ));
+        }
+        let credentials = validated_credentials(provider, client_id, client_secret)?;
+        let sealed = self
+            .vault
+            .seal(
+                SERVER_SCOPE_USER,
+                provider,
+                SealPurpose::ServerCredentials,
+                &credentials,
+            )
+            .map_err(|_| HubError::Database("could not seal credentials".into()))?;
+        let updated_at = self
+            .db(move |connection| {
+                store::save_server_credentials(connection, provider, &sealed, admin_id)
+            })
+            .await?;
+        if let Ok(mut map) = self.server_credentials.write() {
+            map.insert(
+                provider,
+                ServerCredential {
+                    credentials,
+                    source: CredentialSource::Settings,
+                    updated_at: Some(updated_at),
+                },
+            );
+        }
+        Ok(self.server_credentials_status())
+    }
+
+    pub async fn remove_server_credentials(
+        &self,
+        provider: ProviderId,
+    ) -> HubResult<Vec<ServerCredentialStatus>> {
+        if self.environment_owned(provider) {
+            return Err(HubError::Invalid(
+                "These credentials are set by the server's environment variables. Change them there.",
+            ));
+        }
+        self.db(move |connection| store::remove_server_credentials(connection, provider))
+            .await?;
+        if let Ok(mut map) = self.server_credentials.write() {
+            map.remove(&provider);
+        }
+        Ok(self.server_credentials_status())
+    }
+
+    /// The listener's account row, created on first sign-in with the
+    /// server's credentials when the listener has none of their own. This is
+    /// what lets a subscriber skip the credentials step entirely.
+    async fn account_for_sign_in(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+    ) -> HubResult<AccountRow> {
+        if let Some(row) = self.row(user_id, provider).await? {
+            return Ok(row);
+        }
+        if !self.has_server_credentials(provider) {
+            return Err(HubError::CredentialsRequired(provider));
+        }
+        self.save_credentials(user_id, provider, None, None, true)
+            .await?;
+        self.row(user_id, provider)
+            .await?
+            .ok_or(HubError::Provider(ProviderError::NotConnected))
     }
 
     pub fn is_sandbox(&self) -> bool {
@@ -297,9 +655,8 @@ impl StreamingHub {
             .map_err(|_| HubError::Provider(ProviderError::NotConnected))?;
         if stored.client_id == SERVER_CREDENTIALS_MARKER {
             return self
-                .server_credentials
-                .get(&provider)
-                .cloned()
+                .server_credential(provider)
+                .map(|credential| credential.credentials)
                 .ok_or(HubError::Provider(ProviderError::NotConnected));
         }
         Ok(stored)
@@ -323,13 +680,12 @@ impl StreamingHub {
         });
         match stored {
             Some(credentials) if credentials.client_id == SERVER_CREDENTIALS_MARKER => {
+                let server = self.server_credential(provider);
                 CredentialSummary {
-                    configured: self.server_credentials.contains_key(&provider),
+                    configured: server.is_some(),
                     client_id_hint: None,
-                    has_secret: self
-                        .server_credentials
-                        .get(&provider)
-                        .is_some_and(|credentials| credentials.client_secret.is_some()),
+                    has_secret: server
+                        .is_some_and(|server| server.credentials.client_secret.is_some()),
                     uses_server_credentials: true,
                 }
             }
@@ -434,7 +790,7 @@ impl StreamingHub {
             quality_options: client.quality_options(),
             last_library_sync: row.and_then(|row| row.last_library_sync),
             credentials: self.summarize(user_id, provider, row),
-            server_credentials_available: self.server_credentials.contains_key(&provider),
+            server_credentials_available: self.has_server_credentials(provider),
             pending,
             library,
             sandbox: self.sandbox,
@@ -452,7 +808,7 @@ impl StreamingHub {
         use_server: bool,
     ) -> HubResult<ProviderStatus> {
         let credentials = if use_server {
-            if !self.server_credentials.contains_key(&provider) {
+            if !self.has_server_credentials(provider) {
                 return Err(HubError::Invalid(
                     "This server has no credentials configured for that service.",
                 ));
@@ -462,30 +818,7 @@ impl StreamingHub {
                 client_secret: None,
             }
         } else {
-            let client_id = client_id
-                .map(|value| value.trim().to_string())
-                .unwrap_or_default();
-            let client_secret = client_secret
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
-            if !valid_credential(&client_id) || client_id == SERVER_CREDENTIALS_MARKER {
-                return Err(HubError::Invalid("Enter a valid client or app ID."));
-            }
-            if client_secret
-                .as_deref()
-                .is_some_and(|secret| !valid_credential(secret))
-            {
-                return Err(HubError::Invalid("Enter a valid client or app secret."));
-            }
-            if provider == ProviderId::Qobuz && client_secret.is_none() {
-                return Err(HubError::Invalid(
-                    "Qobuz needs both an app ID and an app secret to stream.",
-                ));
-            }
-            ClientCredentials {
-                client_id,
-                client_secret,
-            }
+            validated_credentials(provider, client_id, client_secret)?
         };
         let sealed = self
             .vault
@@ -500,10 +833,7 @@ impl StreamingHub {
     }
 
     pub async fn start_tidal_sign_in(&self, user_id: i32) -> HubResult<PendingSignIn> {
-        let row = self
-            .row(user_id, ProviderId::Tidal)
-            .await?
-            .ok_or(HubError::Provider(ProviderError::NotConnected))?;
+        let row = self.account_for_sign_in(user_id, ProviderId::Tidal).await?;
         let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
         let pending = self.tidal.start_device_authorization(&credentials).await?;
         let sealed = self
@@ -603,10 +933,7 @@ impl StreamingHub {
                 "Enter your Qobuz email or username and password.",
             ));
         }
-        let row = self
-            .row(user_id, ProviderId::Qobuz)
-            .await?
-            .ok_or(HubError::Provider(ProviderError::NotConnected))?;
+        let row = self.account_for_sign_in(user_id, ProviderId::Qobuz).await?;
         let credentials = self.credentials(user_id, ProviderId::Qobuz, &row)?;
         let session = self.qobuz.login(&credentials, username, password).await?;
         self.store_session(user_id, ProviderId::Qobuz, &session)
@@ -1104,6 +1431,473 @@ impl StreamingHub {
             .await?;
         Ok(stream)
     }
+
+    async fn saved_copies(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+    ) -> HubResult<HashMap<String, i64>> {
+        let rows = self
+            .db(move |connection| store::playlist_copies(connection, user_id))
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|row| row.provider == provider.as_str())
+            .map(|row| (row.provider_playlist_id, row.saved_at))
+            .collect())
+    }
+
+    /// The listener's playlists on a service, read-only.
+    pub async fn playlists(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        offset: u32,
+        limit: u32,
+    ) -> HubResult<PlaylistViews> {
+        let (page, _) = self
+            .call(user_id, provider, move |client, context| {
+                Box::pin(async move { client.playlists(context, offset, limit).await })
+            })
+            .await?;
+        let saved = self.saved_copies(user_id, provider).await?;
+        Ok(PlaylistViews {
+            total: page.total,
+            playlists: page
+                .playlists
+                .into_iter()
+                .map(|playlist| {
+                    let saved_copy_at = super::parse_entity_id(&playlist.id)
+                        .and_then(|(_, raw)| saved.get(&raw).copied());
+                    PlaylistView {
+                        playlist,
+                        saved_copy_at,
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    pub async fn playlist(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        raw_id: String,
+    ) -> HubResult<PlaylistView> {
+        let lookup = raw_id.clone();
+        let (mut playlist, _) = self
+            .call(user_id, provider, move |client, context| {
+                let raw_id = lookup.clone();
+                Box::pin(async move { client.playlist(context, &raw_id).await })
+            })
+            .await?;
+        let (_, tracks) = self.library_ids(user_id, provider).await?;
+        mark_tracks(&mut playlist.tracks, &tracks);
+        let saved_copy_at = self
+            .saved_copies(user_id, provider)
+            .await?
+            .get(&raw_id)
+            .copied();
+        Ok(PlaylistView {
+            playlist,
+            saved_copy_at,
+        })
+    }
+
+    /// "Save a copy": snapshots the playlist's current tracks into Parson.
+    /// The service playlist is never changed.
+    pub async fn save_playlist_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        raw_id: String,
+    ) -> HubResult<PlaylistCopy> {
+        let view = self.playlist(user_id, provider, raw_id.clone()).await?;
+        let mut playlist = view.playlist;
+        for track in &mut playlist.tracks {
+            track.in_library = false;
+        }
+        let saved_at = unix_now();
+        self.db(move |connection| {
+            store::save_playlist_copy(connection, user_id, &playlist, saved_at)?;
+            store::playlist_copy(connection, user_id, provider, &raw_id)
+        })
+        .await?
+        .and_then(|row| PlaylistCopy::from_row(row, false))
+        .ok_or(HubError::Database("the copy was not saved".into()))
+    }
+
+    pub async fn playlist_copies(&self, user_id: i32) -> HubResult<Vec<PlaylistCopy>> {
+        let rows = self
+            .db(move |connection| store::playlist_copies(connection, user_id))
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| PlaylistCopy::from_row(row, false))
+            .collect())
+    }
+
+    pub async fn playlist_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        raw_id: String,
+    ) -> HubResult<PlaylistCopy> {
+        let row = self
+            .db(move |connection| store::playlist_copy(connection, user_id, provider, &raw_id))
+            .await?
+            .ok_or(HubError::Provider(ProviderError::NotFound))?;
+        let mut copy =
+            PlaylistCopy::from_row(row, true).ok_or(HubError::Provider(ProviderError::NotFound))?;
+        if let Some(playlist) = copy.playlist.as_mut() {
+            let (_, tracks) = self.library_ids(user_id, provider).await?;
+            mark_tracks(&mut playlist.tracks, &tracks);
+        }
+        Ok(copy)
+    }
+
+    pub async fn remove_playlist_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        raw_id: String,
+    ) -> HubResult<()> {
+        let removed = self
+            .db(move |connection| {
+                store::remove_playlist_copy(connection, user_id, provider, &raw_id)
+            })
+            .await?;
+        if removed == 0 {
+            return Err(HubError::Provider(ProviderError::NotFound));
+        }
+        Ok(())
+    }
+
+    /// Records what a stream delivered, as read by the media proxy.
+    pub fn record_delivery(
+        &self,
+        user_id: i32,
+        track_id: String,
+        stream: &ResolvedStream,
+        probed: Option<ProbedFormat>,
+    ) -> DeliveredStream {
+        let delivery = delivered_stream(track_id.clone(), stream, probed, self.sandbox);
+        if let Ok(mut deliveries) = self.deliveries.lock() {
+            if deliveries.len() >= MAX_DELIVERIES
+                && let Some(oldest) = deliveries
+                    .iter()
+                    .min_by_key(|(_, delivery)| delivery.at)
+                    .map(|(key, _)| key.clone())
+            {
+                deliveries.remove(&oldest);
+            }
+            deliveries.insert((user_id, track_id), delivery.clone());
+        }
+        delivery
+    }
+
+    /// The most recent delivered format for one of the listener's streams.
+    pub fn delivery(&self, user_id: i32, track_id: &str) -> Option<DeliveredStream> {
+        self.deliveries
+            .lock()
+            .ok()?
+            .get(&(user_id, track_id.to_string()))
+            .cloned()
+    }
+
+    /// Fetches the first bytes of a resolved stream through the media
+    /// transport and reads their format, without playing the whole track.
+    pub async fn sample_stream(
+        &self,
+        stream: &ResolvedStream,
+    ) -> Result<Option<ProbedFormat>, media::MediaError> {
+        match &stream.source {
+            StreamSource::SandboxTone { seed, seconds } => {
+                let wav = sandbox::preview_wav(*seed, *seconds, stream.requested);
+                Ok(super::probe::probe(&wav[..wav.len().min(PROBE_BYTES)]))
+            }
+            StreamSource::Progressive { url, .. } => {
+                let response = self
+                    .media
+                    .open(url.clone(), Some(format!("bytes=0-{}", PROBE_BYTES - 1)))
+                    .await?;
+                media::probe_body(response.body).await
+            }
+            StreamSource::Segmented {
+                init_url,
+                segment_urls,
+                ..
+            } => {
+                // The init segment carries the format; the first media
+                // segment carries the first frame to verify it against.
+                let urls = init_url
+                    .iter()
+                    .chain(segment_urls.iter().take(1))
+                    .cloned()
+                    .collect();
+                media::probe_body(media::segmented(self.media.clone(), urls)).await
+            }
+        }
+    }
+
+    /// "Check connection": proves the account works end to end. It checks
+    /// the session, syncs favorites, then resolves a track at the chosen
+    /// quality and reads the delivered format from the stream's own bytes
+    /// through the same media path playback uses.
+    pub async fn check_connection(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        track: Option<String>,
+    ) -> HubResult<ConnectionCheck> {
+        let mut check = ConnectionCheck {
+            provider,
+            ok: false,
+            sandbox: self.sandbox,
+            account_name: None,
+            plan: None,
+            steps: Vec::new(),
+            sync: None,
+            track: None,
+            delivery: None,
+            checked_at: unix_now(),
+        };
+        match self.context(user_id, provider).await {
+            Ok((context, quality)) => {
+                check.account_name = Some(context.session.account_name.clone());
+                check.plan = context.session.plan.clone();
+                check.steps.push(CheckStep {
+                    id: "session",
+                    ok: true,
+                    detail: format!(
+                        "Signed in as {}{}; streaming at {}.",
+                        context.session.account_name,
+                        context
+                            .session
+                            .plan
+                            .as_deref()
+                            .map(|plan| format!(" ({plan})"))
+                            .unwrap_or_default(),
+                        quality_label(self.provider(provider), quality),
+                    ),
+                });
+            }
+            Err(error) => {
+                check.steps.push(CheckStep {
+                    id: "session",
+                    ok: false,
+                    detail: user_message(&error),
+                });
+                return Ok(check);
+            }
+        }
+        match self.sync_library(user_id, provider).await {
+            Ok(report) => {
+                let counts = self
+                    .db(move |connection| store::library_counts(connection, user_id, provider))
+                    .await?;
+                check.steps.push(CheckStep {
+                    id: "favorites",
+                    ok: true,
+                    detail: format!(
+                        "Favorites synced: {} albums and {} tracks in your library.",
+                        counts.albums, counts.tracks
+                    ),
+                });
+                check.sync = Some(report);
+            }
+            Err(error) => {
+                check.steps.push(CheckStep {
+                    id: "favorites",
+                    ok: false,
+                    detail: user_message(&error),
+                });
+                return Ok(check);
+            }
+        }
+        let track = match track {
+            Some(raw) => Some(raw),
+            None => self.first_library_track(user_id, provider).await?,
+        };
+        let Some(raw_id) = track else {
+            check.steps.push(CheckStep {
+                id: "stream",
+                ok: false,
+                detail: "No favorite tracks or albums to test with. Add one, then check again."
+                    .into(),
+            });
+            return Ok(check);
+        };
+        let lookup = raw_id.clone();
+        if let Ok((track, _)) = self
+            .call(user_id, provider, move |client, context| {
+                let raw_id = lookup.clone();
+                Box::pin(async move { client.track(context, &raw_id).await })
+            })
+            .await
+        {
+            check.track = Some(track);
+        }
+        let stream = match self
+            .resolve_stream(user_id, provider, raw_id.clone(), false)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                check.steps.push(CheckStep {
+                    id: "stream",
+                    ok: false,
+                    detail: user_message(&error),
+                });
+                return Ok(check);
+            }
+        };
+        let track_id = super::entity_id(provider, &raw_id);
+        match self.sample_stream(&stream).await {
+            Ok(probed) => {
+                let delivery = self.record_delivery(user_id, track_id, &stream, probed);
+                let ok = delivery.delivered.is_some();
+                check.steps.push(CheckStep {
+                    id: "stream",
+                    ok,
+                    detail: describe_delivery(&delivery),
+                });
+                check.delivery = Some(delivery);
+                check.ok = ok;
+            }
+            Err(error) => check.steps.push(CheckStep {
+                id: "stream",
+                ok: false,
+                detail: format!("The stream did not start: {error}."),
+            }),
+        }
+        Ok(check)
+    }
+
+    async fn first_library_track(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+    ) -> HubResult<Option<String>> {
+        let rows = |kind| {
+            self.db(move |connection| {
+                store::list_items(
+                    connection,
+                    user_id,
+                    &LibraryQuery {
+                        provider: Some(provider),
+                        kind,
+                        text: None,
+                        sort: store::LibrarySort::Recent,
+                        offset: 0,
+                        limit: 1,
+                    },
+                )
+            })
+        };
+        if let Some(row) = rows(ItemKind::Track).await?.0.into_iter().next() {
+            return Ok(Some(row.provider_item_id));
+        }
+        let Some(album) = rows(ItemKind::Album).await?.0.into_iter().next() else {
+            return Ok(None);
+        };
+        let album = self
+            .album(user_id, provider, album.provider_item_id)
+            .await?;
+        Ok(album
+            .tracks
+            .iter()
+            .find(|track| track.streamable)
+            .and_then(|track| super::parse_entity_id(&track.id))
+            .map(|(_, raw)| raw))
+    }
+}
+
+fn quality_label(provider: &dyn StreamingProvider, quality: StreamQuality) -> String {
+    provider
+        .quality_options()
+        .iter()
+        .find(|option| option.id == quality)
+        .map_or_else(
+            || quality.as_str().to_string(),
+            |option| option.label.to_string(),
+        )
+}
+
+fn delivered_stream(
+    track_id: String,
+    stream: &ResolvedStream,
+    probed: Option<ProbedFormat>,
+    sandbox: bool,
+) -> DeliveredStream {
+    let announced = stream.format.clone();
+    let (delivered, container, frame_verified) = match probed {
+        Some(probed) => (
+            Some(probed.format),
+            Some(probed.container),
+            probed.frame_verified,
+        ),
+        None => (None, None, false),
+    };
+    let matches_announced = delivered.as_ref().is_some_and(|delivered| {
+        // Sandbox previews announce no real format.
+        !sandbox
+            && delivered.lossless == announced.lossless
+            && (!announced.lossless
+                || (delivered.codec == announced.codec
+                    && announced
+                        .bit_depth
+                        .is_none_or(|depth| delivered.bit_depth == Some(depth))
+                    && announced
+                        .sample_rate
+                        .is_none_or(|rate| delivered.sample_rate == Some(rate))))
+    });
+    DeliveredStream {
+        track_id,
+        requested: stream.requested,
+        announced,
+        delivered,
+        container,
+        frame_verified,
+        matches_announced,
+        sandbox,
+        at: unix_now(),
+    }
+}
+
+fn describe_delivery(delivery: &DeliveredStream) -> String {
+    let Some(delivered) = &delivery.delivered else {
+        return "The stream started, but its format could not be read.".into();
+    };
+    let mut detail = format!(
+        "Delivered {}{}",
+        delivered.label,
+        delivered
+            .channels
+            .map(|channels| match channels {
+                1 => ", mono".to_string(),
+                2 => ", stereo".to_string(),
+                count => format!(", {count} channels"),
+            })
+            .unwrap_or_default()
+    );
+    if delivery.frame_verified {
+        detail.push_str("; first audio frame verified");
+    }
+    if delivery.sandbox {
+        detail.push_str(". Sandbox preview tone, not a real stream.");
+    } else if delivery.matches_announced {
+        detail.push_str(&format!(
+            ", as the service announced ({}).",
+            delivery.announced.label
+        ));
+    } else {
+        detail.push_str(&format!(
+            ". The service announced {}.",
+            delivery.announced.label
+        ));
+    }
+    detail
 }
 
 fn mark_tracks(tracks: &mut [ProviderTrack], ids: &HashSet<String>) {
@@ -1149,5 +1943,11 @@ pub fn user_message(error: &HubError) -> String {
         },
         HubError::Database(_) => "Parson could not save this change.".into(),
         HubError::Invalid(message) => (*message).to_string(),
+        HubError::CredentialsRequired(ProviderId::Tidal) => {
+            "This server has no TIDAL client yet. Ask the server owner to add one in Settings > Services, or use your own client ID.".into()
+        }
+        HubError::CredentialsRequired(ProviderId::Qobuz) => {
+            "This server has no Qobuz app yet. Ask the server owner to add one in Settings > Services, or use your own app ID and secret.".into()
+        }
     }
 }

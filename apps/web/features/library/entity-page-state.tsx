@@ -9,7 +9,7 @@ export default function EntityPageState({
   loading = false,
   onRetry,
 }: {
-  kind: "album" | "artist";
+  kind: "album" | "artist" | "playlist";
   loading?: boolean;
   onRetry?: () => void;
 }) {
@@ -27,7 +27,11 @@ export default function EntityPageState({
     <div className="grid min-h-[60vh] place-items-center px-5 text-center">
       <div className="max-w-sm">
         <h1 className="text-2xl font-semibold text-white">
-          {kind === "album" ? "Album unavailable" : "Artist unavailable"}
+          {kind === "album"
+            ? "Album unavailable"
+            : kind === "artist"
+              ? "Artist unavailable"
+              : "Playlist unavailable"}
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-500">
           It may have moved during a library refresh, or the server could not be

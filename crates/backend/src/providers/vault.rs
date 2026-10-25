@@ -18,6 +18,8 @@ pub enum SealPurpose {
     Credentials,
     Session,
     PendingAuthorization,
+    /// Server-wide credentials, sealed under user id 0.
+    ServerCredentials,
 }
 
 impl SealPurpose {
@@ -26,6 +28,7 @@ impl SealPurpose {
             Self::Credentials => "credentials",
             Self::Session => "session",
             Self::PendingAuthorization => "pending",
+            Self::ServerCredentials => "server-credentials",
         }
     }
 }

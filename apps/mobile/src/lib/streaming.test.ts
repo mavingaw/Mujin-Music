@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type {
+  StreamingDelivery,
   StreamingProviderStatus,
   StreamingSearchResponse,
   StreamingTrack,
@@ -7,6 +8,8 @@ import type {
 
 import {
   codeSecondsLeft,
+  deliveryText,
+  needsOwnCredentials,
   serviceAction,
   streamingSearchRows,
 } from "./streaming";
@@ -63,4 +66,55 @@ test("service actions and code countdowns", () => {
   expect(serviceAction({ ...base, status: "signed_in" })).toBe("Manage");
   expect(codeSecondsLeft(100, 40_000)).toBe(60);
   expect(codeSecondsLeft(100, 200_000)).toBe(0);
+});
+
+test("server credentials make sign-in the first step", () => {
+  const provider = {
+    status: "configured",
+    credentials: { configured: false },
+    server_credentials_available: true,
+  } as unknown as StreamingProviderStatus;
+  expect(needsOwnCredentials(provider)).toBeFalse();
+  expect(serviceAction(provider)).toBe("Sign in");
+  expect(
+    needsOwnCredentials({ ...provider, server_credentials_available: false }),
+  ).toBeTrue();
+});
+
+test("the player line names the delivered format", () => {
+  const flac = (label: string, depth: number, rate: number) => ({
+    codec: "flac",
+    lossless: true,
+    bit_depth: depth,
+    sample_rate: rate,
+    bitrate_kbps: null,
+    channels: 2,
+    label,
+  });
+  const delivery: StreamingDelivery = {
+    track_id: "qobuz:7700001",
+    requested: "hi_res_max",
+    announced: flac("24/192 FLAC", 24, 192000),
+    delivered: flac("24/192 FLAC", 24, 192000),
+    container: "flac",
+    frame_verified: true,
+    matches_announced: true,
+    sandbox: false,
+    at: 0,
+  };
+  expect(deliveryText(delivery)).toEqual({
+    label: "24/192 FLAC",
+    detail: "delivered · stereo · frame verified",
+    warning: null,
+  });
+  expect(
+    deliveryText({
+      ...delivery,
+      delivered: flac("16/44.1 FLAC", 16, 44100),
+      matches_announced: false,
+    }).warning,
+  ).toBe("Announced 24/192 FLAC");
+  expect(deliveryText({ ...delivery, delivered: null }).label).toBe(
+    "Format unknown",
+  );
 });

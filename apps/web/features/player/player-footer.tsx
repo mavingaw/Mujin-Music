@@ -1,6 +1,7 @@
 "use client";
 
 import FavoriteButton from "@/features/library/favorite-button";
+import { DeliveredFormat } from "@/features/streaming/delivered-format";
 import { NowPlayingStreamingSource } from "@/features/streaming/now-playing-source";
 import { isStreamingId } from "@parson/music-sdk";
 import { ExplicitBadge } from "@/features/library/song-title";
@@ -250,9 +251,17 @@ function TrackInfo({
           href={`/album?id=${encodeURIComponent(albumId)}`}
           title={title}
         />
-        <span className="block truncate text-xs text-zinc-400">
-          {explicit && <ExplicitBadge />}
-          <ArtistCreditLinks credits={artistCredits} />
+        <span className="flex min-w-0 items-center gap-2 text-xs text-zinc-400">
+          <span className="block min-w-0 truncate">
+            {explicit && <ExplicitBadge />}
+            <ArtistCreditLinks credits={artistCredits} />
+          </span>
+          {isStreamingId(songId) && (
+            <DeliveredFormat
+              className="hidden sm:inline-flex"
+              songId={songId}
+            />
+          )}
         </span>
       </div>
       {isStreamingId(songId) ? (

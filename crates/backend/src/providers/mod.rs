@@ -8,6 +8,8 @@
 pub mod artwork;
 pub mod hub;
 pub mod md5;
+pub mod media;
+pub mod probe;
 pub mod qobuz;
 pub mod sandbox;
 pub mod store;
@@ -133,6 +135,9 @@ pub struct AudioFormat {
     pub bit_depth: Option<u8>,
     pub sample_rate: Option<u32>,
     pub bitrate_kbps: Option<u32>,
+    /// Known when the format was read from the stream itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channels: Option<u8>,
     /// Short badge text such as `24/96 FLAC`, `16/44.1 FLAC` or `AAC 320`.
     pub label: String,
 }
@@ -156,6 +161,7 @@ impl AudioFormat {
             bit_depth,
             sample_rate,
             bitrate_kbps: None,
+            channels: None,
             label,
         }
     }
@@ -167,6 +173,7 @@ impl AudioFormat {
             bit_depth: None,
             sample_rate: None,
             bitrate_kbps: Some(bitrate_kbps),
+            channels: None,
             label: format!("{} {bitrate_kbps}", codec.to_ascii_uppercase()),
         }
     }
@@ -256,6 +263,38 @@ pub struct ProviderArtist {
     pub top_tracks: Vec<ProviderTrack>,
     pub web_url: Option<String>,
 }
+
+/// A service playlist: the listener's own or one they follow. Parson reads
+/// playlists and never edits them on the service.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderPlaylist {
+    pub id: String,
+    pub provider: ProviderId,
+    pub title: String,
+    pub description: Option<String>,
+    /// Who made it, e.g. the listener or `TIDAL`.
+    pub owner: Option<String>,
+    /// Whether the listener created it (as opposed to following it).
+    pub own: bool,
+    pub track_count: u32,
+    pub duration: f64,
+    pub cover_url: Option<String>,
+    /// Unix seconds of the service's last change, when it reports one.
+    pub updated_at: Option<i64>,
+    pub web_url: Option<String>,
+    /// Present on playlist pages; empty in lists.
+    #[serde(default)]
+    pub tracks: Vec<ProviderTrack>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistPage {
+    pub playlists: Vec<ProviderPlaylist>,
+    pub total: Option<u32>,
+}
+
+/// Playlists longer than this are read up to this many tracks.
+pub const MAX_PLAYLIST_TRACKS: u32 = 1_000;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchResults {
@@ -477,6 +516,21 @@ pub trait StreamingProvider: Send + Sync {
         raw_id: &'a str,
         quality: StreamQuality,
     ) -> BoxFuture<'a, ProviderResult<ResolvedStream>>;
+
+    /// The listener's playlists: their own and the ones they follow.
+    fn playlists<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        offset: u32,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<PlaylistPage>>;
+
+    /// One playlist with its tracks (up to [`MAX_PLAYLIST_TRACKS`]).
+    fn playlist<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        raw_id: &'a str,
+    ) -> BoxFuture<'a, ProviderResult<ProviderPlaylist>>;
 
     /// Renews an expiring session. `None` means the service has no refresh
     /// flow and the listener must sign in again.

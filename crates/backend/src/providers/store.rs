@@ -7,7 +7,9 @@ use diesel::sql_types::{BigInt, Binary, Double, Integer, Nullable, Text};
 use diesel::sqlite::SqliteConnection;
 use serde::Serialize;
 
-use super::{ItemKind, ProviderAlbum, ProviderId, ProviderTrack, StreamQuality, unix_now};
+use super::{
+    ItemKind, ProviderAlbum, ProviderId, ProviderPlaylist, ProviderTrack, StreamQuality, unix_now,
+};
 use crate::library::search::normalize;
 
 pub const MAX_LIBRARY_PAGE: i64 = 500;
@@ -252,12 +254,18 @@ pub fn remove_account(
         .bind::<Integer, _>(user_id)
         .bind::<Text, _>(provider.as_str())
         .execute(connection)?;
+        let copies = diesel::sql_query(
+            "DELETE FROM provider_playlist_copy WHERE user_id = ? AND provider = ?",
+        )
+        .bind::<Integer, _>(user_id)
+        .bind::<Text, _>(provider.as_str())
+        .execute(connection)?;
         let accounts =
             diesel::sql_query("DELETE FROM provider_account WHERE user_id = ? AND provider = ?")
                 .bind::<Integer, _>(user_id)
                 .bind::<Text, _>(provider.as_str())
                 .execute(connection)?;
-        Ok(items + accounts)
+        Ok(items + copies + accounts)
     })
 }
 
@@ -273,6 +281,169 @@ pub fn set_last_sync(
     .bind::<BigInt, _>(at)
     .bind::<Integer, _>(user_id)
     .bind::<Text, _>(provider.as_str())
+    .execute(connection)
+}
+
+#[derive(Debug, QueryableByName)]
+pub struct ServerCredentialRow {
+    #[diesel(sql_type = Text)]
+    pub provider: String,
+    #[diesel(sql_type = Binary)]
+    pub sealed_credentials: Vec<u8>,
+    #[diesel(sql_type = BigInt)]
+    pub updated_at: i64,
+}
+
+/// Server-wide credentials the server owner saved from Settings.
+pub fn server_credentials(
+    connection: &mut SqliteConnection,
+) -> QueryResult<Vec<ServerCredentialRow>> {
+    diesel::sql_query(
+        "SELECT provider, sealed_credentials, updated_at FROM provider_server_credential
+         ORDER BY provider",
+    )
+    .load(connection)
+}
+
+pub fn save_server_credentials(
+    connection: &mut SqliteConnection,
+    provider: ProviderId,
+    sealed: &[u8],
+    updated_by: i32,
+) -> QueryResult<i64> {
+    let now = unix_now();
+    diesel::sql_query(
+        "INSERT INTO provider_server_credential (provider, sealed_credentials, updated_by, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(provider) DO UPDATE SET
+           sealed_credentials = excluded.sealed_credentials,
+           updated_by = excluded.updated_by,
+           updated_at = excluded.updated_at",
+    )
+    .bind::<Text, _>(provider.as_str())
+    .bind::<Binary, _>(sealed)
+    .bind::<Integer, _>(updated_by)
+    .bind::<BigInt, _>(now)
+    .execute(connection)?;
+    Ok(now)
+}
+
+pub fn remove_server_credentials(
+    connection: &mut SqliteConnection,
+    provider: ProviderId,
+) -> QueryResult<usize> {
+    diesel::sql_query("DELETE FROM provider_server_credential WHERE provider = ?")
+        .bind::<Text, _>(provider.as_str())
+        .execute(connection)
+}
+
+/// A saved, read-only copy of a service playlist.
+#[derive(Clone, Debug, QueryableByName)]
+pub struct PlaylistCopyRow {
+    #[diesel(sql_type = Text)]
+    pub provider: String,
+    #[diesel(sql_type = Text)]
+    pub provider_playlist_id: String,
+    #[diesel(sql_type = Text)]
+    pub title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub owner: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub cover_url: Option<String>,
+    #[diesel(sql_type = Integer)]
+    pub track_count: i32,
+    #[diesel(sql_type = Double)]
+    pub duration: f64,
+    #[diesel(sql_type = Text)]
+    pub payload: String,
+    #[diesel(sql_type = BigInt)]
+    pub saved_at: i64,
+}
+
+pub fn save_playlist_copy(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    playlist: &ProviderPlaylist,
+    saved_at: i64,
+) -> QueryResult<usize> {
+    let raw = super::parse_entity_id(&playlist.id)
+        .map(|(_, raw)| raw)
+        .unwrap_or_default();
+    let payload = serde_json::to_string(playlist).unwrap_or_else(|_| "{}".into());
+    diesel::sql_query(
+        "INSERT INTO provider_playlist_copy
+           (user_id, provider, provider_playlist_id, title, owner, cover_url, track_count,
+            duration, payload, saved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, provider, provider_playlist_id) DO UPDATE SET
+           title = excluded.title, owner = excluded.owner, cover_url = excluded.cover_url,
+           track_count = excluded.track_count, duration = excluded.duration,
+           payload = excluded.payload, saved_at = excluded.saved_at",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<Text, _>(playlist.provider.as_str())
+    .bind::<Text, _>(raw)
+    .bind::<Text, _>(&playlist.title)
+    .bind::<Nullable<Text>, _>(playlist.owner.as_deref())
+    .bind::<Nullable<Text>, _>(playlist.cover_url.as_deref())
+    .bind::<Integer, _>(playlist.tracks.len().min(i32::MAX as usize) as i32)
+    .bind::<Double, _>(
+        playlist
+            .tracks
+            .iter()
+            .map(|track| track.duration)
+            .sum::<f64>(),
+    )
+    .bind::<Text, _>(payload)
+    .bind::<BigInt, _>(saved_at)
+    .execute(connection)
+}
+
+const COPY_COLUMNS: &str = "provider, provider_playlist_id, title, owner, cover_url, \
+     track_count, duration, payload, saved_at";
+
+pub fn playlist_copies(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+) -> QueryResult<Vec<PlaylistCopyRow>> {
+    diesel::sql_query(format!(
+        "SELECT {COPY_COLUMNS} FROM provider_playlist_copy WHERE user_id = ?
+         ORDER BY saved_at DESC, title"
+    ))
+    .bind::<Integer, _>(user_id)
+    .load(connection)
+}
+
+pub fn playlist_copy(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    provider: ProviderId,
+    raw_id: &str,
+) -> QueryResult<Option<PlaylistCopyRow>> {
+    diesel::sql_query(format!(
+        "SELECT {COPY_COLUMNS} FROM provider_playlist_copy
+         WHERE user_id = ? AND provider = ? AND provider_playlist_id = ?"
+    ))
+    .bind::<Integer, _>(user_id)
+    .bind::<Text, _>(provider.as_str())
+    .bind::<Text, _>(raw_id)
+    .get_result(connection)
+    .optional()
+}
+
+pub fn remove_playlist_copy(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    provider: ProviderId,
+    raw_id: &str,
+) -> QueryResult<usize> {
+    diesel::sql_query(
+        "DELETE FROM provider_playlist_copy
+         WHERE user_id = ? AND provider = ? AND provider_playlist_id = ?",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<Text, _>(provider.as_str())
+    .bind::<Text, _>(raw_id)
     .execute(connection)
 }
 

@@ -1,6 +1,8 @@
 import {
   STREAMING_PROVIDER_NAMES,
   addToStreamingLibrary,
+  getStreamDelivery,
+  parseStreamingId,
   removeFromStreamingLibrary,
   streamingTrackToSong,
   type StreamingAlbum,
@@ -8,7 +10,7 @@ import {
   type StreamingProviderId,
   type StreamingTrack,
 } from "@parson/music-sdk";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { Check, Plus } from "lucide-react-native";
 import {
@@ -22,6 +24,7 @@ import {
 import { Artwork } from "@/components/artwork";
 import { palette } from "@/constants/colors";
 import { formatDuration } from "@/lib/format";
+import { deliveryText } from "@/lib/streaming";
 import { usePlayer } from "@/providers/player-provider";
 
 /** Neutral monogram plus the service's name; Parson does not use their logos. */
@@ -54,6 +57,44 @@ export function SourceTag({
       <Text style={[styles.sourceName, large && styles.sourceNameLarge]}>
         {STREAMING_PROVIDER_NAMES[provider]}
       </Text>
+    </View>
+  );
+}
+
+/**
+ * What a streaming track actually delivered, read by the server from the
+ * stream's bytes: shown under the artist in the player.
+ */
+export function StreamDeliveryLine({ songId }: { songId: string }) {
+  const parsed = parseStreamingId(songId);
+  const delivery = useQuery({
+    queryKey: ["streaming", "delivery", songId],
+    queryFn: () => getStreamDelivery(songId),
+    enabled: Boolean(parsed),
+    staleTime: 10_000,
+    refetchInterval: (query) =>
+      query.state.data || query.state.dataUpdateCount >= 20 ? false : 1500,
+  });
+  if (!parsed) return null;
+  const text = delivery.data ? deliveryText(delivery.data) : null;
+  return (
+    <View
+      accessibilityLabel={
+        text
+          ? `Streaming from ${STREAMING_PROVIDER_NAMES[parsed.provider]}, ${text.detail} ${text.label}`
+          : `Streaming from ${STREAMING_PROVIDER_NAMES[parsed.provider]}`
+      }
+      style={styles.deliveryLine}
+    >
+      <SourceTag provider={parsed.provider} />
+      {text ? (
+        <>
+          <FormatTag label={text.label} />
+          <Text numberOfLines={1} style={styles.deliveryDetail}>
+            {text.warning ?? text.detail}
+          </Text>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -228,6 +269,13 @@ export function StreamingAlbumRow({ album }: { album: StreamingAlbum }) {
 }
 
 const styles = StyleSheet.create({
+  deliveryLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+  },
+  deliveryDetail: { color: palette.muted, fontSize: 12, flexShrink: 1 },
   sourceTag: { flexDirection: "row", alignItems: "center", gap: 5 },
   mark: {
     width: 15,

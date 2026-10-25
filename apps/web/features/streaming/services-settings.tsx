@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  checkStreamingConnection,
   formatLastSync,
   pollTidalSignIn,
   removeStreamingProvider,
@@ -11,18 +12,22 @@ import {
   startTidalSignIn,
   syncStreamingLibrary,
   type StreamQuality,
+  type StreamingConnectionCheck,
   type StreamingPendingSignIn,
   type StreamingProviderId,
   type StreamingProviderStatus,
 } from "@parson/music-sdk";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  CheckCircle2,
   ExternalLink,
   FlaskConical,
   KeyRound,
   Loader2,
   RefreshCw,
   ShieldCheck,
+  Stethoscope,
+  XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -41,8 +46,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ProviderMark } from "./source-badge";
-import { providerStatusLine } from "./streaming-model";
+import { useSession } from "@/features/account/session-provider";
+import { ServerCredentialsPanel } from "./server-credentials";
+import { FormatBadge, ProviderMark } from "./source-badge";
+import {
+  deliverySummary,
+  needsOwnCredentials,
+  providerStatusLine,
+  serviceAction,
+} from "./streaming-model";
 import {
   streamingErrorMessage,
   streamingProvidersKey,
@@ -51,7 +63,13 @@ import {
 
 const credentialLabels: Record<
   StreamingProviderId,
-  { id: string; secret: string; secretOptional: boolean; where: string }
+  {
+    id: string;
+    secret: string;
+    secretOptional: boolean;
+    where: string;
+    server: string;
+  }
 > = {
   tidal: {
     id: "Client ID",
@@ -59,6 +77,7 @@ const credentialLabels: Record<
     secretOptional: true,
     where:
       "Use the OAuth client ID (and secret, if your client has one) from your own TIDAL developer access.",
+    server: "this server's TIDAL client",
   },
   qobuz: {
     id: "App ID",
@@ -66,12 +85,15 @@ const credentialLabels: Record<
     secretOptional: false,
     where:
       "Use the app ID and app secret Qobuz issued to you. Both are needed to stream.",
+    server: "this server's Qobuz app",
   },
 };
 
 export default function ServicesSettings() {
   const { providers, sandbox, isPending, isError, refetch } =
     useStreamingProviders();
+  const { session } = useSession();
+  const isAdmin = session?.role === "admin";
   const [open, setOpen] = useState<StreamingProviderId | null>(null);
   const active = providers.find((provider) => provider.id === open) ?? null;
 
@@ -141,11 +163,7 @@ export default function ServicesSettings() {
                 provider.status === "signed_in" ? "secondary" : "default"
               }
             >
-              {provider.status === "signed_in"
-                ? "Edit"
-                : provider.credentials.configured
-                  ? "Sign in"
-                  : "Set up"}
+              {serviceAction(provider)}
             </Button>
           </div>
         ))}
@@ -158,15 +176,17 @@ export default function ServicesSettings() {
         />
         <p>
           <span className="font-medium text-zinc-200">
-            Bring your own credentials.
+            No API key ships with Parson.
           </span>{" "}
-          TIDAL and Qobuz do not issue Parson an API key, so Parson ships none
-          and never extracts one from their apps. You enter credentials from
-          your own developer access, or use ones your server owner configured.
-          Credentials and sign-in tokens are encrypted on this server, used only
-          for your account, and never sent to your devices.
+          TIDAL and Qobuz do not issue Parson one, and Parson never extracts one
+          from their apps. Your server owner adds a TIDAL client and a Qobuz app
+          once; after that you only sign in to your own account. You can also
+          bring your own. Credentials and sign-in tokens are encrypted on this
+          server, used only for your account, and never sent to your devices.
         </p>
       </div>
+
+      {isAdmin && <ServerCredentialsPanel />}
 
       <Dialog
         open={Boolean(active)}
@@ -215,8 +235,11 @@ function ServiceDialog({
   onDone: () => void;
 }) {
   const [editingCredentials, setEditingCredentials] = useState(
-    !provider.credentials.configured,
+    needsOwnCredentials(provider),
   );
+  const ownCredentials =
+    provider.credentials.configured &&
+    !provider.credentials.uses_server_credentials;
   const step = editingCredentials
     ? "credentials"
     : provider.status === "signed_in"
@@ -238,7 +261,9 @@ function ServiceDialog({
             {step === "credentials"
               ? "Step 1 of 2: your API credentials"
               : step === "sign-in"
-                ? "Step 2 of 2: sign in to your account"
+                ? ownCredentials
+                  ? "Step 2 of 2: sign in to your account"
+                  : `Sign in to your ${provider.name} account`
                 : "Account, library and streaming quality"}
           </DialogDescription>
         </div>
@@ -247,9 +272,9 @@ function ServiceDialog({
       {step === "credentials" && (
         <CredentialsStep
           onCancel={
-            provider.credentials.configured
-              ? () => setEditingCredentials(false)
-              : undefined
+            needsOwnCredentials(provider)
+              ? undefined
+              : () => setEditingCredentials(false)
           }
           onSaved={() => setEditingCredentials(false)}
           provider={provider}
@@ -395,7 +420,7 @@ function CredentialsStep({
             type="button"
             variant="secondary"
           >
-            Use this server&apos;s credentials
+            Use {credentialLabels[provider.id].server}
           </Button>
         )}
         {onCancel && (
@@ -417,16 +442,20 @@ function CredentialSummary({
 }) {
   return (
     <p className="text-xs text-zinc-500">
-      {provider.credentials.uses_server_credentials
-        ? "Using this server's credentials"
-        : `${credentialLabels[provider.id].id} ${provider.credentials.client_id_hint ?? ""}`}
+      {provider.credentials.configured &&
+      !provider.credentials.uses_server_credentials
+        ? `Your ${credentialLabels[provider.id].id} ${provider.credentials.client_id_hint ?? ""}`
+        : `Signs in through ${credentialLabels[provider.id].server}`}
       {" · "}
       <button
         className="text-zinc-300 underline-offset-4 hover:text-white hover:underline"
         onClick={onChange}
         type="button"
       >
-        Change
+        {provider.credentials.configured &&
+        !provider.credentials.uses_server_credentials
+          ? "Change"
+          : "Use your own instead"}
       </button>
     </p>
   );
@@ -777,6 +806,7 @@ function AccountStep({
           {provider.name} for its lossy tier instead.
         </p>
       </div>
+      <ConnectionCheckPanel provider={provider} />
       <CredentialSummary onChange={onChangeCredentials} provider={provider} />
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/8 pt-5">
         <div className="flex gap-2">
@@ -808,6 +838,114 @@ function AccountStep({
           Done
         </Button>
       </div>
+    </div>
+  );
+}
+
+const stepLabels: Record<
+  StreamingConnectionCheck["steps"][number]["id"],
+  string
+> = {
+  session: "Sign-in",
+  favorites: "Favorites sync",
+  stream: "Stream",
+};
+
+/**
+ * "Check connection": proves the account works end to end, from sign-in
+ * through favorites to the first bytes of a real stream at the chosen
+ * quality, and shows the format that actually arrived.
+ */
+function ConnectionCheckPanel({
+  provider,
+}: {
+  provider: StreamingProviderStatus;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [check, setCheck] = useState<StreamingConnectionCheck | null>(null);
+  const refresh = useRefreshProviders();
+
+  async function run() {
+    setChecking(true);
+    try {
+      const result = await checkStreamingConnection(provider.id);
+      setCheck(result);
+      await refresh();
+    } catch (error) {
+      toast(streamingErrorMessage(error, "Could not run the check."));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const summary = check?.delivery ? deliverySummary(check.delivery) : null;
+  return (
+    <div className="rounded-xl border border-white/8 px-4 py-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-zinc-100">Check connection</p>
+          <p className="text-xs leading-5 text-zinc-500">
+            Signs in, syncs favorites and plays the first seconds of a favorite
+            at your chosen quality.
+          </p>
+        </div>
+        <Button
+          className="rounded-full"
+          disabled={checking}
+          onClick={() => void run()}
+          size="sm"
+          variant="secondary"
+        >
+          {checking ? (
+            <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+          ) : (
+            <Stethoscope aria-hidden="true" className="h-4 w-4" />
+          )}
+          {checking ? "Checking…" : check ? "Check again" : "Run check"}
+        </Button>
+      </div>
+      {check && (
+        <ol aria-live="polite" className="mt-3 space-y-2">
+          {check.steps.map((step) => (
+            <li className="flex items-start gap-2.5 text-[13px]" key={step.id}>
+              {step.ok ? (
+                <CheckCircle2
+                  aria-label="Passed"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400"
+                />
+              ) : (
+                <XCircle
+                  aria-label="Failed"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-rose-400"
+                />
+              )}
+              <span className="min-w-0">
+                <span className="font-medium text-zinc-200">
+                  {stepLabels[step.id]}
+                </span>
+                <span className="block leading-5 text-zinc-400">
+                  {step.detail}
+                </span>
+              </span>
+            </li>
+          ))}
+          {summary && check.delivery && (
+            <li className="flex flex-wrap items-center gap-2 pl-6.5 pt-1 text-[13px] text-zinc-400">
+              <FormatBadge label={summary.badge} tone={summary.tone} />
+              {check.track && (
+                <span className="truncate">
+                  {check.track.title} · {check.track.artist.name}
+                </span>
+              )}
+              {summary.warning && (
+                <span className="w-full text-amber-200">
+                  {summary.warning}.
+                </span>
+              )}
+            </li>
+          )}
+        </ol>
+      )}
     </div>
   );
 }
