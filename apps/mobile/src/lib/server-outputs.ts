@@ -128,14 +128,39 @@ export function serverHardwareLine(device: NativeOutputDevice) {
 }
 
 /**
- * The kernel's report while the server plays, e.g. `Driver: S24_3LE at
- * 96kHz 2ch, matches`, or `null` when there is none.
+ * The driver's report while the server plays, e.g. `Confirmed by the
+ * driver: hardware running at S24_3LE 96kHz 2ch`, or `null` when there is
+ * none.
  */
 export function serverDriverLine(session: NativeOutputSession) {
   const hardware = session.hardware;
   if (!hardware) return null;
   const params = hardware.params;
-  return `Driver: ${params.format} at ${formatSampleRate(params.rate)} ${params.channels}ch, ${
-    hardware.matches_stream ? "as opened" : "converted after Parson"
-  }`;
+  const running = `${params.format} ${formatSampleRate(params.rate)} ${params.channels}ch`;
+  const chain = hardware.chain?.plugins.length
+    ? ` via ${hardware.chain.plugins.join(" → ")}`
+    : "";
+  if (hardware.matches_stream) {
+    return `Confirmed by the driver: ${hardware.reporter === "library" ? "running" : "hardware running"} at ${running}${chain}`;
+  }
+  const converting = hardware.chain?.converting.length
+    ? ` by ${hardware.chain.converting.join(", ")}`
+    : "";
+  return `Driver: ${running}, converted after Parson${converting}`;
+}
+
+/**
+ * The server output as the kernel and driver name it, e.g.
+ * `USB 152a:8750 · high speed · ALSA hw:1,0 exclusive on studio-pc`.
+ */
+export function serverTransportLine(session: NativeOutputSession) {
+  const device = session.signal_path?.output_device;
+  if (!device) return null;
+  return [
+    device.usb_id ? `USB ${device.usb_id}` : null,
+    device.usb_speed,
+    `${device.transport} on ${device.host}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }

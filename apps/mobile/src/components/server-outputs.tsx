@@ -30,6 +30,7 @@ import {
   serverHardwareLine,
   serverOutputSummary,
   serverSessionLine,
+  serverTransportLine,
   unsupportedRates,
 } from "@/lib/server-outputs";
 import { DspControls, QualityGlyph } from "./signal-path";
@@ -186,6 +187,9 @@ export function ServerOutputs({
             </Text>
           </View>
           <Text style={styles.detail}>{serverSessionLine(current)}</Text>
+          {serverTransportLine(current) ? (
+            <Text style={styles.detail}>{serverTransportLine(current)}</Text>
+          ) : null}
           {serverDriverLine(current) ? (
             <Text
               style={[

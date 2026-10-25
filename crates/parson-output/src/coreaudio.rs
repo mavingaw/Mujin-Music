@@ -403,6 +403,7 @@ impl Backend for CoreAudioBackend {
                         .or(probe_error),
                     is_default: default == Some(device),
                     hardware: None,
+                    address: None,
                 })
             })
             .collect()

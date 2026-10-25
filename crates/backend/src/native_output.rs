@@ -49,6 +49,8 @@ pub struct DeviceView {
     pub driver: Driver,
     /// e.g. `WASAPI Exclusive Mode`, following the exclusive setting.
     pub mode_label: String,
+    /// How the driver addresses it, e.g. `hw:1,0` or an ALSA PCM name.
+    pub address: Option<String>,
     pub exclusive_capable: bool,
     pub is_default: bool,
     pub probe_error: Option<String>,
@@ -266,6 +268,35 @@ pub struct NativeOutputs {
     resampler: &'static str,
     state: Mutex<State>,
     session: Mutex<Option<Session>>,
+}
+
+/// This machine's host name, for the transport stage ("studio-pc ·
+/// Parson audio transport"); `This server` when it cannot be read.
+pub fn host_name() -> &'static str {
+    static HOST: OnceLock<String> = OnceLock::new();
+    HOST.get_or_init(|| {
+        let mut buffer = [0u8; 256];
+        // SAFETY: the buffer is writable for its whole length, and
+        // gethostname NUL-terminates within it on success.
+        #[cfg(target_os = "linux")]
+        let name = (unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0)
+            .then(|| {
+                let end = buffer
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(buffer.len());
+                String::from_utf8_lossy(&buffer[..end]).trim().to_string()
+            });
+        #[cfg(not(target_os = "linux"))]
+        let name = {
+            let _ = &mut buffer;
+            std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .ok()
+        };
+        name.filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "This server".to_string())
+    })
 }
 
 /// The process-wide outputs, with the platform backend and, when
@@ -618,7 +649,7 @@ impl NativeOutputs {
         let extension = Path::new(&song.path)
             .extension()
             .and_then(|extension| extension.to_str());
-        let mode_label = device.driver.mode_label(settings.exclusive);
+        let mode_label = device.mode_label(settings.exclusive);
         let path = describe_native_leg(
             &song.id,
             song.audio.as_ref(),
@@ -626,7 +657,17 @@ impl NativeOutputs {
             &plan,
             &NativeOutputTarget {
                 device_name: &device.name,
-                mode_label,
+                mode_label: &mode_label,
+                host: host_name(),
+                config_pcm: device.is_alsa_config_pcm(),
+                usb_id: device
+                    .hardware
+                    .as_ref()
+                    .and_then(|hardware| hardware.usb_id.as_deref()),
+                usb_speed: device
+                    .hardware
+                    .as_ref()
+                    .and_then(|hardware| hardware.speed.as_deref()),
                 simulated: device.driver == Driver::Simulated,
                 resampler: self.resampler,
                 leveling: leveling.map(|leveling| NativeLeveling {
@@ -813,7 +854,8 @@ fn view(
         name: device.name.clone(),
         detail: device.detail.clone(),
         driver: device.driver,
-        mode_label: device.driver.mode_label(settings.exclusive).to_string(),
+        mode_label: device.mode_label(settings.exclusive),
+        address: device.address.clone(),
         exclusive_capable: device.exclusive_capable,
         is_default: device.is_default,
         probe_error: device.probe_error.clone(),
@@ -1420,6 +1462,8 @@ mod tests {
             let params = parson_output::procfs::parse_hw_params(self.report?)?;
             Some(HardwareStatus {
                 source: "/proc/asound/card1/pcm0p/sub0/hw_params".into(),
+                reporter: parson_output::procfs::HardwareReporter::Kernel,
+                chain: None,
                 matches_stream: parson_output::procfs::params_match(&params, stream),
                 params,
                 momentary_hz: Some(96_000),
@@ -1449,7 +1493,11 @@ mod tests {
         assert!(hardware.matches_stream);
         let stage = view.signal_path.stages.last().unwrap();
         assert_eq!(stage.id, "native-hardware");
-        assert_eq!(stage.detail, "S24_3LE at 96kHz 2ch, USB clock 96kHz");
+        assert_eq!(stage.title, "Confirmed by the driver");
+        assert_eq!(
+            stage.detail,
+            "hardware running at S24_3LE 96kHz 2ch, USB clock 96kHz"
+        );
         assert_eq!(view.signal_path.quality, SignalQuality::Lossless);
         matching.stop().unwrap();
 
@@ -1650,7 +1698,10 @@ mod tests {
             started.signal_path.quality,
             crate::signal_path::SignalQuality::Enhanced
         );
-        let status = wait_for_status(&outputs, |status| status.clipping);
+        // Clipping can be seen before the first speed measurement.
+        let status = wait_for_status(&outputs, |status| {
+            status.clipping && status.realtime_factor.is_some()
+        });
         assert!(status.clipping && status.clipped_samples > 0);
         assert!(status.realtime_factor.unwrap() > 1.0);
 

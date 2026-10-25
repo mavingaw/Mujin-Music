@@ -103,10 +103,27 @@ export interface NativeHardwareInfo {
   altsets: UsbAltset[];
 }
 
-/** The kernel's report of what a playing device runs at. */
+/** The ALSA plugin chain behind an opened PCM, from `snd_pcm_dump`. */
+export interface NativePcmChain {
+  /** Top to bottom, e.g. `["File PCM", "Null PCM"]`. */
+  plugins: string[];
+  /** No plugin in the chain can change a sample. */
+  bit_exact: boolean;
+  /** The plugins that convert, mix or scale. */
+  converting: string[];
+}
+
+/** The driver's report of what a playing device runs at. */
 export interface NativeHardwareStatus {
-  /** The file read, e.g. `/proc/asound/card1/pcm0p/sub0/hw_params`. */
+  /**
+   * The file read, e.g. `/proc/asound/card1/pcm0p/sub0/hw_params`, or
+   * `snd_pcm_dump(<pcm>)` for a libasound report.
+   */
   source: string;
+  /** `kernel` (procfs) or `library` (libasound's opened chain). */
+  reporter?: "kernel" | "library";
+  /** The plugin chain the samples pass through, for libasound reports. */
+  chain?: NativePcmChain | null;
   params: {
     access: string | null;
     /** e.g. `S24_3LE`. */
@@ -137,8 +154,13 @@ export interface NativeOutputDevice {
   /** e.g. `hw:CARD=USB,DEV=0 · ...` or `USB`. */
   detail: string;
   driver: NativeOutputDriver;
-  /** e.g. `WASAPI Exclusive Mode`, following the exclusive setting. */
+  /**
+   * e.g. `ALSA hw:1,0 exclusive` or `WASAPI Exclusive Mode`, following
+   * the exclusive setting.
+   */
   mode_label: string;
+  /** How the driver addresses it: `hw:1,0`, or an ALSA PCM's name. */
+  address?: string | null;
   exclusive_capable: boolean;
   is_default: boolean;
   /** Why the device could not be probed (e.g. in use by another app). */

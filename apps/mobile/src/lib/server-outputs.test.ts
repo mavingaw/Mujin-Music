@@ -12,6 +12,7 @@ import {
   serverDspSummary,
   serverOutputSummary,
   serverSessionLine,
+  serverTransportLine,
   unsupportedRates,
 } from "./server-outputs";
 
@@ -143,7 +144,64 @@ test("DSD support, hardware and the driver's report are summarised", () => {
     },
   } as unknown as NativeOutputSession;
   expect(serverDriverLine(session)).toBe(
-    "Driver: S24_3LE at 96kHz 2ch, as opened",
+    "Confirmed by the driver: hardware running at S24_3LE 96kHz 2ch",
   );
   expect(serverDriverLine({} as NativeOutputSession)).toBeNull();
+});
+
+test("libasound reports name the plugin chain, and the transport names the driver", () => {
+  const params = {
+    access: "RW_INTERLEAVED",
+    format: "S16_LE",
+    channels: 2,
+    rate: 44_100,
+    period_size: 2_205,
+    buffer_size: 8_820,
+  };
+  const confirmed = {
+    hardware: {
+      source: "snd_pcm_dump(parson_capture)",
+      reporter: "library",
+      chain: {
+        plugins: ["File PCM", "Null PCM"],
+        bit_exact: true,
+        converting: [],
+      },
+      params,
+      momentary_hz: null,
+      matches_stream: true,
+    },
+    signal_path: {
+      output_device: {
+        name: "E30",
+        host: "studio-pc",
+        transport: "ALSA hw:1,0 exclusive",
+        usb_id: "152a:8750",
+        usb_speed: "high speed",
+        simulated: false,
+      },
+    },
+  } as unknown as NativeOutputSession;
+  expect(serverDriverLine(confirmed)).toBe(
+    "Confirmed by the driver: running at S16_LE 44.1kHz 2ch via File PCM → Null PCM",
+  );
+  expect(serverTransportLine(confirmed)).toBe(
+    "USB 152a:8750 · high speed · ALSA hw:1,0 exclusive on studio-pc",
+  );
+  const converted = {
+    hardware: {
+      ...confirmed.hardware,
+      chain: {
+        plugins: ["Linear conversion PCM", "Null PCM"],
+        bit_exact: false,
+        converting: ["Linear conversion PCM"],
+      },
+      params: { ...params, format: "S32_LE" },
+      matches_stream: false,
+    },
+  } as unknown as NativeOutputSession;
+  expect(serverDriverLine(converted)).toBe(
+    "Driver: S32_LE 44.1kHz 2ch, converted after Parson by Linear conversion PCM",
+  );
+  expect(serverTransportLine({} as NativeOutputSession)).toBeNull();
 });

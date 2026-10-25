@@ -121,17 +121,19 @@ describe("DSD in the signal path", () => {
         stage({
           id: "native-hardware",
           kind: "output",
-          title: "Driver report",
-          detail: "S24_3LE at 96kHz 2ch",
+          title: "Confirmed by the driver",
+          detail: "hardware running at S24_3LE 96kHz 2ch",
         }),
       ]),
       client,
     );
     expect(verified.hardwareVerified).toBeTrue();
-    expect(verified.hardwareReport).toBe("S24_3LE at 96kHz 2ch");
+    expect(verified.hardwareReport).toBe(
+      "hardware running at S24_3LE 96kHz 2ch",
+    );
     expect(verified.bitPerfect).toBeTrue();
     expect(verified.description).toContain(
-      "The driver confirms the hardware is running S24_3LE at 96kHz 2ch.",
+      "Confirmed by the driver: hardware running at S24_3LE 96kHz 2ch.",
     );
     const converted = buildSignalPath(
       nativeServer([
@@ -149,6 +151,45 @@ describe("DSD in the signal path", () => {
     expect(converted.hardwareVerified).toBeFalse();
     expect(converted.quality).toBe("high_quality");
     expect(converted.bitPerfect).toBeFalse();
+  });
+
+  test("an ALSA hw path names its transport and ends with the driver's confirmation", () => {
+    const path = buildSignalPath(
+      nativeServer([
+        stage({ id: "source", kind: "source" }),
+        stage({ id: "native-decode", kind: "decode" }),
+        stage({
+          id: "native-transport",
+          kind: "transport",
+          title: "studio-pc · Parson audio transport",
+          detail: "ALSA hw:1,0 exclusive",
+        }),
+        stage({
+          id: "native-output",
+          kind: "output",
+          title: "E30",
+          detail: "ALSA hw:1,0 exclusive, 96kHz 24bit 2ch",
+        }),
+        stage({
+          id: "native-hardware",
+          kind: "output",
+          title: "Confirmed by the driver",
+          detail: "hardware running at S24_3LE 96kHz 2ch",
+        }),
+      ]),
+      { ...client, output: { kind: "native", name: "E30" } },
+    );
+    expect(path.transport).toBe("ALSA hw:1,0 exclusive");
+    expect(path.bitPerfect).toBeTrue();
+    expect(path.hardwareVerified).toBeTrue();
+    expect(path.description).toBe(
+      "A high-resolution lossless stream reaches E30 bit-perfect, in exclusive mode at 96kHz 24bit 2ch. Confirmed by the driver: hardware running at S24_3LE 96kHz 2ch.",
+    );
+    expect(
+      outputFormatFromDetail(
+        "ALSA PCM studio, no conversions, 44.1kHz 16bit 2ch",
+      ),
+    ).toBe("44.1kHz 16bit 2ch");
   });
 
   test("output formats are read from every detail shape", () => {

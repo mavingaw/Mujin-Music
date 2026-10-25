@@ -6,14 +6,17 @@
 //! `plughw:` is the same device with ALSA's conversion plugins enabled,
 //! used when exclusive mode is off.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::io;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::procfs::{self, CapsSource, HardwareInfo, HardwareStatus};
+use crate::pcm_chain::{PcmChain, parse_pcm_dump};
+use crate::procfs::{self, CapsSource, HardwareInfo, HardwareReporter, HardwareStatus};
 use crate::{
-    Backend, DSD_FORMATS, DSD_RATES, DeviceCaps, DeviceInfo, Driver, STANDARD_RATES, SampleFormat,
-    Sink, StreamFormat,
+    ALSA_CONFIG_PCM_PREFIX, Backend, DSD_FORMATS, DSD_RATES, DeviceCaps, DeviceInfo, Driver,
+    STANDARD_RATES, SampleFormat, Sink, StreamFormat,
 };
 
 type Ctl = c_void;
@@ -21,6 +24,7 @@ type Pcm = c_void;
 type PcmInfo = c_void;
 type CardInfo = c_void;
 type HwParams = c_void;
+type Output = c_void;
 
 const STREAM_PLAYBACK: c_int = 0;
 const MODE_NONBLOCK: c_int = 1;
@@ -127,6 +131,13 @@ alsa_api! {
     snd_pcm_drop: fn(*mut Pcm) -> c_int;
     snd_pcm_prepare: fn(*mut Pcm) -> c_int;
     snd_strerror: fn(c_int) -> *const c_char;
+    snd_device_name_hint: fn(c_int, *const c_char, *mut *mut *mut c_void) -> c_int;
+    snd_device_name_get_hint: fn(*const c_void, *const c_char) -> *mut c_char;
+    snd_device_name_free_hint: fn(*mut *mut c_void) -> c_int;
+    snd_output_buffer_open: fn(*mut *mut Output) -> c_int;
+    snd_output_buffer_string: fn(*mut Output, *mut *mut c_char) -> usize;
+    snd_output_close: fn(*mut Output) -> c_int;
+    snd_pcm_dump: fn(*mut Pcm, *mut Output) -> c_int;
 }
 
 fn api() -> Option<&'static Api> {
@@ -166,16 +177,63 @@ fn take_string(pointer: *mut c_char) -> Option<String> {
     Some(text)
 }
 
-pub struct AlsaBackend;
+/// What libasound built when a device was opened: the PCM name and the
+/// plugin chain, with the setup the bottom of the chain negotiated.
+#[derive(Clone, Debug)]
+struct OpenReport {
+    pcm: String,
+    chain: PcmChain,
+    generation: u64,
+}
+
+type OpenReports = Arc<Mutex<HashMap<String, OpenReport>>>;
+
+pub struct AlsaBackend {
+    open: OpenReports,
+}
 
 impl AlsaBackend {
     pub fn load() -> Option<Self> {
-        api().map(|_| Self)
+        api().map(|_| Self {
+            open: Arc::default(),
+        })
     }
 }
 
-/// `alsa:USB:0` to `hw:CARD=USB,DEV=0` (or `plughw:` when shared).
+/// A PCM name from the ALSA configuration that Parson can open as is:
+/// letters, digits, `_`, `-` and `.`, the way `pcm.<name>` is written.
+fn valid_config_pcm(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// Configuration PCMs worth listing beside the sound cards: named ones a
+/// user or a package defined (a network bridge, a loopback, a capture, a
+/// sound server). Per-card aliases (`front:CARD=…`, `hw:…`) are covered by
+/// the card list, and `null`/`default`/`sysdefault` are not outputs.
+fn listable_config_pcm(name: &str, ioid: Option<&str>) -> bool {
+    valid_config_pcm(name)
+        && !matches!(name, "null" | "default" | "sysdefault")
+        && ioid.is_none_or(|ioid| ioid == "Output")
+}
+
+/// `alsa:USB:0` to `hw:CARD=USB,DEV=0` (or `plughw:` when shared), and
+/// `alsa-pcm:studio` to `studio` (or `plug:studio` when shared, which lets
+/// ALSA convert).
 fn pcm_name(device_id: &str, exclusive: bool) -> Option<String> {
+    if let Some(name) = device_id.strip_prefix(ALSA_CONFIG_PCM_PREFIX) {
+        if !valid_config_pcm(name) {
+            return None;
+        }
+        return Some(if exclusive {
+            name.to_string()
+        } else {
+            format!("plug:{name}")
+        });
+    }
     let rest = device_id.strip_prefix("alsa:")?;
     let (card, device) = rest.rsplit_once(':')?;
     if card.is_empty()
@@ -272,6 +330,65 @@ fn enumerate(api: &Api) -> Vec<CardDevice> {
         }
     }
     found
+}
+
+/// PCMs from the ALSA configuration, as `aplay -L` lists them: name and
+/// the first line of the description.
+fn enumerate_config_pcms(api: &Api) -> Vec<(String, Option<String>)> {
+    let mut found = Vec::new();
+    let mut hints: *mut *mut c_void = std::ptr::null_mut();
+    // SAFETY: libasound fills `hints` with a NULL-terminated array that is
+    // freed below; each hint string it returns is malloc'd and taken.
+    unsafe {
+        if (api.snd_device_name_hint)(-1, c"pcm".as_ptr(), &mut hints) < 0 || hints.is_null() {
+            return found;
+        }
+        let mut cursor = hints;
+        while !(*cursor).is_null() {
+            let hint = *cursor;
+            let name = take_string((api.snd_device_name_get_hint)(hint, c"NAME".as_ptr()));
+            let description = take_string((api.snd_device_name_get_hint)(hint, c"DESC".as_ptr()));
+            let ioid = take_string((api.snd_device_name_get_hint)(hint, c"IOID".as_ptr()));
+            if let Some(name) = name
+                && listable_config_pcm(&name, ioid.as_deref())
+            {
+                let description = description
+                    .and_then(|text| text.lines().next().map(str::trim).map(str::to_string))
+                    .filter(|text| !text.is_empty());
+                found.push((name, description));
+            }
+            cursor = cursor.add(1);
+        }
+        (api.snd_device_name_free_hint)(hints);
+    }
+    found
+}
+
+/// The chain libasound built for an open, configured PCM.
+///
+/// # Safety
+/// `pcm` must be a live handle whose parameters are set.
+unsafe fn dump_chain(api: &Api, pcm: *mut Pcm) -> Option<PcmChain> {
+    let mut output = std::ptr::null_mut();
+    // SAFETY: the output buffer is closed before returning; the string it
+    // hands out stays valid until then and is copied first.
+    unsafe {
+        if (api.snd_output_buffer_open)(&mut output) < 0 {
+            return None;
+        }
+        let text = if (api.snd_pcm_dump)(pcm, output) == 0 {
+            let mut buffer: *mut c_char = std::ptr::null_mut();
+            let length = (api.snd_output_buffer_string)(output, &mut buffer);
+            (!buffer.is_null()).then(|| {
+                String::from_utf8_lossy(std::slice::from_raw_parts(buffer.cast::<u8>(), length))
+                    .into_owned()
+            })
+        } else {
+            None
+        };
+        (api.snd_output_close)(output);
+        text.map(|text| parse_pcm_dump(&text))
+    }
 }
 
 fn probe(api: &Api, name: &str) -> io::Result<DeviceCaps> {
@@ -397,6 +514,27 @@ fn hardware_info(
     ))
 }
 
+fn lock(reports: &OpenReports) -> std::sync::MutexGuard<'_, HashMap<String, OpenReport>> {
+    reports
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// libasound's account of an open PCM: the setup the bottom of its chain
+/// negotiated, which matches the stream only when no plugin on the way
+/// could change a sample.
+fn library_status(report: &OpenReport, stream: &StreamFormat) -> Option<HardwareStatus> {
+    let params = report.chain.bottom.clone()?;
+    Some(HardwareStatus {
+        source: format!("snd_pcm_dump({})", report.pcm),
+        reporter: HardwareReporter::Library,
+        matches_stream: report.chain.bit_exact && procfs::params_match(&params, stream),
+        chain: Some(report.chain.clone()),
+        params,
+        momentary_hz: None,
+    })
+}
+
 /// `alsa:USB:0` to its card id and device number.
 fn card_and_device(device_id: &str) -> Option<(&str, i32)> {
     let rest = device_id.strip_prefix("alsa:")?;
@@ -413,50 +551,68 @@ impl Backend for AlsaBackend {
         let Some(api) = api() else {
             return Vec::new();
         };
-        enumerate(api)
+        let cards = enumerate(api).into_iter().map(|found| {
+            let id = format!("alsa:{}:{}", found.card_id, found.device);
+            let hw = format!("hw:CARD={},DEV={}", found.card_id, found.device);
+            let (mut caps, probe_error) = match probe(api, &hw) {
+                Ok(caps) => (Some(caps), None),
+                Err(error) => (None, Some(error.to_string())),
+            };
+            let root = std::path::Path::new(procfs::PROC_ASOUND);
+            let hardware =
+                hardware_info(root, &found, caps.is_some()).map(|(hardware, descriptor_caps)| {
+                    // A busy DAC cannot be probed, but its descriptors
+                    // still say what it takes.
+                    if caps.is_none() {
+                        caps = descriptor_caps;
+                    }
+                    hardware
+                });
+            let name = match hardware.as_ref().and_then(|hw| hw.product.clone()) {
+                Some(product) => product,
+                None if found.pcm_name.is_empty() || found.pcm_name == found.card_name => {
+                    found.card_name.clone()
+                }
+                None => format!("{} {}", found.card_name, found.pcm_name),
+            };
+            DeviceInfo {
+                id,
+                name,
+                detail: if found.card_longname.is_empty() {
+                    hw
+                } else {
+                    format!("{hw} · {}", found.card_longname)
+                },
+                driver: Driver::Alsa,
+                exclusive_capable: true,
+                caps,
+                probe_error,
+                is_default: false,
+                hardware,
+                address: Some(format!("hw:{},{}", found.card, found.device)),
+            }
+        });
+        let configured = enumerate_config_pcms(api)
             .into_iter()
-            .map(|found| {
-                let id = format!("alsa:{}:{}", found.card_id, found.device);
-                let hw = format!("hw:CARD={},DEV={}", found.card_id, found.device);
-                let (mut caps, probe_error) = match probe(api, &hw) {
+            .map(|(pcm, description)| {
+                let (caps, probe_error) = match probe(api, &pcm) {
                     Ok(caps) => (Some(caps), None),
                     Err(error) => (None, Some(error.to_string())),
                 };
-                let root = std::path::Path::new(procfs::PROC_ASOUND);
-                let hardware = hardware_info(root, &found, caps.is_some()).map(
-                    |(hardware, descriptor_caps)| {
-                        // A busy DAC cannot be probed, but its descriptors
-                        // still say what it takes.
-                        if caps.is_none() {
-                            caps = descriptor_caps;
-                        }
-                        hardware
-                    },
-                );
-                let name = match hardware.as_ref().and_then(|hw| hw.product.clone()) {
-                    Some(product) => product,
-                    None if found.pcm_name.is_empty() || found.pcm_name == found.card_name => {
-                        found.card_name.clone()
-                    }
-                    None => format!("{} {}", found.card_name, found.pcm_name),
-                };
                 DeviceInfo {
-                    id,
-                    name,
-                    detail: if found.card_longname.is_empty() {
-                        hw
-                    } else {
-                        format!("{hw} · {}", found.card_longname)
-                    },
+                    id: format!("{ALSA_CONFIG_PCM_PREFIX}{pcm}"),
+                    name: description.clone().unwrap_or_else(|| pcm.clone()),
+                    detail: format!("ALSA PCM \"{pcm}\" from the ALSA configuration"),
                     driver: Driver::Alsa,
                     exclusive_capable: true,
                     caps,
                     probe_error,
                     is_default: false,
-                    hardware,
+                    hardware: None,
+                    address: Some(pcm),
                 }
-            })
-            .collect()
+            });
+        cards.chain(configured).collect()
     }
 
     fn open(
@@ -468,17 +624,38 @@ impl Backend for AlsaBackend {
         let api = api().ok_or_else(|| io::Error::other("libasound is not available"))?;
         let name = pcm_name(device_id, exclusive)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not an ALSA device id"))?;
-        Ok(Box::new(open_pcm(api, &name, format, exclusive)?))
+        let mut sink = open_pcm(api, &name, format, exclusive)?;
+        // SAFETY: the sink's handle is open and its parameters are set.
+        if let Some(chain) = unsafe { dump_chain(api, sink.pcm) } {
+            static GENERATION: AtomicU64 = AtomicU64::new(0);
+            let generation = GENERATION.fetch_add(1, Ordering::Relaxed);
+            lock(&self.open).insert(
+                device_id.to_string(),
+                OpenReport {
+                    pcm: name,
+                    chain,
+                    generation,
+                },
+            );
+            sink.report = Some((Arc::clone(&self.open), device_id.to_string(), generation));
+        }
+        Ok(Box::new(sink))
     }
 
     fn hardware_status(&self, device_id: &str, stream: &StreamFormat) -> Option<HardwareStatus> {
-        let (card, device) = card_and_device(device_id)?;
-        procfs::read_status(
-            std::path::Path::new(procfs::PROC_ASOUND),
-            card,
-            device,
-            stream,
-        )
+        // A sound card: the kernel's own hw_params first.
+        if let Some((card, device)) = card_and_device(device_id)
+            && let Some(status) = procfs::read_status(
+                std::path::Path::new(procfs::PROC_ASOUND),
+                card,
+                device,
+                stream,
+            )
+        {
+            return Some(status);
+        }
+        let report = lock(&self.open).get(device_id).cloned()?;
+        library_status(&report, stream)
     }
 }
 
@@ -513,13 +690,21 @@ fn open_pcm(
             return Err(error(api, code, name));
         }
     }
-    Ok(AlsaSink { api, pcm, format })
+    Ok(AlsaSink {
+        api,
+        pcm,
+        format,
+        report: None,
+    })
 }
 
 struct AlsaSink {
     api: &'static Api,
     pcm: *mut Pcm,
     format: StreamFormat,
+    /// The open report this sink registered, removed when it closes
+    /// (unless a newer open of the device replaced it).
+    report: Option<(OpenReports, String, u64)>,
 }
 
 // SAFETY: the PCM handle is only used by the thread that owns the sink;
@@ -581,6 +766,15 @@ impl Sink for AlsaSink {
 
 impl Drop for AlsaSink {
     fn drop(&mut self) {
+        if let Some((reports, device_id, generation)) = self.report.take() {
+            let mut reports = lock(&reports);
+            if reports
+                .get(&device_id)
+                .is_some_and(|report| report.generation == generation)
+            {
+                reports.remove(&device_id);
+            }
+        }
         // SAFETY: the handle was opened by `open` and is closed once.
         unsafe {
             (self.api.snd_pcm_drop)(self.pcm);
@@ -607,6 +801,88 @@ mod tests {
         assert_eq!(pcm_name("alsa:USB", true), None);
         assert_eq!(pcm_name("alsa:U,S:0", true), None);
         assert_eq!(pcm_name("wasapi:x:0", true), None);
+        assert_eq!(
+            pcm_name("alsa-pcm:studio_dac", true).as_deref(),
+            Some("studio_dac")
+        );
+        assert_eq!(
+            pcm_name("alsa-pcm:studio_dac", false).as_deref(),
+            Some("plug:studio_dac")
+        );
+        assert_eq!(pcm_name("alsa-pcm:file:FILE=/etc/passwd", true), None);
+        assert_eq!(pcm_name("alsa-pcm:", true), None);
+        assert_eq!(card_and_device("alsa-pcm:studio"), None);
+    }
+
+    #[test]
+    fn only_named_output_pcms_from_the_configuration_are_listed() {
+        assert!(listable_config_pcm("parson_capture", None));
+        assert!(listable_config_pcm("pipewire", Some("Output")));
+        assert!(!listable_config_pcm("mic", Some("Input")));
+        assert!(!listable_config_pcm("null", None));
+        assert!(!listable_config_pcm("default", None));
+        assert!(!listable_config_pcm("front:CARD=PCH,DEV=0", None));
+        assert!(!listable_config_pcm("hw:CARD=E30,DEV=0", None));
+    }
+
+    #[test]
+    fn libasound_reports_the_chain_it_opened() {
+        // The real libasound builds a file -> null chain; Parson reads it
+        // back with snd_pcm_dump and checks the bottom's setup.
+        let Some(api) = api() else {
+            return;
+        };
+        let path = std::env::temp_dir().join(format!("parson-chain-{}.raw", std::process::id()));
+        let format = StreamFormat {
+            sample_rate: 96_000,
+            sample_format: SampleFormat::S24Packed,
+            channels: 2,
+        };
+        let name = format!("file:FILE={},FORMAT=raw", path.display());
+        let Ok(sink) = open_pcm(api, &name, format, true) else {
+            return;
+        };
+        // SAFETY: the sink is open with its parameters set.
+        let chain = unsafe { dump_chain(api, sink.pcm) }.expect("libasound dumps the PCM");
+        drop(sink);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(chain.plugins, ["File PCM", "Null PCM"]);
+        assert!(chain.bit_exact);
+        let report = OpenReport {
+            pcm: name.clone(),
+            chain,
+            generation: 0,
+        };
+        let status = library_status(&report, &format).unwrap();
+        assert_eq!(status.reporter, HardwareReporter::Library);
+        assert_eq!(status.params.format, "S24_3LE");
+        assert_eq!(status.params.rate, 96_000);
+        assert!(status.matches_stream);
+        assert_eq!(status.source, format!("snd_pcm_dump({name})"));
+        // Opened as 16-bit, the same chain does not match a 24-bit stream.
+        let other = StreamFormat {
+            sample_format: SampleFormat::S16,
+            ..format
+        };
+        assert!(!library_status(&report, &other).unwrap().matches_stream);
+    }
+
+    #[test]
+    fn a_converting_chain_never_matches() {
+        let report = OpenReport {
+            pcm: "studio".into(),
+            chain: crate::pcm_chain::parse_pcm_dump(
+                "Plug PCM: Linear conversion PCM (S32_LE)\nIts setup is:\n  format : S16_LE\n  channels : 2\n  rate : 44100\nSlave: Null PCM\nIts setup is:\n  format : S16_LE\n  channels : 2\n  rate : 44100\n",
+            ),
+            generation: 0,
+        };
+        let stream = StreamFormat {
+            sample_rate: 44_100,
+            sample_format: SampleFormat::S16,
+            channels: 2,
+        };
+        let status = library_status(&report, &stream).unwrap();
+        assert!(!status.matches_stream);
     }
 
     #[test]
@@ -615,7 +891,7 @@ mod tests {
         // not fail even when there are no cards (CI, containers).
         if let Some(backend) = AlsaBackend::load() {
             for device in backend.devices() {
-                assert!(device.id.starts_with("alsa:"));
+                assert!(device.id.starts_with("alsa:") || device.is_alsa_config_pcm());
             }
         }
     }
@@ -651,7 +927,12 @@ mod tests {
             )
         };
         assert_eq!(code, 0);
-        let mut sink = AlsaSink { api, pcm, format };
+        let mut sink = AlsaSink {
+            api,
+            pcm,
+            format,
+            report: None,
+        };
         sink.write(&vec![0; 4_410 * 4]).unwrap();
         sink.flush().unwrap();
         sink.drain().unwrap();
