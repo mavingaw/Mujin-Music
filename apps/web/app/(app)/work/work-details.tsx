@@ -12,6 +12,7 @@ import {
 import { ExternalLink, Loader2, Pause, Play } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { EditorialText } from "@/features/library/credits/editorial-text";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { usePageTitle } from "@/components/app/title-metadata";
@@ -308,6 +309,18 @@ export default function WorkDetails() {
             </a>
           </div>
         </header>
+
+        {page.about && (
+          <section aria-labelledby="work-about" className="mb-12 max-w-170">
+            <h2
+              className="mb-3 text-sm font-semibold uppercase tracking-[0.08em] text-zinc-400"
+              id="work-about"
+            >
+              About
+            </h2>
+            <EditorialText clampLines={5} text={page.about} />
+          </section>
+        )}
 
         {parts.length > 0 && (
           <section aria-labelledby="work-movements" className="mb-12">

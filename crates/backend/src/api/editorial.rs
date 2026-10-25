@@ -79,6 +79,16 @@ pub struct AlbumAbout {
     pub genres: Vec<GenreRef>,
     /// Whether an administrator chose the genres by hand.
     pub genres_edited: bool,
+    /// About the pieces on the album, from their own Wikipedia articles:
+    /// what a classical album shows when the release has no article.
+    pub work_texts: Vec<WorkText>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkText {
+    pub work_mbid: String,
+    pub title: String,
+    pub text: EditorialText,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -569,8 +579,9 @@ fn parse_facts(profile: Option<&store::ProfileRow>) -> Option<Value> {
         .map(|mut value| {
             // What Wikidata linked to is bookkeeping for later stages.
             if let Some(object) = value.as_object_mut() {
-                object.remove(crate::enrichment::worker::WIKIDATA_KEY);
-                object.remove(crate::enrichment::worker::COMMONS_IMAGE_KEY);
+                for key in crate::enrichment::worker::INTERNAL_KEYS {
+                    object.remove(key);
+                }
             }
             value
         })
@@ -637,10 +648,28 @@ pub async fn album_about(
             .map_err(|error| error.to_string())?;
         let identification = store::load_identification(&mut connection, &lookup)
             .map_err(|error| error.to_string())?;
-        Ok::<_, String>((works, identification))
+        let mut work_texts = Vec::new();
+        for work in works.1.iter().filter(|work| work.parent_mbid.is_none()) {
+            if work_texts.len() >= 4 {
+                break;
+            }
+            if let Some(text) = store::work_background(&mut connection, &work.mbid)
+                .map_err(|error| error.to_string())?
+                && !work_texts
+                    .iter()
+                    .any(|known: &WorkText| known.text.url == text.url)
+            {
+                work_texts.push(WorkText {
+                    work_mbid: work.mbid.clone(),
+                    title: crate::enrichment::works::display_title(&work.title),
+                    text,
+                });
+            }
+        }
+        Ok::<_, String>((works, identification, work_texts))
     })
     .await;
-    let ((work_links, work_rows), identification) = match works {
+    let ((work_links, work_rows), identification, work_texts) = match works {
         Ok(Ok(found)) => found,
         _ => {
             tracing::error!("could not load album works");
@@ -662,6 +691,7 @@ pub async fn album_about(
         stored.texts.clear();
         stored.credits.clear();
     }
+    let work_texts = if untrusted { Vec::new() } else { work_texts };
     let mut texts = stored.texts;
     let mut credits = merge_album_credits(album, &known, &stored.credits);
     let ids = credits
@@ -693,6 +723,7 @@ pub async fn album_about(
         identification,
         genres,
         genres_edited,
+        work_texts,
         album_id,
         credits,
         background: texts.remove("background"),

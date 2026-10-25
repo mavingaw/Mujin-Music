@@ -1,5 +1,6 @@
 import {
   albumFormat,
+  albumTextPanels,
   albumWorkSections,
   getAlbumAbout,
   getAlbumInfo,
@@ -56,7 +57,7 @@ export default function AlbumScreen() {
     staleTime: 60_000,
   });
   const [actionsOpen, setActionsOpen] = useState(false);
-  const [textKind, setTextKind] = useState<"review" | "background">("review");
+  const [textKind, setTextKind] = useState<string | null>(null);
   if (album.isPending)
     return (
       <Screen>
@@ -97,16 +98,11 @@ export default function AlbumScreen() {
   )?.[0];
   const label =
     data.label ?? (facts?.exact ? facts.labels?.[0]?.name : undefined);
-  const texts = [
-    about.data?.review ? { key: "review" as const, label: "Review" } : null,
-    about.data?.background
-      ? { key: "background" as const, label: "About" }
-      : null,
-  ].filter((entry) => entry !== null);
-  const shownText =
-    textKind === "review" && about.data?.review
-      ? about.data.review
-      : (about.data?.background ?? about.data?.review ?? null);
+  // Review / About / the pieces' own articles, as on the web.
+  const texts = albumTextPanels(about.data);
+  const shownPanel =
+    texts.find((entry) => entry.key === textKind) ?? texts[0] ?? null;
+  const shownText = shownPanel?.text ?? null;
   const albumPlaying =
     player.isPlaying && player.current?.album_object?.id === data.id;
   return (
@@ -244,21 +240,20 @@ export default function AlbumScreen() {
                   <Pressable
                     accessibilityRole="tab"
                     accessibilityState={{
-                      selected: shownText === about.data?.[entry.key],
+                      selected: shownPanel?.key === entry.key,
                     }}
                     key={entry.key}
                     onPress={() => setTextKind(entry.key)}
                     style={[
                       styles.pill,
-                      shownText === about.data?.[entry.key] &&
-                        styles.pillActive,
+                      shownPanel?.key === entry.key && styles.pillActive,
                     ]}
                   >
                     <Text
+                      numberOfLines={1}
                       style={[
                         styles.pillText,
-                        shownText === about.data?.[entry.key] &&
-                          styles.pillTextActive,
+                        shownPanel?.key === entry.key && styles.pillTextActive,
                       ]}
                     >
                       {entry.label}

@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import type {
   ComposerWork,
+  EditorialText,
   PersonRef,
   TrackWork,
   WorkRecording,
   WorkSummary,
 } from "../domain/types";
 import {
+  albumTextPanels,
   albumWorkSections,
   composerWorkFacets,
   filterComposerWorks,
@@ -210,4 +212,68 @@ test("consecutive movements of one piece share an album section", () => {
   expect(trackWorkTarget(works)?.mbid).toBe("ninth");
   expect(trackWorkTarget([movement("t3", null)])?.mbid).toBe("t3-work");
   expect(trackWorkTarget([])).toBeNull();
+});
+
+const wikiText = (
+  title: string,
+  kind: EditorialText["kind"] = "background",
+): EditorialText => ({
+  kind,
+  source: "wikipedia",
+  language: "en",
+  title,
+  body: `${title} text`,
+  url: `https://en.wikipedia.org/wiki/${title.replace(/ /g, "_")}`,
+  license: "CC BY-SA 4.0",
+  license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+});
+
+test("album text panels put the review first and add the pieces' articles", () => {
+  expect(albumTextPanels(null)).toEqual([]);
+  const jazz = albumTextPanels({
+    review: wikiText("Kind of Blue", "reception"),
+    background: wikiText("Kind of Blue"),
+  });
+  expect(jazz.map((panel) => panel.label)).toEqual(["Review", "About"]);
+
+  // A classical album without an article of its own shows its piece.
+  const classical = albumTextPanels({
+    review: null,
+    background: null,
+    work_texts: [
+      {
+        work_mbid: "ninth",
+        title: "Symphony No. 9 in D minor, Op. 125",
+        text: wikiText("Symphony No. 9 (Beethoven)"),
+      },
+    ],
+  });
+  expect(classical).toHaveLength(1);
+  expect(classical[0]).toMatchObject({
+    key: "work:ninth",
+    label: "About the work",
+    workMbid: "ninth",
+  });
+
+  // Several pieces are named; one that is the album's own article is not repeated.
+  const coupling = albumTextPanels({
+    review: null,
+    background: wikiText("Symphony No. 9 (Beethoven)"),
+    work_texts: [
+      {
+        work_mbid: "ninth",
+        title: "Symphony No. 9",
+        text: wikiText("Symphony No. 9 (Beethoven)"),
+      },
+      {
+        work_mbid: "eighth",
+        title: "Symphony No. 8",
+        text: wikiText("Symphony No. 8 (Beethoven)"),
+      },
+    ],
+  });
+  expect(coupling.map((panel) => panel.label)).toEqual([
+    "About",
+    "Symphony No. 8",
+  ]);
 });

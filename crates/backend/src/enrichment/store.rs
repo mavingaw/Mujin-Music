@@ -143,7 +143,17 @@ pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
          ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
     )
     .execute(connection)?;
-    Ok(queued + linked)
+    // Text no longer waits for Wikidata: anything matched gets a Wikipedia
+    // stage of its own.
+    let text = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT 'wikipedia', entity_type, entity_id FROM editorial_profile
+         WHERE entity_type IN ('artist', 'album', 'work')
+           AND (musicbrainz_id IS NOT NULL OR wikidata_id IS NOT NULL)
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    Ok(queued + linked + text)
 }
 
 /// The enrichment stages. Each one talks to a single host and has its own
@@ -154,10 +164,14 @@ pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
 pub enum Stage {
     /// Resolve the album or artist and its credits on MusicBrainz.
     Musicbrainz,
-    /// Read sitelinks, life dates and the P18 image from Wikidata.
-    Wikidata,
-    /// Fetch the biography, background and reception text.
+    /// Fetch the biography, background and reception text, from the
+    /// Wikipedia link MusicBrainz gives or an article whose Wikidata item
+    /// matches. It does not wait for the Wikidata stage.
     Wikipedia,
+    /// Read sitelinks, life dates and the P18 image from Wikidata, which
+    /// enrich what the Wikipedia stage found (an article in the preferred
+    /// language, a photo).
+    Wikidata,
     /// Download the licensed artist photo from Wikimedia Commons.
     Commons,
 }
@@ -165,8 +179,8 @@ pub enum Stage {
 impl Stage {
     pub const ALL: [Stage; 4] = [
         Stage::Musicbrainz,
-        Stage::Wikidata,
         Stage::Wikipedia,
+        Stage::Wikidata,
         Stage::Commons,
     ];
 
@@ -289,9 +303,12 @@ pub fn next_stage_task(
     let mut tasks = diesel::sql_query(
         "SELECT id, entity_type, entity_id, attempts FROM metadata_task
          WHERE provider = ? AND status = 'pending'
-           AND entity_type IN ('album', 'artist', 'genre')
+           AND entity_type IN ('album', 'artist', 'genre', 'work')
            AND (not_before IS NULL OR not_before <= CURRENT_TIMESTAMP)
-         ORDER BY CASE entity_type WHEN 'genre' THEN 0 WHEN 'album' THEN 1 ELSE 2 END, attempts, id
+         ORDER BY attempts,
+                  CASE entity_type WHEN 'album' THEN 0 WHEN 'artist' THEN 1
+                                   WHEN 'genre' THEN 2 ELSE 3 END,
+                  id
          LIMIT 1",
     )
     .bind::<Text, _>(stage.provider())
@@ -338,6 +355,80 @@ pub fn finish_task(
     .bind::<Integer, _>(task.id)
     .execute(connection)?;
     Ok(())
+}
+
+/// Records the outcome of one stage for an entity, as [`finish_task`] does
+/// for a task the queue handed out.
+pub fn finish_stage(
+    connection: &mut SqliteConnection,
+    stage: Stage,
+    entity_type: &str,
+    entity_id: &str,
+    outcome: &Outcome,
+) -> QueryResult<()> {
+    let mut tasks = diesel::sql_query(
+        "SELECT id, entity_type, entity_id, attempts FROM metadata_task
+         WHERE provider = ? AND entity_type = ? AND entity_id = ?",
+    )
+    .bind::<Text, _>(stage.provider())
+    .bind::<Text, _>(entity_type)
+    .bind::<Text, _>(entity_id)
+    .load::<Task>(connection)?;
+    match tasks.pop() {
+        Some(task) => finish_task(connection, &task, outcome),
+        None => Ok(()),
+    }
+}
+
+/// Queues a stage for an entity that has never had it; a finished or
+/// pending task is left alone.
+pub fn queue_stage_once(
+    connection: &mut SqliteConnection,
+    stage: Stage,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<bool> {
+    let added = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id) VALUES (?, ?, ?)
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .bind::<Text, _>(stage.provider())
+    .bind::<Text, _>(entity_type)
+    .bind::<Text, _>(entity_id)
+    .execute(connection)?;
+    Ok(added > 0)
+}
+
+#[derive(QueryableByName)]
+struct NamesRow {
+    #[diesel(sql_type = Text)]
+    name: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    artist: Option<String>,
+}
+
+/// The catalog's name for an entity (and an album's artist), for profiles
+/// stored before they recorded names.
+pub fn entity_names(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<Option<(String, Option<String>)>> {
+    let query = match entity_type {
+        "album" => {
+            "SELECT al.title AS name,
+                    (SELECT ar.name FROM album_artist aa JOIN artist_entity ar ON ar.id = aa.artist_id
+                     WHERE aa.album_id = al.id ORDER BY aa.position LIMIT 1) AS artist
+             FROM album_entity al WHERE al.id = ?"
+        }
+        "artist" => "SELECT name, NULL AS artist FROM artist_entity WHERE id = ?",
+        "work" => "SELECT title AS name, composer_name AS artist FROM work WHERE mbid = ?",
+        _ => return Ok(None),
+    };
+    let mut rows = diesel::sql_query(query)
+        .bind::<Text, _>(entity_id)
+        .load::<NamesRow>(connection)?;
+    Ok(rows.pop().map(|row| (row.name, row.artist)))
 }
 
 /// Queues an entity to be looked up again.
@@ -387,8 +478,11 @@ pub fn task_state(
     .bind::<Text, _>(entity_id)
     .load::<TaskState>(connection)?;
     let by_stage = |stage: Stage| rows.iter().find(|row| row.stage == stage.provider());
-    // Genres start at Wikidata; they have no MusicBrainz stage.
-    let Some(first) = by_stage(Stage::Musicbrainz).or_else(|| by_stage(Stage::Wikidata)) else {
+    // Genres start at Wikipedia; they have no MusicBrainz stage.
+    let Some(first) = by_stage(Stage::Musicbrainz)
+        .or_else(|| by_stage(Stage::Wikipedia))
+        .or_else(|| by_stage(Stage::Wikidata))
+    else {
         return Ok(None);
     };
     if first.status != "done" {
@@ -542,6 +636,16 @@ pub fn replace_texts(
         }
         Ok(())
     })
+}
+
+/// A work's About text (the Wikipedia lead), when one was found.
+pub fn work_background(
+    connection: &mut SqliteConnection,
+    mbid: &str,
+) -> QueryResult<Option<EditorialText>> {
+    Ok(load_texts(connection, "work", mbid)?
+        .into_iter()
+        .find(|text| text.kind == "background"))
 }
 
 pub fn load_texts(
@@ -1262,9 +1366,17 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(seed_tasks(&mut connection).unwrap(), 1);
+        // It also gets a Wikipedia stage of its own, which does not wait
+        // for Wikidata.
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 2);
         assert_eq!(
             next_stage_task(&mut connection, Stage::Wikidata)
+                .unwrap()
+                .map(|task| task.entity_id),
+            Some("karajan".into())
+        );
+        assert_eq!(
+            next_stage_task(&mut connection, Stage::Wikipedia)
                 .unwrap()
                 .map(|task| task.entity_id),
             Some("karajan".into())
@@ -1649,14 +1761,14 @@ pub fn set_album_genre_edit(
     Ok(())
 }
 
-/// Queues a genre's About text (Wikidata, then Wikipedia) unless it was
-/// already looked up. Returns whether a task was added.
+/// Queues a genre's About text (the Wikipedia article the genre tree
+/// names) unless it was already looked up. Returns whether a task was added.
 pub fn queue_genre(connection: &mut SqliteConnection, slug: &str) -> QueryResult<bool> {
     let added = diesel::sql_query(
         "INSERT INTO metadata_task (provider, entity_type, entity_id) VALUES (?, 'genre', ?)
          ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
     )
-    .bind::<Text, _>(Stage::Wikidata.provider())
+    .bind::<Text, _>(Stage::Wikipedia.provider())
     .bind::<Text, _>(slug)
     .execute(connection)?;
     Ok(added > 0)

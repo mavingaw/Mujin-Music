@@ -491,6 +491,19 @@ export interface AlbumAbout {
   genres?: GenreRef[];
   /** Whether an administrator chose the genres by hand. */
   genres_edited?: boolean;
+  /**
+   * About the pieces on the album, from their own Wikipedia articles (what
+   * a classical album shows when the release has no article). Older
+   * servers leave this out.
+   */
+  work_texts?: WorkText[];
+}
+
+/** A piece on an album and its Wikipedia About text. */
+export interface WorkText {
+  work_mbid: string;
+  title: string;
+  text: EditorialText;
 }
 
 /** Where a genre came from. */
@@ -729,6 +742,11 @@ export interface WorkPage {
   recordings: WorkRecording[];
   /** The work on MusicBrainz. */
   url: string;
+  /**
+   * About the work from the Wikipedia article MusicBrainz links (a
+   * movement shows its piece's text). Older servers leave this out.
+   */
+  about?: EditorialText | null;
 }
 
 export interface ComposerWork {

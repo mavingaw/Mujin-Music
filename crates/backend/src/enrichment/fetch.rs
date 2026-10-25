@@ -19,9 +19,10 @@ pub const USER_AGENT: &str = concat!(
 );
 /// MusicBrainz allows one request per second per client; stay a little under.
 pub const MUSICBRAINZ_INTERVAL: Duration = Duration::from_millis(1_100);
-/// Wikimedia has no hard limit for this volume, but enrichment is background
-/// work and should stay gentle.
-pub const WIKIMEDIA_INTERVAL: Duration = Duration::from_millis(250);
+/// Wikimedia answers bursts from anonymous clients with 429, even for
+/// cached pages, so background enrichment stays well under one request a
+/// second per host.
+pub const WIKIMEDIA_INTERVAL: Duration = Duration::from_millis(900);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;

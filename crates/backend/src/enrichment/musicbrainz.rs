@@ -96,6 +96,11 @@ pub fn release_group_lookup_url(mbid: &str) -> String {
     format!("{API_ROOT}/release-group/{mbid}?inc=url-rels+genres&fmt=json")
 }
 
+/// A work with its URL relationships (Wikidata and Wikipedia links).
+pub fn work_lookup_url(mbid: &str) -> String {
+    format!("{API_ROOT}/work/{mbid}?inc=url-rels&fmt=json")
+}
+
 pub fn artist_page_url(mbid: &str) -> String {
     format!("https://musicbrainz.org/artist/{mbid}")
 }
@@ -184,6 +189,8 @@ pub struct ArtistProfile {
     pub end: Option<String>,
     pub disambiguation: Option<String>,
     pub wikidata_id: Option<String>,
+    /// A Wikipedia article linked directly, as `(language, title)`.
+    pub wikipedia: Option<(String, String)>,
     /// Genres voted on MusicBrainz, most votes first.
     pub genres: Vec<MbGenre>,
     /// A Commons file linked as the artist's image, a fallback when the
@@ -203,6 +210,7 @@ pub fn parse_artist(body: &Value) -> Option<ArtistProfile> {
         end: text(&life_span, "end"),
         disambiguation: text(body, "disambiguation"),
         wikidata_id: wikidata_relation(body),
+        wikipedia: wikipedia_relation(body),
         genres: parse_genres(body),
         image_file: image_relation(body),
     })
@@ -274,6 +282,39 @@ pub fn wikidata_relation(body: &Value) -> Option<String> {
         let resource = relation.get("url").and_then(|url| text(url, "resource"))?;
         let id = resource.rsplit('/').next()?;
         is_wikidata_id(id).then(|| id.to_string())
+    })
+}
+
+/// The Wikipedia article linked from an entity's URL relationships, as
+/// `(language, title)`. English wins when several languages are linked.
+pub fn wikipedia_relation(body: &Value) -> Option<(String, String)> {
+    let mut links = array(body, "relations")
+        .iter()
+        .filter(|relation| relation.get("type").and_then(Value::as_str) == Some("wikipedia"))
+        .filter_map(|relation| {
+            let resource = relation.get("url").and_then(|url| text(url, "resource"))?;
+            super::wikimedia::parse_wikipedia_url(&resource)
+        })
+        .collect::<Vec<_>>();
+    links.sort_by_key(|(language, _)| language != "en");
+    links.into_iter().next()
+}
+
+/// Wikipedia and Wikidata links of a work looked up with `inc=url-rels`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkLinks {
+    pub mbid: String,
+    pub title: String,
+    pub wikidata_id: Option<String>,
+    pub wikipedia: Option<(String, String)>,
+}
+
+pub fn parse_work_links(body: &Value) -> Option<WorkLinks> {
+    Some(WorkLinks {
+        mbid: text(body, "id").filter(|id| is_mbid(id))?,
+        title: text(body, "title").unwrap_or_default(),
+        wikidata_id: wikidata_relation(body),
+        wikipedia: wikipedia_relation(body),
     })
 }
 
@@ -1033,5 +1074,31 @@ mod tests {
             {"type": "image", "url": {"resource": "https://example.com/wiki/File:x.jpg"}}
         ]});
         assert_eq!(image_relation(&elsewhere), None);
+    }
+
+    #[test]
+    fn wikipedia_and_work_links_are_read_from_url_relations() {
+        let body = serde_json::json!({
+            "id": "22222222-2222-4222-8222-222222222222",
+            "title": "Symphony no. 9 in D minor, op. 125",
+            "relations": [
+                {"type": "wikipedia", "url": {"resource": "https://de.wikipedia.org/wiki/9._Sinfonie_(Beethoven)"}},
+                {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Symphony_No._9_(Beethoven)"}},
+                {"type": "wikidata", "url": {"resource": "https://www.wikidata.org/wiki/Q190125"}}
+            ]
+        });
+        assert_eq!(
+            wikipedia_relation(&body),
+            Some(("en".into(), "Symphony No. 9 (Beethoven)".into()))
+        );
+        let links = parse_work_links(&body).unwrap();
+        assert_eq!(links.wikidata_id.as_deref(), Some("Q190125"));
+        assert_eq!(links.title, "Symphony no. 9 in D minor, op. 125");
+        assert!(work_lookup_url(&links.mbid).ends_with("?inc=url-rels&fmt=json"));
+        assert!(parse_work_links(&serde_json::json!({"id": "nope"})).is_none());
+        assert_eq!(
+            wikipedia_relation(&serde_json::json!({"relations": []})),
+            None
+        );
     }
 }

@@ -21,6 +21,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
+import { EditorialBlock } from "@/components/credits";
 import { Chip } from "@/components/works";
 import { palette } from "@/constants/colors";
 import { artistRoute, joinMeta, workRoute } from "@/lib/credit-links";
@@ -117,6 +118,12 @@ export default function WorkScreen() {
               </Pressable>
             ) : null}
           </View>
+          {work.data.about ? (
+            <View style={styles.block}>
+              <SectionTitle>About</SectionTitle>
+              <EditorialBlock text={work.data.about} />
+            </View>
+          ) : null}
           {parts.length ? (
             <View style={styles.block}>
               <SectionTitle>Movements</SectionTitle>
