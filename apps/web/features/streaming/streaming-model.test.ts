@@ -4,6 +4,9 @@ import type {
   StreamingProviderStatus,
 } from "@parson/music-sdk";
 import {
+  editorialParagraphs,
+  isEditedCopyConflict,
+  radioPlaylistTitle,
   deliverySummary,
   needsOwnCredentials,
   serviceAction,
@@ -238,4 +241,35 @@ test("genre tiles use service artwork or a stable gradient", () => {
   expect(jazz.backgroundImage).toStartWith("linear-gradient(");
   expect(genreTileStyle("jazz", "http://insecure.test/x.jpg")).toEqual(jazz);
   expect(genreTileStyle("Pop", null)).not.toEqual(jazz);
+});
+
+test("reviews and biographies split into paragraphs", () => {
+  expect(editorialParagraphs("One.\n\nTwo\nlines.\n\n\n  \n\nThree")).toEqual([
+    "One.",
+    "Two\nlines.",
+    "Three",
+  ]);
+  expect(editorialParagraphs("")).toEqual([]);
+});
+
+test("kept radios get a name the server accepts", () => {
+  expect(radioPlaylistTitle("Kenroku-en")).toBe("Kenroku-en radio");
+  expect(radioPlaylistTitle("  ")).toBe("Radio radio");
+  const long = radioPlaylistTitle("x".repeat(400));
+  expect(long.length).toBeLessThanOrEqual(200);
+  expect(long.endsWith("… radio")).toBe(true);
+});
+
+test("only the edited-copy 409 asks before replacing edits", () => {
+  expect(
+    isEditedCopyConflict({
+      response: { status: 409, data: { code: "provider_copy_edited" } },
+    }),
+  ).toBe(true);
+  expect(
+    isEditedCopyConflict({
+      response: { status: 409, data: { code: "provider_not_connected" } },
+    }),
+  ).toBe(false);
+  expect(isEditedCopyConflict(new Error("offline"))).toBe(false);
 });

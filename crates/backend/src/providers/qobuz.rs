@@ -14,11 +14,16 @@ use super::md5::hex_digest;
 use super::transport::{ApiRequest, Transport};
 use super::{
     AlbumRef, ArtistRef, ArtistSummary, AudioFormat, BrowsePage, BrowseSection, ClientCredentials,
-    EditorialSection, ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist,
-    ProviderContext, ProviderError, ProviderGenre, ProviderId, ProviderPlaylist, ProviderResult,
-    ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults, StreamQuality,
-    StreamSource, StreamingProvider, decode_json, entity_id, status_error, unix_now,
+    Credit, EditorialSection, EditorialText, ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage,
+    ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderGenre, ProviderId,
+    ProviderPlaylist, ProviderResult, ProviderSession, ProviderTrack, QualityOption, Radio,
+    RadioOrigin, RadioSeed, ResolvedStream, SearchResults, StreamQuality, StreamSource,
+    StreamingProvider, decode_json, entity_id, interleave_tracks, plain_text, push_credit,
+    status_error, unix_now,
 };
+
+/// Similar artists mixed into a Qobuz radio, besides the seed artist.
+const RADIO_SIMILAR_ARTISTS: usize = 5;
 
 pub const API_BASE: &str = "https://www.qobuz.com/api.json/0.2";
 
@@ -118,6 +123,43 @@ struct QArtist {
     picture: Option<String>,
     albums: Option<QPage<QAlbum>>,
     tracks: Option<QPage<QTrack>>,
+    biography: Option<QBiography>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QBiography {
+    summary: Option<String>,
+    content: Option<String>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QAward {
+    name: Option<String>,
+    publication_name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QSimilar {
+    artists: QPage<QArtist>,
+}
+
+/// Qobuz credits: `Name, Role, Role - Name, Role`.
+fn parse_performers(performers: &str) -> Vec<Credit> {
+    let mut credits = Vec::new();
+    for entry in performers.split(" - ") {
+        let mut parts = entry.split(',').map(str::trim);
+        let Some(name) = parts.next().filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        for role in parts {
+            push_credit(&mut credits, role, name);
+        }
+    }
+    credits
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -142,6 +184,8 @@ struct QAlbum {
     copyright: Option<String>,
     url: Option<String>,
     tracks: Option<QPage<QTrack>>,
+    description: Option<String>,
+    awards: Vec<QAward>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -161,6 +205,7 @@ struct QTrack {
     streamable: Option<bool>,
     parental_warning: bool,
     album: Option<Box<QAlbum>>,
+    performers: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -393,6 +438,27 @@ impl QobuzClient {
                 .or_else(|| Some(format!("https://open.qobuz.com/album/{}", raw.id))),
             tracks,
             in_library: false,
+            review: raw
+                .description
+                .as_deref()
+                .and_then(plain_text)
+                .map(|text| EditorialText {
+                    text,
+                    source: Some("Qobuz".to_string()),
+                }),
+            awards: raw
+                .awards
+                .into_iter()
+                .filter_map(|award| {
+                    let name = non_empty(award.name)?;
+                    Some(match non_empty(award.publication_name) {
+                        Some(publication) if !name.contains(&publication) => {
+                            format!("{name} ({publication})")
+                        }
+                        _ => name,
+                    })
+                })
+                .collect(),
         }
     }
 
@@ -440,6 +506,11 @@ impl QobuzClient {
             isrc: non_empty(raw.isrc),
             streamable: raw.streamable.unwrap_or(true),
             in_library: false,
+            credits: raw
+                .performers
+                .as_deref()
+                .map(parse_performers)
+                .unwrap_or_default(),
         }
     }
 
@@ -622,6 +693,85 @@ impl QobuzClient {
     }
 }
 
+impl QobuzClient {
+    /// `artist/get` with albums and top tracks, plus (when asked) the
+    /// biography's similar artists from `artist/getSimilarArtists`.
+    async fn artist_page(
+        &self,
+        context: &ProviderContext,
+        raw_id: &str,
+        with_similar: bool,
+    ) -> ProviderResult<ProviderArtist> {
+        let artist_query = [
+            ("artist_id", raw_id.to_string()),
+            ("extra", "albums,tracks".to_string()),
+            ("limit", "50".to_string()),
+        ];
+        let similar_query = [
+            ("artist_id", raw_id.to_string()),
+            ("limit", "12".to_string()),
+            ("offset", "0".to_string()),
+        ];
+        let (body, similar) =
+            futures::join!(self.get(context, "artist/get", &artist_query), async {
+                if with_similar {
+                    self.get(context, "artist/getSimilarArtists", &similar_query)
+                        .await
+                        .ok()
+                } else {
+                    None
+                }
+            });
+        let artist: QArtist = decode_json(&body?)?;
+        let summary = self.artist_summary(&artist);
+        let artist_ref = Self::artist_ref(&artist);
+        let similar: QSimilar = similar
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        let bio = artist.biography.and_then(|biography| {
+            let text = biography
+                .content
+                .as_deref()
+                .and_then(plain_text)
+                .or_else(|| biography.summary.as_deref().and_then(plain_text))?;
+            Some(EditorialText {
+                text,
+                source: non_empty(biography.source).or_else(|| Some("Qobuz".to_string())),
+            })
+        });
+        Ok(ProviderArtist {
+            id: summary.id,
+            provider: ProviderId::Qobuz,
+            name: summary.name,
+            picture_url: summary.picture_url,
+            web_url: Some(format!("https://open.qobuz.com/artist/{}", artist.id)),
+            albums: artist
+                .albums
+                .unwrap_or_default()
+                .items
+                .into_iter()
+                .map(|album| self.normalize_album(album))
+                .collect(),
+            top_tracks: artist
+                .tracks
+                .unwrap_or_default()
+                .items
+                .into_iter()
+                .take(10)
+                .map(|track| self.normalize_track(track, None, Some(&artist_ref)))
+                .collect(),
+            bio,
+            similar: similar
+                .artists
+                .items
+                .iter()
+                .filter(|artist| !artist.id.is_empty() && artist.id != raw_id)
+                .map(|artist| self.artist_summary(artist))
+                .collect(),
+        })
+    }
+}
+
 impl StreamingProvider for QobuzClient {
     fn id(&self) -> ProviderId {
         ProviderId::Qobuz
@@ -698,44 +848,7 @@ impl StreamingProvider for QobuzClient {
         context: &'a ProviderContext,
         raw_id: &'a str,
     ) -> BoxFuture<'a, ProviderResult<ProviderArtist>> {
-        Box::pin(async move {
-            let body = self
-                .get(
-                    context,
-                    "artist/get",
-                    &[
-                        ("artist_id", raw_id.to_string()),
-                        ("extra", "albums,tracks".to_string()),
-                        ("limit", "50".to_string()),
-                    ],
-                )
-                .await?;
-            let artist: QArtist = decode_json(&body)?;
-            let summary = self.artist_summary(&artist);
-            let artist_ref = Self::artist_ref(&artist);
-            Ok(ProviderArtist {
-                id: summary.id,
-                provider: ProviderId::Qobuz,
-                name: summary.name,
-                picture_url: summary.picture_url,
-                web_url: Some(format!("https://open.qobuz.com/artist/{}", artist.id)),
-                albums: artist
-                    .albums
-                    .unwrap_or_default()
-                    .items
-                    .into_iter()
-                    .map(|album| self.normalize_album(album))
-                    .collect(),
-                top_tracks: artist
-                    .tracks
-                    .unwrap_or_default()
-                    .items
-                    .into_iter()
-                    .take(10)
-                    .map(|track| self.normalize_track(track, None, Some(&artist_ref)))
-                    .collect(),
-            })
-        })
+        Box::pin(self.artist_page(context, raw_id, true))
     }
 
     fn track<'a>(
@@ -930,6 +1043,61 @@ impl StreamingProvider for QobuzClient {
         })
     }
 
+    fn radio<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        seed: RadioSeed,
+        raw_id: &'a str,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<Radio>> {
+        Box::pin(async move {
+            // Qobuz publishes no radio endpoint, so Parson mixes the
+            // artist's top tracks with those of Qobuz's similar artists.
+            let seed_track = match seed {
+                RadioSeed::Artist => None,
+                RadioSeed::Track | RadioSeed::Album => Some(self.track(context, raw_id).await?),
+            };
+            let artist_raw = match &seed_track {
+                Some(track) => super::parse_entity_id(&track.artist.id)
+                    .map(|(_, raw)| raw)
+                    .ok_or(ProviderError::NotFound)?,
+                None => raw_id.to_string(),
+            };
+            let artist = self.artist_page(context, &artist_raw, true).await?;
+            let similar_ids = artist
+                .similar
+                .iter()
+                .filter_map(|similar| super::parse_entity_id(&similar.id).map(|(_, raw)| raw))
+                .take(RADIO_SIMILAR_ARTISTS)
+                .collect::<Vec<_>>();
+            let similar_pages = futures::future::join_all(
+                similar_ids
+                    .iter()
+                    .map(|id| self.artist_page(context, id, false)),
+            )
+            .await;
+            let mut lists = Vec::with_capacity(similar_pages.len() + 2);
+            if let Some(track) = seed_track {
+                lists.push(vec![track]);
+            }
+            lists.push(artist.top_tracks);
+            lists.extend(
+                similar_pages
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .map(|page| page.top_tracks),
+            );
+            let tracks = interleave_tracks(lists, limit as usize)
+                .into_iter()
+                .filter(|track| track.streamable)
+                .collect();
+            Ok(Radio {
+                tracks,
+                origin: RadioOrigin::SimilarArtists,
+            })
+        })
+    }
+
     fn playlists<'a>(
         &'a self,
         context: &'a ProviderContext,
@@ -1010,21 +1178,25 @@ impl StreamingProvider for QobuzClient {
 mod tests {
     use std::sync::Arc;
 
+    use super::parse_performers;
     use super::{QobuzClient, file_url_signature};
     use crate::providers::artwork::ArtworkMode;
     use crate::providers::md5::hex_digest;
     use crate::providers::transport::FixtureTransport;
     use crate::providers::{
-        BrowseSection, ClientCredentials, ItemKind, ProviderContext, ProviderError,
-        ProviderSession, StreamQuality, StreamSource, StreamingProvider,
+        BrowseSection, ClientCredentials, Credit, ItemKind, ProviderContext, ProviderError,
+        ProviderSession, RadioOrigin, RadioSeed, StreamQuality, StreamSource, StreamingProvider,
     };
 
     const FIXTURES: &str = include_str!("fixtures/qobuz.json");
     const BROWSE_FIXTURES: &str = include_str!("fixtures/qobuz_browse.json");
+    const NOTES_FIXTURES: &str = include_str!("fixtures/qobuz_notes.json");
 
     fn client() -> (QobuzClient, Arc<FixtureTransport>) {
-        let transport =
-            Arc::new(FixtureTransport::from_json(&[BROWSE_FIXTURES, FIXTURES]).expect("fixtures"));
+        let transport = Arc::new(
+            FixtureTransport::from_json(&[BROWSE_FIXTURES, NOTES_FIXTURES, FIXTURES])
+                .expect("fixtures"),
+        );
         (
             QobuzClient::new(transport.clone(), ArtworkMode::Live),
             transport,
@@ -1051,6 +1223,127 @@ mod tests {
                 plan: Some("Studio".into()),
             },
         }
+    }
+
+    #[test]
+    fn performers_strings_become_credits_by_role() {
+        assert_eq!(
+            parse_performers(
+                "Ilse Marten, MainArtist, Composer - Ines Calder, Producer - , Nobody - Theo Barras, Mixing Engineer"
+            ),
+            vec![
+                Credit {
+                    role: "MainArtist".into(),
+                    names: vec!["Ilse Marten".into()]
+                },
+                Credit {
+                    role: "Composer".into(),
+                    names: vec!["Ilse Marten".into()]
+                },
+                Credit {
+                    role: "Producer".into(),
+                    names: vec!["Ines Calder".into()]
+                },
+                Credit {
+                    role: "Mixing Engineer".into(),
+                    names: vec!["Theo Barras".into()]
+                },
+            ]
+        );
+    }
+
+    #[actix_web::test]
+    async fn album_pages_carry_the_description_awards_and_credits() {
+        let (client, _) = client();
+        let album = client
+            .album(&context(), "q0glassorch01")
+            .await
+            .expect("album");
+        let review = album.review.expect("description");
+        assert_eq!(review.source.as_deref(), Some("Qobuz"));
+        assert!(
+            review
+                .text
+                .starts_with("Ilse Marten\u{2019}s Glass Orchard is a three-movement suite"),
+            "{}",
+            review.text
+        );
+        assert_eq!(review.text.matches("\n\n").count(), 1);
+        assert_eq!(album.awards, ["Qobuzissime"]);
+        let roles = album.tracks[0]
+            .credits
+            .iter()
+            .map(|credit| credit.role.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            [
+                "MainArtist",
+                "Composer",
+                "Producer",
+                "Mixing Engineer",
+                "Mastering Engineer"
+            ]
+        );
+    }
+
+    #[actix_web::test]
+    async fn artist_pages_carry_the_biography_and_similar_artists() {
+        let (client, _) = client();
+        let artist = client.artist(&context(), "51003").await.expect("artist");
+        let bio = artist.bio.expect("biography");
+        assert_eq!(bio.text, "Sora Ueda is a fictional pianist from Kanazawa.");
+        assert_eq!(bio.source.as_deref(), Some("Parson sandbox"));
+        assert_eq!(artist.similar.len(), 3);
+        assert!(
+            artist
+                .similar
+                .iter()
+                .all(|similar| similar.id != "qobuz:51003")
+        );
+    }
+
+    #[actix_web::test]
+    async fn radios_mix_the_seed_with_similar_artists_top_tracks() {
+        let (client, _) = client();
+        let radio = client
+            .radio(&context(), RadioSeed::Track, "7700202", 50)
+            .await
+            .expect("radio");
+        assert_eq!(radio.origin, RadioOrigin::SimilarArtists);
+        let ids = radio
+            .tracks
+            .iter()
+            .map(|track| track.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids[0], "qobuz:7700202", "the seed plays first");
+        let unique = ids.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), ids.len(), "no repeats");
+        // Seed artist, then each similar artist in turn.
+        let artists = radio
+            .tracks
+            .iter()
+            .take(5)
+            .map(|track| track.artist.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            artists,
+            [
+                "Sora Ueda",
+                "Sora Ueda",
+                "Ilse Marten",
+                "Northbound Brass",
+                "Mara Vell"
+            ]
+        );
+        assert_eq!(ids.len(), 14, "every top track of four artists, once");
+
+        let short = client
+            .radio(&context(), RadioSeed::Artist, "51001", 4)
+            .await
+            .expect("artist radio");
+        assert_eq!(short.tracks.len(), 4);
+        assert_eq!(short.tracks[0].artist.name, "Ilse Marten");
     }
 
     #[actix_web::test]

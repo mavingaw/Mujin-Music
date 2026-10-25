@@ -8,6 +8,8 @@ import type {
 
 import {
   codeSecondsLeft,
+  editorialPreview,
+  subscriberSetupText,
   deliveryText,
   needsOwnCredentials,
   serviceAction,
@@ -116,5 +118,30 @@ test("the player line names the delivered format", () => {
   ).toBe("Announced 24/192 FLAC");
   expect(deliveryText({ ...delivery, delivered: null }).label).toBe(
     "Format unknown",
+  );
+});
+
+test("reviews show their first paragraph until expanded", () => {
+  const text = "First paragraph.\n\nSecond paragraph.";
+  expect(editorialPreview(text, false)).toEqual({
+    paragraphs: ["First paragraph."],
+    more: true,
+  });
+  expect(editorialPreview(text, true).paragraphs).toHaveLength(2);
+  expect(editorialPreview("Short.", false)).toEqual({
+    paragraphs: ["Short."],
+    more: false,
+  });
+  const long = editorialPreview("x".repeat(900), false);
+  expect(long.more).toBe(true);
+  expect(long.paragraphs[0]?.length).toBe(398);
+});
+
+test("subscribers are told to ask the server owner, not to find API keys", () => {
+  const tidal = subscriberSetupText("tidal", "TIDAL");
+  expect(tidal).toContain("approve the sign-in on TIDAL");
+  expect(tidal).toContain("Server credentials");
+  expect(subscriberSetupText("qobuz", "Qobuz")).toContain(
+    "Qobuz email and password",
   );
 });

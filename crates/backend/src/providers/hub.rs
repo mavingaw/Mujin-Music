@@ -21,8 +21,9 @@ use super::vault::{SealPurpose, TokenVault};
 use super::{
     AudioFormat, BrowsePage, BrowseSection, ClientCredentials, EditorialSection, ItemKind,
     ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderGenre, ProviderId,
-    ProviderPlaylist, ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults,
-    SourcePreference, StreamQuality, StreamSource, StreamingProvider, sandbox, unix_now,
+    ProviderPlaylist, ProviderSession, ProviderTrack, QualityOption, RADIO_TRACKS, Radio,
+    RadioSeed, ResolvedStream, SearchResults, SourcePreference, StreamQuality, StreamSource,
+    StreamingProvider, sandbox, unix_now,
 };
 use crate::persistence::connection::DbPool;
 
@@ -47,6 +48,9 @@ pub enum HubError {
     Invalid(&'static str),
     /// Neither the listener nor the server has credentials for this service.
     CredentialsRequired(ProviderId),
+    /// The change would overwrite something the listener did, and was not
+    /// confirmed.
+    Conflict(&'static str),
 }
 
 impl From<ProviderError> for HubError {
@@ -64,6 +68,7 @@ impl std::fmt::Display for HubError {
             Self::CredentialsRequired(provider) => {
                 write!(formatter, "no {} credentials", provider.display_name())
             }
+            Self::Conflict(message) => formatter.write_str(message),
         }
     }
 }
@@ -260,7 +265,16 @@ pub struct PlaylistViews {
     pub total: Option<u32>,
 }
 
-/// A read-only copy of a service playlist kept in Parson.
+/// Ids of playlists Parson made itself (from a radio or a selection) start
+/// with this; they have no service playlist behind them.
+pub const PARSON_PLAYLIST_PREFIX: &str = "parson-";
+
+/// Most tracks a copy holds, and most new tracks one edit may add.
+pub const MAX_COPY_TRACKS: usize = super::MAX_PLAYLIST_TRACKS as usize;
+const MAX_ADDED_PER_EDIT: usize = 200;
+
+/// A copy of a service playlist kept in Parson, editable there. The
+/// service playlist is never changed.
 #[derive(Clone, Debug, Serialize)]
 pub struct PlaylistCopy {
     pub id: String,
@@ -271,6 +285,11 @@ pub struct PlaylistCopy {
     pub track_count: i32,
     pub duration: f64,
     pub saved_at: i64,
+    /// When the listener last changed it in Parson.
+    pub edited_at: Option<i64>,
+    /// Made in Parson (from a radio or a selection), not saved from a
+    /// service playlist.
+    pub made_in_parson: bool,
     /// The saved tracks; only on a single copy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist: Option<ProviderPlaylist>,
@@ -291,6 +310,8 @@ impl PlaylistCopy {
             track_count: row.track_count,
             duration: row.duration,
             saved_at: row.saved_at,
+            edited_at: row.edited_at,
+            made_in_parson: row.provider_playlist_id.starts_with(PARSON_PLAYLIST_PREFIX),
             playlist,
         })
     }
@@ -1700,13 +1721,31 @@ impl StreamingHub {
     }
 
     /// "Save a copy": snapshots the playlist's current tracks into Parson.
-    /// The service playlist is never changed.
+    /// The service playlist is never changed. Saving again over a copy the
+    /// listener edited needs `replace_edits`.
     pub async fn save_playlist_copy(
         &self,
         user_id: i32,
         provider: ProviderId,
         raw_id: String,
+        replace_edits: bool,
     ) -> HubResult<PlaylistCopy> {
+        if raw_id.starts_with(PARSON_PLAYLIST_PREFIX) {
+            return Err(HubError::Invalid(
+                "This playlist was made in Parson and has no service playlist to save again.",
+            ));
+        }
+        if !replace_edits {
+            let lookup = raw_id.clone();
+            let existing = self
+                .db(move |connection| store::playlist_copy(connection, user_id, provider, &lookup))
+                .await?;
+            if existing.is_some_and(|row| row.edited_at.is_some()) {
+                return Err(HubError::Conflict(
+                    "You edited this copy in Parson. Saving it again replaces your edits with the service playlist.",
+                ));
+            }
+        }
         let view = self.playlist(user_id, provider, raw_id.clone()).await?;
         let mut playlist = view.playlist;
         for track in &mut playlist.tracks {
@@ -1720,6 +1759,212 @@ impl StreamingHub {
         .await?
         .and_then(|row| PlaylistCopy::from_row(row, false))
         .ok_or(HubError::Database("the copy was not saved".into()))
+    }
+
+    /// Edits a copy in Parson: its title, description and tracks (in the
+    /// order given). Tracks already in the copy keep their saved details;
+    /// new ones are read from the service.
+    pub async fn edit_playlist_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        raw_id: String,
+        edit: CopyEdit,
+    ) -> HubResult<PlaylistCopy> {
+        let lookup = raw_id.clone();
+        let row = self
+            .db(move |connection| store::playlist_copy(connection, user_id, provider, &lookup))
+            .await?
+            .ok_or(HubError::Provider(ProviderError::NotFound))?;
+        let saved_at = row.saved_at;
+        let mut playlist = serde_json::from_str::<ProviderPlaylist>(&row.payload)
+            .map_err(|error| HubError::Database(error.to_string()))?;
+        if let Some(title) = edit.title {
+            playlist.title = copy_title(&title)?;
+        }
+        if let Some(description) = edit.description {
+            let description = description.trim();
+            if description.chars().count() > 2_000 {
+                return Err(HubError::Invalid(
+                    "Keep the description under 2,000 characters.",
+                ));
+            }
+            playlist.description = (!description.is_empty()).then(|| description.to_string());
+        }
+        if let Some(track_ids) = edit.track_ids {
+            let existing = std::mem::take(&mut playlist.tracks);
+            playlist.tracks = self
+                .tracks_for_copy(user_id, provider, &track_ids, existing)
+                .await?;
+        }
+        self.store_copy(user_id, provider, raw_id, playlist, saved_at)
+            .await
+    }
+
+    /// A new playlist made in Parson from service tracks, such as a radio
+    /// the listener wants to keep.
+    pub async fn create_playlist_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        title: String,
+        description: Option<String>,
+        track_ids: Vec<String>,
+    ) -> HubResult<PlaylistCopy> {
+        let title = copy_title(&title)?;
+        if track_ids.is_empty() {
+            return Err(HubError::Invalid("Add at least one track."));
+        }
+        let tracks = self
+            .tracks_for_copy(user_id, provider, &track_ids, Vec::new())
+            .await?;
+        let now = unix_now();
+        let raw_id = format!(
+            "{PARSON_PLAYLIST_PREFIX}{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        );
+        let playlist = ProviderPlaylist {
+            id: super::entity_id(provider, &raw_id),
+            provider,
+            cover_url: tracks
+                .iter()
+                .find_map(|track| track.album.as_ref()?.cover_url.clone()),
+            title,
+            description: description
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty()),
+            owner: Some("You, in Parson".to_string()),
+            own: true,
+            track_count: tracks.len() as u32,
+            duration: tracks.iter().map(|track| track.duration).sum(),
+            updated_at: Some(now),
+            web_url: None,
+            tracks,
+        };
+        self.store_copy(user_id, provider, raw_id, playlist, now)
+            .await
+    }
+
+    async fn tracks_for_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        track_ids: &[String],
+        existing: Vec<ProviderTrack>,
+    ) -> HubResult<Vec<ProviderTrack>> {
+        if track_ids.len() > MAX_COPY_TRACKS {
+            return Err(HubError::Invalid("A playlist holds up to 1,000 tracks."));
+        }
+        let mut known = existing
+            .into_iter()
+            .map(|track| (track.id.clone(), track))
+            .collect::<HashMap<_, _>>();
+        let mut seen = HashSet::new();
+        let mut wanted = Vec::with_capacity(track_ids.len());
+        let mut missing = Vec::new();
+        for id in track_ids {
+            let Some((track_provider, raw)) = super::parse_entity_id(id) else {
+                return Err(HubError::Invalid("Unknown track in the playlist."));
+            };
+            if track_provider != provider {
+                return Err(HubError::Invalid(
+                    "A playlist copy holds tracks from one service.",
+                ));
+            }
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if !known.contains_key(id) {
+                missing.push(raw);
+            }
+            wanted.push(id.clone());
+        }
+        if missing.len() > MAX_ADDED_PER_EDIT {
+            return Err(HubError::Invalid("Add up to 200 new tracks at a time."));
+        }
+        if !missing.is_empty() {
+            let (fetched, _) = self
+                .call(user_id, provider, move |client, context| {
+                    let missing = missing.clone();
+                    Box::pin(async move {
+                        let mut tracks = Vec::with_capacity(missing.len());
+                        for chunk in missing.chunks(8) {
+                            let results = futures::future::join_all(
+                                chunk.iter().map(|raw| client.track(context, raw)),
+                            )
+                            .await;
+                            for result in results {
+                                tracks.push(result?);
+                            }
+                        }
+                        Ok(tracks)
+                    })
+                })
+                .await?;
+            for mut track in fetched {
+                track.in_library = false;
+                known.insert(track.id.clone(), track);
+            }
+        }
+        Ok(wanted
+            .into_iter()
+            .filter_map(|id| known.remove(&id))
+            .collect())
+    }
+
+    async fn store_copy(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        raw_id: String,
+        mut playlist: ProviderPlaylist,
+        saved_at: i64,
+    ) -> HubResult<PlaylistCopy> {
+        playlist.track_count = playlist.tracks.len() as u32;
+        playlist.duration = playlist.tracks.iter().map(|track| track.duration).sum();
+        let edited_at = unix_now();
+        self.db(move |connection| {
+            store::write_playlist_copy(connection, user_id, &playlist, saved_at, Some(edited_at))?;
+            store::playlist_copy(connection, user_id, provider, &raw_id)
+        })
+        .await?
+        .and_then(|row| PlaylistCopy::from_row(row, true))
+        .ok_or(HubError::Database("the copy was not saved".into()))
+    }
+
+    /// A radio from a track, artist or album on one service. Album radios
+    /// start from the album's first playable track.
+    pub async fn radio(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        seed: RadioSeed,
+        raw_id: String,
+    ) -> HubResult<Radio> {
+        let (seed, raw_id) = if seed == RadioSeed::Album {
+            let album = self.album(user_id, provider, raw_id).await?;
+            let first = album
+                .tracks
+                .iter()
+                .find(|track| track.streamable)
+                .and_then(|track| super::parse_entity_id(&track.id))
+                .map(|(_, raw)| raw)
+                .ok_or(HubError::Provider(ProviderError::Unavailable(
+                    "This album has no playable tracks to start a radio from.".into(),
+                )))?;
+            (RadioSeed::Track, first)
+        } else {
+            (seed, raw_id)
+        };
+        let (mut radio, _) = self
+            .call(user_id, provider, move |client, context| {
+                let raw_id = raw_id.clone();
+                Box::pin(async move { client.radio(context, seed, &raw_id, RADIO_TRACKS).await })
+            })
+            .await?;
+        let (_, tracks) = self.library_ids(user_id, provider).await?;
+        mark_tracks(&mut radio.tracks, &tracks);
+        Ok(radio)
     }
 
     pub async fn playlist_copies(&self, user_id: i32) -> HubResult<Vec<PlaylistCopy>> {
@@ -2095,6 +2340,25 @@ fn describe_delivery(delivery: &DeliveredStream) -> String {
     detail
 }
 
+/// Changes to a playlist copy; fields left out stay as they are.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct CopyEdit {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// The copy's tracks in their new order. Ids not in the copy are added.
+    pub track_ids: Option<Vec<String>>,
+}
+
+fn copy_title(title: &str) -> HubResult<String> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 200 {
+        return Err(HubError::Invalid(
+            "Give the playlist a name of up to 200 characters.",
+        ));
+    }
+    Ok(title.to_string())
+}
+
 fn mark_tracks(tracks: &mut [ProviderTrack], ids: &HashSet<String>) {
     for track in tracks {
         track.in_library =
@@ -2137,7 +2401,7 @@ pub fn user_message(error: &HubError) -> String {
             }
         },
         HubError::Database(_) => "Parson could not save this change.".into(),
-        HubError::Invalid(message) => (*message).to_string(),
+        HubError::Invalid(message) | HubError::Conflict(message) => (*message).to_string(),
         HubError::CredentialsRequired(ProviderId::Tidal) => {
             "This server has no TIDAL client yet. Ask the server owner to add one in Settings > Services, or use your own client ID.".into()
         }

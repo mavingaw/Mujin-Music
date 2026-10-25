@@ -15,10 +15,11 @@ use super::artwork::ArtworkMode;
 use super::transport::{ApiRequest, Transport};
 use super::{
     AlbumRef, ArtistRef, ArtistSummary, AudioFormat, BrowsePage, BrowseSection, ClientCredentials,
-    EditorialSection, ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist,
-    ProviderContext, ProviderError, ProviderGenre, ProviderId, ProviderPlaylist, ProviderResult,
-    ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults, StreamQuality,
-    StreamSource, StreamingProvider, decode_json, entity_id, status_error, unix_now,
+    Credit, EditorialSection, EditorialText, ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage,
+    ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderGenre, ProviderId,
+    ProviderPlaylist, ProviderResult, ProviderSession, ProviderTrack, QualityOption, Radio,
+    RadioOrigin, RadioSeed, ResolvedStream, SearchResults, StreamQuality, StreamSource,
+    StreamingProvider, decode_json, entity_id, plain_text, push_credit, status_error, unix_now,
 };
 
 pub const AUTH_BASE: &str = "https://auth.tidal.com/v1/oauth2";
@@ -201,6 +202,62 @@ impl<T> Default for TPage<T> {
             total_number_of_items: None,
         }
     }
+}
+
+/// `/albums/{id}/review` and `/artists/{id}/bio`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TEditorial {
+    text: Option<String>,
+    source: Option<String>,
+}
+
+impl TEditorial {
+    fn into_text(self) -> Option<EditorialText> {
+        Some(EditorialText {
+            text: plain_text(self.text.as_deref()?)?,
+            source: non_empty(self.source),
+        })
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TContributor {
+    name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TCredit {
+    #[serde(rename = "type")]
+    role: String,
+    contributors: Vec<TContributor>,
+}
+
+/// One entry of `/albums/{id}/items/credits`: a track and its credits.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TCreditedItem {
+    item: TCreditedTrack,
+    credits: Vec<TCredit>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TCreditedTrack {
+    #[serde(deserialize_with = "de_id")]
+    id: String,
+}
+
+fn credits_from(raw: Vec<TCredit>) -> Vec<Credit> {
+    let mut credits = Vec::new();
+    for credit in raw {
+        for contributor in credit.contributors {
+            push_credit(&mut credits, &credit.role, &contributor.name);
+        }
+    }
+    credits
 }
 
 /// Favorites and some editorial lists wrap each entry as `{ "item": ... }`.
@@ -413,6 +470,8 @@ impl TidalClient {
             web_url: Some(format!("https://tidal.com/browse/album/{}", raw.id)),
             tracks: Vec::new(),
             in_library: false,
+            review: None,
+            awards: Vec::new(),
         }
     }
 
@@ -449,6 +508,7 @@ impl TidalClient {
             isrc: non_empty(raw.isrc),
             streamable: raw.allow_streaming.unwrap_or(true) && raw.stream_ready.unwrap_or(true),
             in_library: false,
+            credits: Vec::new(),
         }
     }
 
@@ -847,9 +907,19 @@ impl StreamingProvider for TidalClient {
             let album_path = format!("/albums/{raw_id}");
             let tracks_path = format!("/albums/{raw_id}/tracks");
             let tracks_query = [("limit", "100".to_string()), ("offset", "0".to_string())];
-            let (album, tracks) = futures::join!(
+            let review_path = format!("/albums/{raw_id}/review");
+            let credits_path = format!("/albums/{raw_id}/items/credits");
+            let credits_query = [
+                ("limit", "100".to_string()),
+                ("offset", "0".to_string()),
+                ("replace", "true".to_string()),
+                ("includeContributors", "true".to_string()),
+            ];
+            let (album, tracks, review, credits) = futures::join!(
                 self.get(context, &album_path, &[]),
-                self.get(context, &tracks_path, &tracks_query)
+                self.get(context, &tracks_path, &tracks_query),
+                self.get(context, &review_path, &[]),
+                self.get(context, &credits_path, &credits_query)
             );
             let mut album = self.normalize_album(decode_json::<TAlbum>(&album?)?);
             let tracks: TPage<MaybeWrapped<TTrack>> = decode_json(&tracks?)?;
@@ -858,6 +928,30 @@ impl StreamingProvider for TidalClient {
                 .into_iter()
                 .map(|track| self.normalize_track(track.into_inner()))
                 .collect();
+            // Many albums have no review (TIDAL answers 404) and credits are
+            // a nicety: the album page works without either.
+            album.review = review
+                .ok()
+                .and_then(|body| serde_json::from_slice::<TEditorial>(&body).ok())
+                .and_then(TEditorial::into_text);
+            if let Some(credited) = credits
+                .ok()
+                .and_then(|body| serde_json::from_slice::<TPage<TCreditedItem>>(&body).ok())
+            {
+                let mut by_track = credited
+                    .items
+                    .into_iter()
+                    .map(|entry| {
+                        (
+                            entity_id(ProviderId::Tidal, &entry.item.id),
+                            credits_from(entry.credits),
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                for track in &mut album.tracks {
+                    track.credits = by_track.remove(&track.id).unwrap_or_default();
+                }
+            }
             Ok(album)
         })
     }
@@ -873,11 +967,24 @@ impl StreamingProvider for TidalClient {
             let top_path = format!("/artists/{raw_id}/toptracks");
             let albums_query = [("limit", "50".to_string()), ("offset", "0".to_string())];
             let top_query = [("limit", "10".to_string()), ("offset", "0".to_string())];
-            let (artist, albums, top) = futures::join!(
+            let bio_path = format!("/artists/{raw_id}/bio");
+            let similar_path = format!("/artists/{raw_id}/similar");
+            let similar_query = [("limit", "12".to_string()), ("offset", "0".to_string())];
+            let (artist, albums, top, bio, similar) = futures::join!(
                 self.get(context, &artist_path, &[]),
                 self.get(context, &albums_path, &albums_query),
-                self.get(context, &top_path, &top_query)
+                self.get(context, &top_path, &top_query),
+                self.get(context, &bio_path, &[]),
+                self.get(context, &similar_path, &similar_query)
             );
+            let bio = bio
+                .ok()
+                .and_then(|body| serde_json::from_slice::<TEditorial>(&body).ok())
+                .and_then(TEditorial::into_text);
+            let similar: TPage<TArtist> = similar
+                .ok()
+                .and_then(|body| serde_json::from_slice(&body).ok())
+                .unwrap_or_default();
             let artist: TArtist = decode_json(&artist?)?;
             let albums: TPage<TAlbum> = decode_json(&albums?)?;
             // Top tracks are a nicety; an artist page still works without them.
@@ -903,6 +1010,13 @@ impl StreamingProvider for TidalClient {
                     .items
                     .into_iter()
                     .map(|track| self.normalize_track(track))
+                    .collect(),
+                bio,
+                similar: similar
+                    .items
+                    .iter()
+                    .filter(|artist| !artist.id.is_empty())
+                    .map(|artist| self.artist_summary(artist))
                     .collect(),
             })
         })
@@ -1158,6 +1272,36 @@ impl StreamingProvider for TidalClient {
         })
     }
 
+    fn radio<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        seed: RadioSeed,
+        raw_id: &'a str,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<Radio>> {
+        Box::pin(async move {
+            let path = match seed {
+                RadioSeed::Artist => format!("/artists/{raw_id}/radio"),
+                RadioSeed::Track | RadioSeed::Album => format!("/tracks/{raw_id}/radio"),
+            };
+            let query = [
+                ("limit", limit.min(100).to_string()),
+                ("offset", "0".to_string()),
+            ];
+            let page: TPage<MaybeWrapped<TTrack>> =
+                decode_json(&self.get(context, &path, &query).await?)?;
+            Ok(Radio {
+                tracks: page
+                    .items
+                    .into_iter()
+                    .map(|track| self.normalize_track(track.into_inner()))
+                    .take(limit as usize)
+                    .collect(),
+                origin: RadioOrigin::Service,
+            })
+        })
+    }
+
     fn playlists<'a>(
         &'a self,
         context: &'a ProviderContext,
@@ -1279,16 +1423,19 @@ mod tests {
     use crate::providers::artwork::ArtworkMode;
     use crate::providers::transport::{FixtureRoute, FixtureTransport, Method};
     use crate::providers::{
-        BrowseSection, ClientCredentials, ItemKind, ProviderContext, ProviderError,
-        ProviderSession, StreamQuality, StreamSource, StreamingProvider,
+        BrowseSection, ClientCredentials, Credit, ItemKind, ProviderContext, ProviderError,
+        ProviderSession, RadioOrigin, RadioSeed, StreamQuality, StreamSource, StreamingProvider,
     };
 
     const FIXTURES: &str = include_str!("fixtures/tidal.json");
     const BROWSE_FIXTURES: &str = include_str!("fixtures/tidal_browse.json");
+    const NOTES_FIXTURES: &str = include_str!("fixtures/tidal_notes.json");
 
     fn client() -> (TidalClient, Arc<FixtureTransport>) {
-        let transport =
-            Arc::new(FixtureTransport::from_json(&[BROWSE_FIXTURES, FIXTURES]).expect("fixtures"));
+        let transport = Arc::new(
+            FixtureTransport::from_json(&[BROWSE_FIXTURES, NOTES_FIXTURES, FIXTURES])
+                .expect("fixtures"),
+        );
         (
             TidalClient::new(transport.clone(), ArtworkMode::Live),
             transport,
@@ -1436,6 +1583,90 @@ mod tests {
                 .editorial_sections()
                 .iter()
                 .all(|section| section.id != BrowseSection::PressAwards)
+        );
+    }
+
+    #[actix_web::test]
+    async fn album_pages_carry_the_review_and_per_track_credits() {
+        let (client, transport) = client();
+        let album = client.album(&context(), "300100").await.expect("album");
+        let review = album.review.expect("review");
+        assert_eq!(review.source.as_deref(), Some("Parson sandbox"));
+        assert!(
+            review
+                .text
+                .starts_with("Mara Vell's Harbor Lights is a quiet")
+        );
+        assert!(review.text.contains("\n\nWritten over one winter"));
+        assert!(review.text.contains("\"porch light\""), "{}", review.text);
+        let first = &album.tracks[0];
+        assert_eq!(first.id, "tidal:300101");
+        assert_eq!(
+            first.credits[0],
+            Credit {
+                role: "Producer".into(),
+                names: vec!["Ines Calder".into()]
+            }
+        );
+        assert!(album.tracks.iter().all(|track| track.credits.len() == 4));
+        let credits_request = transport
+            .requests()
+            .into_iter()
+            .find(|request| request.url.ends_with("/albums/300100/items/credits"))
+            .expect("credits request");
+        assert_eq!(
+            credits_request.query_value("includeContributors"),
+            Some("true")
+        );
+
+        // No review: TIDAL answers 404 and the page still loads.
+        let plain = client.album(&context(), "300200").await.expect("album");
+        assert!(plain.review.is_none());
+        assert_eq!(plain.tracks.len(), 3);
+    }
+
+    #[actix_web::test]
+    async fn artist_pages_carry_the_bio_and_similar_artists() {
+        let (client, _) = client();
+        let artist = client.artist(&context(), "400200").await.expect("artist");
+        assert_eq!(
+            artist.bio.expect("bio").text,
+            "The Lantern Choir is a twelve-voice ensemble that sings in churches and boathouses."
+        );
+        let similar = artist
+            .similar
+            .iter()
+            .map(|artist| artist.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(similar, ["tidal:400100", "tidal:400300"]);
+    }
+
+    #[actix_web::test]
+    async fn radios_use_tidal_track_and_artist_radio() {
+        let (client, transport) = client();
+        let radio = client
+            .radio(&context(), RadioSeed::Track, "300101", 5)
+            .await
+            .expect("track radio");
+        assert_eq!(radio.origin, RadioOrigin::Service);
+        assert_eq!(radio.tracks.len(), 5);
+        assert!(radio.tracks.iter().all(|track| track.id != "tidal:300101"));
+        let request = transport.requests().pop().expect("radio request");
+        assert!(request.url.ends_with("/tracks/300101/radio"));
+        assert_eq!(request.query_value("limit"), Some("5"));
+
+        let artist = client
+            .radio(&context(), RadioSeed::Artist, "400300", 50)
+            .await
+            .expect("artist radio");
+        assert_eq!(artist.tracks[0].artist.name, "Okonkwo Quartet");
+        assert!(
+            transport
+                .requests()
+                .pop()
+                .expect("request")
+                .url
+                .ends_with("/artists/400300/radio")
         );
     }
 

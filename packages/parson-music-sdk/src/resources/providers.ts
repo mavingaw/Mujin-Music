@@ -89,6 +89,21 @@ export interface StreamingTrack {
   format: StreamingAudioFormat | null;
   streamable: boolean;
   in_library: boolean;
+  /** Who played, wrote and produced it; on album pages, when the service says. */
+  credits?: StreamingCredit[];
+}
+
+/** One credited role, such as `Producer: A, B`. */
+export interface StreamingCredit {
+  role: string;
+  names: string[];
+}
+
+/** A service's album review or artist biography, as plain paragraphs. */
+export interface StreamingEditorialText {
+  text: string;
+  /** Who wrote it, when the service says. */
+  source: string | null;
 }
 
 export interface StreamingAlbum {
@@ -110,6 +125,10 @@ export interface StreamingAlbum {
   web_url: string | null;
   tracks: StreamingTrack[];
   in_library: boolean;
+  /** The service's review or description, on album pages. */
+  review?: StreamingEditorialText | null;
+  /** Press awards such as `Qobuzissime`. */
+  awards?: string[];
 }
 
 export interface StreamingArtistSummary {
@@ -123,6 +142,31 @@ export interface StreamingArtist extends StreamingArtistSummary {
   albums: StreamingAlbum[];
   top_tracks: StreamingTrack[];
   web_url: string | null;
+  bio?: StreamingEditorialText | null;
+  /** Artists the service considers similar. */
+  similar?: StreamingArtistSummary[];
+}
+
+export type StreamingRadioSeed = "track" | "artist" | "album";
+
+/**
+ * A radio: TIDAL's own track or artist radio (`service`), or for Qobuz,
+ * which publishes none, Parson's mix of the artist's and similar artists'
+ * top tracks (`similar_artists`).
+ */
+export interface StreamingRadio {
+  tracks: StreamingTrack[];
+  origin: "service" | "similar_artists";
+}
+
+/** How a radio's tracks were chosen, for the UI. */
+export function describeRadio(
+  provider: StreamingProviderId,
+  radio: Pick<StreamingRadio, "origin">,
+): string {
+  return radio.origin === "service"
+    ? `${STREAMING_PROVIDER_NAMES[provider]} radio`
+    : `Parson radio from ${STREAMING_PROVIDER_NAMES[provider]} similar artists`;
 }
 
 export interface StreamingSearchResults {
@@ -254,7 +298,11 @@ export interface StreamingPlaylist {
   saved_copy_at: number | null;
 }
 
-/** A read-only copy of a service playlist kept in Parson. */
+/**
+ * A copy of a service playlist kept in Parson, editable there (the service
+ * playlist never changes), or a playlist made in Parson from a radio or a
+ * selection of one service's tracks.
+ */
 export interface StreamingPlaylistCopy {
   id: string;
   provider: StreamingProviderId;
@@ -264,6 +312,10 @@ export interface StreamingPlaylistCopy {
   track_count: number;
   duration: number;
   saved_at: number;
+  /** When the listener last changed it in Parson. */
+  edited_at?: number | null;
+  /** Made in Parson; there is no service playlist to save again. */
+  made_in_parson?: boolean;
   /** The saved tracks, on a single copy. */
   playlist?: Omit<StreamingPlaylist, "saved_copy_at">;
 }
@@ -605,17 +657,120 @@ export async function getStreamingPlaylistCopy(
   ).data;
 }
 
-/** Saves (or refreshes) a copy in Parson; the service playlist is unchanged. */
+/**
+ * Saves (or refreshes) a copy in Parson; the service playlist is unchanged.
+ * Refreshing a copy edited in Parson fails with 409 `provider_copy_edited`
+ * unless `replaceEdits` is set.
+ */
 export async function saveStreamingPlaylistCopy(
   id: string,
+  options: { replaceEdits?: boolean } = {},
 ): Promise<StreamingPlaylistCopy> {
   return (
     await api.put<StreamingPlaylistCopy>(
       `${entityPath("playlists", id)}/copy`,
       undefined,
+      {
+        timeout: 30_000,
+        params: options.replaceEdits ? { replace_edits: true } : undefined,
+      },
+    )
+  ).data;
+}
+
+/** Changes to a copy; fields left out stay as they are. */
+export interface StreamingPlaylistCopyEdit {
+  title?: string;
+  description?: string;
+  /** The tracks in their new order. Ids not yet in the copy are added. */
+  track_ids?: string[];
+}
+
+/** Renames, reorders, removes or adds tracks, in Parson only. */
+export async function editStreamingPlaylistCopy(
+  id: string,
+  edit: StreamingPlaylistCopyEdit,
+): Promise<StreamingPlaylistCopy> {
+  return (
+    await api.patch<StreamingPlaylistCopy>(
+      `${entityPath("playlists", id)}/copy`,
+      edit,
       { timeout: 30_000 },
     )
   ).data;
+}
+
+/** A playlist made in Parson from one service's tracks, e.g. a radio. */
+export async function createStreamingPlaylistCopy(
+  provider: StreamingProviderId,
+  playlist: { title: string; description?: string; track_ids: string[] },
+): Promise<StreamingPlaylistCopy> {
+  return (
+    await api.post<StreamingPlaylistCopy>(
+      `/providers/${provider}/playlist-copies`,
+      playlist,
+      { timeout: 30_000 },
+    )
+  ).data;
+}
+
+/** Starts a radio from a TIDAL or Qobuz track, artist or album. */
+export async function getStreamingRadio(
+  seed: StreamingRadioSeed,
+  id: string,
+): Promise<StreamingRadio> {
+  const parsed = parseStreamingId(id);
+  if (!parsed) throw new Error(`Not a streaming id: ${id}`);
+  return (
+    await api.get<StreamingRadio>(
+      `/providers/${parsed.provider}/radio/${seed}/${encodeURIComponent(parsed.rawId)}`,
+      { timeout: 30_000 },
+    )
+  ).data;
+}
+
+/** Moves one track up or down in an ordered id list (for copy editors). */
+export function moveTrackId(
+  ids: readonly string[],
+  index: number,
+  offset: -1 | 1,
+): string[] {
+  const target = index + offset;
+  if (index < 0 || index >= ids.length || target < 0 || target >= ids.length) {
+    return [...ids];
+  }
+  const next = [...ids];
+  const [moved] = next.splice(index, 1);
+  if (moved !== undefined) next.splice(target, 0, moved);
+  return next;
+}
+
+/** Groups credits for display, main artists first, at most `limit` roles. */
+export function creditLines(
+  credits: readonly StreamingCredit[] | undefined,
+  limit = 6,
+): string[] {
+  const order = (role: string) =>
+    /main ?artist|performer/i.test(role)
+      ? 0
+      : /composer|lyricist|writer/i.test(role)
+        ? 1
+        : 2;
+  return [...(credits ?? [])]
+    .filter((credit) => credit.names.length > 0)
+    .sort((a, b) => order(a.role) - order(b.role))
+    .slice(0, limit)
+    .map((credit) => `${prettyRole(credit.role)}: ${credit.names.join(", ")}`);
+}
+
+/** `MainArtist` -> `Main artist`, `Mixing Engineer` -> `Mixing engineer`. */
+export function prettyRole(role: string): string {
+  const spaced = role
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 export async function removeStreamingPlaylistCopy(id: string): Promise<void> {

@@ -19,6 +19,11 @@ import {
   StreamingAlbumRow,
   StreamingTrackRow,
 } from "@/components/streaming-ui";
+import {
+  EditorialSection,
+  SimilarArtistsRow,
+  StartRadioButton,
+} from "@/components/streaming-notes";
 import { palette } from "@/constants/colors";
 
 export function StreamingArtistScreen({ id }: { id: string }) {
@@ -65,6 +70,7 @@ export function StreamingArtistScreen({ id }: { id: string }) {
             <Artwork path={data.picture_url} rounded={90} size={180} />
             <SourceTag provider={data.provider} />
             <Text style={styles.name}>{data.name}</Text>
+            <StartRadioButton id={data.id} label={data.name} seed="artist" />
           </View>
           {data.top_tracks.length ? (
             <SectionTitle>Top tracks</SectionTitle>
@@ -80,6 +86,10 @@ export function StreamingArtistScreen({ id }: { id: string }) {
           {data.albums.map((album) => (
             <StreamingAlbumRow album={album} key={album.id} />
           ))}
+          {data.bio ? (
+            <EditorialSection text={data.bio} title="Biography" />
+          ) : null}
+          <SimilarArtistsRow artists={data.similar} />
         </ScrollView>
       </SafeAreaView>
     </Screen>

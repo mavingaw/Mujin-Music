@@ -5,7 +5,8 @@ import StreamingPlaylistPage from "@/features/streaming/streaming-playlists";
 
 export const metadata: Metadata = {
   title: "Playlist",
-  description: "A TIDAL or Qobuz playlist, read-only, or its saved copy.",
+  description:
+    "A TIDAL or Qobuz playlist, read-only, or its copy kept and edited in Parson.",
 };
 
 export default function StreamingPlaylistRoute() {

@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { ExplicitBadge } from "@/features/library/song-title";
 import { FormatBadge } from "./source-badge";
 import { LibraryButton } from "./library-button";
+import { StartRadioButton } from "./radio-button";
 import { formatTone } from "./streaming-model";
 
 export function formatTrackDuration(duration: number) {
@@ -98,6 +99,15 @@ export function StreamingTrackRow({
             className="hidden sm:inline-flex"
             label={track.format.label}
             tone={formatTone(track.format)}
+          />
+        )}
+        {!unavailable && (
+          <StartRadioButton
+            className="hidden opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 sm:inline-flex"
+            compact
+            id={track.id}
+            label={track.title}
+            seed="track"
           />
         )}
         <LibraryButton

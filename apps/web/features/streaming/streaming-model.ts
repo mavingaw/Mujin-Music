@@ -285,3 +285,32 @@ export function totalDurationLabel(seconds: number) {
   const rest = minutes % 60;
   return rest ? `${hours} hr ${rest} min` : `${hours} hr`;
 }
+
+/** A review or biography split into paragraphs (blank-line separated). */
+export function editorialParagraphs(text: string): string[] {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+}
+
+/** Name for a radio kept as a playlist, within the server's 200 characters. */
+export function radioPlaylistTitle(label: string): string {
+  const base = label.trim() || "Radio";
+  const title = `${base} radio`;
+  return title.length > 200 ? `${base.slice(0, 193).trimEnd()}… radio` : title;
+}
+
+/** Whether a failed copy save means "you edited this copy". */
+export function isEditedCopyConflict(error: unknown): boolean {
+  const response = (
+    error as {
+      response?: { status?: number; data?: { code?: string; error?: string } };
+    }
+  )?.response;
+  return (
+    response?.status === 409 &&
+    (response.data?.code === "provider_copy_edited" ||
+      response.data?.error === "provider_copy_edited")
+  );
+}

@@ -780,7 +780,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Ilse Marten, MainArtist - Ilse Marten, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700002,
@@ -799,7 +800,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Ilse Marten, MainArtist - Ilse Marten, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700003,
@@ -818,10 +820,19 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Ilse Marten, MainArtist - Ilse Marten, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               }
             ]
-          }
+          },
+          "description": "<p>Ilse Marten&rsquo;s <strong>Glass Orchard</strong> is a three-movement suite recorded in 24-bit/192 kHz.</p><p>The sandbox description stands in for Qobuz&rsquo;s own editorial text.</p>",
+          "awards": [
+            {
+              "name": "Qobuzissime",
+              "awarded_at": 1739500000,
+              "publication_name": "Qobuz"
+            }
+          ]
         }
       }
     ],
@@ -895,7 +906,8 @@
                 "hires": false,
                 "hires_streamable": false,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700102,
@@ -914,7 +926,8 @@
                 "hires": false,
                 "hires_streamable": false,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700103,
@@ -933,7 +946,8 @@
                 "hires": false,
                 "hires_streamable": false,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700104,
@@ -952,10 +966,12 @@
                 "hires": false,
                 "hires_streamable": false,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               }
             ]
-          }
+          },
+          "awards": []
         }
       }
     ],
@@ -1029,7 +1045,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Sora Ueda, MainArtist - Sora Ueda, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700202,
@@ -1048,7 +1065,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Sora Ueda, MainArtist - Sora Ueda, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700203,
@@ -1067,10 +1085,12 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Sora Ueda, MainArtist - Sora Ueda, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               }
             ]
-          }
+          },
+          "awards": []
         }
       }
     ],
@@ -1144,7 +1164,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700302,
@@ -1163,7 +1184,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700303,
@@ -1182,7 +1204,8 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               },
               {
                 "id": 7700304,
@@ -1201,10 +1224,13 @@
                 "hires": true,
                 "hires_streamable": true,
                 "streamable": true,
-                "parental_warning": false
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
               }
             ]
-          }
+          },
+          "description": "<p>The Qobuz edition of <em>Harbor Lights</em>, in 24-bit/96 kHz.</p>",
+          "awards": []
         }
       }
     ],
@@ -1223,7 +1249,9 @@
             "large": "https://static.qobuz.com/images/artists/51001.jpg"
           },
           "biography": {
-            "summary": ""
+            "summary": "",
+            "content": "<p>Ilse Marten is a fictional composer whose chamber works open the Parson sandbox.</p>",
+            "source": "Parson sandbox"
           },
           "albums": {
             "offset": 0,
@@ -1397,7 +1425,9 @@
             "large": "https://static.qobuz.com/images/artists/51002.jpg"
           },
           "biography": {
-            "summary": ""
+            "summary": "",
+            "content": "<p>Northbound Brass is a fictional nine-piece brass band.</p>",
+            "source": "Parson sandbox"
           },
           "albums": {
             "offset": 0,
@@ -1604,7 +1634,9 @@
             "large": "https://static.qobuz.com/images/artists/51003.jpg"
           },
           "biography": {
-            "summary": ""
+            "summary": "",
+            "content": "<p>Sora Ueda is a fictional pianist from Kanazawa.</p>",
+            "source": "Parson sandbox"
           },
           "albums": {
             "offset": 0,
@@ -1778,7 +1810,9 @@
             "large": "https://static.qobuz.com/images/artists/51004.jpg"
           },
           "biography": {
-            "summary": ""
+            "summary": "",
+            "content": "<p>Mara Vell is a fictional songwriter, on Qobuz as on TIDAL.</p>",
+            "source": "Parson sandbox"
           },
           "albums": {
             "offset": 0,

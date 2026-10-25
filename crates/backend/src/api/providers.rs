@@ -46,6 +46,7 @@ pub fn hub_error_response(error: HubError) -> HttpResponse {
         HubError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "provider_storage_failed"),
         HubError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid_provider_request"),
         HubError::CredentialsRequired(_) => (StatusCode::CONFLICT, "provider_credentials_required"),
+        HubError::Conflict(_) => (StatusCode::CONFLICT, "provider_copy_edited"),
     };
     if status.is_server_error() {
         tracing::warn!(%error, code, "streaming provider request failed");
@@ -733,11 +734,19 @@ async fn playlist_copy(
     respond(hub.playlist_copy(user_id, provider, raw).await)
 }
 
-/// Saves (or refreshes) a copy. The service playlist is not changed.
+#[derive(Deserialize)]
+struct SaveCopyQuery {
+    #[serde(default)]
+    replace_edits: bool,
+}
+
+/// Saves (or refreshes) a copy. The service playlist is not changed. A
+/// copy edited in Parson is only replaced with `?replace_edits=true`.
 #[put("/{provider}/playlists/{id}/copy")]
 async fn save_playlist_copy(
     request: HttpRequest,
     path: web::Path<(String, String)>,
+    query: web::Query<SaveCopyQuery>,
     hub: web::Data<StreamingHub>,
 ) -> HttpResponse {
     let user_id = match authenticated_user_id(&request) {
@@ -747,7 +756,91 @@ async fn save_playlist_copy(
     let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
         return unknown_provider();
     };
-    respond(hub.save_playlist_copy(user_id, provider, raw).await)
+    respond(
+        hub.save_playlist_copy(user_id, provider, raw, query.replace_edits)
+            .await,
+    )
+}
+
+/// Renames, reorders, removes or adds tracks in a copy, in Parson only.
+#[patch("/{provider}/playlists/{id}/copy")]
+async fn edit_playlist_copy(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    body: web::Json<crate::providers::hub::CopyEdit>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
+        return unknown_provider();
+    };
+    respond(
+        hub.edit_playlist_copy(user_id, provider, raw, body.into_inner())
+            .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct NewCopyBody {
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    track_ids: Vec<String>,
+}
+
+/// A new playlist made in Parson from one service's tracks.
+#[post("/{provider}/playlist-copies")]
+async fn create_playlist_copy(
+    request: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<NewCopyBody>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some(provider) = ProviderId::parse(&path) else {
+        return unknown_provider();
+    };
+    let body = body.into_inner();
+    respond(
+        hub.create_playlist_copy(
+            user_id,
+            provider,
+            body.title,
+            body.description,
+            body.track_ids,
+        )
+        .await,
+    )
+}
+
+/// A radio from a track, artist or album: TIDAL's own radio, or for Qobuz
+/// Parson's mix of the artist's and similar artists' top tracks.
+#[get("/{provider}/radio/{seed}/{id}")]
+async fn radio(
+    request: HttpRequest,
+    path: web::Path<(String, String, String)>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let (provider, seed, id) = path.into_inner();
+    let Some((provider, raw)) = provider_and_raw(&provider, &id) else {
+        return unknown_provider();
+    };
+    let Some(seed) = crate::providers::RadioSeed::parse(&seed) else {
+        return hub_error_response(HubError::Invalid(
+            "Start a radio from a track, artist or album.",
+        ));
+    };
+    respond(hub.radio(user_id, provider, seed, raw).await)
 }
 
 #[delete("/{provider}/playlists/{id}/copy")]
@@ -987,6 +1080,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(playlists)
             .service(playlist_copy)
             .service(save_playlist_copy)
+            .service(edit_playlist_copy)
+            .service(create_playlist_copy)
+            .service(radio)
             .service(remove_playlist_copy)
             .service(playlist)
             .service(list_providers)
@@ -1244,21 +1340,22 @@ mod tests {
 
     use actix_web::dev::Service;
     use actix_web::http::StatusCode;
-    use actix_web::{App, HttpMessage, HttpRequest, test, web};
+    use actix_web::{App, HttpMessage, test, web};
     use diesel::connection::SimpleConnection;
     use diesel::r2d2::{ConnectionManager, Pool};
     use diesel::sqlite::SqliteConnection;
     use diesel_migrations::MigrationHarness;
     use serde_json::{Value, json};
 
-    use super::{byte_range, configure, stream_provider_track};
+    use super::{byte_range, configure};
     use crate::api::auth::Claims;
+    use crate::library::state::LibraryLifecycle;
     use crate::persistence::connection::DbPool;
+    use crate::providers::ProviderId;
     use crate::providers::hub::StreamingHub;
     use crate::providers::media::FixtureMedia;
     use crate::providers::transport::{FixtureReply, FixtureRoute, FixtureTransport, Method};
     use crate::providers::vault::TokenVault;
-    use crate::providers::{ProviderId, parse_entity_id};
 
     fn pool() -> DbPool {
         let pool = Arc::new(
@@ -1312,14 +1409,6 @@ mod tests {
         }
     }
 
-    async fn stream_route(
-        request: HttpRequest,
-        path: web::Path<String>,
-    ) -> actix_web::HttpResponse {
-        let (provider, raw) = parse_entity_id(&path).expect("provider id");
-        stream_provider_track(&request, provider, raw, 0).await
-    }
-
     macro_rules! app {
         ($hub:expr, $user:expr) => {
             test::init_service(
@@ -1329,8 +1418,9 @@ mod tests {
                         request.extensions_mut().insert(claims($user));
                         service.call(request)
                     })
+                    .app_data(web::Data::new(LibraryLifecycle::new()))
                     .configure(configure)
-                    .route("/media/songs/{song}/stream", web::get().to(stream_route)),
+                    .service(crate::api::library::stream_song),
             )
             .await
         };
@@ -1346,8 +1436,9 @@ mod tests {
                         request.extensions_mut().insert(claims_as($user, $role));
                         service.call(request)
                     })
+                    .app_data(web::Data::new(LibraryLifecycle::new()))
                     .configure(configure)
-                    .route("/media/songs/{song}/stream", web::get().to(stream_route)),
+                    .service(crate::api::library::stream_song),
             )
             .await
         };
@@ -1461,7 +1552,11 @@ mod tests {
     }
 
     async fn signed_in_app_state(pool: &DbPool) -> StreamingHub {
-        let (hub, _) = hub(pool.clone(), false);
+        signed_in_with_transport(pool).await.0
+    }
+
+    async fn signed_in_with_transport(pool: &DbPool) -> (StreamingHub, Arc<FixtureTransport>) {
+        let (hub, transport) = hub(pool.clone(), false);
         hub.save_credentials(1, ProviderId::Tidal, Some("client".into()), None, false)
             .await
             .expect("tidal credentials");
@@ -1480,7 +1575,266 @@ mod tests {
         hub.qobuz_sign_in(1, "listener@example.test", "pw")
             .await
             .expect("qobuz sign-in");
-        hub
+        (hub, transport)
+    }
+
+    #[actix_web::test]
+    async fn the_stream_route_plays_without_a_bitrate_and_honors_one() {
+        let pool = pool();
+        let (hub, transport) = signed_in_with_transport(&pool).await;
+        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, HIRES_192_FLAC.to_vec()));
+        let app = app!(hub.with_media(media), 1);
+        let file_url_formats = || {
+            transport
+                .requests()
+                .iter()
+                .filter(|request| request.url.ends_with("track/getFileUrl"))
+                .filter_map(|request| request.query_value("format_id").map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+
+        // Players that omit `bitrate` get the listener's chosen quality.
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-parson-stream-quality")
+                .and_then(|value| value.to_str().ok()),
+            Some("hi_res_max")
+        );
+        assert_eq!(file_url_formats(), ["27"]);
+
+        // `bitrate=0` is the same; a lossy bitrate asks Qobuz for MP3.
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream?bitrate=0")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream?bitrate=320")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(file_url_formats(), ["27", "27", "5"]);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream?bitrate=abc")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn radios_start_from_tracks_artists_and_albums() {
+        let pool = pool();
+        let hub = signed_in_app_state(&pool).await;
+        let app = app!(hub, 1);
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/radio/track/300101"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["origin"], "service");
+        assert_eq!(body["tracks"].as_array().map(Vec::len), Some(13));
+
+        // Album radio starts from the album's first track.
+        let (status, album_radio) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/radio/album/300100"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{album_radio}");
+        assert_eq!(album_radio["tracks"], body["tracks"]);
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/radio/artist/51004"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["origin"], "similar_artists");
+        assert_eq!(body["tracks"][0]["artist"]["name"], "Mara Vell");
+
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/radio/genre/51004"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn playlist_copies_are_editable_and_radios_can_be_kept() {
+        let pool = pool();
+        let hub = signed_in_app_state(&pool).await;
+        let app = app!(hub, 1);
+        let raw = "7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d";
+        let uri = format!("/providers/tidal/playlists/{raw}/copy");
+        let (status, copy) = call!(&app, test::TestRequest::put().uri(&uri)).await;
+        assert_eq!(status, StatusCode::OK, "{copy}");
+        assert_eq!(copy["edited_at"], Value::Null);
+        assert_eq!(copy["made_in_parson"], false);
+
+        // Rename, drop a track, move the last one first and add one from
+        // another album.
+        let (status, edited) = call!(
+            &app,
+            test::TestRequest::patch().uri(&uri).set_json(json!({
+                "title": "  Late Night (mine)  ",
+                "description": "Edited in Parson",
+                "track_ids": ["tidal:300104", "tidal:300101", "tidal:300102", "tidal:300301"],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{edited}");
+        assert_eq!(edited["title"], "Late Night (mine)");
+        assert!(edited["edited_at"].as_i64().is_some());
+        let ids = edited["playlist"]["tracks"]
+            .as_array()
+            .expect("tracks")
+            .iter()
+            .map(|track| track["id"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "tidal:300104",
+                "tidal:300101",
+                "tidal:300102",
+                "tidal:300301"
+            ]
+        );
+        assert_eq!(edited["playlist"]["tracks"][3]["title"], "Low Tide Hymn");
+        assert_eq!(edited["playlist"]["description"], "Edited in Parson");
+        assert_eq!(edited["track_count"], 4);
+
+        // Saving the service playlist again asks before replacing edits.
+        let (status, body) = call!(&app, test::TestRequest::put().uri(&uri)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "provider_copy_edited");
+        let (_, kept) = call!(&app, test::TestRequest::get().uri(&uri)).await;
+        assert_eq!(kept["title"], "Late Night (mine)");
+        let (status, replaced) = call!(
+            &app,
+            test::TestRequest::put().uri(&format!("{uri}?replace_edits=true")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{replaced}");
+        assert_eq!(replaced["title"], "Late Night Hi-Res");
+        assert_eq!(replaced["edited_at"], Value::Null);
+
+        // Tracks from another service, unknown ids and empty names are refused.
+        for body in [
+            json!({"track_ids": ["qobuz:7700001"]}),
+            json!({"track_ids": ["spotify:1"]}),
+            json!({"title": "   "}),
+        ] {
+            let (status, _) =
+                call!(&app, test::TestRequest::patch().uri(&uri).set_json(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+
+        // A radio kept as a playlist made in Parson.
+        let (_, radio) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/radio/track/7700202"),
+        )
+        .await;
+        let track_ids = radio["tracks"]
+            .as_array()
+            .expect("radio")
+            .iter()
+            .take(5)
+            .map(|track| track["id"].clone())
+            .collect::<Vec<_>>();
+        let (status, made) = call!(
+            &app,
+            test::TestRequest::post()
+                .uri("/providers/qobuz/playlist-copies")
+                .set_json(json!({"title": "Kenroku-en radio", "track_ids": track_ids})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        assert_eq!(made["made_in_parson"], true);
+        assert_eq!(made["track_count"], 5);
+        assert_eq!(made["owner"], "You, in Parson");
+        let id = made["id"].as_str().expect("id");
+        let made_raw = id.strip_prefix("qobuz:").expect("qobuz id");
+        assert!(made_raw.starts_with("parson-"));
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::put().uri(&format!("/providers/qobuz/playlists/{made_raw}/copy")),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "no service playlist to save again"
+        );
+        let (_, copies) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/playlist-copies"),
+        )
+        .await;
+        assert_eq!(copies["copies"].as_array().map(Vec::len), Some(2));
+
+        // Another listener cannot see or edit it.
+        let other = app!(hub_for(pool.clone()), 2);
+        let (status, _) = call!(
+            &other,
+            test::TestRequest::patch()
+                .uri(&format!("/providers/qobuz/playlists/{made_raw}/copy"))
+                .set_json(json!({"title": "Mine now"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn album_and_artist_pages_include_reviews_credits_and_bios() {
+        let pool = pool();
+        let hub = signed_in_app_state(&pool).await;
+        let app = app!(hub, 1);
+        let (status, album) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/albums/q0glassorch01"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{album}");
+        assert_eq!(album["review"]["source"], "Qobuz");
+        assert_eq!(album["awards"][0], "Qobuzissime");
+        assert_eq!(album["tracks"][0]["credits"][2]["role"], "Producer");
+        assert_eq!(album["tracks"][0]["credits"][2]["names"][0], "Ines Calder");
+
+        let (status, artist) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/artists/400100"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{artist}");
+        assert!(
+            artist["bio"]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("Mara Vell is a songwriter"))
+        );
+        assert_eq!(artist["similar"].as_array().map(Vec::len), Some(2));
     }
 
     #[actix_web::test]

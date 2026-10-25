@@ -1,0 +1,162 @@
+[
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/getSimilarArtists",
+    "query": [["artist_id", "51001"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "artists": {
+            "offset": 0,
+            "limit": 12,
+            "total": 3,
+            "items": [
+              {
+                "id": 51002,
+                "name": "Northbound Brass",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51002.jpg"
+                }
+              },
+              {
+                "id": 51003,
+                "name": "Sora Ueda",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51003.jpg"
+                }
+              },
+              {
+                "id": 51004,
+                "name": "Mara Vell",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51004.jpg"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/getSimilarArtists",
+    "query": [["artist_id", "51002"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "artists": {
+            "offset": 0,
+            "limit": 12,
+            "total": 3,
+            "items": [
+              {
+                "id": 51001,
+                "name": "Ilse Marten",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51001.jpg"
+                }
+              },
+              {
+                "id": 51003,
+                "name": "Sora Ueda",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51003.jpg"
+                }
+              },
+              {
+                "id": 51004,
+                "name": "Mara Vell",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51004.jpg"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/getSimilarArtists",
+    "query": [["artist_id", "51003"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "artists": {
+            "offset": 0,
+            "limit": 12,
+            "total": 3,
+            "items": [
+              {
+                "id": 51001,
+                "name": "Ilse Marten",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51001.jpg"
+                }
+              },
+              {
+                "id": 51002,
+                "name": "Northbound Brass",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51002.jpg"
+                }
+              },
+              {
+                "id": 51004,
+                "name": "Mara Vell",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51004.jpg"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/getSimilarArtists",
+    "query": [["artist_id", "51004"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "artists": {
+            "offset": 0,
+            "limit": 12,
+            "total": 3,
+            "items": [
+              {
+                "id": 51001,
+                "name": "Ilse Marten",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51001.jpg"
+                }
+              },
+              {
+                "id": 51002,
+                "name": "Northbound Brass",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51002.jpg"
+                }
+              },
+              {
+                "id": 51003,
+                "name": "Sora Ueda",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51003.jpg"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+]
