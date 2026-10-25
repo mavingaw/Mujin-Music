@@ -101,6 +101,23 @@ export interface ServerSignalPath {
   stages: SignalStage[];
   /** Present when a server output runs the DSP chain itself. */
   processing?: ServerSignalProcessing | null;
+  /** The server output that plays a native path. */
+  output_device?: SignalOutputDevice | null;
+}
+
+/** A server output as the kernel and driver name it. */
+export interface SignalOutputDevice {
+  /** e.g. the USB product name. */
+  name: string;
+  /** The machine the server runs on. */
+  host: string;
+  /** e.g. `ALSA hw:1,0 exclusive`. */
+  transport: string;
+  /** From the kernel, e.g. `152a:8750`. */
+  usb_id: string | null;
+  /** e.g. `high speed`. */
+  usb_speed: string | null;
+  simulated: boolean;
 }
 
 export type SignalPlatform = "web" | "desktop" | "ios" | "android";
@@ -205,8 +222,18 @@ export interface SignalPath {
    * report (not playing, or not Linux).
    */
   hardwareVerified: boolean | null;
-  /** The driver's report, e.g. `S24_3LE at 96kHz 2ch`. */
+  /**
+   * The driver's report, e.g. `hardware running at S24_3LE 96kHz 2ch`
+   * (older servers: `S24_3LE at 96kHz 2ch`).
+   */
   hardwareReport: string | null;
+  /**
+   * The transport: the host, driver, address and mode, e.g. `ALSA hw:1,0
+   * exclusive` (older servers have no transport stage).
+   */
+  transport: string | null;
+  /** The server output, as the kernel and driver name it. */
+  outputDevice: SignalOutputDevice | null;
   /**
    * One sentence naming what decided the light, built from the stages
    * present: what you asked for, what you did not, what was lossy.
@@ -822,7 +849,12 @@ export function outputFormatFromDetail(detail: string) {
  */
 export function describeSignalPath(
   stages: SignalStage[],
-  options: { highRes?: boolean; output?: string } = {},
+  options: {
+    highRes?: boolean;
+    output?: string;
+    /** The DSP chain clipped: its result is no longer exact. */
+    clipping?: boolean;
+  } = {},
 ): string {
   const quality = overallSignalQuality(stages);
   const by = (wanted: SignalQuality) =>
@@ -844,7 +876,7 @@ export function describeSignalPath(
     case "enhanced":
       return outputStage?.id === "native-output" &&
         outputStage.quality === "lossless"
-        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output} bit-exact, in exclusive mode at ${outputFormatFromDetail(outputStage.detail)}.`
+        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, in exclusive mode at ${outputFormatFromDetail(outputStage.detail)}.`
         : `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
     case "high_quality": {
       const unknown = stages.some(
@@ -921,9 +953,10 @@ export function buildSignalPath(
   const description = `${describeSignalPath(stages, {
     highRes,
     output: outputStage?.title,
+    clipping,
   })}${
     hardwareStage?.quality === "lossless"
-      ? ` The driver confirms the hardware is running ${hardwareStage.detail}.`
+      ? ` Confirmed by the driver: ${hardwareStage.detail}.`
       : ""
   }${
     clipping
@@ -937,8 +970,13 @@ export function buildSignalPath(
   return {
     hardwareVerified,
     hardwareReport: hardware?.detail ?? null,
+    transport:
+      rated.find((stage) => stage.id === "native-transport")?.detail ?? null,
+    outputDevice:
+      server && !client.localFile ? (server.output_device ?? null) : null,
     exactAfterProcessing:
       quality === "enhanced" &&
+      !clipping &&
       Boolean(processing) &&
       ratedOutput?.id === "native-output" &&
       ratedOutput.quality === "lossless",

@@ -201,9 +201,31 @@ function HiResBadge() {
   );
 }
 
+/** Wide enough that stage details stay on one line. */
+const PANEL_WIDTH = 500;
+/**
+ * On a desktop screen the panel gains a side column for the explanation,
+ * so the whole chain stays one column tall and nothing scrolls at 1440x900.
+ */
+const WIDE_PANEL_WIDTH = 780;
+const WIDE_VIEWPORT = 1100;
+
+/** The panel has room for the explanation column. */
+function useWidePanel() {
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    const update = () => setWide(window.innerWidth >= WIDE_VIEWPORT);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return wide;
+}
+
 function usePanelPosition(
   anchor: React.RefObject<HTMLElement | null>,
   panel: React.RefObject<HTMLElement | null>,
+  wide: boolean,
 ) {
   const [style, setStyle] = useState<React.CSSProperties>({
     visibility: "hidden",
@@ -213,22 +235,30 @@ function usePanelPosition(
     const element = panel.current;
     if (!trigger || !element) return;
     const margin = 12;
-    const width = Math.min(400, window.innerWidth - margin * 2);
-    const height = element.offsetHeight;
+    const width = Math.min(
+      wide ? WIDE_PANEL_WIDTH : PANEL_WIDTH,
+      window.innerWidth - margin * 2,
+    );
+    // The whole viewport is available: a long chain (decode, the DSP
+    // stages, transport, output, the driver's confirmation) fits at
+    // 1440x900 instead of scrolling inside a short box.
+    const maxHeight = window.innerHeight - margin * 2;
+    const height = Math.min(element.offsetHeight, maxHeight);
     const left = Math.min(
       Math.max(margin, trigger.left + trigger.width / 2 - width / 2),
       window.innerWidth - width - margin,
     );
     const above = trigger.top - margin - height;
+    const below = trigger.bottom + margin;
     const top =
       above >= margin
         ? above
-        : Math.min(
-            trigger.bottom + margin,
-            window.innerHeight - height - margin,
-          );
-    setStyle({ left, top: Math.max(margin, top), width });
-  }, [anchor, panel]);
+        : below + height <= window.innerHeight - margin
+          ? below
+          : // Neither side has room: cover the trigger rather than clip.
+            window.innerHeight - height - margin;
+    setStyle({ left, maxHeight, top: Math.max(margin, top), width });
+  }, [anchor, panel, wide]);
   useLayoutEffect(() => {
     place();
     const element = panel.current;
@@ -262,7 +292,9 @@ function SignalPathPanel({
   onClose: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const style = usePanelPosition(anchor, panelRef);
+  const listRef = useRef<HTMLDivElement>(null);
+  const wide = useWidePanel();
+  const style = usePanelPosition(anchor, panelRef, wide);
   const [selected, setSelected] = useState<string | null>(null);
   const titleId = `${id}-title`;
 
@@ -295,15 +327,37 @@ function SignalPathPanel({
     panelRef.current?.focus();
   }, []);
 
+  // When the chain is taller than the screen, keep where it ends (the
+  // device and the driver's confirmation) in view rather than the source.
+  const lastStage = path?.stages.at(-1)?.id;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || !lastStage || list.scrollHeight <= list.clientHeight) return;
+    list
+      .querySelector(`[data-stage="${lastStage}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [lastStage]);
+
   if (typeof document === "undefined") return null;
   const quality = path?.quality ?? null;
   const serverOutput =
     path?.stages.find((stage) => stage.id === "native-output") ?? null;
+  const device = path?.outputDevice ?? null;
+  const selectedStage =
+    path?.stages.find((stage) => stage.id === selected) ?? null;
+  const deviceFacts = device
+    ? [
+        device.usb_id ? `USB ${device.usb_id}` : null,
+        device.usb_speed,
+        device.transport,
+        `on ${device.host}`,
+      ].filter(Boolean)
+    : [];
 
   return createPortal(
     <div
       aria-labelledby={titleId}
-      className="fixed z-120 flex max-h-[min(78dvh,680px)] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f]/98 text-left text-white shadow-[0_24px_80px_rgba(0,0,0,0.75)] outline-none backdrop-blur-xl"
+      className="fixed z-120 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f]/98 text-left text-white shadow-[0_24px_80px_rgba(0,0,0,0.75)] outline-none backdrop-blur-xl"
       data-signal-path-panel
       id={id}
       onContextMenu={(event) => event.stopPropagation()}
@@ -347,6 +401,16 @@ function SignalPathPanel({
               <QualityGlyph quality="lossless" size={10} />
               Bit-perfect to {serverOutput.title}
             </p>
+          ) : path?.clipping && serverOutput ? (
+            <p
+              className="mt-1.5 flex items-center gap-1.5 text-xs font-medium"
+              data-clipping-to-output
+              style={{ color: SIGNAL_CLIPPING_COLOR }}
+            >
+              <QualityGlyph clipping quality="enhanced" size={10} />
+              Processed on the server and sent to {serverOutput.title}, but
+              clipping changed some samples
+            </p>
           ) : path?.exactAfterProcessing && serverOutput ? (
             <p
               className="mt-1.5 flex items-center gap-1.5 text-xs font-medium"
@@ -365,6 +429,14 @@ function SignalPathPanel({
               Bit-perfect up to the {casting ? "Cast device" : "system mixer"}
             </p>
           ) : null}
+          {serverOutput && deviceFacts.length ? (
+            <p
+              className="mt-0.5 text-[11px] leading-4 text-zinc-400"
+              data-output-device
+            >
+              {deviceFacts.join(" · ")}
+            </p>
+          ) : null}
           {path?.hardwareVerified !== null &&
           path?.hardwareVerified !== undefined ? (
             <p
@@ -377,8 +449,8 @@ function SignalPathPanel({
               }}
             >
               {path.hardwareVerified
-                ? `Confirmed by the driver: the hardware is running ${path.hardwareReport}.`
-                : `The driver reports ${path.hardwareReport}, not the format Parson opened.`}
+                ? `Confirmed by the driver: ${path.hardwareReport}.`
+                : `Driver report: ${path.hardwareReport}. That is not exactly what Parson opened.`}
             </p>
           ) : null}
           {path && !serverOutput && !casting ? (
@@ -401,44 +473,70 @@ function SignalPathPanel({
           <X className="h-4 w-4" />
         </button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {path ? (
-          <ol aria-label="Stages" className="relative">
-            {path.stages.map((stage, index) => (
-              <StageRow
-                expanded={selected === stage.id}
-                key={stage.id}
-                last={index === path.stages.length - 1}
-                onToggle={() =>
-                  setSelected((current) =>
-                    current === stage.id ? null : stage.id,
-                  )
-                }
-                stage={stage}
-              />
-            ))}
-          </ol>
-        ) : (
-          <p className="px-2 py-6 text-sm text-zinc-500">
-            {loading ? "Reading the signal path..." : "Nothing is playing."}
-          </p>
-        )}
-        {path && !path.serverKnown ? (
-          <p className="mx-2 mt-1 rounded-lg bg-white/4 px-3 py-2 text-xs leading-5 text-zinc-400">
-            The server&apos;s part of the path could not be loaded, so the
-            source is described from the library and server processing is not
-            shown.
-          </p>
-        ) : null}
-        {path?.processing ? <ProcessingSummary path={path} /> : null}
-        {path ? (
-          <p className="mx-2 mt-3 text-[11px] leading-4 text-zinc-500">
-            {path.description} The light describes formats and processing, not
-            the recording itself.
-          </p>
+      <div
+        className={cn("flex min-h-0 flex-1", wide ? "flex-row" : "flex-col")}
+      >
+        <div
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
+          data-signal-stages
+          ref={listRef}
+        >
+          {path ? (
+            <ol aria-label="Stages" className="relative">
+              {path.stages.map((stage, index) => (
+                <StageRow
+                  expanded={selected === stage.id}
+                  inline={!wide}
+                  key={stage.id}
+                  last={index === path.stages.length - 1}
+                  onToggle={() =>
+                    setSelected((current) =>
+                      current === stage.id ? null : stage.id,
+                    )
+                  }
+                  stage={stage}
+                />
+              ))}
+            </ol>
+          ) : (
+            <p className="px-2 py-6 text-sm text-zinc-500">
+              {loading ? "Reading the signal path..." : "Nothing is playing."}
+            </p>
+          )}
+          {!wide ? <PathNotes path={path} /> : null}
+        </div>
+        {wide && path ? (
+          <aside
+            aria-label="About this path"
+            className="w-[290px] shrink-0 space-y-2 overflow-y-auto border-l border-white/6 px-3 py-3"
+            data-signal-aside
+          >
+            {selectedStage ? (
+              <div
+                className="rounded-lg bg-white/4 px-3 py-2 text-xs leading-5"
+                data-stage-explanation={selectedStage.id}
+              >
+                <p className="font-medium text-zinc-100">
+                  {selectedStage.title}
+                </p>
+                <p className="mt-0.5 text-zinc-400">
+                  {selectedStage.explanation}
+                </p>
+              </div>
+            ) : null}
+            {path.processing ? <ProcessingSummary path={path} /> : null}
+            <PathNotes path={path} />
+          </aside>
         ) : null}
       </div>
-      <footer className="space-y-3 border-t border-white/6 px-5 py-3">
+      {!wide && path?.processing ? (
+        // Pinned below the list, so clipping is visible however long the
+        // chain is.
+        <div className="shrink-0 px-3 pb-2">
+          <ProcessingSummary path={path} />
+        </div>
+      ) : null}
+      <footer className="shrink-0 space-y-2 border-t border-white/6 px-5 py-2.5">
         {!casting ? (
           <LevelingControl
             mode={levelingMode}
@@ -490,6 +588,28 @@ function SignalPathPanel({
   );
 }
 
+/** The sentence under the light, and what could not be loaded. */
+function PathNotes({ path }: { path: SignalPath | null }) {
+  if (!path) return null;
+  return (
+    <>
+      {!path.serverKnown ? (
+        <p className="mx-2 mt-1 rounded-lg bg-white/4 px-3 py-2 text-xs leading-5 text-zinc-400">
+          The server&apos;s part of the path could not be loaded, so the source
+          is described from the library and server processing is not shown.
+        </p>
+      ) : null}
+      <p
+        className="mx-2 mt-2 text-[11px] leading-4 text-zinc-500"
+        data-signal-description
+      >
+        {path.description} The light describes formats and processing, not the
+        recording itself.
+      </p>
+    </>
+  );
+}
+
 /** Roon's MUSE footer: where the chain runs and how fast. */
 function ProcessingSummary({ path }: { path: SignalPath }) {
   const processing = path.processing;
@@ -497,7 +617,7 @@ function ProcessingSummary({ path }: { path: SignalPath }) {
   const status = processing.status;
   return (
     <div
-      className="mx-2 mt-2 space-y-1 rounded-lg border px-3 py-2 text-xs leading-5"
+      className="mx-2 space-y-0.5 rounded-lg border px-3 py-1.5 text-xs leading-5"
       data-signal-processing
       style={{
         borderColor: status?.clipping
@@ -545,11 +665,14 @@ function ProcessingSummary({ path }: { path: SignalPath }) {
 
 function StageRow({
   expanded,
+  inline,
   last,
   onToggle,
   stage,
 }: {
   expanded: boolean;
+  /** The explanation opens under the row (else in the side column). */
+  inline: boolean;
   last: boolean;
   onToggle: () => void;
   stage: SignalStage;
@@ -561,19 +684,22 @@ function StageRow({
       {!last ? (
         <span
           aria-hidden="true"
-          className="absolute -bottom-2 left-6 top-10 w-px bg-white/12"
+          className="absolute -bottom-1 left-5.5 top-8 w-px bg-white/12"
         />
       ) : null}
       <button
         aria-expanded={expanded}
-        className="flex w-full items-start gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-white/4 focus-visible:bg-white/6 focus-visible:outline-none"
+        className={cn(
+          "flex w-full items-start gap-3 rounded-xl px-2 py-1 text-left transition-colors hover:bg-white/4 focus-visible:bg-white/6 focus-visible:outline-none",
+          expanded && !inline && "bg-white/6",
+        )}
         onClick={onToggle}
         type="button"
       >
-        <span className="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/14 bg-[#141416] text-zinc-300">
-          <Icon className="h-4 w-4" />
+        <span className="relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/14 bg-[#141416] text-zinc-300">
+          <Icon className="h-3.5 w-3.5" />
         </span>
-        <span className="min-w-0 flex-1 pt-0.5">
+        <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-100">
             <span className="truncate">{stage.title}</span>
             <QualityGlyph quality={stage.quality} size={11} />
@@ -582,12 +708,12 @@ function StageRow({
             </span>
           </span>
           <span
-            className="mt-0.5 block text-[13px] leading-5"
+            className="block text-[13px] leading-5"
             style={{ color: stage.quality ? `${color}` : "#a1a1aa" }}
           >
             {stage.detail}
           </span>
-          {expanded ? (
+          {expanded && inline ? (
             <span className="mt-1.5 block text-xs leading-5 text-zinc-400">
               {stage.explanation}
             </span>
@@ -639,7 +765,7 @@ function Legend() {
   return (
     <ul
       aria-label="Light colours"
-      className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-zinc-500"
+      className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500"
     >
       {QUALITY_ORDER.map((quality) => (
         <li className="flex items-center gap-1.5" key={quality}>

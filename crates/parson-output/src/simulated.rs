@@ -48,6 +48,7 @@ impl Backend for SimulatedBackend {
             probe_error: None,
             is_default: false,
             hardware: None,
+            address: None,
         }]
     }
 

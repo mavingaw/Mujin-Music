@@ -196,7 +196,9 @@ function DeviceCard({
             <p className="text-sm font-medium text-zinc-200">Exclusive Mode</p>
             <p className="text-xs leading-5 text-zinc-500">
               {settings.exclusive
-                ? `${device.mode_label}: no other program or system mixer touches the audio, and the device switches to each track's format.`
+                ? device.id.startsWith("alsa-pcm:")
+                  ? `${device.mode_label}: Parson turns ALSA's conversions off. This PCM comes from your ALSA configuration and may be a chain of plugins, so while it plays the signal path lists the chain libasound built and rates it.`
+                  : `${device.mode_label}: no other program or system mixer touches the audio, and the device switches to each track's format.`
                 : `${device.mode_label}: the system may convert or mix the audio, so the path is rated High quality at best.`}
             </p>
           </div>

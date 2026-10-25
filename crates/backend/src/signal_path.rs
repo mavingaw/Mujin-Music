@@ -156,6 +156,25 @@ pub struct ServerSignalPath {
     /// The server-side DSP chain, on a native output that processes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processing: Option<SignalProcessing>,
+    /// The server output that plays it, on a native path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_device: Option<OutputDeviceSummary>,
+}
+
+/// The device end of a native path, as the kernel and driver name it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct OutputDeviceSummary {
+    /// e.g. the USB product name, `E30`.
+    pub name: String,
+    /// The machine the server runs on.
+    pub host: String,
+    /// Driver, address and mode, e.g. `ALSA hw:1,0 exclusive`.
+    pub transport: String,
+    /// From the kernel (`/proc/asound/cardN/usbid`), e.g. `152a:8750`.
+    pub usb_id: Option<String>,
+    /// From the kernel's USB stream report, e.g. `high speed`.
+    pub usb_speed: Option<String>,
+    pub simulated: bool,
 }
 
 /// Bitrate the stream is transcoded at, or `None` for the original bytes.
@@ -441,6 +460,7 @@ pub fn describe_server_leg(
             effect: None,
             stages,
             processing: None,
+            output_device: None,
         };
     };
 
@@ -582,6 +602,7 @@ pub fn describe_server_leg(
         effect: effect.map(|effect| effect.id),
         stages,
         processing: None,
+        output_device: None,
     }
 }
 
@@ -673,6 +694,7 @@ fn describe_dsd_compat(
         effect: None,
         stages,
         processing: None,
+        output_device: None,
     }
 }
 
@@ -701,8 +723,16 @@ pub fn format_decibels(db: f64) -> String {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NativeOutputTarget<'a> {
     pub device_name: &'a str,
-    /// e.g. `WASAPI Exclusive Mode`.
+    /// e.g. `ALSA hw:1,0 exclusive` or `WASAPI Exclusive Mode`.
     pub mode_label: &'a str,
+    /// The machine the server runs on, which owns the device.
+    pub host: &'a str,
+    /// A PCM from the ALSA configuration, which may be a plugin chain
+    /// rather than a sound card; libasound's report decides the rating.
+    pub config_pcm: bool,
+    /// The USB id and speed the kernel reports for the device.
+    pub usb_id: Option<&'a str>,
+    pub usb_speed: Option<&'a str>,
     /// Whether the driver is a simulated device without hardware.
     pub simulated: bool,
     /// e.g. `soxr, very high quality`.
@@ -1063,7 +1093,37 @@ pub fn describe_native_leg(
         });
     }
     let format = plan_format_summary(plan);
-    let (quality, mut explanation) = if plan.exclusive {
+    stages.push(SignalStage {
+        id: "native-transport",
+        kind: StageKind::Transport,
+        title: format!("{} · Parson audio transport", target.host),
+        detail: target.mode_label.to_string(),
+        quality: Some(if plan.exclusive {
+            SignalQuality::Lossless
+        } else {
+            SignalQuality::HighQuality
+        }),
+        explanation: if plan.exclusive {
+            format!(
+                "The server on {} writes the samples itself through {}, with the device's own driver and nothing else in between: no browser, phone, sound server or system mixer.",
+                target.host, target.mode_label
+            )
+        } else {
+            format!(
+                "The server on {} writes the samples through {}, which lets the system convert the format or mix in other sounds after this point.",
+                target.host, target.mode_label
+            )
+        },
+    });
+    let (quality, mut explanation) = if plan.exclusive && target.config_pcm {
+        (
+            SignalQuality::Lossless,
+            format!(
+                "The server opens the ALSA PCM for {} ({}) with ALSA's conversions turned off and switched it to {}. This PCM comes from the ALSA configuration, so it can be a chain of plugins: the driver report below lists every plugin the samples pass through and rates the path from it.",
+                target.device_name, target.mode_label, format
+            ),
+        )
+    } else if plan.exclusive {
         (
             SignalQuality::Lossless,
             format!(
@@ -1082,6 +1142,15 @@ pub fn describe_native_leg(
     };
     if dsd.is_some_and(|dsd| dsd.mode == parson_output::DsdMode::Native) {
         explanation.push_str(" The driver takes DSD natively, so the DAC receives the file's one-bit stream as it is.");
+    }
+    if let Some(usb_id) = target.usb_id {
+        explanation.push_str(&format!(
+            " The kernel reports it as USB device {usb_id}{}.",
+            target
+                .usb_speed
+                .map(|speed| format!(", {speed}"))
+                .unwrap_or_default()
+        ));
     }
     stages.push(SignalStage {
         id: "native-output",
@@ -1135,6 +1204,14 @@ pub fn describe_native_leg(
             notes,
             status: None,
         }),
+        output_device: Some(OutputDeviceSummary {
+            name: target.device_name.to_string(),
+            host: target.host.to_string(),
+            transport: target.mode_label.to_string(),
+            usb_id: target.usb_id.map(str::to_string),
+            usb_speed: target.usb_speed.map(str::to_string),
+            simulated: target.simulated,
+        }),
     }
 }
 
@@ -1148,13 +1225,24 @@ pub fn add_hardware_report(
     hardware: &parson_output::procfs::HardwareStatus,
     stream: &parson_output::StreamFormat,
 ) {
+    use parson_output::procfs::HardwareReporter;
     let params = &hardware.params;
-    let mut detail = format!(
-        "{} at {} {}ch",
+    let running = format!(
+        "{} {} {}ch",
         params.format,
         format_rate(params.rate),
         params.channels
     );
+    let chain = hardware
+        .chain
+        .as_ref()
+        .map(parson_output::pcm_chain::chain_label);
+    let mut detail = match (hardware.reporter, chain.as_deref()) {
+        (HardwareReporter::Kernel, _) | (_, None) => format!("hardware running at {running}"),
+        (HardwareReporter::Library, Some(chain)) => {
+            format!("running at {running}, through {chain}")
+        }
+    };
     if let Some(hz) = hardware.momentary_hz {
         detail.push_str(&format!(", USB clock {}", format_rate(hz)));
     }
@@ -1164,20 +1252,40 @@ pub fn add_hardware_report(
         format_rate(stream.sample_rate),
         stream.channels
     );
-    let (quality, explanation) = if hardware.matches_stream {
+    let who = match hardware.reporter {
+        HardwareReporter::Kernel => format!("Read from the kernel driver ({})", hardware.source),
+        HardwareReporter::Library => format!(
+            "Read from libasound ({}), which lists the plugin chain it built and the setup its bottom negotiated",
+            hardware.source
+        ),
+    };
+    let converting = hardware
+        .chain
+        .as_ref()
+        .map(|chain| chain.converting.join(", "))
+        .filter(|plugins| !plugins.is_empty());
+    let (title, quality, explanation) = if hardware.matches_stream {
         (
+            "Confirmed by the driver",
             SignalQuality::Lossless,
             format!(
-                "Read from the kernel ({}) while this track plays: the driver for {device_name} is running exactly the format the server opened ({opened}). Nothing between Parson and the hardware converted it.",
-                hardware.source
+                "{who} while this track plays: {device_name} is running exactly the format the server opened ({opened}). Nothing between Parson and the hardware converted it."
+            ),
+        )
+    } else if let Some(converting) = converting {
+        (
+            "Converted below Parson",
+            SignalQuality::HighQuality,
+            format!(
+                "{who} while this track plays: the samples pass through {converting}, which can convert, mix or scale them before {device_name} (the bottom of the chain runs {running}; the server opened {opened}). Point Parson at a PCM without those plugins, or at the card itself, for a bit-perfect path."
             ),
         )
     } else {
         (
+            "Converted below Parson",
             SignalQuality::HighQuality,
             format!(
-                "Read from the kernel ({}) while this track plays: the server opened {opened}, but the hardware runs {detail}. Something between Parson and {device_name} converted the stream, so it is not bit-perfect.",
-                hardware.source
+                "{who} while this track plays: the server opened {opened}, but the hardware runs {running}. Something between Parson and {device_name} converted the stream, so it is not bit-perfect."
             ),
         )
     };
@@ -1185,7 +1293,7 @@ pub fn add_hardware_report(
     path.stages.push(SignalStage {
         id: "native-hardware",
         kind: StageKind::Output,
-        title: "Driver report".into(),
+        title: title.into(),
         detail,
         quality: Some(quality),
         explanation,
@@ -1321,6 +1429,8 @@ mod tests {
         .unwrap();
         let report = parson_output::procfs::HardwareStatus {
             source: "/proc/asound/card1/pcm0p/sub0/hw_params".into(),
+            reporter: parson_output::procfs::HardwareReporter::Kernel,
+            chain: None,
             matches_stream: parson_output::procfs::params_match(&params, &stream),
             params,
             momentary_hz: None,
@@ -1335,7 +1445,8 @@ mod tests {
             1
         );
         let stage = path.stages.last().unwrap();
-        assert_eq!(stage.detail, "S24_3LE at 96kHz 2ch");
+        assert_eq!(stage.title, "Confirmed by the driver");
+        assert_eq!(stage.detail, "hardware running at S24_3LE 96kHz 2ch");
         assert!(
             stage
                 .explanation
@@ -1347,6 +1458,65 @@ mod tests {
             ..report
         };
         add_hardware_report(&mut path, "DragonFly Red", &wrong, &stream);
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+        assert_eq!(path.stages.last().unwrap().title, "Converted below Parson");
+    }
+
+    #[test]
+    fn libasound_reports_name_the_chain_and_its_converters() {
+        let mut path = describe_server_leg(
+            "s",
+            Some(&flac(44_100, 16, 2)),
+            Some("flac"),
+            "audio/flac",
+            &direct(0),
+        );
+        let stream = parson_output::StreamFormat {
+            sample_rate: 44_100,
+            sample_format: parson_output::SampleFormat::S16,
+            channels: 2,
+        };
+        let setup = |format: &str| {
+            format!("Its setup is:\n  format : {format}\n  channels : 2\n  rate : 44100\n")
+        };
+        let clean = parson_output::pcm_chain::parse_pcm_dump(&format!(
+            "File PCM (file=/tmp/c.raw)\n{}Slave: Null PCM\n{}",
+            setup("S16_LE"),
+            setup("S16_LE")
+        ));
+        let report = parson_output::procfs::HardwareStatus {
+            source: "snd_pcm_dump(parson_capture)".into(),
+            reporter: parson_output::procfs::HardwareReporter::Library,
+            params: clean.bottom.clone().unwrap(),
+            matches_stream: true,
+            chain: Some(clean),
+            momentary_hz: None,
+        };
+        add_hardware_report(&mut path, "Parson capture", &report, &stream);
+        let stage = path.stages.last().unwrap();
+        assert_eq!(stage.title, "Confirmed by the driver");
+        assert_eq!(
+            stage.detail,
+            "running at S16_LE 44.1kHz 2ch, through File PCM → Null PCM"
+        );
+        assert!(stage.explanation.starts_with("Read from libasound"));
+        assert_eq!(path.quality, SignalQuality::Lossless);
+
+        let converting = parson_output::pcm_chain::parse_pcm_dump(&format!(
+            "Plug PCM: Linear conversion PCM (S32_LE)\n{}Slave: Null PCM\n{}",
+            setup("S16_LE"),
+            setup("S32_LE")
+        ));
+        let report = parson_output::procfs::HardwareStatus {
+            params: converting.bottom.clone().unwrap(),
+            matches_stream: false,
+            chain: Some(converting),
+            ..report
+        };
+        add_hardware_report(&mut path, "Parson capture", &report, &stream);
+        let stage = path.stages.last().unwrap();
+        assert_eq!(stage.title, "Converted below Parson");
+        assert!(stage.explanation.contains("Linear conversion PCM"));
         assert_eq!(path.quality, SignalQuality::HighQuality);
     }
 
@@ -1577,11 +1747,72 @@ mod tests {
     const DAC: NativeOutputTarget<'static> = NativeOutputTarget {
         device_name: "USB DAC",
         mode_label: "WASAPI Exclusive Mode",
+        host: "studio-pc",
+        config_pcm: false,
+        usb_id: None,
+        usb_speed: None,
         simulated: false,
         resampler: "soxr, very high quality",
         leveling: None,
         processing: None,
     };
+
+    #[test]
+    fn native_paths_name_the_host_driver_and_address_before_the_device() {
+        let audio = flac(44_100, 16, 2);
+        let plan = native_plan(&audio, &usb_dac(), true);
+        let alsa = NativeOutputTarget {
+            device_name: "E30",
+            mode_label: "ALSA hw:1,0 exclusive",
+            ..DAC
+        };
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &alsa);
+        let at = path
+            .stages
+            .iter()
+            .position(|stage| stage.id == "native-transport")
+            .expect("a transport stage");
+        let transport = &path.stages[at];
+        assert_eq!(transport.kind, StageKind::Transport);
+        assert_eq!(transport.title, "studio-pc · Parson audio transport");
+        assert_eq!(transport.detail, "ALSA hw:1,0 exclusive");
+        assert_eq!(transport.quality, Some(SignalQuality::Lossless));
+        assert_eq!(path.stages[at + 1].id, "native-output");
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        let device = path.output_device.as_ref().unwrap();
+        assert_eq!(device.transport, "ALSA hw:1,0 exclusive");
+        assert_eq!(device.host, "studio-pc");
+
+        let usb = NativeOutputTarget {
+            usb_id: Some("152a:8750"),
+            usb_speed: Some("high speed"),
+            ..alsa
+        };
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &usb);
+        assert!(
+            path.stages
+                .iter()
+                .find(|stage| stage.id == "native-output")
+                .unwrap()
+                .explanation
+                .ends_with("The kernel reports it as USB device 152a:8750, high speed.")
+        );
+        assert_eq!(
+            path.output_device.unwrap().usb_id.as_deref(),
+            Some("152a:8750")
+        );
+
+        let configured = NativeOutputTarget {
+            device_name: "Parson capture",
+            mode_label: "ALSA PCM parson_capture, no conversions",
+            config_pcm: true,
+            ..DAC
+        };
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &configured);
+        let output = path.stages.last().unwrap();
+        assert!(output.explanation.contains("chain of plugins"));
+        assert!(!output.explanation.contains("no other program"));
+    }
 
     #[test]
     fn native_exclusive_output_of_a_supported_format_is_lossless() {

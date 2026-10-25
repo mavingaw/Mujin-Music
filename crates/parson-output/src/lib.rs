@@ -18,6 +18,7 @@
 
 pub mod dsd;
 pub mod dsp;
+pub mod pcm_chain;
 pub mod player;
 pub mod procfs;
 pub mod simulated;
@@ -236,6 +237,43 @@ pub struct DeviceInfo {
     /// What the kernel reports about the hardware (Linux), e.g. the USB
     /// product name and the formats its descriptors declare.
     pub hardware: Option<procfs::HardwareInfo>,
+    /// How the driver addresses the device: `hw:1,0` for an ALSA card, or
+    /// the PCM's name for a PCM defined in the ALSA configuration.
+    pub address: Option<String>,
+}
+
+/// Device ids of PCMs from the ALSA configuration (`aplay -L`), as
+/// opposed to `alsa:` sound cards.
+pub const ALSA_CONFIG_PCM_PREFIX: &str = "alsa-pcm:";
+
+impl DeviceInfo {
+    /// A PCM defined in the ALSA configuration, which may be a chain of
+    /// plugins rather than a sound card.
+    pub fn is_alsa_config_pcm(&self) -> bool {
+        self.id.starts_with(ALSA_CONFIG_PCM_PREFIX)
+    }
+
+    /// The driver, the device's address and the mode, e.g. `ALSA hw:1,0
+    /// exclusive` or `WASAPI Exclusive Mode`.
+    pub fn mode_label(&self, exclusive: bool) -> String {
+        match (self.driver, self.address.as_deref()) {
+            (Driver::Alsa, Some(address)) if self.is_alsa_config_pcm() => {
+                if exclusive {
+                    format!("ALSA PCM {address}, no conversions")
+                } else {
+                    format!("ALSA plug:{address}, conversions allowed")
+                }
+            }
+            (Driver::Alsa, Some(address)) => {
+                if exclusive {
+                    format!("ALSA {address} exclusive")
+                } else {
+                    format!("ALSA plug{address}, conversions allowed")
+                }
+            }
+            _ => self.driver.mode_label(exclusive).to_string(),
+        }
+    }
 }
 
 /// Per-device user settings, mirroring Roon's device setup.
@@ -856,6 +894,47 @@ mod tests {
         let sixteen = ((0x1234_i32) << 16).to_le_bytes();
         pack_samples(&sixteen, SampleFormat::S16, &mut out);
         assert_eq!(out, [0x34, 0x12]);
+    }
+
+    #[test]
+    fn device_mode_labels_name_the_alsa_address() {
+        let card = DeviceInfo {
+            id: "alsa:E30:0".into(),
+            name: "E30".into(),
+            detail: String::new(),
+            driver: Driver::Alsa,
+            exclusive_capable: true,
+            caps: None,
+            probe_error: None,
+            is_default: false,
+            hardware: None,
+            address: Some("hw:1,0".into()),
+        };
+        assert_eq!(card.mode_label(true), "ALSA hw:1,0 exclusive");
+        assert_eq!(
+            card.mode_label(false),
+            "ALSA plughw:1,0, conversions allowed"
+        );
+        let configured = DeviceInfo {
+            id: "alsa-pcm:studio".into(),
+            address: Some("studio".into()),
+            ..card.clone()
+        };
+        assert!(configured.is_alsa_config_pcm());
+        assert_eq!(
+            configured.mode_label(true),
+            "ALSA PCM studio, no conversions"
+        );
+        assert_eq!(
+            configured.mode_label(false),
+            "ALSA plug:studio, conversions allowed"
+        );
+        let wasapi = DeviceInfo {
+            driver: Driver::Wasapi,
+            address: None,
+            ..card
+        };
+        assert_eq!(wasapi.mode_label(true), "WASAPI Exclusive Mode");
     }
 
     #[test]

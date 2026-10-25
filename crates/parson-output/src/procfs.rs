@@ -346,11 +346,27 @@ pub fn read_usb(root: &Path, card: &str, device: i32) -> Option<(Option<String>,
     Some((usb_id, parse_usb_stream(&stream)?))
 }
 
-/// The kernel's account of a stream that is playing.
+/// Who reported what the hardware runs.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HardwareReporter {
+    /// The kernel driver, through `/proc/asound/…/hw_params`.
+    Kernel,
+    /// libasound, from the setup of the opened PCM chain (`snd_pcm_dump`):
+    /// what the bottom of the chain negotiated, and every plugin on the way.
+    Library,
+}
+
+/// The driver's account of a stream that is playing.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct HardwareStatus {
-    /// The file read, e.g. `/proc/asound/card1/pcm0p/sub0/hw_params`.
+    /// The file read, e.g. `/proc/asound/card1/pcm0p/sub0/hw_params`, or
+    /// `snd_pcm_dump(<pcm>)` for a libasound report.
     pub source: String,
+    pub reporter: HardwareReporter,
+    /// The ALSA plugin chain the samples passed through (libasound
+    /// reports; for a kernel report, a bare `hw` PCM has none).
+    pub chain: Option<crate::pcm_chain::PcmChain>,
     pub params: HwParams,
     /// The USB DAC's measured clock while streaming, when it reports one.
     pub momentary_hz: Option<u32>,
@@ -382,6 +398,8 @@ pub fn read_status(
         .and_then(|usb| usb.momentary_hz);
     Some(HardwareStatus {
         source: path.display().to_string(),
+        reporter: HardwareReporter::Kernel,
+        chain: None,
         matches_stream: params_match(&params, stream),
         params,
         momentary_hz,

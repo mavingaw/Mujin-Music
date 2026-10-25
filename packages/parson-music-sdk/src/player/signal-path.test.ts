@@ -393,6 +393,12 @@ describe("signal path classification", () => {
     expect(clipping.description).toContain(
       "Clipping detected: 812 samples went past full scale",
     );
+    // Clipped samples are not what the chain meant: never "bit-exact".
+    expect(clipping.description).not.toContain("bit-exact");
+    expect(clipping.description).toContain(
+      "The result reaches USB DAC, in exclusive mode at 96kHz 32bit 2ch.",
+    );
+    expect(clipping.exactAfterProcessing).toBeFalse();
 
     // A shared-mode server output is still processed, but not exact.
     const shared = buildSignalPath(

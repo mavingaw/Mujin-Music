@@ -576,11 +576,13 @@ mod tests {
                 "native-crossfeed",
                 "native-resample",
                 "native-depth",
+                "native-transport",
                 "native-output",
             ]
         );
         assert_eq!(path["stages"][6]["quality"], "enhanced");
         assert_eq!(path["stages"][8]["quality"], "lossless");
+        assert_eq!(path["stages"][9]["quality"], "lossless");
         assert_eq!(path["processing"]["engine"], "Parson DSP, 64-bit float");
 
         // The live session reports processing speed and clipping.

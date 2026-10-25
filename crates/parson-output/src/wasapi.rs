@@ -222,6 +222,7 @@ impl Backend for WasapiBackend {
                 probe_error,
                 is_default: default_id.as_deref() == Some(endpoint.as_str()),
                 hardware: None,
+                address: None,
             });
         }
         devices
