@@ -133,6 +133,12 @@ pub struct SignalProcessing {
 
 pub const SERVER_DSP_ENGINE: &str = "Parson DSP, 64-bit float";
 
+/// Browsers and phones cannot decode DSD, so the "original" stream of a
+/// DSF or DSDIFF file is converted to PCM: 24-bit FLAC at 88.2 kHz, as
+/// Roon's "Conversions for Compatibility" does for a DAC without DSD.
+pub const DSD_COMPAT_RATE: u32 = 88_200;
+pub const DSD_COMPAT_BITS: u8 = 24;
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ServerSignalPath {
     pub song_id: String,
@@ -196,6 +202,19 @@ pub fn mp3_output_rate(rate: u32) -> u32 {
         .unwrap_or(44_100)
 }
 
+/// `DSD64 2.8MHz`, for a one-bit DSD rate.
+pub fn format_dsd_rate(rate: u32) -> String {
+    format!(
+        "{} {:.1}MHz",
+        parson_output::dsd_rate_label(rate),
+        f64::from(rate) / 1_000_000.0
+    )
+}
+
+fn is_dsd(format: &SignalFormat) -> bool {
+    format.codec.as_deref() == Some("dsd")
+}
+
 /// `44.1kHz`, `96kHz`, `352.8kHz`.
 pub fn format_rate(rate: u32) -> String {
     let khz = f64::from(rate) / 1000.0;
@@ -219,6 +238,7 @@ fn codec_label(codec: &str) -> String {
         "pcm_float" => "PCM float".into(),
         "wavpack" => "WavPack".into(),
         "ape" => "Monkey's Audio".into(),
+        "dsd" => "DSD".into(),
         other => other.to_ascii_uppercase(),
     }
 }
@@ -229,6 +249,9 @@ fn container_label(container: &str) -> String {
         "wav" => "WAV".into(),
         "aiff" => "AIFF".into(),
         "ogg" => "Ogg".into(),
+        "dff" => "DSDIFF".into(),
+        "native" => "Native".into(),
+        "DoP" => "DoP".into(),
         other => other.to_ascii_uppercase(),
     }
 }
@@ -244,6 +267,7 @@ fn codec_from_extension(extension: &str) -> Option<&'static str> {
         "aac" => Some("aac"),
         "wv" => Some("wavpack"),
         "ape" => Some("ape"),
+        "dsf" | "dff" => Some("dsd"),
         _ => None,
     }
 }
@@ -256,6 +280,23 @@ fn is_high_res(lossless: Option<bool>, sample_rate: Option<u32>, bit_depth: Opti
 
 fn summarize(format: &SignalFormat) -> String {
     let mut parts = Vec::new();
+    if is_dsd(format) {
+        // e.g. `DSF DSD64 2.8MHz 2ch`.
+        parts.push(
+            format
+                .container
+                .as_deref()
+                .map(container_label)
+                .unwrap_or_else(|| "DSD".into()),
+        );
+        if let Some(rate) = format.sample_rate {
+            parts.push(format_dsd_rate(rate));
+        }
+        if let Some(channels) = format.channels {
+            parts.push(format!("{channels}ch"));
+        }
+        return parts.join(" ");
+    }
     let codec = format.codec.as_deref().map(codec_label);
     match (&codec, format.container.as_deref()) {
         (Some(codec), Some(container))
@@ -372,6 +413,11 @@ pub fn describe_server_leg(
         cast_conversion = true;
     }
 
+    let dsd_source = is_dsd(&source);
+    if dsd_source && transcode.is_none() {
+        return describe_dsd_compat(song_id, source, stages, request);
+    }
+
     let Some(bitrate) = transcode else {
         stages.push(SignalStage {
             id: "server",
@@ -399,6 +445,16 @@ pub fn describe_server_leg(
     };
 
     let mut rate = source.sample_rate;
+    if dsd_source && let Some(dsd_rate) = rate {
+        let pcm = parson_output::dsd::pcm_rate(dsd_rate);
+        stages.push(dsd_to_pcm_stage(
+            dsd_rate,
+            pcm,
+            "ffmpeg's DSD decoder",
+            None,
+        ));
+        rate = Some(pcm);
+    }
     if let Some(effect) = effect {
         stages.push(SignalStage {
             id: "dsp",
@@ -529,6 +585,97 @@ pub fn describe_server_leg(
     }
 }
 
+fn dsd_to_pcm_stage(
+    dsd_rate: u32,
+    pcm_rate: u32,
+    converter: &str,
+    why: Option<&str>,
+) -> SignalStage {
+    let mut explanation = format!(
+        "DSD is a one-bit stream at {}. This output cannot take it as DSD, so {converter} converts it to PCM at {} with a low-pass filter for the ultrasonic noise DSD carries. High quality, but the original bits do not reach the device.",
+        format_dsd_rate(dsd_rate),
+        format_rate(pcm_rate)
+    );
+    if let Some(why) = why {
+        explanation.push_str(&format!(" Converted because {why}."));
+    }
+    SignalStage {
+        id: "dsd-to-pcm",
+        kind: StageKind::Conversion,
+        title: "DSD to PCM conversion".into(),
+        detail: format!(
+            "{} to {}",
+            parson_output::dsd_rate_label(dsd_rate),
+            format_rate(pcm_rate)
+        ),
+        quality: Some(SignalQuality::HighQuality),
+        explanation,
+    }
+}
+
+/// A DSD file streamed to a browser or phone: no web or mobile decoder
+/// plays DSD, so the server converts it to 24-bit FLAC (Roon's
+/// "Conversions for Compatibility").
+fn describe_dsd_compat(
+    song_id: &str,
+    source: SignalFormat,
+    mut stages: Vec<SignalStage>,
+    request: &ServerLegRequest,
+) -> ServerSignalPath {
+    let rate = DSD_COMPAT_RATE;
+    let bits = DSD_COMPAT_BITS;
+    if let Some(dsd_rate) = source.sample_rate {
+        let mut stage = dsd_to_pcm_stage(
+            dsd_rate,
+            rate,
+            "the server",
+            Some(
+                "browsers and phones cannot decode DSD; play it on a server output with native DSD or DoP to keep it bit-perfect",
+            ),
+        );
+        stage.detail = format!(
+            "{} to {} {bits}bit",
+            parson_output::dsd_rate_label(dsd_rate),
+            format_rate(rate)
+        );
+        stages.push(stage);
+    }
+    stages.push(SignalStage {
+        id: "server",
+        kind: StageKind::Transport,
+        title: "Parson server".into(),
+        detail: format!("{bits}-bit FLAC, cached for seeking"),
+        quality: Some(SignalQuality::Lossless),
+        explanation: "The converted PCM is stored as lossless FLAC in the transcode cache, so nothing further is lost on the way to the client and later plays reuse it.".into(),
+    });
+    let mut delivered = SignalFormat {
+        codec: Some("flac".into()),
+        container: Some("flac".into()),
+        sample_rate: Some(rate),
+        bit_depth: Some(bits),
+        channels: source.channels.map(|channels| channels.min(2)),
+        bitrate_kbps: None,
+        lossless: Some(true),
+        high_res: true,
+        summary: String::new(),
+    };
+    delivered.summary = summarize(&delivered);
+    let quality = overall(&stages);
+    ServerSignalPath {
+        song_id: song_id.to_string(),
+        target: request.target,
+        mode: DeliveryMode::Transcode,
+        quality,
+        source,
+        delivered,
+        content_type: "audio/flac".into(),
+        requested_bitrate_kbps: request.bitrate_kbps,
+        effect: None,
+        stages,
+        processing: None,
+    }
+}
+
 /// Volume leveling the server applies on a native output.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NativeLeveling<'a> {
@@ -568,6 +715,28 @@ pub struct NativeOutputTarget<'a> {
 }
 
 fn plan_format_summary(plan: &parson_output::OutputPlan) -> String {
+    use parson_output::DsdMode;
+    match plan.dsd.as_ref() {
+        Some(dsd) if dsd.mode == DsdMode::Native => {
+            return format!(
+                "native {} ({}, {} frames) {}ch",
+                dsd.dsd_label,
+                dsd.container.unwrap_or("DSD"),
+                format_rate(plan.sample_rate),
+                plan.channels
+            );
+        }
+        Some(dsd) if dsd.mode == DsdMode::Dop => {
+            return format!(
+                "DoP: {} in {} {}bit {}ch",
+                dsd.dsd_label,
+                format_rate(plan.sample_rate),
+                plan.bit_depth,
+                plan.channels
+            );
+        }
+        _ => {}
+    }
     format!(
         "{} {}bit {}ch",
         format_rate(plan.sample_rate),
@@ -599,16 +768,67 @@ pub fn describe_native_leg(
         .map(codec_label)
         .unwrap_or_else(|| "The file".into());
     let mut stages = vec![source_stage(&source, indexed)];
-    stages.push(SignalStage {
-        id: "native-decode",
-        kind: StageKind::Decode,
-        title: "Parson server".into(),
-        detail: format!("{codec} decoded to PCM"),
-        quality: Some(SignalQuality::Lossless),
-        explanation: format!(
-            "The server decodes {codec} itself and writes the samples to the device, so no browser, phone or system mixer handles them. Decoding is exact."
-        ),
-    });
+    let dsd = plan.dsd.as_ref();
+    match dsd {
+        Some(dsd) if dsd.mode != parson_output::DsdMode::Pcm => stages.push(SignalStage {
+            id: "native-dsd-read",
+            kind: StageKind::Decode,
+            title: "Parson server".into(),
+            detail: format!("{} read from the file, not decoded", dsd.dsd_label),
+            quality: Some(SignalQuality::Lossless),
+            explanation: "The server reads the one-bit DSD stream straight from the file and puts it in time order. It is never turned into PCM, filtered or scaled.".into(),
+        }),
+        Some(dsd) => {
+            stages.push(SignalStage {
+                id: "native-decode",
+                kind: StageKind::Decode,
+                title: "Parson server".into(),
+                detail: "DSD decoded to PCM".into(),
+                quality: Some(SignalQuality::Lossless),
+                explanation: "The server decodes the file itself and writes the samples to the device, so no browser, phone or system mixer handles them.".into(),
+            });
+            if let Some(pcm_rate) = dsd.pcm_rate {
+                let mut stage = dsd_to_pcm_stage(
+                    dsd.dsd_rate,
+                    pcm_rate,
+                    "ffmpeg's DSD decoder",
+                    dsd.fallback_reason.as_deref(),
+                );
+                if dsd.fallback_reason.is_none() {
+                    stage.explanation.push_str(" The device's DSD Playback Strategy is set to Convert to PCM.");
+                }
+                stages.push(stage);
+            }
+        }
+        None => stages.push(SignalStage {
+            id: "native-decode",
+            kind: StageKind::Decode,
+            title: "Parson server".into(),
+            detail: format!("{codec} decoded to PCM"),
+            quality: Some(SignalQuality::Lossless),
+            explanation: format!(
+                "The server decodes {codec} itself and writes the samples to the device, so no browser, phone or system mixer handles them. Decoding is exact."
+            ),
+        }),
+    }
+    if let Some(dsd) = dsd.filter(|dsd| dsd.mode == parson_output::DsdMode::Dop) {
+        stages.push(SignalStage {
+            id: "native-dop",
+            kind: StageKind::Transport,
+            title: "DSD over PCM (DoP v1.0)".into(),
+            detail: format!(
+                "{} packed into {} {}bit frames",
+                dsd.dsd_label,
+                format_rate(plan.sample_rate),
+                plan.bit_depth
+            ),
+            quality: Some(SignalQuality::Lossless),
+            explanation: format!(
+                "Each 24-bit PCM frame carries 16 DSD bits per channel under a marker byte that alternates 0x05 and 0xFA. A DoP DAC recognises the markers and plays the DSD unchanged; the bits are not altered. If {} plays noise, it does not decode DoP: set its DSD Playback Strategy to Native or Convert to PCM.",
+                target.device_name
+            ),
+        });
+    }
     let derived;
     let processing = match (target.processing, target.leveling) {
         (Some(processing), _) => Some(processing),
@@ -816,7 +1036,11 @@ pub fn describe_native_leg(
             title: "Bit depth".into(),
             detail: format!("Decoded to {to}bit"),
             quality: Some(SignalQuality::HighQuality),
-            explanation: "A lossy file has no fixed bit depth; the decoder's output is quantised to the device's integer format.".into(),
+            explanation: if dsd.is_some() {
+                format!("DSD has no PCM word length; the converted PCM is quantised to the device's {to}-bit integer format.")
+            } else {
+                "A lossy file has no fixed bit depth; the decoder's output is quantised to the device's integer format.".into()
+            },
         }),
     }
     if let Some((from, to)) = plan.channel_change {
@@ -839,7 +1063,7 @@ pub fn describe_native_leg(
         });
     }
     let format = plan_format_summary(plan);
-    let (quality, explanation) = if plan.exclusive {
+    let (quality, mut explanation) = if plan.exclusive {
         (
             SignalQuality::Lossless,
             format!(
@@ -856,6 +1080,9 @@ pub fn describe_native_leg(
             ),
         )
     };
+    if dsd.is_some_and(|dsd| dsd.mode == parson_output::DsdMode::Native) {
+        explanation.push_str(" The driver takes DSD natively, so the DAC receives the file's one-bit stream as it is.");
+    }
     stages.push(SignalStage {
         id: "native-output",
         kind: StageKind::Output,
@@ -868,11 +1095,15 @@ pub fn describe_native_leg(
             explanation
         },
     });
+    let as_dsd = dsd.filter(|dsd| dsd.mode != parson_output::DsdMode::Pcm);
     let mut delivered = SignalFormat {
-        codec: Some("pcm".into()),
-        container: None,
-        sample_rate: Some(plan.sample_rate),
-        bit_depth: Some(plan.bit_depth),
+        codec: Some(if as_dsd.is_some() { "dsd" } else { "pcm" }.into()),
+        container: as_dsd.map(|dsd| match dsd.mode {
+            parson_output::DsdMode::Dop => "DoP".to_string(),
+            _ => "native".to_string(),
+        }),
+        sample_rate: Some(as_dsd.map_or(plan.sample_rate, |dsd| dsd.dsd_rate)),
+        bit_depth: Some(if as_dsd.is_some() { 1 } else { plan.bit_depth }),
         channels: Some(plan.channels),
         bitrate_kbps: None,
         lossless: Some(source.lossless == Some(true)),
@@ -905,6 +1136,62 @@ pub fn describe_native_leg(
             status: None,
         }),
     }
+}
+
+/// Adds what the operating system reports the hardware is running at, read
+/// while the track plays, as the last stage of a native path. When it
+/// differs from what the server opened, something below Parson converted
+/// the stream, and the path can no longer be called lossless.
+pub fn add_hardware_report(
+    path: &mut ServerSignalPath,
+    device_name: &str,
+    hardware: &parson_output::procfs::HardwareStatus,
+    stream: &parson_output::StreamFormat,
+) {
+    let params = &hardware.params;
+    let mut detail = format!(
+        "{} at {} {}ch",
+        params.format,
+        format_rate(params.rate),
+        params.channels
+    );
+    if let Some(hz) = hardware.momentary_hz {
+        detail.push_str(&format!(", USB clock {}", format_rate(hz)));
+    }
+    let opened = format!(
+        "{} at {} {}ch",
+        parson_output::procfs::alsa_format_name(stream.sample_format),
+        format_rate(stream.sample_rate),
+        stream.channels
+    );
+    let (quality, explanation) = if hardware.matches_stream {
+        (
+            SignalQuality::Lossless,
+            format!(
+                "Read from the kernel ({}) while this track plays: the driver for {device_name} is running exactly the format the server opened ({opened}). Nothing between Parson and the hardware converted it.",
+                hardware.source
+            ),
+        )
+    } else {
+        (
+            SignalQuality::HighQuality,
+            format!(
+                "Read from the kernel ({}) while this track plays: the server opened {opened}, but the hardware runs {detail}. Something between Parson and {device_name} converted the stream, so it is not bit-perfect.",
+                hardware.source
+            ),
+        )
+    };
+    path.stages.retain(|stage| stage.id != "native-hardware");
+    path.stages.push(SignalStage {
+        id: "native-hardware",
+        kind: StageKind::Output,
+        title: "Driver report".into(),
+        detail,
+        quality: Some(quality),
+        explanation,
+    });
+    carry_lossy_generation(&mut path.stages);
+    path.quality = overall(&path.stages);
 }
 
 /// Once a lossy stage has run, every later stage carries lossy audio, so
@@ -981,6 +1268,86 @@ mod tests {
 
     fn ids(path: &ServerSignalPath) -> Vec<&'static str> {
         path.stages.iter().map(|stage| stage.id).collect()
+    }
+
+    fn dsd64() -> AudioProperties {
+        AudioProperties {
+            codec: Some("dsd".into()),
+            container: Some("dsf".into()),
+            sample_rate: Some(2_822_400),
+            bit_depth: Some(1),
+            channels: Some(2),
+            bitrate_kbps: Some(5_644),
+            lossless: Some(true),
+        }
+    }
+
+    #[test]
+    fn browsers_get_dsd_converted_to_flac_for_compatibility() {
+        let audio = dsd64();
+        let path = describe_server_leg("s", Some(&audio), Some("dsf"), "audio/flac", &direct(0));
+        assert_eq!(path.source.summary, "DSF DSD64 2.8MHz 2ch");
+        assert!(path.source.high_res);
+        assert_eq!(ids(&path), ["source", "dsd-to-pcm", "server"]);
+        assert_eq!(path.stages[1].detail, "DSD64 to 88.2kHz 24bit");
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+        assert_eq!(path.delivered.summary, "FLAC 88.2kHz 24bit 2ch");
+        assert_eq!(path.content_type, "audio/flac");
+        // A bitrate choice still converts DSD to PCM before the MP3 encode.
+        let mp3 = describe_server_leg("s", Some(&audio), Some("dsf"), "audio/mpeg", &direct(320));
+        assert_eq!(ids(&mp3)[..3], ["source", "dsd-to-pcm", "resample"]);
+        assert_eq!(mp3.stages[2].detail, "352.8kHz to 48kHz");
+        assert_eq!(mp3.quality, SignalQuality::LowQuality);
+        assert_eq!(codec_from_extension("DFF"), Some("dsd"));
+    }
+
+    #[test]
+    fn hardware_reports_are_added_once_and_rate_the_path() {
+        let mut path = describe_server_leg(
+            "s",
+            Some(&flac(96_000, 24, 2)),
+            Some("flac"),
+            "audio/flac",
+            &direct(0),
+        );
+        let stream = parson_output::StreamFormat {
+            sample_rate: 96_000,
+            sample_format: parson_output::SampleFormat::S24Packed,
+            channels: 2,
+        };
+        let params = parson_output::procfs::parse_hw_params(
+            "format: S24_3LE\nchannels: 2\nrate: 96000 (96000/1)\n",
+        )
+        .unwrap();
+        let report = parson_output::procfs::HardwareStatus {
+            source: "/proc/asound/card1/pcm0p/sub0/hw_params".into(),
+            matches_stream: parson_output::procfs::params_match(&params, &stream),
+            params,
+            momentary_hz: None,
+        };
+        add_hardware_report(&mut path, "DragonFly Red", &report, &stream);
+        add_hardware_report(&mut path, "DragonFly Red", &report, &stream);
+        assert_eq!(
+            path.stages
+                .iter()
+                .filter(|s| s.id == "native-hardware")
+                .count(),
+            1
+        );
+        let stage = path.stages.last().unwrap();
+        assert_eq!(stage.detail, "S24_3LE at 96kHz 2ch");
+        assert!(
+            stage
+                .explanation
+                .contains("exactly the format the server opened")
+        );
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        let wrong = parson_output::procfs::HardwareStatus {
+            matches_stream: false,
+            ..report
+        };
+        add_hardware_report(&mut path, "DragonFly Red", &wrong, &stream);
+        assert_eq!(path.quality, SignalQuality::HighQuality);
     }
 
     #[test]
@@ -1203,6 +1570,7 @@ mod tests {
             ],
             min_channels: 2,
             max_channels: 2,
+            ..parson_output::DeviceCaps::default()
         }
     }
 

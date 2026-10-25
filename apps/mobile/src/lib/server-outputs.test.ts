@@ -5,6 +5,9 @@ import {
   type NativeOutputSession,
 } from "@parson/music-sdk";
 import {
+  serverDriverLine,
+  serverDsdLine,
+  serverHardwareLine,
   serverDspStatusLine,
   serverDspSummary,
   serverOutputSummary,
@@ -90,4 +93,57 @@ test("the live DSP status reads like Roon's processing speed", () => {
       clipping: true,
     }),
   ).toBe("Processing speed 41.3x · Peak +1.4 dBFS · Clipping (12)");
+});
+
+test("DSD support, hardware and the driver's report are summarised", () => {
+  const dsdDevice = {
+    ...device,
+    settings: {
+      exclusive: true,
+      max_sample_rate: null,
+      max_bit_depth: null,
+      dsd_strategy: "dop",
+      max_dsd_rate: null,
+    },
+    formats: {
+      ...device.formats,
+      dsd_rates: [2_822_400, 5_644_800].map((value) => ({
+        value,
+        supported: false,
+        allowed: true,
+      })),
+      dop_rates: [2_822_400, 5_644_800],
+    },
+    hardware: {
+      bus: "usb",
+      usb_id: "21b4:0082",
+      product: "AudioQuest DragonFly Red v1.0",
+      speed: "high speed",
+      caps_source: "driver",
+      altsets: [],
+    },
+  } as unknown as NativeOutputDevice;
+  expect(serverDsdLine(dsdDevice)).toBe(
+    "DSD: DoP up to DSD128 · DSD over PCM (DoP v1.0)",
+  );
+  expect(serverHardwareLine(dsdDevice)).toBe("USB 21b4:0082 · high speed");
+  const session = {
+    hardware: {
+      source: "/proc/asound/card1/pcm0p/sub0/hw_params",
+      params: {
+        access: "RW_INTERLEAVED",
+        format: "S24_3LE",
+        channels: 2,
+        rate: 96_000,
+        period_size: null,
+        buffer_size: null,
+      },
+      momentary_hz: 96_000,
+      matches_stream: true,
+    },
+  } as unknown as NativeOutputSession;
+  expect(serverDriverLine(session)).toBe(
+    "Driver: S24_3LE at 96kHz 2ch, as opened",
+  );
+  expect(serverDriverLine({} as NativeOutputSession)).toBeNull();
 });

@@ -803,8 +803,10 @@ fn score_release_folder_markers(
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| {
-                    ["mp3", "flac", "ogg", "m4a", "opus", "wav", "aac", "aiff"]
-                        .contains(&extension.to_ascii_lowercase().as_str())
+                    [
+                        "mp3", "flac", "ogg", "m4a", "opus", "wav", "aac", "aiff", "dsf", "dff",
+                    ]
+                    .contains(&extension.to_ascii_lowercase().as_str())
                 });
             let directory = if is_audio_file {
                 path.parent().unwrap_or(path)
@@ -1071,7 +1073,7 @@ fn release_directory(path: &str) -> &str {
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             [
-                "aac", "aiff", "alac", "flac", "m4a", "mp3", "ogg", "opus", "wav",
+                "aac", "aiff", "alac", "dff", "dsf", "flac", "m4a", "mp3", "ogg", "opus", "wav",
             ]
             .contains(&extension.to_ascii_lowercase().as_str())
         });

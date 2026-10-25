@@ -114,7 +114,7 @@ impl AudioProperties {
 /// Whether a codec name reported in [`AudioProperties::codec`] is lossless.
 pub fn codec_is_lossless(codec: &str) -> Option<bool> {
     match codec {
-        "flac" | "alac" | "pcm" | "pcm_float" | "wavpack" | "ape" | "tta" => Some(true),
+        "flac" | "alac" | "pcm" | "pcm_float" | "wavpack" | "ape" | "tta" | "dsd" => Some(true),
         "mp3" | "aac" | "vorbis" | "opus" | "speex" | "musepack" | "ac3" | "eac3" => Some(false),
         _ => None,
     }

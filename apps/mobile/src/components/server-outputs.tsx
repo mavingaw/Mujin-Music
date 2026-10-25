@@ -6,11 +6,14 @@ import {
   getNativeOutputs,
   normalizeDspSettings,
   playOnNativeOutput,
+  DSD_STRATEGIES,
   sendNativeOutputCommand,
   signalLightColor,
   signalLightLabel,
   signalQualityColors,
   updateNativeOutputDsp,
+  updateNativeOutputSettings,
+  type DsdStrategy,
   type DspSettings,
   type NativeOutputCommand,
   type NativeOutputs,
@@ -20,8 +23,11 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { palette } from "@/constants/colors";
 import { useState } from "react";
 import {
+  serverDriverLine,
+  serverDsdLine,
   serverDspStatusLine,
   serverDspSummary,
+  serverHardwareLine,
   serverOutputSummary,
   serverSessionLine,
   unsupportedRates,
@@ -105,6 +111,29 @@ export function ServerOutputs({
       );
     },
   });
+  const saveSettings = useMutation({
+    mutationFn: (input: { id: string; strategy: DsdStrategy }) => {
+      const device = outputs.data?.devices.find((item) => item.id === input.id);
+      if (!device) throw new Error("That output device is not connected.");
+      return updateNativeOutputSettings(input.id, {
+        ...device.settings,
+        dsd_strategy: input.strategy,
+      });
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData<NativeOutputs>(["native-outputs"], (old) =>
+        old
+          ? {
+              ...old,
+              devices: old.devices.map((item) =>
+                item.id === saved.id ? saved : item,
+              ),
+            }
+          : old,
+      );
+      void queryClient.invalidateQueries({ queryKey: sessionKey });
+    },
+  });
   const devices = outputs.data?.devices ?? [];
   if (!outputs.data?.supported || !devices.length) return null;
   const current = session.data ?? null;
@@ -157,6 +186,20 @@ export function ServerOutputs({
             </Text>
           </View>
           <Text style={styles.detail}>{serverSessionLine(current)}</Text>
+          {serverDriverLine(current) ? (
+            <Text
+              style={[
+                styles.detail,
+                {
+                  color: current.hardware?.matches_stream
+                    ? signalQualityColors.lossless
+                    : signalQualityColors.high_quality,
+                },
+              ]}
+            >
+              {serverDriverLine(current)}
+            </Text>
+          ) : null}
           {statusLine ? (
             <Text
               style={[
@@ -197,6 +240,16 @@ export function ServerOutputs({
                 Converted: {unsupportedRates(device)}
               </Text>
             ) : null}
+            {serverHardwareLine(device) ? (
+              <Text numberOfLines={1} style={styles.detail}>
+                {serverHardwareLine(device)}
+              </Text>
+            ) : null}
+            {serverDsdLine(device) ? (
+              <Text numberOfLines={1} style={styles.detail}>
+                {serverDsdLine(device)}
+              </Text>
+            ) : null}
             {serverDspSummary(device) ? (
               <Text
                 numberOfLines={1}
@@ -213,6 +266,42 @@ export function ServerOutputs({
           />
         </View>
       ))}
+      {focused.formats?.dsd_rates ? (
+        <View style={styles.strategies}>
+          <Text style={styles.detail}>DSD playback on {focused.name}</Text>
+          <View style={styles.chips}>
+            {DSD_STRATEGIES.map((strategy) => {
+              const chosen =
+                (focused.settings.dsd_strategy ?? "auto") === strategy.value;
+              return (
+                <Pressable
+                  accessibilityLabel={`DSD playback strategy: ${strategy.label}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: chosen }}
+                  disabled={saveSettings.isPending}
+                  key={strategy.value}
+                  onPress={() =>
+                    saveSettings.mutate({
+                      id: focused.id,
+                      strategy: strategy.value,
+                    })
+                  }
+                  style={[styles.button, chosen && styles.chosen]}
+                >
+                  <Text style={styles.buttonText}>{strategy.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {saveSettings.error ? (
+            <Text style={styles.unsupported}>
+              {saveSettings.error instanceof Error
+                ? saveSettings.error.message
+                : "The server did not save the setting."}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
       <DspControls
         crossfeed={focused.dsp_support ? focused.dsp_support.crossfeed : null}
         onChange={(settings) => {
@@ -302,5 +391,11 @@ const styles = StyleSheet.create({
     borderColor: palette.borderStrong,
   },
   buttonDisabled: { opacity: 0.4 },
+  chosen: {
+    borderColor: signalQualityColors.lossless,
+    backgroundColor: "rgba(178,107,255,0.16)",
+  },
+  strategies: { gap: 6 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   buttonText: { color: "white", fontSize: 12, fontWeight: "600" },
 });

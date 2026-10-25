@@ -160,6 +160,9 @@ fn probe(device: &IMMDevice) -> io::Result<DeviceCaps> {
         sample_formats: formats,
         min_channels: 2,
         max_channels: 2,
+        // DSD reaches WASAPI only as DoP, which cannot be probed.
+        dsd_formats: Vec::new(),
+        dsd_rates: Vec::new(),
     })
 }
 
@@ -218,6 +221,7 @@ impl Backend for WasapiBackend {
                 caps,
                 probe_error,
                 is_default: default_id.as_deref() == Some(endpoint.as_str()),
+                hardware: None,
             });
         }
         devices
