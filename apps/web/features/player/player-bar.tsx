@@ -11,7 +11,7 @@ import {
 } from "./player-bar-hooks";
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
 import { PlayerFooter } from "./player-footer";
-import PlayerQueue from "./player-queue";
+import PlayerQueue, { type QueueEditing } from "./player-queue";
 import { useMediaSession } from "./use-media-session";
 import { useCastOutput } from "./use-cast-output";
 import { getSongInfo } from "@parson/music-sdk";
@@ -22,7 +22,12 @@ import {
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
 import getBaseURL from "@/lib/api/server-url";
-import { zoneStatusLabel } from "@parson/music-sdk";
+import {
+  nextRepeatMode,
+  previewQueueEdit,
+  zoneStatusLabel,
+  type ZoneCommand,
+} from "@parson/music-sdk";
 import { useZones } from "./zones/zones-provider";
 import { ZonePickerButton } from "./zones/zone-picker";
 import {
@@ -48,6 +53,12 @@ export default function PlayerBar() {
     playQueueItem,
     queue,
     reorderQueue,
+    removeQueueItem,
+    clearUpcoming,
+    repeatMode,
+    setRepeatMode,
+    shuffle,
+    setShuffle,
     setAudioVolume,
     setAudioPreset,
     slowedReverb,
@@ -73,7 +84,21 @@ export default function PlayerBar() {
   const zones = useZones();
   const remote = zones.remoteZone;
   const remoteSong = useZoneSong(remote);
-  const remoteQueue = useZoneQueue(remote);
+  // An edit made from here shows at once, until the zone reports it.
+  const [optimistic, setOptimistic] = useState<{
+    zoneId: string;
+    base: string;
+    ids: string[];
+  } | null>(null);
+  const remoteQueueKey = remote ? remote.queue.song_ids.join(",") : "";
+  const optimisticIds =
+    optimistic &&
+    remote &&
+    optimistic.zoneId === remote.id &&
+    optimistic.base === remoteQueueKey
+      ? optimistic.ids
+      : null;
+  const remoteQueue = useZoneQueue(remote, optimisticIds);
   const remoteTime = useZoneClock(remote, zones.fetchedAt);
   const remoteNow = remote?.now_playing ?? null;
   const effectiveSong = (remote ? remoteSong : castSong) || song;
@@ -134,6 +159,18 @@ export default function PlayerBar() {
   const sendRemote = (command: Parameters<typeof zones.send>[1]) => {
     if (!remote) return;
     void zones.send(remote.id, command).catch(() => {});
+  };
+  const sendQueueEdit = (command: ZoneCommand) => {
+    if (!remote) return;
+    const ids = optimisticIds ?? remote.queue.song_ids;
+    const preview = previewQueueEdit(
+      ids,
+      remote.queue.current_position,
+      command,
+    );
+    if (!preview) return;
+    setOptimistic({ zoneId: remote.id, base: remoteQueueKey, ids: preview });
+    void zones.send(remote.id, command).catch(() => setOptimistic(null));
   };
   const togglePlayback = remote
     ? () => sendRemote({ command: effectivePlaying ? "pause" : "play" })
@@ -217,7 +254,16 @@ export default function PlayerBar() {
     enabled: Boolean(song.id || castItem || remote),
     onNext: next,
     onPrevious: previous,
-    onRepeat: toggleLoop,
+    onRepeat: remote
+      ? () => {
+          if (remote.capabilities.repeat) {
+            sendRemote({
+              command: "set_repeat",
+              mode: nextRepeatMode(remote.repeat),
+            });
+          }
+        }
+      : toggleLoop,
     onSeek: seek,
     onToggleMute: toggleOutputMute,
     onTogglePlayback: togglePlayback,
@@ -271,8 +317,62 @@ export default function PlayerBar() {
   const selectQueueItem = remote
     ? (index: number) => sendRemote({ command: "jump", queue_position: index })
     : playQueueItem;
-  const reorderPlayerQueue = remote ? () => {} : reorderQueue;
+  const remoteIds = optimisticIds ?? remote?.queue.song_ids ?? [];
+  const reorderPlayerQueue = remote
+    ? (from: number, to: number) =>
+        sendQueueEdit({
+          command: "move_queue_item",
+          from,
+          to,
+          song_id: remoteIds[from],
+        })
+    : reorderQueue;
   const queueSongId = remote ? (remoteNow?.song_id ?? "") : song.id;
+  const localIndex = queue.findIndex((item) => item.song.id === song.id);
+  const queueEditing = ((): QueueEditing | undefined => {
+    if (remote) {
+      const parsonQueue = remote.source === "parson";
+      return {
+        currentIndex: remote.queue.current_position,
+        editable: remote.capabilities.queue_edit && parsonQueue,
+        onRemove: (index) =>
+          sendQueueEdit({
+            command: "remove_queue_item",
+            queue_position: index,
+            song_id: remoteIds[index],
+          }),
+        onClearUpcoming: () => sendQueueEdit({ command: "clear_upcoming" }),
+        repeatMode: remote.repeat,
+        onRepeatChange: remote.capabilities.repeat
+          ? (mode) => sendRemote({ command: "set_repeat", mode })
+          : null,
+        shuffle: remote.shuffle,
+        onShuffleChange: remote.capabilities.shuffle
+          ? (enabled) => sendRemote({ command: "set_shuffle", enabled })
+          : null,
+      };
+    }
+    if (casting) return undefined;
+    return {
+      currentIndex: Math.max(0, localIndex),
+      editable: queue.length > 0,
+      reorderAnywhere: true,
+      onRemove: removeQueueItem,
+      onClearUpcoming: clearUpcoming,
+      repeatMode,
+      onRepeatChange: setRepeatMode,
+      shuffle,
+      onShuffleChange: setShuffle,
+    };
+  })();
+  const effectiveRepeat = remote ? remote.repeat : repeatMode;
+  const cycleRepeat = remote
+    ? () =>
+        sendRemote({
+          command: "set_repeat",
+          mode: nextRepeatMode(remote.repeat),
+        })
+    : toggleLoop;
 
   if (!song.id && !castItem && !remote) {
     // Nothing plays here: keep the zone picker reachable so a remote zone
@@ -300,6 +400,8 @@ export default function PlayerBar() {
           readPosition={casting || remote ? undefined : getPlaybackPosition}
           isPlaying={effectivePlaying}
           looping={looping}
+          repeatMode={effectiveRepeat}
+          queueEditing={queueEditing}
           lyricsOpen={lyricsOpen}
           lyricsFallback={fallbackLyrics}
           lyricsFailed={lyricsFailed}
@@ -330,7 +432,7 @@ export default function PlayerBar() {
             setQueueOpen(false);
           }}
           onSeek={seek}
-          onToggleLoop={toggleLoop}
+          onToggleLoop={cycleRepeat}
           onToggleMute={toggleOutputMute}
           onTogglePlayback={togglePlayback}
           onToggleSound={toggleSlowedReverb}
@@ -367,6 +469,8 @@ export default function PlayerBar() {
       {queueOpen && !fullscreenOpen && (
         <PlayerQueue
           currentSongId={queueSongId}
+          editing={queueEditing}
+          title={remote ? `Queue · ${remote.name}` : "Queue"}
           onClose={closeQueue}
           onReorder={reorderPlayerQueue}
           onSelect={(index) => selectQueueItem(index)}

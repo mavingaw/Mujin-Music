@@ -9,7 +9,12 @@ import {
 import type { LibrarySong } from "@parson/music-sdk/types";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import type { QueueItem } from "../player-model";
+import {
+  blankAlbum,
+  blankArtist,
+  blankSong,
+  type QueueItem,
+} from "../player-model";
 
 /** Ticking position estimate for a remote zone, in seconds. */
 export function useZoneClock(zone: Zone | null, fetchedAt: number) {
@@ -37,28 +42,47 @@ export function useZoneSong(zone: Zone | null): LibrarySong | null {
   );
 }
 
-/** The remote zone's queue as player queue items. */
-export function useZoneQueue(zone: Zone | null): QueueItem[] {
-  const ids = zone?.queue.song_ids ?? [];
+/**
+ * The remote zone's queue as player queue items, index for index with the
+ * server's queue (positions are what queue commands address). `overrideIds`
+ * shows an optimistic edit until the zone reports it.
+ */
+export function useZoneQueue(
+  zone: Zone | null,
+  overrideIds?: string[] | null,
+): QueueItem[] {
+  const ids = overrideIds ?? zone?.queue.song_ids ?? [];
   const key = ids.join(",");
+  const allIds = zone?.queue.song_ids ?? [];
+  // Fetch info for the server's queue; an optimistic edit only reorders it.
+  const infoKey = [...new Set([...allIds, ...ids])].sort().join(",");
   const infos = useQuery({
-    queryKey: ["zone-queue", key],
-    queryFn: () => getSongInfos(ids, false),
-    enabled: ids.length > 0,
+    queryKey: ["zone-queue", infoKey],
+    queryFn: () => getSongInfos(infoKey.split(","), false),
+    enabled: infoKey.length > 0,
     staleTime: 5 * 60_000,
   }).data;
   return useMemo(() => {
-    if (!infos) return [];
-    return key
-      .split(",")
-      .map((id) => infos[id] as LibrarySong | undefined)
-      .filter((song): song is LibrarySong => Boolean(song?.album_object))
-      .map((song) => ({
+    if (!infos || !key) return [];
+    return key.split(",").map((id) => {
+      const song = infos[id] as LibrarySong | undefined;
+      if (!song?.album_object) {
+        // Keep the slot so positions still match the zone's queue.
+        return {
+          song: { ...blankSong(), id, name: "Unavailable track" },
+          album: blankAlbum(),
+          artist: blankArtist(),
+          origin: "manual" as const,
+          queuePosition: null,
+        };
+      }
+      return {
         song,
         album: song.album_object,
         artist: song.artist_object,
         origin: "manual" as const,
         queuePosition: null,
-      }));
+      };
+    });
   }, [infos, key]); // `key` captures `ids`.
 }

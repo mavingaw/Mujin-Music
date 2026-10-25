@@ -1,6 +1,10 @@
 "use client";
 
-import { createPlaybackQueue } from "@parson/music-sdk";
+import {
+  createPlaybackQueue,
+  nextRepeatMode,
+  type ZoneRepeatMode,
+} from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/features/account/session-provider";
@@ -40,6 +44,12 @@ import {
   activeQueueIndexAfterMove,
   moveQueueItem,
 } from "./player-queue-reorder";
+import {
+  clearUpcomingItems,
+  removeUpcomingItem,
+  shuffleUpcomingItems,
+  unshuffleUpcomingItems,
+} from "./player-queue-edit";
 const cover = (path?: string) =>
   path
     ? `${getBaseURL()}/media/images/${encodeURIComponent(path)}`
@@ -86,8 +96,12 @@ export function usePlayerController() {
   const queuePositionSync = useRef<Promise<void>>(Promise.resolve());
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const loopingRef = useRef(false);
-  const [looping, setLooping] = useState(false);
+  const repeatRef = useRef<ZoneRepeatMode>("off");
+  const [repeatMode, setRepeatModeState] = useState<ZoneRepeatMode>("off");
+  const looping = repeatMode === "one";
+  /** Unshuffled order while shuffle is on. */
+  const originalOrder = useRef<QueueItem[] | null>(null);
+  const [shuffle, setShuffleState] = useState(false);
   const { sendPlaybackEvent, telemetry } = usePlaybackTelemetry({
     activeSong,
     audio,
@@ -170,6 +184,8 @@ export function usePlayerController() {
     (items: QueueInput[]) => {
       playbackGeneration.current += 1;
       const normalized = manualQueueItems(items);
+      originalOrder.current = null;
+      setShuffleState(false);
       queueRef.current = normalized;
       currentOrigin.current = "manual";
       persistedQueue.current = null;
@@ -186,6 +202,9 @@ export function usePlayerController() {
         return;
       }
       const additions = manualQueueItems(items);
+      if (originalOrder.current) {
+        originalOrder.current = [...originalOrder.current, ...additions];
+      }
       const next = [...queueRef.current, ...additions];
       queueRef.current = next;
       persistedQueue.current = null;
@@ -205,6 +224,18 @@ export function usePlayerController() {
         index.current + 1,
         queueRef.current.length,
       );
+      if (originalOrder.current) {
+        const currentId = queueRef.current[index.current]?.song.id;
+        const at =
+          originalOrder.current.findIndex(
+            (item) => item.song.id === currentId,
+          ) + 1;
+        originalOrder.current = [
+          ...originalOrder.current.slice(0, at),
+          ...additions,
+          ...originalOrder.current.slice(at),
+        ];
+      }
       const next = [
         ...queueRef.current.slice(0, insertionIndex),
         ...additions,
@@ -217,6 +248,80 @@ export function usePlayerController() {
       setQueueState(next);
     },
     [session?.sub],
+  );
+  const commitQueue = useCallback(
+    (next: QueueItem[], nextIndex: number) => {
+      queueRef.current = next;
+      index.current = nextIndex;
+      persistedQueue.current = null;
+      storeQueue(null);
+      storeQueueSnapshot(session?.sub, next, nextIndex);
+      setQueueState(next);
+    },
+    [session?.sub],
+  );
+  const removeQueueItem = useCallback(
+    (position: number) => {
+      const removed = queueRef.current[position];
+      const next = removeUpcomingItem(
+        queueRef.current,
+        index.current,
+        position,
+      );
+      if (!next || !removed) return;
+      if (originalOrder.current) {
+        const at = originalOrder.current.findIndex(
+          (item) => item === removed || item.song.id === removed.song.id,
+        );
+        if (at >= 0) {
+          originalOrder.current = originalOrder.current.filter(
+            (_, position) => position !== at,
+          );
+        }
+      }
+      commitQueue(next, index.current);
+    },
+    [commitQueue],
+  );
+  const clearUpcoming = useCallback(() => {
+    if (index.current + 1 >= queueRef.current.length) return;
+    const next = clearUpcomingItems(queueRef.current, index.current);
+    if (originalOrder.current) {
+      const kept = new Set(next.map((item) => item.song.id));
+      originalOrder.current = originalOrder.current.filter((item) =>
+        kept.has(item.song.id),
+      );
+    }
+    commitQueue(next, index.current);
+  }, [commitQueue]);
+  const setShuffle = useCallback(
+    (enabled: boolean) => {
+      if (enabled === Boolean(originalOrder.current)) {
+        setShuffleState(enabled);
+        return;
+      }
+      if (enabled) {
+        originalOrder.current = queueRef.current;
+        commitQueue(
+          shuffleUpcomingItems(queueRef.current, index.current),
+          index.current,
+        );
+      } else {
+        const original = originalOrder.current ?? [];
+        originalOrder.current = null;
+        commitQueue(
+          unshuffleUpcomingItems(
+            queueRef.current,
+            index.current,
+            original,
+            (item) => item.song.id,
+          ),
+          index.current,
+        );
+      }
+      setShuffleState(enabled);
+    },
+    [commitQueue],
   );
   const reorderQueue = useCallback(
     (from: number, to: number) => {
@@ -369,13 +474,15 @@ export function usePlayerController() {
     }
     setCurrentTime(bounded);
   }, []);
-  const toggleLoop = useCallback(() => {
-    const next = !loopingRef.current;
-    loopingRef.current = next;
-    setLooping(next);
+  const setRepeatMode = useCallback((mode: ZoneRepeatMode) => {
+    repeatRef.current = mode;
+    setRepeatModeState(mode);
   }, []);
+  const toggleLoop = useCallback(() => {
+    setRepeatMode(nextRepeatMode(repeatRef.current));
+  }, [setRepeatMode]);
   const handleEnded = useCallback(() => {
-    if (loopingRef.current && audio.current) {
+    if (repeatRef.current === "one" && audio.current) {
       audio.current.currentTime = 0;
       playAudioSource();
       return;
@@ -397,6 +504,10 @@ export function usePlayerController() {
       index.current + 1 < queueRef.current.length
     ) {
       playItem(index.current + 1);
+      return;
+    }
+    if (repeatRef.current === "all" && queueRef.current.length) {
+      playItem(0);
       return;
     }
     if (song.id) {
@@ -443,7 +554,9 @@ export function usePlayerController() {
       preloadAudioSource(null);
       return;
     }
-    const next = queueRef.current[index.current + 1];
+    const next =
+      queueRef.current[index.current + 1] ??
+      (repeatMode === "all" ? queueRef.current[0] : undefined);
     preloadAudioSource(
       next ? streamUrl(next.song.id, session?.bitrate ?? 0) : null,
     );
@@ -452,6 +565,7 @@ export function usePlayerController() {
     looping,
     preloadAudioSource,
     queue,
+    repeatMode,
     session?.bitrate,
     song.id,
   ]);
@@ -513,6 +627,8 @@ export function usePlayerController() {
       audioPreset,
       audioPresets,
       looping,
+      repeatMode,
+      shuffle,
       setSongCallback,
       setQueue,
       addNextToQueue,
@@ -541,6 +657,10 @@ export function usePlayerController() {
         playItem(nextIndex);
       },
       reorderQueue,
+      removeQueueItem,
+      clearUpcoming,
+      setRepeatMode,
+      setShuffle,
       handleTimeChange,
       getPlaybackPosition,
       setAudioVolume,
@@ -567,6 +687,12 @@ export function usePlayerController() {
       playPreviousSong,
       playItem,
       reorderQueue,
+      removeQueueItem,
+      clearUpcoming,
+      repeatMode,
+      setRepeatMode,
+      shuffle,
+      setShuffle,
       persistQueuePosition,
       queue,
       session?.sub,

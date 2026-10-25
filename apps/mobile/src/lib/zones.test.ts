@@ -4,6 +4,8 @@ import {
   applyMobileZoneCommand,
   mobileZoneName,
   mobileZoneStatus,
+  mobileRepeatMode,
+  zoneRepeatMode,
   zonePollInterval,
   type MobileZoneControls,
 } from "./zones";
@@ -20,6 +22,12 @@ function controls(playing: boolean) {
     load: async (ids, position, positionMs) => {
       calls.push(`load:${ids.length}@${position}+${positionMs}`);
     },
+    songIdAt: (index) => ["a", "b", "c"][index],
+    move: (from, to) => calls.push(`move:${from}->${to}`),
+    remove: (index) => calls.push(`remove:${index}`),
+    clearUpcoming: () => calls.push("clear"),
+    setRepeat: (mode) => calls.push(`repeat:${mode}`),
+    setShuffle: (enabled) => calls.push(`shuffle:${enabled}`),
   };
   return { calls, value };
 }
@@ -66,4 +74,38 @@ test("status and polling cadence", () => {
   expect(zonePollInterval(true, false)).toBeLessThan(
     zonePollInterval(false, true),
   );
+});
+
+test("remote queue management reaches the phone's queue", async () => {
+  const phone = controls(true);
+  await applyMobileZoneCommand(
+    { command: "move_queue_item", from: 2, to: 1, song_id: "c" },
+    phone.value,
+  );
+  await applyMobileZoneCommand(
+    { command: "remove_queue_item", queue_position: 2, song_id: "stale" },
+    phone.value,
+  );
+  await applyMobileZoneCommand(
+    { command: "remove_queue_item", queue_position: 2, song_id: "c" },
+    phone.value,
+  );
+  await applyMobileZoneCommand({ command: "clear_upcoming" }, phone.value);
+  await applyMobileZoneCommand(
+    { command: "set_repeat", mode: "off" },
+    phone.value,
+  );
+  await applyMobileZoneCommand(
+    { command: "set_shuffle", enabled: false },
+    phone.value,
+  );
+  expect(phone.calls).toEqual([
+    "move:2->1",
+    "remove:2",
+    "clear",
+    "repeat:none",
+    "shuffle:false",
+  ]);
+  expect(zoneRepeatMode("none")).toBe("off");
+  expect(mobileRepeatMode("one")).toBe("one");
 });

@@ -2,6 +2,7 @@ import {
   estimateZonePosition,
   groupingPlan,
   orderZones,
+  sleepTimerLabel,
   zoneStatusLabel,
   type Zone,
   type ZoneKind,
@@ -38,6 +39,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { palette } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 import { useZones } from "@/providers/zones-provider";
+
+import { ZoneQueue } from "./zone-queue";
 
 function ZoneGlyph({ kind, color }: { kind: ZoneKind; color: string }) {
   const props = { color, size: 20 };
@@ -339,6 +342,14 @@ function RemoteControls({ zone }: { zone: Zone }) {
           ? `  ·  ${formatTime(position)} / ${formatTime(duration)}`
           : ""}
       </Text>
+      {zone.sleep_timer ? (
+        <Text
+          numberOfLines={1}
+          style={[styles.syncNote, { color: palette.secondary }]}
+        >
+          {sleepTimerLabel(zone.sleep_timer, now)}
+        </Text>
+      ) : null}
       <View style={styles.transport}>
         <Pressable
           accessibilityLabel="Previous"
@@ -395,6 +406,17 @@ function RemoteControls({ zone }: { zone: Zone }) {
             <Plus color="white" size={18} />
           </Pressable>
         </View>
+      ) : null}
+      {zone.capabilities.queue && zone.queue.song_ids.length > 0 ? (
+        <ZoneQueue
+          send={(command) =>
+            zones.send(zone.id, command).catch((error) => {
+              failure(error, "The zone did not change its queue.");
+              throw error;
+            })
+          }
+          zone={zone}
+        />
       ) : null}
     </View>
   );

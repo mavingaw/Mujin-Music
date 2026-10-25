@@ -33,6 +33,7 @@ import {
   mobileZoneName,
   mobileZoneStatus,
   zonePollInterval,
+  zoneRepeatMode,
   ZONE_DEVICE_KEY,
   ZONE_SELECTED_KEY,
   type MobileZoneControls,
@@ -134,6 +135,12 @@ export function ZonesProvider({ children }: PropsWithChildren) {
           };
         }
       },
+      songIdAt: (index) => playerRef.current.queue[index]?.id,
+      move: (from, to) => playerRef.current.moveInQueue(from, to),
+      remove: (index) => playerRef.current.removeFromQueue(index),
+      clearUpcoming: () => playerRef.current.clearUpcoming(),
+      setRepeat: (mode) => playerRef.current.setRepeatMode(mode),
+      setShuffle: (enabled) => playerRef.current.setShuffleEnabled(enabled),
     }),
     [],
   );
@@ -189,6 +196,8 @@ export function ZonesProvider({ children }: PropsWithChildren) {
         duration_ms: Math.round(positionRef.current.duration * 1000),
         volume: 100,
         muted: false,
+        repeat: zoneRepeatMode(current.repeat),
+        shuffle: current.shuffle,
         acknowledged_seq: lastSeq.current ?? 0,
       });
       if (includeQueue) lastQueue.current = queueKey;
@@ -207,11 +216,13 @@ export function ZonesProvider({ children }: PropsWithChildren) {
     return () => clearInterval(timer);
   }, [deviceId, foreground, interval, ready, report]);
 
-  // Prompt reports on track or play-state changes.
+  // Prompt reports on track, play-state, queue and mode changes.
   const currentId = player.current?.id;
+  const queueKey = player.queue.map((song) => song.id).join(",");
+  const { repeat, shuffle } = player;
   useEffect(() => {
     if (ready && deviceId) void report();
-  }, [currentId, deviceId, playing, ready, report]);
+  }, [currentId, deviceId, playing, queueKey, repeat, ready, report, shuffle]);
 
   const query = useQuery({
     queryKey: ["zones"],

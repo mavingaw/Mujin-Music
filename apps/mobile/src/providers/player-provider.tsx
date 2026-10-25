@@ -59,6 +59,7 @@ import {
   updateListenedSeconds,
 } from "@/lib/playback-telemetry";
 import { restoredQueue, shuffledQueue } from "@/lib/shuffle-queue";
+import { moveQueueItem, queueIndexAfterMove } from "@/lib/queue-edit";
 import {
   parseStoredPlayerState,
   serializePlayerState,
@@ -114,12 +115,16 @@ type PlayerContextValue = {
   addToQueue: (songs: LibrarySong[]) => void;
   clearUpcoming: () => void;
   removeFromQueue: (index: number) => void;
+  /** Moves a queue item; the playing song keeps playing. */
+  moveInQueue: (from: number, to: number) => void;
   toggle: () => void;
   next: () => void;
   previous: () => void;
   seek: (seconds: number) => void;
   cycleRepeat: () => void;
+  setRepeatMode: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
+  setShuffleEnabled: (enabled: boolean) => void;
   setAudioPreset: (preset: AudioPreset) => void;
 };
 
@@ -1079,6 +1084,28 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     [applyPreset, audioPreset, audioPresetsEnabled],
   );
 
+  const moveInQueue = useCallback(
+    (from: number, to: number) => {
+      if (
+        from === to ||
+        from < 0 ||
+        to < 0 ||
+        from >= queue.length ||
+        to >= queue.length
+      ) {
+        return;
+      }
+      const next = moveQueueItem(queue, from, to);
+      setQueue(next);
+      setCurrentIndex((value) => queueIndexAfterMove(value, from, to));
+      // Unshuffled, the new order is the order shuffle-off returns to.
+      if (!shuffle) originalQueue.current = next;
+    },
+    [queue, shuffle],
+  );
+
+  const setRepeatMode = useCallback((mode: RepeatMode) => setRepeat(mode), []);
+
   const cycleRepeat = useCallback(() => {
     setRepeat((value) =>
       value === "none" ? "all" : value === "all" ? "one" : "none",
@@ -1104,6 +1131,13 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     setCurrentIndex(shuffled.currentIndex);
     setShuffle(true);
   }, [currentIndex, queue, shuffle]);
+
+  const setShuffleEnabled = useCallback(
+    (enabled: boolean) => {
+      if (enabled !== shuffle) toggleShuffle();
+    },
+    [shuffle, toggleShuffle],
+  );
 
   const handleEnded = useCallback(() => {
     setIsPlaying(false);
@@ -1236,12 +1270,15 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       addToQueue,
       clearUpcoming,
       removeFromQueue,
+      moveInQueue,
       toggle: cast.casting ? cast.toggle : toggle,
       next: cast.casting ? cast.next : next,
       previous: cast.casting ? cast.previous : previous,
       seek: cast.casting ? cast.seek : seek,
       cycleRepeat,
+      setRepeatMode,
       toggleShuffle,
+      setShuffleEnabled,
       setAudioPreset,
     };
   }, [
@@ -1270,6 +1307,9 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     previous,
     queue,
     removeFromQueue,
+    moveInQueue,
+    setRepeatMode,
+    setShuffleEnabled,
     repeat,
     shuffle,
     seek,
