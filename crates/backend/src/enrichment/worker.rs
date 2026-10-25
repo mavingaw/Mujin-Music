@@ -645,6 +645,7 @@ impl<F: Fetch> Enricher<F> {
             .map(|work| work.mbid.clone())
             .take(MAX_WORKS_PER_ALBUM)
             .collect::<Vec<_>>();
+        let people = credited_people(&release, &links);
         let profile = ProfileRow {
             musicbrainz_id: Some(release.mbid.clone()),
             release_group_mbid: release.release_group_mbid.clone(),
@@ -680,6 +681,9 @@ impl<F: Fetch> Enricher<F> {
             }
             for piece in &pieces {
                 store::queue_stage_once(connection, Stage::Musicbrainz, "work", piece)?;
+            }
+            for person in &people {
+                store::queue_stage_once(connection, Stage::Musicbrainz, "artist", person)?;
             }
             queue_text_stages(connection, "album", &album_id, linked)
         })
@@ -800,7 +804,46 @@ impl<F: Fetch> Enricher<F> {
                 "the MusicBrainz artist was not found".into(),
             ));
         };
+        self.save_artist(&artist.id, profile, settings).await
+    }
 
+    /// The MusicBrainz stage for a person known only from MusicBrainz
+    /// credits (a producer, engineer or session player with no tracks of
+    /// their own): the id comes from the release itself, so no name search
+    /// is needed. Their page then gets a biography and photo like any
+    /// library artist.
+    pub async fn resolve_credited_person(
+        &self,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(mbid) = entity_id
+            .strip_prefix(EXTERNAL_PERSON_PREFIX)
+            .filter(|mbid| mb::is_mbid(mbid))
+        else {
+            return Ok(Outcome::Skipped("not a MusicBrainz artist id".into()));
+        };
+        let profile = match self.get_json(&mb::artist_lookup_url(mbid)).await? {
+            Ok(Some(body)) => mb::parse_artist(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(profile) = profile.filter(|profile| !mb::is_placeholder_artist(&profile.name))
+        else {
+            return Ok(Outcome::Skipped(
+                "the MusicBrainz artist was not found".into(),
+            ));
+        };
+        self.save_artist(entity_id, profile, settings).await
+    }
+
+    /// Stores a resolved MusicBrainz artist and queues its text and photo.
+    async fn save_artist(
+        &self,
+        artist_id: &str,
+        profile: mb::ArtistProfile,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
         let row = ProfileRow {
             musicbrainz_id: Some(profile.mbid.clone()),
             release_group_mbid: None,
@@ -818,7 +861,7 @@ impl<F: Fetch> Enricher<F> {
             })
             .to_string(),
         };
-        let artist_id = artist.id.clone();
+        let artist_id = artist_id.to_string();
         let genres = profile.genres.clone();
         let photo = profile.image_file.is_some() && settings.artist_images;
         db(&self.pool, move |connection| {
@@ -1165,6 +1208,12 @@ impl<F: Fetch> Enricher<F> {
                 }
             }
             (Stage::Musicbrainz, "work") => self.resolve_work(&task.entity_id).await,
+            (Stage::Musicbrainz, "artist")
+                if task.entity_id.starts_with(EXTERNAL_PERSON_PREFIX) =>
+            {
+                self.resolve_credited_person(&task.entity_id, settings)
+                    .await
+            }
             (Stage::Musicbrainz, _) => {
                 let artist_id = task.entity_id.clone();
                 match db(&self.pool, move |connection| {
@@ -1413,7 +1462,10 @@ impl<F: Fetch> Enricher<F> {
         artist_id: &str,
         image: wiki::CommonsImage,
     ) -> Result<Result<Option<ImageRow>, Outcome>, BoxError> {
-        let Some(file_name) = image_file_name("artist", artist_id, &image.mime_type) else {
+        // A credited person's id ("mb:<mbid>") is stored as "mb_<mbid>".
+        let Some(file_name) =
+            image_file_name("artist", &artist_id.replace(':', "_"), &image.mime_type)
+        else {
             return Ok(Ok(None));
         };
         let response = self.fetch.get(&image.download_url, MAX_IMAGE_BYTES).await?;
@@ -1445,6 +1497,13 @@ struct ReadArticle {
 
 /// At most this many pieces per album are looked up for their own text.
 const MAX_WORKS_PER_ALBUM: usize = 6;
+
+/// The id prefix of a person known only from MusicBrainz credits.
+pub const EXTERNAL_PERSON_PREFIX: &str = "mb:";
+
+/// At most this many credited people per album are looked up for their own
+/// biography and photo, so one box set cannot flood the queue.
+const MAX_CREDITED_PEOPLE_PER_ALBUM: usize = 24;
 
 /// After MusicBrainz: the Wikipedia stage always (it finds the article from
 /// the MusicBrainz link or by title), and the Wikidata stage when there is
@@ -1725,6 +1784,39 @@ fn artist_links(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<(String
         }
     }
     links
+}
+
+/// The people MusicBrainz credits on a release who are not artists in the
+/// library (producers, engineers, session players), as `mb:<mbid>` ids in
+/// credit order. Library artists are enriched under their own ids.
+fn credited_people(release: &mb::ReleaseDetails, links: &[(String, String)]) -> Vec<String> {
+    let mut people = Vec::new();
+    for credit in release
+        .credits
+        .iter()
+        .chain(release.tracks.iter().flat_map(|track| &track.credits))
+    {
+        let Some(mbid) = credit
+            .artist_mbid
+            .as_deref()
+            .filter(|mbid| mb::is_mbid(mbid))
+        else {
+            continue;
+        };
+        if release.artists.iter().any(|(artist, _)| artist == mbid)
+            || links.iter().any(|(_, linked)| linked == mbid)
+        {
+            continue;
+        }
+        let id = format!("{EXTERNAL_PERSON_PREFIX}{mbid}");
+        if !people.contains(&id) {
+            people.push(id);
+        }
+        if people.len() == MAX_CREDITED_PEOPLE_PER_ALBUM {
+            break;
+        }
+    }
+    people
 }
 
 /// Builds worker input for an album from the catalog cache.
@@ -3419,5 +3511,157 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn people_credited_only_on_musicbrainz_get_a_biography_and_photo() {
+        const MACERO: &str = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = mock()
+            .json(
+                &mb::release_lookup_url(RELEASE),
+                serde_json::json!({
+                    "id": RELEASE, "title": "Kind of Blue", "date": "1959-08-17",
+                    "release-group": {"id": GROUP, "primary-type": "Album"},
+                    "artist-credit": [{"name": "Miles Davis", "artist": {"id": MILES, "name": "Miles Davis"}}],
+                    "relations": [
+                        {"type": "producer", "target-type": "artist", "attributes": [],
+                         "artist": {"id": MACERO, "name": "Teo Macero"}},
+                        {"type": "producer", "target-type": "artist", "attributes": [],
+                         "artist": {"id": MILES, "name": "Miles Davis"}}
+                    ],
+                    "media": [{"position": 1, "tracks": [
+                        {"position": 1, "title": "So What", "recording": {"id": RELEASE, "relations": []}},
+                        {"position": 3, "title": "Blue in Green", "recording": {"id": RELEASE, "relations": [
+                            {"type": "instrument", "target-type": "artist", "attributes": ["piano"],
+                             "artist": {"id": EVANS, "name": "Bill Evans"}},
+                            {"type": "producer", "target-type": "artist", "attributes": [],
+                             "artist": {"id": MACERO, "name": "Teo Macero"}}
+                        ]}}
+                    ]}]
+                }),
+            )
+            .json(
+                &mb::artist_lookup_url(MACERO),
+                serde_json::json!({"id": MACERO, "name": "Teo Macero", "type": "Person",
+                    "life-span": {"begin": "1925-10-30", "end": "2008-02-19"},
+                    "relations": [
+                        {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Teo_Macero"}},
+                        {"type": "image", "url": {"resource": "https://commons.wikimedia.org/wiki/File:Teo_Macero.jpg"}}
+                    ]}),
+            )
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Teo Macero"),
+                "text/html",
+                &page(
+                    "Teo Macero",
+                    Some("Q1386346"),
+                    "American jazz saxophonist and record producer",
+                    "Attilio Joseph \"Teo\" Macero was an American jazz saxophonist and record producer.",
+                    &[],
+                    None,
+                ),
+            )
+            .bytes(
+                &wiki::commons_wikitext_url("Teo Macero.jpg"),
+                "text/plain",
+                b"{{Information\n|author=Tom Marcello\n}}\n{{cc-by-2.0}}",
+            )
+            .bytes(&wiki::commons_thumbnail_url("Teo Macero.jpg"), "image/jpeg", &jpeg);
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.resolve_album(&album()).await.unwrap(),
+            Outcome::Done
+        );
+        // Teo Macero is credited twice but queued once; Miles Davis and
+        // Bill Evans are library artists and keep their own ids.
+        let person = format!("{EXTERNAL_PERSON_PREFIX}{MACERO}");
+        {
+            let mut connection = pool.get().unwrap();
+            let task = store::next_stage_task(&mut connection, Stage::Musicbrainz)
+                .unwrap()
+                .expect("the credited producer's lookup");
+            assert_eq!(
+                (task.entity_type.as_str(), task.entity_id.as_str()),
+                ("artist", person.as_str())
+            );
+            store::finish_task(&mut connection, &task, &Outcome::Done).unwrap();
+            assert!(
+                store::next_stage_task(&mut connection, Stage::Musicbrainz)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let task = Task {
+            id: 0,
+            entity_type: "artist".into(),
+            entity_id: person.clone(),
+            attempts: 0,
+        };
+        assert_eq!(
+            enricher
+                .run_task(Stage::Musicbrainz, &task, &settings, None)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        assert_eq!(
+            enricher
+                .later_stages("artist", &person, &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "artist", &person).unwrap();
+        assert_eq!(texts[0].kind, "biography");
+        assert!(texts[0].body.contains("record producer"));
+        assert_eq!(texts[0].url, "https://en.wikipedia.org/wiki/Teo_Macero");
+        let image = store::load_image(&mut connection, "artist", &person)
+            .unwrap()
+            .expect("the credited producer's photo");
+        assert_eq!(image.file_name, format!("artist-mb_{MACERO}.jpg"));
+        assert_eq!(image.license, "CC BY 2.0");
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        assert!(
+            store::artists_with_images(&mut connection, std::slice::from_ref(&person))
+                .unwrap()
+                .contains(&person)
+        );
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_credited_person_id_that_is_not_a_musicbrainz_id_is_skipped() {
+        let enricher = Enricher {
+            fetch: MockFetch::default(),
+            pool: migrated_memory_pool(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        for id in ["mb:not-an-id", "mb:../../etc"] {
+            assert!(matches!(
+                enricher
+                    .resolve_credited_person(id, &settings)
+                    .await
+                    .unwrap(),
+                Outcome::Skipped(_)
+            ));
+        }
+        assert!(enricher.fetch.requested().is_empty());
     }
 }

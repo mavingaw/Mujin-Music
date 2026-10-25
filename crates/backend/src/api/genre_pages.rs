@@ -613,7 +613,6 @@ async fn genre_page(
         .iter()
         .chain(composers.iter())
         .map(|person| person.artist_id.clone())
-        .filter(|id| !id.starts_with(crate::api::editorial::EXTERNAL_PREFIX))
         .collect::<Vec<_>>();
     let images = crate::api::editorial::credited_images(image_pool, ids).await;
     for person in artists.iter_mut().chain(composers.iter_mut()) {

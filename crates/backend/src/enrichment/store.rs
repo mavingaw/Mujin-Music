@@ -153,7 +153,24 @@ pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
          ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
     )
     .execute(connection)?;
-    Ok(queued + linked + text)
+    // People MusicBrainz credits who are not library artists (producers,
+    // engineers, session players) get a page of their own, with a
+    // biography and photo, under their `mb:` id.
+    let people = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT DISTINCT 'musicbrainz', 'artist', 'mb:' || credit.source_artist_id
+         FROM enriched_credit credit
+         WHERE credit.source = 'musicbrainz'
+           AND length(credit.source_artist_id) = 36
+           AND NOT EXISTS (
+               SELECT 1 FROM external_id linked
+               WHERE linked.entity_type = 'artist' AND linked.provider = 'musicbrainz'
+                 AND linked.external_id = credit.source_artist_id
+           )
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    Ok(queued + linked + text + people)
 }
 
 /// The enrichment stages. Each one talks to a single host and has its own
@@ -1327,6 +1344,32 @@ mod tests {
                 .status,
             "skipped"
         );
+    }
+
+    #[test]
+    fn seeding_queues_people_credited_only_on_musicbrainz() {
+        const MACERO: &str = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+        const EVANS: &str = "c4b9e4a2-4f6f-4b39-9b8c-7a2e0f0a1b2c";
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        connection
+            .batch_execute(&format!(
+                "INSERT INTO enriched_credit
+                   (album_id, track_id, name, normalized_name, role, source, source_artist_id)
+                 VALUES ('kob', '', 'Teo Macero', 'teo macero', 'producer', 'musicbrainz', '{MACERO}'),
+                        ('kob', 't3', 'Teo Macero', 'teo macero', 'producer', 'musicbrainz', '{MACERO}'),
+                        ('kob', 't3', 'Bill Evans', 'bill evans', 'performer', 'musicbrainz', '{EVANS}'),
+                        ('kob', 't1', 'Nobody', 'nobody', 'engineer', 'musicbrainz', NULL);"
+            ))
+            .unwrap();
+        // Bill Evans is a library artist, enriched under his own id.
+        link_artist_mbid(&mut connection, "artist-evans", EVANS).unwrap();
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 1);
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 0);
+        let task = next_stage_task(&mut connection, Stage::Musicbrainz)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.entity_id, format!("mb:{MACERO}"));
     }
 
     #[test]
