@@ -25,6 +25,12 @@ import {
   SourceTag,
   StreamingTrackRow,
 } from "@/components/streaming-ui";
+import {
+  AlbumCreditsSection,
+  AwardTags,
+  EditorialSection,
+  StartRadioButton,
+} from "@/components/streaming-notes";
 import { palette } from "@/constants/colors";
 import { formatCollectionDuration } from "@/lib/format";
 import { usePlayer } from "@/providers/player-provider";
@@ -112,6 +118,7 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
                 .filter(Boolean)
                 .join(" • ")}
             </Text>
+            <AwardTags awards={data.awards} />
             <View style={styles.actions}>
               <Pressable
                 accessibilityLabel={playing ? "Pause album" : "Play album"}
@@ -137,6 +144,7 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
                 title={data.title}
                 wide
               />
+              <StartRadioButton id={data.id} label={data.title} seed="album" />
             </View>
           </View>
           {data.tracks.map((track, index) => (
@@ -148,6 +156,10 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
               track={track}
             />
           ))}
+          {data.review ? (
+            <EditorialSection text={data.review} title="About this album" />
+          ) : null}
+          <AlbumCreditsSection album={data} />
           <Text style={styles.footer}>
             {[data.label, data.copyright].filter(Boolean).join("\n")}
             {"\n"}Streams from {STREAMING_PROVIDER_NAMES[data.provider]} at the

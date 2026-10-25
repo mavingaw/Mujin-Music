@@ -70,6 +70,10 @@ const credentialLabels: Record<
     secretOptional: boolean;
     where: string;
     server: string;
+    /** Where an owner gets this credential, said plainly. */
+    source: string;
+    /** What a listener does once the server has credentials. */
+    account: string;
   }
 > = {
   tidal: {
@@ -79,6 +83,9 @@ const credentialLabels: Record<
     where:
       "Use the OAuth client ID (and secret, if your client has one) from your own TIDAL developer access.",
     server: "this server's TIDAL client",
+    source:
+      "TIDAL issues client IDs through its developer program at developer.tidal.com. Parson signs in with TIDAL's device-code flow, so the client must be allowed to use it.",
+    account: "approve the sign-in on TIDAL",
   },
   qobuz: {
     id: "App ID",
@@ -87,6 +94,9 @@ const credentialLabels: Record<
     where:
       "Use the app ID and app secret Qobuz issued to you. Both are needed to stream.",
     server: "this server's Qobuz app",
+    source:
+      "Qobuz issues app IDs and secrets to partners through its API program; ask Qobuz for one.",
+    account: "enter their Qobuz email and password",
   },
 };
 
@@ -206,8 +216,19 @@ export default function ServicesSettings() {
         {active && (
           <DialogContent className="max-w-lg">
             <ServiceDialog
+              isAdmin={isAdmin}
               key={active.id}
               onDone={() => setOpen(null)}
+              onOpenServerCredentials={() => {
+                setOpen(null);
+                window.setTimeout(
+                  () =>
+                    document
+                      .getElementById("server-credentials-title")
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+                  50,
+                );
+              }}
               provider={active}
             />
           </DialogContent>
@@ -240,19 +261,30 @@ export function SandboxNotice({ compact = false }: { compact?: boolean }) {
 
 function ServiceDialog({
   provider,
+  isAdmin,
   onDone,
+  onOpenServerCredentials,
 }: {
   provider: StreamingProviderStatus;
+  isAdmin: boolean;
   onDone: () => void;
+  onOpenServerCredentials: () => void;
 }) {
   const [editingCredentials, setEditingCredentials] = useState(
     needsOwnCredentials(provider),
+  );
+  // Without server credentials, explain the subscriber path first instead
+  // of opening on an API credentials form.
+  const [chooseOwn, setChooseOwn] = useState(
+    provider.sandbox || !needsOwnCredentials(provider),
   );
   const ownCredentials =
     provider.credentials.configured &&
     !provider.credentials.uses_server_credentials;
   const step = editingCredentials
-    ? "credentials"
+    ? chooseOwn
+      ? "credentials"
+      : "setup"
     : provider.status === "signed_in"
       ? "account"
       : "sign-in";
@@ -269,17 +301,27 @@ function ServiceDialog({
             {provider.name}
           </DialogTitle>
           <DialogDescription className="text-sm text-zinc-500">
-            {step === "credentials"
-              ? "Step 1 of 2: your API credentials"
-              : step === "sign-in"
-                ? ownCredentials
-                  ? "Step 2 of 2: sign in to your account"
-                  : `Sign in to your ${provider.name} account`
-                : "Account, library and streaming quality"}
+            {step === "setup"
+              ? `Connect your ${provider.name} subscription`
+              : step === "credentials"
+                ? "Step 1 of 2: your API credentials"
+                : step === "sign-in"
+                  ? ownCredentials
+                    ? "Step 2 of 2: sign in to your account"
+                    : `Sign in to your ${provider.name} account`
+                  : "Account, library and streaming quality"}
           </DialogDescription>
         </div>
       </div>
       {provider.sandbox && <SandboxNotice compact />}
+      {step === "setup" && (
+        <SubscriberSetup
+          isAdmin={isAdmin}
+          onOpenServerCredentials={onOpenServerCredentials}
+          onUseOwn={() => setChooseOwn(true)}
+          provider={provider}
+        />
+      )}
       {step === "credentials" && (
         <CredentialsStep
           onCancel={
@@ -310,6 +352,55 @@ function ServiceDialog({
           provider={provider}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * What a subscriber does when this server has no TIDAL client or Qobuz app:
+ * the owner adds one once, then every listener signs in with only their
+ * account. Bringing your own stays one click away.
+ */
+function SubscriberSetup({
+  provider,
+  isAdmin,
+  onUseOwn,
+  onOpenServerCredentials,
+}: {
+  provider: StreamingProviderStatus;
+  isAdmin: boolean;
+  onUseOwn: () => void;
+  onOpenServerCredentials: () => void;
+}) {
+  const labels = credentialLabels[provider.id];
+  return (
+    <div className="space-y-4 text-sm leading-6 text-zinc-400">
+      <p>
+        {isAdmin
+          ? `Add ${labels.server.replace("this server's", "a")} once under Server credentials, and everyone on this server connects by signing in: they ${labels.account}, nothing else.`
+          : `With a ${provider.name} subscription you only need to ${labels.account}, once this server has ${labels.server.replace("this server's", "a")}. It has none yet: ask the person who runs this Parson server to add one in Settings, Services, Server credentials.`}
+      </p>
+      <p className="rounded-lg border border-white/8 px-3 py-2.5 text-[13px] leading-5 text-zinc-500">
+        {provider.name} does not issue credentials to Parson, and Parson never
+        copies keys out of {provider.name}&apos;s own apps. {labels.source}
+      </p>
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        {isAdmin && (
+          <Button
+            className="rounded-full px-6"
+            onClick={onOpenServerCredentials}
+          >
+            Add server credentials
+          </Button>
+        )}
+        <Button
+          className="rounded-full"
+          onClick={onUseOwn}
+          variant={isAdmin ? "secondary" : "default"}
+        >
+          I have my own {labels.id.toLowerCase()}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api, { ApiError } from "../core/http";
 import {
+  createStreamingPlaylistCopy,
+  creditLines,
+  describeRadio,
+  editStreamingPlaylistCopy,
+  getStreamingRadio,
+  moveTrackId,
+  prettyRole,
   addToStreamingLibrary,
   formatScore,
   getSourcePreference,
@@ -483,5 +490,92 @@ describe("album versions", () => {
     expect(put).toHaveBeenCalledWith("/providers/preferences/source", {
       source: "local",
     });
+  });
+});
+
+describe("radio, credits and editable copies", () => {
+  test("radio and copy routes use the provider-scoped paths", async () => {
+    const get = spyOn(api, "get").mockResolvedValue({
+      data: { tracks: [], origin: "similar_artists" },
+      status: 200,
+      headers: new Headers(),
+    } as never);
+    const patch = spyOn(api, "patch").mockResolvedValue({
+      data: {},
+      status: 200,
+      headers: new Headers(),
+    } as never);
+    const post = spyOn(api, "post").mockResolvedValue({
+      data: {},
+      status: 200,
+      headers: new Headers(),
+    } as never);
+    const put = spyOn(api, "put").mockResolvedValue({
+      data: {},
+      status: 200,
+      headers: new Headers(),
+    } as never);
+
+    const radio = await getStreamingRadio("album", "qobuz:q0glassorch01");
+    expect(radio.origin).toBe("similar_artists");
+    expect(get.mock.calls[0]?.[0]).toBe(
+      "/providers/qobuz/radio/album/q0glassorch01",
+    );
+    await expect(getStreamingRadio("track", "local-song")).rejects.toThrow();
+
+    await editStreamingPlaylistCopy("tidal:7a3f", {
+      title: "Mine",
+      track_ids: ["tidal:2", "tidal:1"],
+    });
+    expect(patch.mock.calls[0]?.[0]).toBe(
+      "/providers/tidal/playlists/7a3f/copy",
+    );
+    expect(patch.mock.calls[0]?.[1]).toEqual({
+      title: "Mine",
+      track_ids: ["tidal:2", "tidal:1"],
+    });
+
+    await createStreamingPlaylistCopy("qobuz", {
+      title: "Radio",
+      track_ids: ["qobuz:1"],
+    });
+    expect(post.mock.calls[0]?.[0]).toBe("/providers/qobuz/playlist-copies");
+
+    await saveStreamingPlaylistCopy("tidal:7a3f", { replaceEdits: true });
+    expect(put.mock.calls[0]?.[2]).toEqual({
+      timeout: 30_000,
+      params: { replace_edits: true },
+    });
+  });
+
+  test("radio origins are named honestly", () => {
+    expect(describeRadio("tidal", { origin: "service" })).toBe("TIDAL radio");
+    expect(describeRadio("qobuz", { origin: "similar_artists" })).toBe(
+      "Parson radio from Qobuz similar artists",
+    );
+  });
+
+  test("tracks move within the bounds of a copy", () => {
+    expect(moveTrackId(["a", "b", "c"], 2, -1)).toEqual(["a", "c", "b"]);
+    expect(moveTrackId(["a", "b", "c"], 0, 1)).toEqual(["b", "a", "c"]);
+    expect(moveTrackId(["a", "b"], 0, -1)).toEqual(["a", "b"]);
+    expect(moveTrackId(["a", "b"], 1, 1)).toEqual(["a", "b"]);
+  });
+
+  test("credit lines put performers and writers first", () => {
+    expect(
+      creditLines([
+        { role: "Producer", names: ["Ines Calder"] },
+        { role: "Composer", names: ["Sora Ueda"] },
+        { role: "MainArtist", names: ["Sora Ueda"] },
+        { role: "Mixing Engineer", names: [] },
+      ]),
+    ).toEqual([
+      "Main artist: Sora Ueda",
+      "Composer: Sora Ueda",
+      "Producer: Ines Calder",
+    ]);
+    expect(creditLines(undefined)).toEqual([]);
+    expect(prettyRole("Mastering Engineer")).toBe("Mastering engineer");
   });
 });

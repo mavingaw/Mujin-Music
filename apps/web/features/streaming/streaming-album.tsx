@@ -16,6 +16,8 @@ import { AlbumArtFallback } from "@/lib/images/image-url";
 import { AlbumVersions, BetterVersionNotice } from "./album-versions";
 import { FormatBadge, SourceBadge } from "./source-badge";
 import { LibraryButton } from "./library-button";
+import { StartRadioButton } from "./radio-button";
+import { AlbumCredits, AwardChips, EditorialBlock } from "./streaming-notes";
 import { formatTone, totalDurationLabel } from "./streaming-model";
 import { StreamingTrackRow } from "./streaming-track-row";
 import { SandboxNotice } from "./services-settings";
@@ -142,6 +144,7 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
                 </>
               )}
             </div>
+            <AwardChips awards={data.awards} />
           </div>
         </div>
 
@@ -168,6 +171,7 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
             kind="album"
             title={data.title}
           />
+          <StartRadioButton id={data.id} label={data.title} seed="album" />
           <button
             aria-label="Add to queue"
             className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-white/8 hover:text-white"
@@ -228,6 +232,12 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
             );
           })}
         </div>
+
+        {data.review && (
+          <EditorialBlock text={data.review} title="About this album" />
+        )}
+
+        <AlbumCredits album={data} />
 
         <AlbumVersions album={data} />
 

@@ -33,6 +33,7 @@ import { palette } from "@/constants/colors";
 import {
   codeSecondsLeft,
   needsOwnCredentials,
+  subscriberSetupText,
   serviceAction,
 } from "@/lib/streaming";
 
@@ -153,6 +154,11 @@ function SourcePreferencePicker() {
 function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(needsOwnCredentials(provider));
+  // Without server credentials, explain the subscriber path before showing
+  // an API credentials form.
+  const [chooseOwn, setChooseOwn] = useState(
+    provider.sandbox || !needsOwnCredentials(provider),
+  );
   const [clientId, setClientId] = useState("");
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
@@ -219,7 +225,22 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
 
   return (
     <View style={styles.panel}>
-      {editing ? (
+      {editing && !chooseOwn ? (
+        <>
+          <Text style={styles.body}>
+            {subscriberSetupText(provider.id, provider.name)}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setChooseOwn(true)}
+            style={styles.primary}
+          >
+            <Text style={styles.primaryText}>
+              I have my own {labels.id.toLowerCase()}
+            </Text>
+          </Pressable>
+        </>
+      ) : editing ? (
         <>
           <TextInput
             accessibilityLabel={labels.id}

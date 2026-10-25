@@ -227,6 +227,26 @@ pub struct ProviderTrack {
     pub streamable: bool,
     #[serde(default)]
     pub in_library: bool,
+    /// Who played, wrote and produced it, when the service says. Filled on
+    /// album pages; empty in lists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credits: Vec<Credit>,
+}
+
+/// One credited role on a track, such as `Producer: A, B`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credit {
+    pub role: String,
+    pub names: Vec<String>,
+}
+
+/// Editorial text a service publishes (an album review or an artist
+/// biography), reduced to plain paragraphs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorialText {
+    pub text: String,
+    /// Who wrote it, e.g. `TiVo` or `Qobuz`, when the service says.
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -252,6 +272,12 @@ pub struct ProviderAlbum {
     pub tracks: Vec<ProviderTrack>,
     #[serde(default)]
     pub in_library: bool,
+    /// The service's review or description, on album pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<EditorialText>,
+    /// Press awards such as `Qobuzissime` or `Diapason d'or`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awards: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,7 +289,52 @@ pub struct ProviderArtist {
     pub albums: Vec<ProviderAlbum>,
     pub top_tracks: Vec<ProviderTrack>,
     pub web_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio: Option<EditorialText>,
+    /// Artists the service considers similar.
+    #[serde(default)]
+    pub similar: Vec<ArtistSummary>,
 }
+
+/// What a radio starts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadioSeed {
+    Track,
+    Artist,
+    Album,
+}
+
+impl RadioSeed {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "track" => Some(Self::Track),
+            "artist" => Some(Self::Artist),
+            "album" => Some(Self::Album),
+            _ => None,
+        }
+    }
+}
+
+/// Who chose a radio's tracks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadioOrigin {
+    /// The service's own radio (TIDAL track and artist radio).
+    Service,
+    /// Parson, from the service's similar artists and their top tracks
+    /// (Qobuz publishes no radio endpoint).
+    SimilarArtists,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Radio {
+    pub tracks: Vec<ProviderTrack>,
+    pub origin: RadioOrigin,
+}
+
+/// Tracks in a radio.
+pub const RADIO_TRACKS: u32 = 50;
 
 /// A service playlist: the listener's own or one they follow. Parson reads
 /// playlists and never edits them on the service.
@@ -610,6 +681,17 @@ pub trait StreamingProvider: Send + Sync {
         quality: StreamQuality,
     ) -> BoxFuture<'a, ProviderResult<ResolvedStream>>;
 
+    /// A radio of tracks like the seed: TIDAL's own track or artist radio,
+    /// or for Qobuz a mix of the artist's and similar artists' top tracks.
+    /// Album seeds are resolved by the hub to the album's first track.
+    fn radio<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        seed: RadioSeed,
+        raw_id: &'a str,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<Radio>>;
+
     /// The listener's playlists: their own and the ones they follow.
     fn playlists<'a>(
         &'a self,
@@ -632,6 +714,131 @@ pub trait StreamingProvider: Send + Sync {
         credentials: &'a ClientCredentials,
         session: &'a ProviderSession,
     ) -> BoxFuture<'a, ProviderResult<Option<ProviderSession>>>;
+}
+
+/// Longest editorial text kept, in characters.
+const MAX_EDITORIAL_CHARS: usize = 20_000;
+
+/// Service markup (Qobuz HTML, TIDAL `[wimpLink]` tags) to plain text with
+/// paragraph breaks kept. Returns `None` for text that is empty once
+/// stripped.
+pub(crate) fn plain_text(markup: &str) -> Option<String> {
+    let mut text = String::with_capacity(markup.len());
+    let mut rest = markup;
+    while let Some(start) = rest.find(['<', '[']) {
+        text.push_str(&rest[..start]);
+        let opener = rest.as_bytes()[start];
+        let close = if opener == b'<' { '>' } else { ']' };
+        let tail = &rest[start..];
+        let Some(end) = tail.find(close) else {
+            text.push_str(tail);
+            rest = "";
+            break;
+        };
+        let tag = tail[1..end].trim().to_ascii_lowercase();
+        let name = tag
+            .trim_start_matches('/')
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or("");
+        let known = if opener == b'<' {
+            !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        } else {
+            name == "wimplink"
+        };
+        if known {
+            if matches!(name, "br" | "p" | "div" | "li") {
+                text.push('\n');
+                if name != "br" {
+                    text.push('\n');
+                }
+            }
+        } else {
+            text.push_str(&tail[..=end]);
+        }
+        rest = &tail[end + 1..];
+    }
+    text.push_str(rest);
+    let decoded = text
+        .replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&rsquo;", "\u{2019}")
+        .replace("&lsquo;", "\u{2018}")
+        .replace("&ldquo;", "\u{201c}")
+        .replace("&rdquo;", "\u{201d}")
+        .replace("&hellip;", "\u{2026}")
+        .replace("&ndash;", "\u{2013}")
+        .replace("&mdash;", "\u{2014}")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let paragraphs = decoded
+        .split("\n\n")
+        .map(|paragraph| {
+            paragraph
+                .lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>();
+    let mut joined = paragraphs.join("\n\n");
+    if joined.chars().count() > MAX_EDITORIAL_CHARS {
+        joined = joined.chars().take(MAX_EDITORIAL_CHARS).collect::<String>();
+        joined.push('\u{2026}');
+    }
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// Adds `name` under `role`, keeping first-seen order and no duplicates.
+pub(crate) fn push_credit(credits: &mut Vec<Credit>, role: &str, name: &str) {
+    let (role, name) = (role.trim(), name.trim());
+    if role.is_empty() || name.is_empty() {
+        return;
+    }
+    match credits.iter_mut().find(|credit| credit.role == role) {
+        Some(credit) => {
+            if !credit.names.iter().any(|existing| existing == name) {
+                credit.names.push(name.to_string());
+            }
+        }
+        None => credits.push(Credit {
+            role: role.to_string(),
+            names: vec![name.to_string()],
+        }),
+    }
+}
+
+/// Round-robins several track lists into one radio, skipping repeats.
+pub(crate) fn interleave_tracks(
+    lists: Vec<Vec<ProviderTrack>>,
+    limit: usize,
+) -> Vec<ProviderTrack> {
+    let mut seen = std::collections::HashSet::new();
+    let mut iterators = lists.into_iter().map(Vec::into_iter).collect::<Vec<_>>();
+    let mut tracks = Vec::new();
+    loop {
+        let mut advanced = false;
+        for iterator in &mut iterators {
+            if tracks.len() >= limit {
+                return tracks;
+            }
+            for track in iterator.by_ref() {
+                advanced = true;
+                if seen.insert(track.id.clone()) {
+                    tracks.push(track);
+                    break;
+                }
+            }
+        }
+        if !advanced {
+            return tracks;
+        }
+    }
 }
 
 pub(crate) fn decode_json<T: serde::de::DeserializeOwned>(body: &[u8]) -> ProviderResult<T> {
@@ -658,7 +865,54 @@ pub(crate) fn unix_now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioFormat, ProviderId, entity_id, format_khz, parse_entity_id};
+    use super::{
+        AudioFormat, Credit, ProviderId, entity_id, format_khz, parse_entity_id, plain_text,
+        push_credit,
+    };
+
+    #[test]
+    fn editorial_markup_becomes_plain_paragraphs() {
+        assert_eq!(
+            plain_text(
+                "<p>A <strong>bold</strong> debut &amp; more.</p><p>Second&nbsp;part<br/>line two</p>"
+            )
+            .as_deref(),
+            Some("A bold debut & more.\n\nSecond part\nline two")
+        );
+        assert_eq!(
+            plain_text("Produced with [wimpLink artistId=\"4001\"]Mara Vell[/wimpLink].")
+                .as_deref(),
+            Some("Produced with Mara Vell.")
+        );
+        assert_eq!(
+            plain_text("2 < 3 and [brackets] stay").as_deref(),
+            Some("2 < 3 and [brackets] stay")
+        );
+        assert_eq!(plain_text("<p> </p>"), None);
+    }
+
+    #[test]
+    fn credits_group_names_by_role() {
+        let mut credits = Vec::new();
+        push_credit(&mut credits, "Producer", "A");
+        push_credit(&mut credits, "Composer", "B");
+        push_credit(&mut credits, "Producer", "C");
+        push_credit(&mut credits, "Producer", "A");
+        push_credit(&mut credits, " ", "D");
+        assert_eq!(
+            credits,
+            vec![
+                Credit {
+                    role: "Producer".into(),
+                    names: vec!["A".into(), "C".into()]
+                },
+                Credit {
+                    role: "Composer".into(),
+                    names: vec!["B".into()]
+                },
+            ]
+        );
+    }
 
     #[test]
     fn provider_ids_never_collide_with_library_ids() {

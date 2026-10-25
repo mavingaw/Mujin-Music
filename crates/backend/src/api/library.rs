@@ -1438,6 +1438,8 @@ fn write_library_paths(paths: &[String]) -> Result<(), Box<dyn std::error::Error
 
 #[derive(Deserialize)]
 pub struct BitrateQueryParams {
+    /// Kilobits per second to transcode to; missing or 0 plays the original.
+    #[serde(default)]
     pub bitrate: u32,
     pub slowed_reverb: Option<bool>,
     pub audio_effect: Option<StreamAudioEffect>,
@@ -2377,7 +2379,7 @@ async fn release_transcode_lock(cache_path: &Path, cache_lock: &Arc<Mutex<()>>) 
 }
 
 #[get("/media/songs/{song}/stream")]
-async fn stream_song(
+pub(crate) async fn stream_song(
     req: HttpRequest,
     path: web::Path<String>,
     query: web::Query<BitrateQueryParams>,

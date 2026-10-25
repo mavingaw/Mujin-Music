@@ -11,7 +11,9 @@ import Image from "next/image";
 import { usePageTitle } from "@/components/app/title-metadata";
 import AlbumCard from "@/features/library/album-card";
 import EntityPageState from "@/features/library/entity-page-state";
+import { StartRadioButton } from "./radio-button";
 import { SourceBadge } from "./source-badge";
+import { EditorialBlock, SimilarArtists } from "./streaming-notes";
 import { StreamingTrackRow } from "./streaming-track-row";
 import { useStreamingPlayback } from "./use-streaming";
 
@@ -66,6 +68,7 @@ export default function StreamingArtistDetails({ id }: { id: string }) {
                 <Play className="h-4 w-4 fill-black" /> Play top tracks
               </button>
             )}
+            <StartRadioButton id={data.id} label={data.name} seed="artist" />
             {data.web_url && (
               <a
                 className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-200"
@@ -124,6 +127,10 @@ export default function StreamingArtistDetails({ id }: { id: string }) {
           <p className="text-sm text-zinc-500">No albums found.</p>
         )}
       </section>
+
+      {data.bio && <EditorialBlock text={data.bio} title="Biography" />}
+
+      <SimilarArtists artists={data.similar} />
     </div>
   );
 }

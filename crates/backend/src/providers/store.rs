@@ -373,7 +373,7 @@ pub fn set_source_preference(
     .execute(connection)
 }
 
-/// A saved, read-only copy of a service playlist.
+/// A saved copy of a service playlist, editable in Parson.
 #[derive(Clone, Debug, QueryableByName)]
 pub struct PlaylistCopyRow {
     #[diesel(sql_type = Text)]
@@ -394,13 +394,27 @@ pub struct PlaylistCopyRow {
     pub payload: String,
     #[diesel(sql_type = BigInt)]
     pub saved_at: i64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    pub edited_at: Option<i64>,
 }
 
+/// Saves a copy as the service has it now (clearing any Parson edits), or
+/// with `edited_at` for a copy changed or made in Parson.
 pub fn save_playlist_copy(
     connection: &mut SqliteConnection,
     user_id: i32,
     playlist: &ProviderPlaylist,
     saved_at: i64,
+) -> QueryResult<usize> {
+    write_playlist_copy(connection, user_id, playlist, saved_at, None)
+}
+
+pub fn write_playlist_copy(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    playlist: &ProviderPlaylist,
+    saved_at: i64,
+    edited_at: Option<i64>,
 ) -> QueryResult<usize> {
     let raw = super::parse_entity_id(&playlist.id)
         .map(|(_, raw)| raw)
@@ -409,12 +423,13 @@ pub fn save_playlist_copy(
     diesel::sql_query(
         "INSERT INTO provider_playlist_copy
            (user_id, provider, provider_playlist_id, title, owner, cover_url, track_count,
-            duration, payload, saved_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            duration, payload, saved_at, edited_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(user_id, provider, provider_playlist_id) DO UPDATE SET
            title = excluded.title, owner = excluded.owner, cover_url = excluded.cover_url,
            track_count = excluded.track_count, duration = excluded.duration,
-           payload = excluded.payload, saved_at = excluded.saved_at",
+           payload = excluded.payload, saved_at = excluded.saved_at,
+           edited_at = excluded.edited_at",
     )
     .bind::<Integer, _>(user_id)
     .bind::<Text, _>(playlist.provider.as_str())
@@ -432,11 +447,12 @@ pub fn save_playlist_copy(
     )
     .bind::<Text, _>(payload)
     .bind::<BigInt, _>(saved_at)
+    .bind::<Nullable<BigInt>, _>(edited_at)
     .execute(connection)
 }
 
 const COPY_COLUMNS: &str = "provider, provider_playlist_id, title, owner, cover_url, \
-     track_count, duration, payload, saved_at";
+     track_count, duration, payload, saved_at, edited_at";
 
 pub fn playlist_copies(
     connection: &mut SqliteConnection,
@@ -933,6 +949,8 @@ pub(crate) mod tests {
             copyright: None,
             web_url: None,
             tracks: Vec::new(),
+            review: None,
+            awards: Vec::new(),
             in_library: false,
         }
     }

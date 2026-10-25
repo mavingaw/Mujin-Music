@@ -16,6 +16,9 @@ pub const QOBUZ_FIXTURES: &str = include_str!("fixtures/qobuz.json");
 /// than the generic recorded `album/getFeatured` reply.
 pub const TIDAL_BROWSE_FIXTURES: &str = include_str!("fixtures/tidal_browse.json");
 pub const QOBUZ_BROWSE_FIXTURES: &str = include_str!("fixtures/qobuz_browse.json");
+/// Reviews, credits, biographies, similar artists and radios.
+pub const TIDAL_NOTES_FIXTURES: &str = include_str!("fixtures/tidal_notes.json");
+pub const QOBUZ_NOTES_FIXTURES: &str = include_str!("fixtures/qobuz_notes.json");
 
 /// Length of a sandbox preview.
 pub const PREVIEW_SECONDS: u32 = 30;
@@ -31,6 +34,8 @@ pub fn transport() -> FixtureTransport {
     FixtureTransport::from_json(&[
         TIDAL_BROWSE_FIXTURES,
         QOBUZ_BROWSE_FIXTURES,
+        TIDAL_NOTES_FIXTURES,
+        QOBUZ_NOTES_FIXTURES,
         TIDAL_FIXTURES,
         QOBUZ_FIXTURES,
     ])

@@ -111,3 +111,40 @@ export function deliveryText(delivery: StreamingDelivery): {
 export function codeSecondsLeft(expiresAt: number, nowMs = Date.now()) {
   return Math.max(0, expiresAt - Math.floor(nowMs / 1000));
 }
+
+/** A review or biography for a phone screen: the first paragraph until expanded. */
+export function editorialPreview(
+  text: string,
+  expanded: boolean,
+): { paragraphs: string[]; more: boolean } {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const more = paragraphs.length > 1 || text.length > 400;
+  if (expanded || !more) return { paragraphs, more };
+  const first = paragraphs[0] ?? "";
+  return {
+    paragraphs: [
+      first.length > 400 ? `${first.slice(0, 397).trimEnd()}…` : first,
+    ],
+    more,
+  };
+}
+
+/**
+ * What a subscriber reads when the server has no TIDAL client or Qobuz app:
+ * the server owner adds one once, then everyone signs in with only their
+ * account.
+ */
+export function subscriberSetupText(
+  provider: StreamingProviderId,
+  name: string,
+): string {
+  const step =
+    provider === "tidal"
+      ? "approve the sign-in on TIDAL"
+      : "enter your Qobuz email and password";
+  const credential = provider === "tidal" ? "a TIDAL client" : "a Qobuz app";
+  return `With a ${name} subscription you only need to ${step}, once this server has ${credential}. It has none yet: ask the person who runs this Parson server to add one in Settings, Services, Server credentials on the web. ${name} does not issue credentials to Parson, and Parson never copies keys out of ${name}'s own apps.`;
+}
