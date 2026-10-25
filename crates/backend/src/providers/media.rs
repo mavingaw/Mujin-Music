@@ -190,34 +190,35 @@ impl MediaTransport for FixtureMedia {
             requests.push((url.clone(), range.clone()));
         }
         let file = self.files.get(&url).cloned();
-        Box::pin(async move {
-            let file = file.ok_or(MediaError::Status(404))?;
-            let length = file.len() as u64;
-            let (status, body, content_range) = match range.as_deref() {
-                Some(header) => {
-                    let (start, end) =
-                        byte_range(Some(header), length).ok_or(MediaError::Status(416))?;
-                    (
-                        206,
-                        file.slice(start as usize..=end as usize),
-                        Some(format!("bytes {start}-{end}/{length}")),
-                    )
-                }
-                None => (200, file, None),
-            };
-            // Deliver in small chunks, as a network would.
-            let chunks = body
-                .chunks(4096)
-                .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
-                .collect::<Vec<_>>();
-            Ok(MediaResponse {
-                status,
-                content_length: Some(body.len() as u64),
-                content_range,
-                body: futures::stream::iter(chunks).boxed(),
-            })
-        })
+        Box::pin(async move { serve_file(file.ok_or(MediaError::Status(404))?, range) })
     }
+}
+
+/// Answers a request for an in-memory file, honouring a byte range, in
+/// small chunks as a network would deliver them.
+pub fn serve_file(file: Bytes, range: Option<String>) -> Result<MediaResponse, MediaError> {
+    let length = file.len() as u64;
+    let (status, body, content_range) = match range.as_deref() {
+        Some(header) => {
+            let (start, end) = byte_range(Some(header), length).ok_or(MediaError::Status(416))?;
+            (
+                206,
+                file.slice(start as usize..=end as usize),
+                Some(format!("bytes {start}-{end}/{length}")),
+            )
+        }
+        None => (200, file, None),
+    };
+    let chunks = body
+        .chunks(4096)
+        .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+        .collect::<Vec<_>>();
+    Ok(MediaResponse {
+        status,
+        content_length: Some(body.len() as u64),
+        content_range,
+        body: futures::stream::iter(chunks).boxed(),
+    })
 }
 
 /// Plays DASH segments back-to-back as one body.

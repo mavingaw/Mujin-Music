@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api, { ApiError } from "../core/http";
 import {
+  finishTidalBrowserSignIn,
+  readTidalCallback,
+  startTidalBrowserSignIn,
+  tidalRedirectUri,
   createStreamingPlaylistCopy,
   creditLines,
   describeRadio,
@@ -577,5 +581,48 @@ describe("radio, credits and editable copies", () => {
     ]);
     expect(creditLines(undefined)).toEqual([]);
     expect(prettyRole("Mastering Engineer")).toBe("Mastering engineer");
+  });
+});
+
+describe("TIDAL browser sign-in", () => {
+  test("posts the redirect URI, then the returned code and state", async () => {
+    const post = spyOn(api, "post").mockResolvedValue({
+      data: {},
+      status: 200,
+      headers: new Headers(),
+    } as never);
+    const redirect = tidalRedirectUri("https://music.example.test/");
+    expect(redirect).toBe(
+      "https://music.example.test/settings/services/tidal-callback",
+    );
+    await startTidalBrowserSignIn(redirect);
+    await finishTidalBrowserSignIn("s1", "c1");
+    expect(post.mock.calls[0]?.slice(0, 2)).toEqual([
+      "/providers/tidal/sign-in/browser",
+      { redirect_uri: redirect },
+    ]);
+    expect(post.mock.calls[1]?.slice(0, 2)).toEqual([
+      "/providers/tidal/sign-in/browser/finish",
+      { state: "s1", code: "c1" },
+    ]);
+  });
+
+  test("reads approvals, refusals and empty callbacks", () => {
+    expect(readTidalCallback("?code=abc&state=xyz")).toEqual({
+      ok: true,
+      code: "abc",
+      state: "xyz",
+    });
+    expect(readTidalCallback("?error=access_denied&state=xyz")).toEqual({
+      ok: false,
+      error: "Sign-in was declined on TIDAL.",
+    });
+    expect(
+      readTidalCallback("?error=invalid_scope&error_description=Bad+scope"),
+    ).toEqual({ ok: false, error: "Bad scope" });
+    expect(readTidalCallback("")).toEqual({
+      ok: false,
+      error: "TIDAL sent back no sign-in code.",
+    });
   });
 });

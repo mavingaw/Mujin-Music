@@ -1,6 +1,29 @@
 [
   {
     "method": "POST",
+    "url": "https://auth.tidal.com/v1/oauth2/token",
+    "form": [["grant_type", "authorization_code"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "access_token": "recorded-browser-access-token",
+          "refresh_token": "recorded-browser-refresh-token",
+          "token_type": "Bearer",
+          "expires_in": 86400,
+          "user_id": 5550101,
+          "user": {
+            "userId": 5550101,
+            "email": "listener@example.test",
+            "countryCode": "GB",
+            "username": "recorded.listener"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "POST",
     "url": "https://auth.tidal.com/v1/oauth2/device_authorization",
     "replies": [
       {

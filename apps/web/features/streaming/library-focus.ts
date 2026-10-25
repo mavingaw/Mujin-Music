@@ -3,6 +3,7 @@ import type {
   CatalogFacet,
   CatalogFilter,
   CatalogQuality,
+  CatalogSort,
 } from "@parson/music-sdk";
 import {
   parseAlbumSourceFilter,
@@ -156,4 +157,32 @@ export function catalogAlbumEntry(album: CatalogAlbum): LibraryAlbumEntry {
     source: album.source === "local" ? null : album.source,
     formatLabel: album.format_label,
   };
+}
+
+/** Album orders, in the menu's order. Artist is the default. */
+export const catalogSorts: { value: CatalogSort; label: string }[] = [
+  { value: "artist", label: "Artist" },
+  { value: "title", label: "Title" },
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "quality", label: "Best quality first" },
+];
+
+/** The album order from `?sort=`; anything unknown is the default. */
+export function parseCatalogSort(params: URLSearchParams): CatalogSort {
+  const value = params.get("sort");
+  return catalogSorts.some((sort) => sort.value === value)
+    ? (value as CatalogSort)
+    : "artist";
+}
+
+/** Writes the album order into `params`; the default is left out. */
+export function writeCatalogSort(
+  params: URLSearchParams,
+  sort: CatalogSort,
+): URLSearchParams {
+  const next = new URLSearchParams(params);
+  if (sort === "artist") next.delete("sort");
+  else next.set("sort", sort);
+  return next;
 }

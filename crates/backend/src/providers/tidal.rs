@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use futures::future::BoxFuture;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -23,6 +23,12 @@ use super::{
 };
 
 pub const AUTH_BASE: &str = "https://auth.tidal.com/v1/oauth2";
+/// Where a listener approves a browser (authorization code) sign-in.
+pub const LOGIN_AUTHORIZE: &str = "https://login.tidal.com/authorize";
+/// Scopes a client registered at developer.tidal.com requests in the browser
+/// sign-in. Device-code clients keep the older [`SCOPE`].
+pub const BROWSER_SCOPE: &str =
+    "user.read collection.read collection.write playlists.read search.read playback";
 pub const API_BASE: &str = "https://api.tidal.com/v1";
 const SCOPE: &str = "r_usr w_usr w_sub";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -41,13 +47,13 @@ static QUALITY_OPTIONS: [QualityOption; 4] = [
     },
     QualityOption {
         id: StreamQuality::High,
-        label: "Low: AAC 320 kbps",
-        detail: "Lossy, for slower connections",
+        label: "Standard: AAC 320 kbps",
+        detail: "Lossy, for slower connections. TIDAL's apps call this Low (320 kbps)",
     },
     QualityOption {
         id: StreamQuality::Low,
-        label: "Low: AAC 96 kbps",
-        detail: "Lossy, for very slow or metered connections",
+        label: "Data saver: AAC 96 kbps",
+        detail: "Lossy, for metered connections. TIDAL's apps call this Low (96 kbps)",
     },
 ];
 
@@ -93,6 +99,46 @@ pub struct DeviceAuthorization {
     pub verification_uri_complete: Option<String>,
     pub expires_at: i64,
     pub interval: u64,
+}
+
+/// How long a browser sign-in may take.
+pub const BROWSER_SIGN_IN_SECONDS: i64 = 10 * 60;
+
+/// A browser sign-in waiting for the listener to come back from TIDAL.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserAuthorization {
+    pub state: String,
+    pub code_verifier: String,
+    pub redirect_uri: String,
+    pub expires_at: i64,
+}
+
+/// The S256 PKCE challenge for a verifier.
+pub fn code_challenge(verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+pub fn browser_authorize_url(
+    credentials: &ClientCredentials,
+    pending: &BrowserAuthorization,
+) -> String {
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    let parameters = [
+        ("response_type", "code".to_string()),
+        ("client_id", credentials.client_id.clone()),
+        ("redirect_uri", pending.redirect_uri.clone()),
+        ("scope", BROWSER_SCOPE.to_string()),
+        ("code_challenge_method", "S256".to_string()),
+        ("code_challenge", code_challenge(&pending.code_verifier)),
+        ("state", pending.state.clone()),
+    ];
+    let query = parameters
+        .iter()
+        .map(|(key, value)| format!("{key}={}", utf8_percent_encode(value, NON_ALPHANUMERIC)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{LOGIN_AUTHORIZE}?{query}")
 }
 
 #[derive(Debug, PartialEq)]
@@ -531,6 +577,64 @@ impl TidalClient {
             Some(secret) => request.form("client_secret", secret),
             None => request,
         }
+    }
+
+    /// Prepares a browser sign-in: OAuth 2.0 authorization code with PKCE
+    /// (RFC 7636), the flow TIDAL gives clients registered on its developer
+    /// dashboard. Returns what to keep until the listener comes back and the
+    /// URL to send them to.
+    pub fn browser_authorization(
+        credentials: &ClientCredentials,
+        redirect_uri: &str,
+    ) -> (BrowserAuthorization, String) {
+        let mut verifier = [0_u8; 48];
+        rand::fill(&mut verifier);
+        let mut state = [0_u8; 18];
+        rand::fill(&mut state);
+        let pending = BrowserAuthorization {
+            state: URL_SAFE_NO_PAD.encode(state),
+            code_verifier: URL_SAFE_NO_PAD.encode(verifier),
+            redirect_uri: redirect_uri.to_string(),
+            expires_at: unix_now() + BROWSER_SIGN_IN_SECONDS,
+        };
+        let url = browser_authorize_url(credentials, &pending);
+        (pending, url)
+    }
+
+    /// Trades the code TIDAL sent back for tokens.
+    pub async fn exchange_authorization_code(
+        &self,
+        credentials: &ClientCredentials,
+        pending: &BrowserAuthorization,
+        code: &str,
+    ) -> ProviderResult<ProviderSession> {
+        let request =
+            Self::client_form(ApiRequest::post(format!("{AUTH_BASE}/token")), credentials)
+                .form("grant_type", "authorization_code")
+                .form("code", code)
+                .form("redirect_uri", pending.redirect_uri.clone())
+                .form("code_verifier", pending.code_verifier.clone());
+        let reply = self.transport.send(request).await?;
+        if (200..300).contains(&reply.status) {
+            let token: TTokenResponse = decode_json(&reply.body)?;
+            return Ok(session_from_token(token, None));
+        }
+        if matches!(reply.status, 400 | 401) {
+            let error: TOAuthError = serde_json::from_slice(&reply.body).unwrap_or_default();
+            return Err(ProviderError::InvalidCredentials(
+                match error.error.as_str() {
+                    "invalid_grant" => {
+                        "TIDAL did not accept the sign-in code. Start the sign-in again."
+                    }
+                    "invalid_client" | "unauthorized_client" => {
+                        "TIDAL rejected this client ID or secret for browser sign-in."
+                    }
+                    _ => "TIDAL refused the browser sign-in.",
+                }
+                .into(),
+            ));
+        }
+        Err(status_error(reply.status))
     }
 
     /// Starts the OAuth 2.0 device authorization flow (RFC 8628).
@@ -1863,5 +1967,22 @@ mod tests {
         assert!(parse_dash_manifest(insecure).is_err());
         let empty = r#"<MPD><Representation id="FLAC" codecs="flac"><SegmentTemplate media="https://x/$Number$.mp4"></SegmentTemplate></Representation></MPD>"#;
         assert!(parse_dash_manifest(empty).is_err());
+    }
+
+    #[test]
+    fn quality_options_have_distinct_names() {
+        let names = super::QUALITY_OPTIONS
+            .iter()
+            .map(|option| option.label.split(':').next().unwrap_or_default())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(names.len(), super::QUALITY_OPTIONS.len());
+    }
+
+    #[test]
+    fn pkce_challenge_matches_rfc_7636_appendix_b() {
+        assert_eq!(
+            super::code_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
     }
 }

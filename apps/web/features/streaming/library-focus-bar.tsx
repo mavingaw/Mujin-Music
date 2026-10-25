@@ -4,6 +4,7 @@ import {
   STREAMING_PROVIDER_NAMES,
   type CatalogFacets,
   type CatalogQuality,
+  type CatalogSort,
   type CatalogSource,
   type StreamingProviderId,
 } from "@parson/music-sdk";
@@ -12,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { ProviderMark } from "./source-badge";
 import {
   activeFocusCount,
+  catalogSorts,
   decadeLabel,
   describeFocus,
   emptyFocus,
@@ -103,12 +105,16 @@ export function LibraryFocusBar({
   available,
   total,
   onChange,
+  sort,
+  onSortChange,
 }: {
   focus: LibraryFocus;
   facets: CatalogFacets | undefined;
   available: StreamingProviderId[];
   total: number | undefined;
   onChange: (focus: LibraryFocus) => void;
+  sort?: CatalogSort;
+  onSortChange?: (sort: CatalogSort) => void;
 }) {
   const set = (patch: Partial<LibraryFocus>) =>
     onChange({ ...focus, ...patch });
@@ -154,6 +160,24 @@ export function LibraryFocusBar({
       aria-label="Focus"
       className="space-y-2.5 rounded-xl border border-white/8 bg-white/[0.02] p-3 sm:p-4"
     >
+      {sort && onSortChange && (
+        <FacetRow label="Sort">
+          <select
+            aria-label="Sort albums"
+            className="h-8 shrink-0 rounded-full border border-white/12 bg-zinc-950 px-3 text-[13px] text-zinc-200 hover:border-white/30"
+            onChange={(event) =>
+              onSortChange(event.target.value as CatalogSort)
+            }
+            value={sort}
+          >
+            {catalogSorts.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </FacetRow>
+      )}
       {(streamingSources.length > 0 || focus.source !== "all") && (
         <FacetRow label="Source">
           <Chip
@@ -251,6 +275,7 @@ export function LibraryFocusBar({
           <button
             className="inline-flex items-center gap-1.5 text-zinc-300 hover:text-white"
             onClick={() => onChange(emptyFocus)}
+            title="Clears the filters; the sort order stays"
             type="button"
           >
             <X className="h-3.5 w-3.5" /> Clear focus
