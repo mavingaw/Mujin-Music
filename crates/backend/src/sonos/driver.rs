@@ -1052,7 +1052,7 @@ fn merge_groups(
         .collect()
 }
 
-fn local_address_towards(target: SocketAddr) -> Option<IpAddr> {
+pub(crate) fn local_address_towards(target: SocketAddr) -> Option<IpAddr> {
     let bind: SocketAddr = if target.is_ipv4() {
         (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
     } else {

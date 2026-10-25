@@ -15,6 +15,8 @@ import {
 } from "./audio-presets";
 import { canPromotePreloadedMedia } from "./gapless-playback";
 import { crossfadeGains, leveledVolume } from "./crossfade";
+import { createDspChain, dspParameters } from "./zone-dsp";
+import type { ZoneDsp } from "@parson/music-sdk";
 
 const CROSSFADE_TICK_MS = 50;
 
@@ -49,6 +51,8 @@ export function useAudioEngine() {
   const levelFactor = useRef(1);
   /** Zone crossfade time in seconds (0: off). */
   const crossfadeSeconds = useRef(0);
+  /** Zone DSP for this device (preamp, shelves, crossfeed). */
+  const dspRef = useRef<ZoneDsp | null>(null);
   /** The next source change should crossfade instead of cutting. */
   const crossfadeArmed = useRef(false);
   const crossfade = useRef<Crossfade | null>(null);
@@ -153,16 +157,20 @@ export function useAudioEngine() {
       const wetGain = context.createGain();
       const convolver = context.createConvolver();
       convolver.buffer = buildReverbImpulse(context);
+      const dsp = createDspChain(context);
       mediaSource.connect(dryGain);
       convolver.connect(wetGain);
-      dryGain.connect(context.destination);
-      wetGain.connect(context.destination);
+      dryGain.connect(dsp.input);
+      wetGain.connect(dsp.input);
+      dsp.output.connect(context.destination);
       dryGain.gain.value = 1;
       wetGain.gain.value = 0;
+      dsp.apply(dspRef.current);
       graph.current = {
         convolver,
         context,
         dryGain,
+        dsp,
         source: mediaSource,
         wetConnected: false,
         wetGain,
@@ -181,9 +189,11 @@ export function useAudioEngine() {
       setPitchPreservation(element, preset.preservePitch);
       element.defaultPlaybackRate = preset.rate;
       element.playbackRate = preset.rate;
+      const needsGraph = preset.wet > 0 || dspParameters(dspRef.current).active;
       const audioGraph =
-        graph.current ?? (preset.wet > 0 ? ensureAudioGraph() : null);
+        graph.current ?? (needsGraph ? ensureAudioGraph() : null);
       if (!audioGraph) return;
+      audioGraph.dsp?.apply(dspRef.current);
       if (preset.wet > 0 && !audioGraph.wetConnected) {
         audioGraph.source.connect(audioGraph.convolver);
         audioGraph.wetConnected = true;
@@ -305,17 +315,24 @@ export function useAudioEngine() {
     ({
       crossfadeSeconds: seconds,
       levelingFactor: factor,
+      dsp,
     }: {
       crossfadeSeconds: number;
       levelingFactor: number;
+      dsp?: ZoneDsp | null;
     }) => {
       crossfadeSeconds.current = Math.max(0, seconds);
       levelFactor.current = Number.isFinite(factor) && factor > 0 ? factor : 1;
       if (audio.current && !crossfade.current) {
         audio.current.volume = outputVolume();
       }
+      dspRef.current = dsp ?? null;
+      const audioGraph =
+        graph.current ??
+        (dspParameters(dsp).active ? ensureAudioGraph() : null);
+      audioGraph?.dsp?.apply(dspRef.current);
     },
-    [outputVolume],
+    [ensureAudioGraph, outputVolume],
   );
 
   const playAudioSource = useCallback(() => {

@@ -8,9 +8,13 @@
 //! out to zones of any ecosystem and are clearly labelled as not
 //! sample-synced.
 
+mod hosted;
+
+pub use hosted::{HostedStream, render_scope};
+
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -27,6 +31,7 @@ const MAX_CLIENT_ZONES_PER_USER: usize = 32;
 const MAX_PENDING_COMMANDS: usize = 32;
 const MAX_LINKED_GROUPS_PER_USER: usize = 16;
 const MEDIA_URL_LIFETIME_SECONDS: i64 = 12 * 60 * 60;
+const SONOS_FORMAT_NOTE: &str = "Sonos plays up to 48 kHz/24-bit. MP3, AAC, ALAC, FLAC and WAV within that limit stream untouched; anything else is converted to 24-bit FLAC at 44.1 or 48 kHz.";
 /// Path prefix of signed Sonos media URLs.
 pub const ZONE_MEDIA_PATH: &str = "/api/v1/zones/media/";
 
@@ -104,6 +109,14 @@ pub struct ZoneSettings {
     pub safety_max_volume: Option<u8>,
     /// Only the device the zone runs on can see and control it.
     pub private: bool,
+    pub dsp: ZoneDsp,
+    /// Device zones: open the device exclusively (bit-perfect).
+    pub exclusive: bool,
+    /// Server-driven zones: `None` uses the device's best mode.
+    pub volume_mode: Option<VolumeMode>,
+    /// Device setup: highest sample rate and bit depth to send.
+    pub max_sample_rate: Option<u32>,
+    pub max_bit_depth: Option<u8>,
 }
 
 impl Default for ZoneSettings {
@@ -119,6 +132,11 @@ impl Default for ZoneSettings {
             safety_min_volume: None,
             safety_max_volume: None,
             private: false,
+            dsp: ZoneDsp::default(),
+            exclusive: true,
+            volume_mode: None,
+            max_sample_rate: None,
+            max_bit_depth: None,
         }
     }
 }
@@ -177,9 +195,24 @@ pub struct ZoneSettingsPatch {
     pub max_volume: Option<Option<u8>>,
     #[serde(default)]
     pub private: Option<bool>,
+    /// The whole DSP block (replaces it).
+    #[serde(default)]
+    pub dsp: Option<ZoneDsp>,
+    #[serde(default)]
+    pub exclusive: Option<bool>,
+    #[serde(default)]
+    pub volume_mode: Option<VolumeMode>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub max_sample_rate: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub max_bit_depth: Option<Option<u8>>,
 }
 
 impl ZoneSettingsPatch {
+    fn touches_max_format(&self) -> bool {
+        self.max_sample_rate.is_some() || self.max_bit_depth.is_some()
+    }
+
     fn touches_volume_limits(&self) -> bool {
         self.comfort_volume.is_some()
             || self.safety_min_volume.is_some()
@@ -275,6 +308,32 @@ pub fn apply_settings_patch(
     if let Some(private) = patch.private {
         next.private = private;
     }
+    if let Some(dsp) = patch.dsp {
+        dsp.validate().map_err(ZoneError::Invalid)?;
+        next.dsp = dsp;
+    }
+    if let Some(exclusive) = patch.exclusive {
+        next.exclusive = exclusive;
+    }
+    if let Some(mode) = patch.volume_mode {
+        next.volume_mode = Some(mode);
+    }
+    if let Some(rate) = patch.max_sample_rate {
+        if let Some(rate) = rate
+            && !SAMPLE_RATE_CHOICES.contains(&rate)
+        {
+            return Err(ZoneError::Invalid("invalid_max_sample_rate"));
+        }
+        next.max_sample_rate = rate;
+    }
+    if let Some(depth) = patch.max_bit_depth {
+        if let Some(depth) = depth
+            && !BIT_DEPTH_CHOICES.contains(&depth)
+        {
+            return Err(ZoneError::Invalid("invalid_max_bit_depth"));
+        }
+        next.max_bit_depth = depth;
+    }
     Ok(next)
 }
 
@@ -338,6 +397,10 @@ struct State {
     /// Last UPnP event per player and whether a coalesced poll is pending,
     /// so NOTIFY floods cost at most four polls a second.
     sonos_events: HashMap<String, (Instant, bool)>,
+    /// Queues of server-driven zones (UPnP renderers, audio devices).
+    hosted: HashMap<String, hosted::HostedQueue>,
+    /// Last published view of each server-driven zone, to notice changes.
+    hosted_seen: HashMap<String, String>,
 }
 
 /// Server-side zones.
@@ -351,6 +414,11 @@ pub struct ZoneService {
     sleep_fade: Mutex<Duration>,
     /// Measured track loudness for volume leveling.
     loudness: Arc<LoudnessStore>,
+    /// UPnP renderers and local audio devices.
+    outputs: OnceLock<Arc<crate::outputs::Outputs>>,
+    /// The library, for server-driven zones that move on by themselves.
+    library: OnceLock<Arc<crate::library::state::LibraryLifecycle>>,
+    track_serial: AtomicU64,
 }
 
 /// Fade-out length when a sleep timer pauses mid-track.
@@ -359,6 +427,38 @@ const SLEEP_FADE_STEPS: u32 = 16;
 
 pub(crate) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// Who is asking: the app's own zone device (header) and whether the
+/// request comes from this computer (loopback).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Viewer<'a> {
+    pub device: Option<&'a str>,
+    pub local: bool,
+}
+
+impl<'a> Viewer<'a> {
+    pub fn device(device: Option<&'a str>) -> Self {
+        Self {
+            device,
+            local: false,
+        }
+    }
+
+    /// The viewer is the zone's own device: the app itself, or for an
+    /// audio-device zone the computer the device is attached to.
+    pub fn owns(&self, zone_id: &str) -> bool {
+        if zone_id.starts_with("device:") {
+            return self.local;
+        }
+        self.device.and_then(client_zone_id).as_deref() == Some(zone_id)
+    }
+}
+
+impl<'a> From<Option<&'a str>> for Viewer<'a> {
+    fn from(device: Option<&'a str>) -> Self {
+        Self::device(device)
+    }
 }
 
 pub fn client_zone_id(device_id: &str) -> Option<String> {
@@ -439,6 +539,9 @@ impl ZoneService {
             pool,
             port: AtomicU16::new(crate::settings::DEFAULT_PORT),
             sleep_fade: Mutex::new(SLEEP_FADE),
+            outputs: OnceLock::new(),
+            library: OnceLock::new(),
+            track_serial: AtomicU64::new(1),
         }
     }
 
@@ -728,7 +831,7 @@ impl ZoneService {
     pub fn list_for(
         &self,
         user_id: i32,
-        viewer: Option<&str>,
+        viewer: Viewer<'_>,
         cache: Option<&LibraryCache>,
     ) -> Vec<Zone> {
         let mut zones = self.list(user_id, cache);
@@ -736,14 +839,16 @@ impl ZoneService {
         zones
     }
 
-    /// Whether the device `viewer` may see and control `zone_id`.
-    pub fn visible_to(&self, zone_id: &str, viewer: Option<&str>) -> bool {
+    /// Whether `viewer` may see and control `zone_id`. A private app zone
+    /// shows only on its own device; a private audio-device zone only on
+    /// the computer it is attached to.
+    pub fn visible_to(&self, zone_id: &str, viewer: Viewer<'_>) -> bool {
         let private = self
             .lock()
             .settings
             .get(zone_id)
             .is_some_and(|settings| settings.private);
-        !private || viewer.and_then(client_zone_id).as_deref() == Some(zone_id)
+        !private || viewer.owns(zone_id)
     }
 
     /// Every zone `user_id` can see.
@@ -765,6 +870,7 @@ impl ZoneService {
                 zones.push(self.sonos_zone_view(&state, sonos, &group, cache, now));
             }
         }
+        zones.extend(self.hosted_views(&state, cache, now));
         let mut linked: Vec<(&String, &LinkedGroup)> = state
             .linked
             .iter()
@@ -867,9 +973,12 @@ impl ZoneService {
                     leveling: app_player,
                     volume_limits: true,
                     private: true,
+                    dsp: app_player,
+                    ..ZoneSettingsSupport::default()
                 },
                 setting_notes,
             ),
+            output: None,
             notes: Vec::new(),
         }
     }
@@ -939,9 +1048,7 @@ impl ZoneService {
             })
             .collect();
         let (repeat, sonos_shuffles) = RepeatMode::from_sonos_play_mode(&group.play_mode);
-        let mut notes = vec![
-            "Sonos plays up to 48 kHz/24-bit. MP3, AAC, ALAC, FLAC and WAV within that limit stream untouched; anything else is converted to 24-bit FLAC at 44.1 or 48 kHz.".to_string(),
-        ];
+        let mut notes = vec![SONOS_FORMAT_NOTE.to_string()];
         if let Some(queue) = queue
             && queue.song_ids.len() > queue.window_len
         {
@@ -1038,9 +1145,19 @@ impl ZoneService {
                     leveling: true,
                     volume_limits: true,
                     private: false,
+                    ..ZoneSettingsSupport::default()
                 },
                 setting_notes,
             ),
+            output: Some(ZoneOutputInfo {
+                max_sample_rate: crate::outputs::FormatLimits::SONOS.max_sample_rate,
+                max_bit_depth: crate::outputs::FormatLimits::SONOS.max_bit_depth,
+                formats: crate::outputs::FormatLimits::SONOS.formats(),
+                note: SONOS_FORMAT_NOTE.to_string(),
+                exclusive: None,
+                volume_mode: None,
+                stream: None,
+            }),
             notes,
         }
     }
@@ -1118,6 +1235,9 @@ impl ZoneService {
         }
         if let Some(uuid) = zone_id.strip_prefix("sonos:") {
             return self.sonos_command(user_id, uuid, command, cache).await;
+        }
+        if zone_id.starts_with("upnp:") || zone_id.starts_with("device:") {
+            return self.hosted_command(zone_id, command, cache).await;
         }
         if zone_id.starts_with("client:") {
             let command = self.clamp_client_command(user_id, zone_id, command)?;
@@ -1835,6 +1955,37 @@ impl ZoneService {
         })
     }
 
+    /// Pauses every zone `viewer` can see that is playing (Roon's
+    /// "Pause all"). Returns how many zones were paused.
+    pub async fn pause_all(
+        &self,
+        user_id: i32,
+        viewer: Viewer<'_>,
+        cache: Option<&LibraryCache>,
+    ) -> usize {
+        let zones = self.list_for(user_id, viewer, cache);
+        let mut paused = 0;
+        for zone in zones {
+            // Members of a linked group pause through the group.
+            if zone.grouped_into.is_some()
+                || !zone.capabilities.transport
+                || !zone.status.is_playing()
+            {
+                continue;
+            }
+            match self
+                .command(user_id, &zone.id, ZoneCommand::Pause, cache)
+                .await
+            {
+                Ok(()) => paused += 1,
+                Err(error) => {
+                    tracing::warn!(%error, zone = zone.id, "pause all could not pause a zone")
+                }
+            }
+        }
+        paused
+    }
+
     // ----- transfer and grouping ---------------------------------------
 
     /// Moves queue and position from `from` to `to`, then stops `from`.
@@ -2062,7 +2213,7 @@ impl ZoneService {
         user_id: i32,
         zone_id: &str,
         patch: ZoneSettingsPatch,
-        viewer: Option<&str>,
+        viewer: Viewer<'_>,
         cache: Option<&LibraryCache>,
     ) -> Result<ZoneSettings, ZoneError> {
         if !self.visible_to(zone_id, viewer) {
@@ -2095,11 +2246,27 @@ impl ZoneService {
         if patch.touches_volume_limits() && !supports.volume_limits {
             return Err(ZoneError::Unsupported("volume_limits_not_supported_here"));
         }
+        if patch.dsp.is_some_and(|dsp| dsp.is_active()) && !supports.dsp {
+            return Err(ZoneError::Unsupported("dsp_not_supported_here"));
+        }
+        if patch.exclusive.is_some() && !supports.exclusive {
+            return Err(ZoneError::Unsupported(
+                "exclusive_mode_is_for_audio_devices",
+            ));
+        }
+        if let Some(mode) = patch.volume_mode
+            && !supports.volume_modes.contains(&mode)
+        {
+            return Err(ZoneError::Unsupported("volume_mode_not_supported_here"));
+        }
+        if patch.touches_max_format() && !supports.max_format {
+            return Err(ZoneError::Unsupported("max_format_not_supported_here"));
+        }
         if patch.private.is_some() {
             if !supports.private {
                 return Err(ZoneError::Unsupported("only_parson_apps_can_be_private"));
             }
-            if viewer.and_then(client_zone_id).as_deref() != Some(zone_id) {
+            if !viewer.owns(zone_id) {
                 return Err(ZoneError::Unsupported("set_private_on_the_device_itself"));
             }
         }
@@ -2153,8 +2320,14 @@ impl ZoneService {
                 tracing::warn!(%error, uuid, "could not apply leveling to the Sonos queue");
             }
         }
-        let shared = zone_id.starts_with("sonos:");
-        self.changed(if shared { None } else { Some(user_id) });
+        if zone_id.starts_with("upnp:") || zone_id.starts_with("device:") {
+            self.hosted_settings_changed(zone_id).await;
+        }
+        self.changed(if shared_zone(zone_id) {
+            None
+        } else {
+            Some(user_id)
+        });
         Ok(after)
     }
 
@@ -2237,7 +2410,7 @@ impl ZoneService {
     }
 
     fn sleep_changed(&self, user_id: i32, zone_id: &str) {
-        self.changed(if zone_id.starts_with("sonos:") {
+        self.changed(if shared_zone(zone_id) {
             None
         } else {
             Some(user_id)
@@ -2447,6 +2620,46 @@ impl ZoneService {
                 sleeper.run_sleep_timers().await;
             }
         });
+        // Renderers and audio devices: discovery and queue following.
+        if let Some(outputs) = self.outputs.get().cloned() {
+            let driver = self.clone();
+            tokio::spawn(async move {
+                let mut changes = outputs.subscribe();
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut tick: u64 = 0;
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {}
+                        changed = async {
+                            match changes.as_mut() {
+                                Some(receiver) => receiver.recv().await.ok(),
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if changed.is_some() {
+                                // A device moved on or stopped: follow now.
+                                driver.drive_hosted(0).await;
+                            }
+                            continue;
+                        }
+                    }
+                    tick += 1;
+                    if (tick == 1 || tick.is_multiple_of(10))
+                        && let Some(devices) = &outputs.devices
+                    {
+                        devices.refresh();
+                    }
+                    if (tick == 1 || tick.is_multiple_of(60))
+                        && let Some(upnp) = &outputs.upnp
+                        && let Err(error) = upnp.discover().await
+                    {
+                        tracing::debug!(%error, "UPnP discovery failed");
+                    }
+                    driver.drive_hosted(tick).await;
+                }
+            });
+        }
         let mut tick: u64 = 0;
         let mut sonos_changes = self.sonos.as_ref().map(|sonos| sonos.subscribe_changes());
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -2537,6 +2750,11 @@ impl ZoneService {
             let _ = sonos.refresh_topology().await;
         }
     }
+}
+
+/// Zones every account on the server sees (speakers, renderers, devices).
+fn shared_zone(zone_id: &str) -> bool {
+    zone_id.starts_with("sonos:") || zone_id.starts_with("upnp:") || zone_id.starts_with("device:")
 }
 
 fn strip_member(command: &mut ZoneCommand) {
@@ -2637,12 +2855,14 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
                 leveling: false,
                 volume_limits: true,
                 private: false,
+                ..ZoneSettingsSupport::default()
             },
             vec![
                 "Crossfade and volume leveling are set on each zone in the group. A custom group name is forgotten when the group ends."
                     .to_string(),
             ],
         ),
+        output: None,
         notes: vec![LINKED_SYNC_NOTE.to_string()],
     })
 }
@@ -2669,6 +2889,11 @@ fn settings_view(
         leveling_target_lufs: settings.leveling_target_lufs,
         leveling_adjustment_db: settings.leveling_adjustment_db,
         private: settings.private,
+        dsp: settings.dsp,
+        exclusive: settings.exclusive,
+        volume_mode: settings.volume_mode.unwrap_or_default(),
+        max_sample_rate: settings.max_sample_rate,
+        max_bit_depth: settings.max_bit_depth,
         supports,
         notes,
     }
@@ -2802,6 +3027,20 @@ struct SettingRow {
     safety_max_volume: Option<i32>,
     #[diesel(sql_type = diesel::sql_types::Integer)]
     private: i32,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    dsp: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    output: Option<String>,
+}
+
+/// Device setup of a server-driven zone, stored as JSON.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct StoredOutput {
+    exclusive: Option<bool>,
+    volume_mode: Option<VolumeMode>,
+    max_sample_rate: Option<u32>,
+    max_bit_depth: Option<u8>,
 }
 
 fn load_settings(
@@ -2811,7 +3050,7 @@ fn load_settings(
     let rows = diesel::sql_query(
         "SELECT zone_id, name, icon, crossfade_seconds, leveling, leveling_target_lufs,
                 leveling_adjustment_db, comfort_volume, safety_min_volume, safety_max_volume,
-                private
+                private, dsp, output
          FROM zone_setting",
     )
     .load::<SettingRow>(connection)?;
@@ -2820,6 +3059,17 @@ fn load_settings(
         .into_iter()
         .map(|row| {
             let defaults = ZoneSettings::default();
+            let dsp = row
+                .dsp
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<ZoneDsp>(json).ok())
+                .filter(|dsp| dsp.validate().is_ok())
+                .unwrap_or_default();
+            let output = row
+                .output
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<StoredOutput>(json).ok())
+                .unwrap_or_default();
             (
                 row.zone_id,
                 ZoneSettings {
@@ -2841,6 +3091,15 @@ fn load_settings(
                     safety_min_volume: level(row.safety_min_volume),
                     safety_max_volume: level(row.safety_max_volume),
                     private: row.private != 0,
+                    dsp,
+                    exclusive: output.exclusive.unwrap_or(true),
+                    volume_mode: output.volume_mode,
+                    max_sample_rate: output
+                        .max_sample_rate
+                        .filter(|rate| SAMPLE_RATE_CHOICES.contains(rate)),
+                    max_bit_depth: output
+                        .max_bit_depth
+                        .filter(|depth| BIT_DEPTH_CHOICES.contains(depth)),
                 },
             )
         })
@@ -2857,8 +3116,8 @@ fn save_setting(
     diesel::sql_query(
         "INSERT INTO zone_setting (zone_id, name, icon, crossfade_seconds, leveling,
              leveling_target_lufs, leveling_adjustment_db, comfort_volume, safety_min_volume,
-             safety_max_volume, private, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             safety_max_volume, private, dsp, output, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
          ON CONFLICT(zone_id) DO UPDATE SET name = excluded.name, icon = excluded.icon,
              crossfade_seconds = excluded.crossfade_seconds, leveling = excluded.leveling,
              leveling_target_lufs = excluded.leveling_target_lufs,
@@ -2866,6 +3125,7 @@ fn save_setting(
              comfort_volume = excluded.comfort_volume,
              safety_min_volume = excluded.safety_min_volume,
              safety_max_volume = excluded.safety_max_volume, private = excluded.private,
+             dsp = excluded.dsp, output = excluded.output,
              updated_at = CURRENT_TIMESTAMP",
     )
     .bind::<Text, _>(zone_id)
@@ -2879,6 +3139,20 @@ fn save_setting(
     .bind::<Nullable<Integer>, _>(settings.safety_min_volume.map(i32::from))
     .bind::<Nullable<Integer>, _>(settings.safety_max_volume.map(i32::from))
     .bind::<Integer, _>(i32::from(settings.private))
+    .bind::<Nullable<Text>, _>(
+        (settings.dsp != ZoneDsp::default())
+            .then(|| serde_json::to_string(&settings.dsp).ok())
+            .flatten(),
+    )
+    .bind::<Nullable<Text>, _>(
+        serde_json::to_string(&StoredOutput {
+            exclusive: (!settings.exclusive).then_some(false),
+            volume_mode: settings.volume_mode,
+            max_sample_rate: settings.max_sample_rate,
+            max_bit_depth: settings.max_bit_depth,
+        })
+        .ok(),
+    )
     .execute(connection)?;
     Ok(())
 }

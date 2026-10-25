@@ -1,8 +1,12 @@
 import {
+  anyZonePlaying,
+  deviceVolumeLabel,
   estimateZonePosition,
   groupingPlan,
   orderZones,
   sleepTimerLabel,
+  zoneKindLabel,
+  zoneQualityLabel,
   zoneStatusLabel,
   type Zone,
 } from "@parson/music-sdk";
@@ -151,6 +155,21 @@ export function ZoneSheet({
               {grouping ? "Cancel grouping" : "Group zones"}
             </Text>
           </Pressable>
+          <Pressable
+            {...immediatePressFeedback}
+            accessibilityLabel="Pause all zones"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !anyZonePlaying(ordered) }}
+            disabled={!anyZonePlaying(ordered)}
+            onPress={() =>
+              void zones
+                .pauseAll()
+                .catch((error) => failure(error, "Could not pause."))
+            }
+            style={[styles.chip, !anyZonePlaying(ordered) && styles.disabled]}
+          >
+            <Text style={styles.chipText}>Pause all</Text>
+          </Pressable>
         </View>
         <ScrollView contentContainerStyle={styles.list}>
           {ordered
@@ -202,6 +221,20 @@ export function ZoneSheet({
                     <Text numberOfLines={1} style={styles.rowSubtitle}>
                       {subtitle}
                     </Text>
+                    <Text numberOfLines={1} style={styles.rowDevice}>
+                      {[
+                        zone.device || zoneKindLabel(zone.kind),
+                        zoneQualityLabel(zone),
+                        deviceVolumeLabel(zone.volume),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Text>
+                    {isActive && zone.output?.note ? (
+                      <Text numberOfLines={3} style={styles.rowDevice}>
+                        {zone.output.note}
+                      </Text>
+                    ) : null}
                     {zone.group ? (
                       <Text
                         numberOfLines={2}
@@ -465,6 +498,11 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, minWidth: 0 },
   rowTitle: { color: "white", fontSize: 15, fontWeight: "600" },
   rowSubtitle: { color: palette.secondary, fontSize: 12, marginTop: 2 },
+  rowDevice: {
+    color: palette.muted,
+    fontSize: 11,
+    marginTop: 2,
+  },
   syncNote: { fontSize: 11, marginTop: 3 },
   iconButton: {
     alignItems: "center",

@@ -212,7 +212,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos", "upnp", "audio_devices"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
@@ -256,6 +256,7 @@ fn build_zone_service(
     let service = crate::zones::ZoneService::new(sonos, Some(database));
     service.set_port(port);
     service.load_settings();
+    service.set_outputs(std::sync::Arc::new(crate::outputs::Outputs::from_env()));
     service
 }
 
@@ -306,6 +307,7 @@ pub async fn build_server_with_shutdown_timeout(
     }
     let bind_port = settings::port().map_err(std::io::Error::other)?;
     let zone_service = web::Data::new(build_zone_service(database.get_ref().clone(), bind_port));
+    zone_service.set_library(library.clone().into_inner());
     tokio::spawn(zone_service.clone().into_inner().run());
     let bind_address = settings::bind_address().map_err(std::io::Error::other)?;
     let worker_count = std::thread::available_parallelism()

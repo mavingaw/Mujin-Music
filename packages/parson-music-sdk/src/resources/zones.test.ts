@@ -26,6 +26,14 @@ import {
   transferZone,
   ungroupZones,
   unseenZoneCommands,
+  anyZonePlaying,
+  deviceVolumeLabel,
+  discoverOutputs,
+  dspSummary,
+  formatSampleRate,
+  pauseAllZones,
+  zoneKindLabel,
+  zoneQualityLabel,
   type Zone,
 } from "./zones";
 
@@ -454,4 +462,165 @@ test("zone requests name this device so its private zone stays visible", async (
   }
   await getZones();
   expect(get).toHaveBeenLastCalledWith("/zones", { timeout: 5_000 });
+});
+
+test("audio devices and UPnP renderers sort, label and describe their output", () => {
+  const dac = zone({
+    id: "device:alsa-e30-0",
+    kind: "device",
+    ecosystem: "device",
+    name: "Topping E30",
+    status: "playing",
+    volume: {
+      level: 80,
+      muted: false,
+      min: 0,
+      max: 100,
+      comfort: null,
+      step: 2,
+      device_range: {
+        min: -127.5,
+        max: 0,
+        step: 0.5,
+        unit: "dB",
+        hardware: true,
+        current: -16,
+      },
+    },
+    output: {
+      max_sample_rate: 384_000,
+      max_bit_depth: 32,
+      formats: ["FLAC"],
+      note: "",
+      exclusive: true,
+      volume_mode: "hardware",
+      stream: {
+        source: "FLAC 96 kHz/24-bit",
+        output: "96 kHz/24-bit (S24_3LE) to Topping E30, exclusive",
+        bit_perfect: true,
+        steps: [],
+      },
+    },
+  });
+  const renderer = zone({
+    id: "upnp:abc",
+    kind: "upnp",
+    ecosystem: "upnp",
+    name: "Streamer",
+    volume: {
+      level: 50,
+      muted: false,
+      min: 0,
+      max: 100,
+      step: 2,
+      device_range: {
+        min: 0,
+        max: 30,
+        step: 1,
+        unit: "steps",
+        hardware: true,
+        current: 15,
+      },
+    },
+  });
+  const sonos = zone({ id: "sonos:R", kind: "sonos", name: "Kitchen" });
+  const browser = zone({ id: "client:b", kind: "web", name: "Browser" });
+  expect(
+    orderZones([renderer, sonos, dac, browser]).map((item) => item.id),
+  ).toEqual(["client:b", "device:alsa-e30-0", "sonos:R", "upnp:abc"]);
+  expect(zoneKindLabel("upnp")).toBe("UPnP/DLNA renderer");
+  expect(zoneKindLabel("device")).toBe("Audio device");
+  expect(zoneIconName(dac)).toBe("amplifier");
+  expect(zoneIconName(renderer)).toBe("radio");
+  expect(deviceVolumeLabel(dac.volume)).toBe(
+    "-16.0 dB on the device (-127.5 to 0.0 dB)",
+  );
+  expect(deviceVolumeLabel(renderer.volume)).toBe("15 of 30 on the device");
+  expect(deviceVolumeLabel(browser.volume)).toBeNull();
+  expect(zoneQualityLabel(dac)).toBe("Bit-perfect");
+  expect(zoneQualityLabel(renderer)).toBeNull();
+  expect(formatSampleRate(44_100)).toBe("44.1 kHz");
+  expect(formatSampleRate(352_800)).toBe("352.8 kHz");
+  expect(formatSampleRate(96_000)).toBe("96 kHz");
+  expect(anyZonePlaying([dac, renderer])).toBe(true);
+  expect(anyZonePlaying([renderer, { ...dac, grouped_into: "linked:x" }])).toBe(
+    false,
+  );
+});
+
+test("DSP summaries match the server and only changed DSP is saved", () => {
+  expect(dspSummary(undefined)).toBe("Off");
+  expect(
+    dspSummary({
+      enabled: true,
+      preamp_db: 0,
+      bass_db: 3,
+      treble_db: -2,
+      crossfeed: true,
+    }),
+  ).toBe("Preamp \u22123 dB, Bass +3 dB, Treble \u22122 dB, Crossfeed");
+  expect(
+    dspSummary({
+      enabled: false,
+      preamp_db: -6,
+      bass_db: 0,
+      treble_db: 0,
+      crossfeed: false,
+    }),
+  ).toBe("Off");
+  const dac = zone({
+    id: "device:dac",
+    kind: "device",
+    settings: settingsView({
+      dsp: {
+        enabled: false,
+        preamp_db: 0,
+        bass_db: 0,
+        treble_db: 0,
+        crossfeed: false,
+      },
+      exclusive: true,
+      volume_mode: "hardware",
+      max_sample_rate: null,
+      max_bit_depth: null,
+    }),
+  });
+  const initial = zoneSettingsDraft(dac);
+  expect(zoneSettingsPatch(initial, { ...initial })).toEqual({});
+  expect(
+    zoneSettingsPatch(initial, {
+      ...initial,
+      dsp: { ...initial.dsp, enabled: true, bass_db: 4 },
+      exclusive: false,
+      volume_mode: "fixed",
+      max_sample_rate: 96_000,
+    }),
+  ).toEqual({
+    dsp: {
+      enabled: true,
+      preamp_db: 0,
+      bass_db: 4,
+      treble_db: 0,
+      crossfeed: false,
+    },
+    exclusive: false,
+    volume_mode: "fixed",
+    max_sample_rate: 96_000,
+  });
+});
+
+test("pause all and output discovery call the zone API", async () => {
+  const post = spyOn(api, "post").mockResolvedValue(ok({ paused: 3 }));
+  expect(await pauseAllZones()).toEqual({ paused: 3 });
+  expect(post).toHaveBeenCalledWith(
+    "/zones/pause-all",
+    {},
+    { timeout: 15_000 },
+  );
+  await discoverOutputs();
+  expect(post).toHaveBeenLastCalledWith(
+    "/zones/outputs/discover",
+    {},
+    { timeout: 20_000 },
+  );
 });

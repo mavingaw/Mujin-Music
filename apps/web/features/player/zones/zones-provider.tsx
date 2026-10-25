@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  discoverOutputs,
   discoverSonos,
+  pauseAllZones,
   getSongInfos,
   getZoneEventsURL,
   getZoneLoudness,
@@ -59,6 +61,8 @@ export const zonesQueryKey = ["zones"] as const;
 type ZonesContextValue = {
   zones: Zone[];
   sonos: ZoneList["sonos"] | null;
+  /** UPnP renderers and this computer's audio devices. */
+  outputs: ZoneList["outputs"] | null;
   /** When `zones` was fetched (for position estimates). */
   fetchedAt: number;
   loading: boolean;
@@ -78,6 +82,10 @@ type ZonesContextValue = {
   /** This device's zone. */
   localZone: Zone | null;
   rescanSonos: () => Promise<void>;
+  /** Looks for UPnP renderers and audio devices now. */
+  rescanOutputs: () => Promise<void>;
+  /** Pauses every playing zone; returns how many. */
+  pauseAll: () => Promise<number>;
   busy: boolean;
   error: unknown;
 };
@@ -480,18 +488,23 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
     player.song.id,
     queueSongIds,
   ]);
+  // Per-zone DSP for this device's own playback.
+  const dsp = localSettings?.supports.dsp ? (localSettings.dsp ?? null) : null;
+  const dspKey = dsp ? JSON.stringify(dsp) : "";
   const { setOutputSettings } = player;
   useEffect(() => {
     setOutputSettings({
       crossfadeSeconds,
       levelingFactor: levelingFactor(levelingGain),
+      dsp: dspKey ? (JSON.parse(dspKey) as NonNullable<typeof dsp>) : null,
     });
-  }, [crossfadeSeconds, levelingGain, setOutputSettings]);
+  }, [crossfadeSeconds, dspKey, levelingGain, setOutputSettings]);
 
   const value = useMemo<ZonesContextValue>(
     () => ({
       zones,
       sonos: query.data?.sonos ?? null,
+      outputs: query.data?.outputs ?? null,
       fetchedAt: query.dataUpdatedAt,
       loading: query.isLoading,
       localZoneId,
@@ -526,6 +539,15 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       rescanSonos: async () => {
         await run(() => discoverSonos());
       },
+      rescanOutputs: async () => {
+        await run(() => discoverOutputs());
+      },
+      pauseAll: async () => {
+        const result = (await run(() => pauseAllZones())) as Awaited<
+          ReturnType<typeof pauseAllZones>
+        >;
+        return result.paused;
+      },
       busy: action.isPending,
       error: action.error ?? query.error,
     }),
@@ -535,6 +557,7 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       localZone,
       localZoneId,
       query.data?.sonos,
+      query.data?.outputs,
       query.dataUpdatedAt,
       query.error,
       query.isLoading,

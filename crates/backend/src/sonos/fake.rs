@@ -326,14 +326,14 @@ impl FakeSonos {
     }
 }
 
-struct Request {
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    body: String,
+pub(crate) struct Request {
+    pub method: String,
+    pub path: String,
+    pub headers: HashMap<String, String>,
+    pub body: String,
 }
 
-async fn read_request(stream: &mut TcpStream) -> Option<Request> {
+pub(crate) async fn read_request(stream: &mut TcpStream) -> Option<Request> {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
     let header_end = loop {
@@ -378,7 +378,7 @@ async fn read_request(stream: &mut TcpStream) -> Option<Request> {
     })
 }
 
-async fn write_response(
+pub(crate) async fn write_response(
     stream: &mut TcpStream,
     status: &str,
     extra_headers: &[(&str, String)],

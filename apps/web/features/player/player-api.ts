@@ -1,6 +1,6 @@
 "use client";
 
-import type { ZoneRepeatMode } from "@parson/music-sdk";
+import type { ZoneRepeatMode, ZoneDsp } from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { createContext, useContext } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
@@ -53,6 +53,8 @@ export type Player = {
   setOutputSettings: (settings: {
     crossfadeSeconds: number;
     levelingFactor: number;
+    /** This zone's DSP (preamp, shelves, crossfeed); `null` is off. */
+    dsp?: ZoneDsp | null;
   }) => void;
   toggleMute: () => void;
   toggleSlowedReverb: () => void;

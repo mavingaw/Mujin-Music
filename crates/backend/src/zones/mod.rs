@@ -5,7 +5,11 @@
 mod e2e_tests;
 pub mod leveling;
 pub mod model;
+#[cfg(test)]
+mod outputs_e2e_tests;
 pub mod service;
 
 pub use model::*;
-pub use service::{ClientRegistration, ZoneEvent, ZoneService, ZoneSettings, ZoneSettingsPatch};
+pub use service::{
+    ClientRegistration, Viewer, ZoneEvent, ZoneService, ZoneSettings, ZoneSettingsPatch,
+};

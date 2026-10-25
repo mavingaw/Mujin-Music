@@ -52,9 +52,40 @@ pub fn m_search_request(search_target: &str, mx_seconds: u8) -> String {
     )
 }
 
+/// Search target of UPnP/DLNA media renderers.
+pub const MEDIA_RENDERER_ST: &str = "urn:schemas-upnp-org:device:MediaRenderer:1";
+
 /// Parses an SSDP search answer, returning `None` for anything that is not a
 /// `200 OK` from a Sonos ZonePlayer with an HTTP location.
 pub fn parse_response(datagram: &[u8]) -> Option<SsdpResponse> {
+    let response = parse_answer(datagram)?;
+    let is_zone_player = response
+        .st
+        .as_deref()
+        .is_some_and(|st| st.eq_ignore_ascii_case(ZONE_PLAYER_ST))
+        || response
+            .usn
+            .as_deref()
+            .is_some_and(|usn| usn.contains("RINCON_"));
+    is_zone_player.then_some(response)
+}
+
+/// Parses an SSDP search answer for `search_target` (any `200 OK` whose ST
+/// or USN names it and whose location is HTTP).
+pub fn parse_response_for(datagram: &[u8], search_target: &str) -> Option<SsdpResponse> {
+    let response = parse_answer(datagram)?;
+    let matches = response
+        .st
+        .as_deref()
+        .is_some_and(|st| st.eq_ignore_ascii_case(search_target))
+        || response
+            .usn
+            .as_deref()
+            .is_some_and(|usn| usn.ends_with(search_target));
+    matches.then_some(response)
+}
+
+fn parse_answer(datagram: &[u8]) -> Option<SsdpResponse> {
     let text = std::str::from_utf8(datagram).ok()?;
     let mut lines = text.split("\r\n").flat_map(|line| line.split('\n'));
     let status = lines.next()?.trim();
@@ -83,16 +114,7 @@ pub fn parse_response(datagram: &[u8]) -> Option<SsdpResponse> {
             _ => {}
         }
     }
-    let is_zone_player = response
-        .st
-        .as_deref()
-        .is_some_and(|st| st.eq_ignore_ascii_case(ZONE_PLAYER_ST))
-        || response
-            .usn
-            .as_deref()
-            .is_some_and(|usn| usn.contains("RINCON_"));
-    let http_location = response.location.starts_with("http://");
-    (is_zone_player && http_location).then_some(response)
+    response.location.starts_with("http://").then_some(response)
 }
 
 /// Sends `M-SEARCH` to every target and gathers answers until `timeout`.
@@ -103,6 +125,16 @@ pub async fn search(
     targets: &[SocketAddr],
     timeout: Duration,
 ) -> std::io::Result<Vec<SsdpResponse>> {
+    search_with(targets, ZONE_PLAYER_ST, timeout, parse_response).await
+}
+
+/// Sends `M-SEARCH` for `search_target` and keeps answers `parse` accepts.
+pub async fn search_with(
+    targets: &[SocketAddr],
+    search_target: &str,
+    timeout: Duration,
+    parse: impl Fn(&[u8]) -> Option<SsdpResponse>,
+) -> std::io::Result<Vec<SsdpResponse>> {
     let all_loopback = targets.iter().all(|target| target.ip().is_loopback());
     let bind: SocketAddr = if all_loopback {
         (Ipv4Addr::LOCALHOST, 0).into()
@@ -111,7 +143,7 @@ pub async fn search(
     };
     let socket = UdpSocket::bind(bind).await?;
     let _ = socket.set_multicast_ttl_v4(2);
-    let request = m_search_request(ZONE_PLAYER_ST, 1);
+    let request = m_search_request(search_target, 1);
     // UDP is lossy: send twice, as UPnP recommends.
     for _ in 0..2 {
         for target in targets {
@@ -129,7 +161,7 @@ pub async fn search(
         let Ok(Ok((length, _peer))) = received else {
             break;
         };
-        if let Some(response) = parse_response(&buffer[..length])
+        if let Some(response) = parse(&buffer[..length])
             && seen.insert(response.location.clone())
         {
             responses.push(response);
