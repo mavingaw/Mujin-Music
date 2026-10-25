@@ -15,9 +15,11 @@ import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { toast } from "sonner";
 import Link from "next/link";
+import { BanMenuItem } from "@/features/library/radio-bans";
 
 type AlbumMenuProps = {
   album_id: string;
+  album_name?: string;
   artist_id: string;
   children: React.ReactNode;
   showArtist?: boolean;
@@ -25,6 +27,7 @@ type AlbumMenuProps = {
 
 export default function AlbumMenu({
   album_id,
+  album_name,
   artist_id,
   children,
   showArtist = true,
@@ -71,6 +74,9 @@ export default function AlbumMenu({
           <Radio className="h-4 w-4" />
           Start radio
         </ContextMenuItem>
+        <BanMenuItem
+          target={{ kind: "album", id: album_id, name: album_name }}
+        />
         <ContextMenuSeparator />
         <ContextMenuItem asChild>
           <Link href={`/album?id=${album_id}`}>

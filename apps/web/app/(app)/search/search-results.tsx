@@ -110,13 +110,21 @@ function SearchResultMenu({
   }
   if (item.item_type === "album") {
     return (
-      <AlbumMenu album_id={item.id} artist_id={item.artist_object?.id ?? ""}>
+      <AlbumMenu
+        album_id={item.id}
+        album_name={item.name}
+        artist_id={item.artist_object?.id ?? ""}
+      >
         {children}
       </AlbumMenu>
     );
   }
   if (item.item_type === "artist") {
-    return <ArtistMenu artistId={item.id}>{children}</ArtistMenu>;
+    return (
+      <ArtistMenu artistId={item.id} artistName={item.name}>
+        {children}
+      </ArtistMenu>
+    );
   }
   return children;
 }

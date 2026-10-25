@@ -1,3 +1,4 @@
+import { isSongExcludedByBans, type RadioBanIndex } from "@parson/music-sdk";
 import type { QueueItem } from "./player-model";
 
 /** Appends Radio picks, skipping songs already in the queue. */
@@ -61,4 +62,49 @@ export function radioExclusions(
   return [
     ...new Set([...items.map((item) => item.song.id), ...rejected]),
   ].filter(Boolean);
+}
+
+/** Whether bans keep this queue item out of Radio and Shuffle. */
+export function queueItemBanned(
+  index: RadioBanIndex,
+  item: QueueItem,
+): boolean {
+  return isSongExcludedByBans(index, {
+    songId: item.song.id,
+    albumId: item.album?.id || item.song.album_object?.id,
+    artistIds: [
+      item.artist?.id,
+      item.song.artist_object?.id,
+      ...(item.song.contributing_artist_ids ?? []),
+    ],
+  });
+}
+
+/**
+ * Applies a ban change to the queue at once: upcoming Radio picks that are
+ * now banned are dropped (explicitly queued songs stay, as in Roon).
+ * `currentBanned` reports whether the playing item is a banned Radio pick,
+ * so the caller can skip it.
+ */
+export function withoutBannedRadioPicks(
+  items: readonly QueueItem[],
+  activeIndex: number,
+  index: RadioBanIndex,
+): { items: QueueItem[]; removed: number; currentBanned: boolean } {
+  const kept = items.filter(
+    (item, itemIndex) =>
+      itemIndex <= activeIndex ||
+      item.origin !== "generated" ||
+      !queueItemBanned(index, item),
+  );
+  const current = items[activeIndex];
+  return {
+    items: kept,
+    removed: items.length - kept.length,
+    currentBanned: Boolean(
+      current &&
+      current.origin === "generated" &&
+      queueItemBanned(index, current),
+    ),
+  };
 }

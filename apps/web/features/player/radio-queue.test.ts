@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
+import { radioBanIndex } from "@parson/music-sdk";
 import { manualQueueItems, radioPickItems } from "./player-model";
 import {
   appendRadioPicks,
+  queueItemBanned,
+  withoutBannedRadioPicks,
   markRadioPickLiked,
   radioExclusions,
   removeUpcomingItem,
@@ -65,4 +68,44 @@ test("thumbs up marks a pick and exclusions cover rejected songs", () => {
   expect(queue[2]?.liked).toBe(true);
   expect(queue[0]?.liked).toBeUndefined();
   expect(radioExclusions(queue, ["z", "a"])).toEqual(["a", "b", "c", "z"]);
+});
+
+test("a new ban drops upcoming Radio picks but keeps what you queued", () => {
+  const pick = (id: string, artist: string) =>
+    radioPickItems([
+      {
+        id,
+        name: id,
+        artist,
+        contributing_artists: [],
+        contributing_artist_ids: [],
+        track_number: 1,
+        duration: 200,
+        album_object: { id: `album-${id}`, name: "Album", cover_url: "" },
+        artist_object: { id: artist, name: artist, icon_url: "" },
+        origin: "generated",
+        queue_position: 0,
+        reason: "fits this station",
+      },
+    ] as never)[0]!;
+  const queue = [
+    ...manualQueueItems([
+      { song: { id: "m1", name: "M1" }, artist: { id: "banned-artist" } },
+    ]),
+    pick("p1", "banned-artist"),
+    pick("p2", "ok-artist"),
+    pick("p3", "banned-artist"),
+  ];
+  const bans = radioBanIndex([{ kind: "artist", id: "banned-artist" }]);
+
+  const upcoming = withoutBannedRadioPicks(queue, 0, bans);
+  expect(upcoming.items.map((item) => item.song.id)).toEqual(["m1", "p2"]);
+  expect(upcoming.removed).toBe(2);
+  expect(upcoming.currentBanned).toBeFalse();
+
+  const playing = withoutBannedRadioPicks(queue, 1, bans);
+  expect(playing.items.map((item) => item.song.id)).toEqual(["m1", "p1", "p2"]);
+  expect(playing.currentBanned).toBeTrue();
+  expect(queueItemBanned(bans, queue[2]!)).toBeFalse();
+  expect(withoutBannedRadioPicks(queue, 0, radioBanIndex([])).removed).toBe(0);
 });

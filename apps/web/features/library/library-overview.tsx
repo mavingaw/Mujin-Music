@@ -8,6 +8,8 @@ import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import PlaylistCover from "@/features/library/playlist-cover";
 import PlaylistMenu from "@/features/library/playlist-menu";
 import SongMenu from "@/features/library/song-menu";
+import BannedView from "@/features/library/banned-view";
+import { BannedBadge } from "@/features/library/radio-bans";
 import { SongTitle, ExplicitBadge } from "./song-title";
 import { isExplicitSongTitle } from "./song-presentation";
 import { ArtistCreditLinks } from "./artist-credit-links";
@@ -30,6 +32,7 @@ import {
 } from "@parson/music-sdk";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
+  Ban,
   Disc3,
   ChevronRight,
   ListMusic,
@@ -53,7 +56,7 @@ import {
 } from "./library-view-primitives";
 
 const PAGE_SIZE = 100;
-const views = ["albums", "songs", "artists", "playlists"] as const;
+const views = ["albums", "songs", "artists", "playlists", "banned"] as const;
 type LibraryView = (typeof views)[number];
 
 export default function LibraryOverview() {
@@ -170,6 +173,12 @@ export default function LibraryOverview() {
             label="Playlists"
             onClick={() => selectView("playlists")}
           />
+          <LibraryTab
+            active={view === "banned"}
+            icon={<Ban />}
+            label="Banned"
+            onClick={() => selectView("banned")}
+          />
         </div>
         {view === "playlists" && (
           <div className="mb-2 ml-2 shrink-0">
@@ -211,6 +220,7 @@ export default function LibraryOverview() {
           onLoadMore={() => void artists.fetchNextPage()}
         />
       )}
+      {view === "banned" && <BannedView />}
       {view === "playlists" && (
         <PlaylistsView
           loading={playlists.isPending}
@@ -420,6 +430,10 @@ function CatalogSongRow({
             className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
           >
             <SongTitle title={song.name} />
+            <BannedBadge
+              className="ml-1.5 align-[-2px]"
+              target={{ kind: "song", id: song.id }}
+            />
           </p>
           <p className="truncate text-xs text-zinc-500 hover:text-white hover:underline sm:hidden">
             {isExplicitSongTitle(song.name) && <ExplicitBadge />}
@@ -481,14 +495,15 @@ function ArtistsView({
 function ArtistRow({ artist }: { artist: LibraryCatalogArtist }) {
   const summary = artistCatalogSummary(artist);
   return (
-    <ArtistMenu artistId={artist.id}>
+    <ArtistMenu artistId={artist.id} artistName={artist.name}>
       <Link
         className="group flex min-w-0 items-center gap-4 border-b border-white/6 px-4 py-4 transition-colors last:border-0 hover:bg-white/[0.035] sm:px-5"
         href={`/artist?id=${artist.id}`}
       >
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold text-zinc-100 group-hover:text-white">
-            {artist.name}
+          <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-zinc-100 group-hover:text-white">
+            <span className="truncate">{artist.name}</span>
+            <BannedBadge target={{ kind: "artist", id: artist.id }} />
           </h2>
           {summary && <p className="mt-1 text-xs text-zinc-500">{summary}</p>}
         </div>

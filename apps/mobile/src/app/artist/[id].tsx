@@ -21,6 +21,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
+import { BannedMark, useRadioBans } from "@/components/radio-bans";
+import { songBanned } from "@/lib/radio-queue";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import {
@@ -32,6 +34,7 @@ export default function ArtistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const player = usePlayer();
+  const bans = useRadioBans();
   const [selected, setSelected] = useState<Album | null>(null);
   const artist = useQuery({
     queryKey: ["artist", id],
@@ -143,7 +146,10 @@ export default function ArtistScreen() {
                 style={styles.portrait}
               />
             ) : null}
-            <Text style={styles.title}>{data.name}</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>{data.name}</Text>
+              <BannedMark size={20} target={{ kind: "artist", id: data.id }} />
+            </View>
             {data.description ? (
               <Text numberOfLines={4} style={styles.description}>
                 {data.description}
@@ -156,7 +162,14 @@ export default function ArtistScreen() {
                   accessibilityLabel={`Shuffle ${data.name}`}
                   accessibilityRole="button"
                   style={styles.shuffle}
-                  onPress={() => player.playShuffled(songs)}
+                  onPress={() => {
+                    // Like Roon's artist shuffle, skip banned albums and
+                    // tracks (unless everything here is banned).
+                    const allowed = songs.filter(
+                      (song) => !songBanned(bans.index, song),
+                    );
+                    player.playShuffled(allowed.length ? allowed : songs);
+                  }}
                 >
                   <Shuffle color="white" size={22} />
                 </Pressable>
@@ -188,9 +201,12 @@ export default function ArtistScreen() {
                     onLongPress={() => setSelected(album)}
                   >
                     <Artwork path={album.cover_url} size={156} rounded={9} />
-                    <Text numberOfLines={2} style={styles.albumName}>
-                      {album.name}
-                    </Text>
+                    <View style={styles.albumNameRow}>
+                      <BannedMark target={{ kind: "album", id: album.id }} />
+                      <Text numberOfLines={2} style={styles.albumName}>
+                        {album.name}
+                      </Text>
+                    </View>
                   </Pressable>
                 ))}
               </View>
@@ -229,6 +245,17 @@ const styles = StyleSheet.create({
   nav: { height: 48, paddingHorizontal: 20, justifyContent: "center" },
   hero: { alignItems: "center", paddingHorizontal: 20, paddingBottom: 28 },
   portrait: { marginBottom: 20 },
+  titleRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
+  },
+  albumNameRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 5,
+  },
   title: {
     color: "white",
     fontSize: 34,
@@ -273,6 +300,7 @@ const styles = StyleSheet.create({
   card: { width: 156 },
   albumName: {
     color: "white",
+    flexShrink: 1,
     fontWeight: "700",
     marginTop: 8,
     lineHeight: 18,

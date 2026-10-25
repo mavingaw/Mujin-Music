@@ -1,4 +1,6 @@
 import {
+  isSongExcludedByBans,
+  type RadioBanIndex,
   radioMinimumUpcomingPicks,
   radioSectionStart,
   upcomingRadioPicks,
@@ -81,5 +83,54 @@ export function extendWithRadio<T extends Song>(
   return {
     queue: appendUnique(kept, picks),
     nextIndex: kept.length,
+  };
+}
+
+type BannableQueueSong = Song & {
+  album_object?: { id?: string } | null;
+  artist_object?: { id?: string } | null;
+  contributing_artist_ids?: readonly string[] | null;
+};
+
+/** Whether bans keep this song out of Radio and Shuffle. */
+export function songBanned(
+  index: RadioBanIndex,
+  song: BannableQueueSong,
+): boolean {
+  return isSongExcludedByBans(index, {
+    songId: song.id,
+    albumId: song.album_object?.id,
+    artistIds: [
+      song.artist_object?.id,
+      ...(song.contributing_artist_ids ?? []),
+    ],
+  });
+}
+
+/**
+ * Applies a ban change to the queue at once: upcoming Radio picks that are
+ * now banned are dropped; songs you queued yourself stay. `currentBanned`
+ * says whether the playing song is a banned Radio pick to skip.
+ */
+export function withoutBannedRadioPicks<T extends BannableQueueSong>(
+  queue: readonly T[],
+  radioIds: ReadonlySet<string>,
+  currentIndex: number,
+  index: RadioBanIndex,
+): { queue: T[]; removedIds: string[]; currentBanned: boolean } {
+  const removedIds: string[] = [];
+  const kept = queue.filter((song, songIndex) => {
+    if (songIndex <= currentIndex || !radioIds.has(song.id)) return true;
+    if (!songBanned(index, song)) return true;
+    removedIds.push(song.id);
+    return false;
+  });
+  const current = queue[currentIndex];
+  return {
+    queue: kept,
+    removedIds,
+    currentBanned: Boolean(
+      current && radioIds.has(current.id) && songBanned(index, current),
+    ),
   };
 }

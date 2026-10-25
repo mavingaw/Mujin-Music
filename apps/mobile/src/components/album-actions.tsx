@@ -38,6 +38,7 @@ import { PlaylistPicker } from "@/components/playlist-picker";
 import { useSession } from "@/providers/session-provider";
 import { palette } from "@/constants/colors";
 import { StartRadioAction } from "@/components/radio-ui";
+import { BanAction } from "@/components/radio-bans";
 
 export function AlbumActions({
   albumId,
@@ -189,6 +190,10 @@ export function AlbumActions({
             onStarted={onClose}
           />
         ) : null}
+        <BanAction
+          target={{ kind: "album", id: albumId, name }}
+          onDone={onClose}
+        />
         <DrawerAction
           icon={ListEnd}
           label="Add to queue"

@@ -81,8 +81,10 @@ import {
   isCurrentRadioPick,
   needsRadioTopUp,
   radioStartIndex,
+  withoutBannedRadioPicks,
 } from "@/lib/radio-queue";
 import { useCastOutput } from "@/hooks/use-cast-output";
+import { useRadioBans } from "@/components/radio-bans";
 
 type RepeatMode = "none" | "one" | "all";
 export type AudioPreset = PlayerAudioPresetId;
@@ -1503,6 +1505,56 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       sendSongEvent,
     ],
   );
+
+  // Bans apply at once: banned Radio picks leave the queue, and a banned
+  // Radio pick that is playing is skipped. Songs you queued yourself stay.
+  const { index: banIndex, loaded: bansLoaded } = useRadioBans();
+  const appliedBanIndex = useRef<typeof banIndex | null>(null);
+  useEffect(() => {
+    if (!bansLoaded) return;
+    const previous = appliedBanIndex.current;
+    appliedBanIndex.current = banIndex;
+    if (previous === banIndex || !queue.length) return;
+    const result = withoutBannedRadioPicks(
+      queue,
+      radioIdsRef.current,
+      currentIndex,
+      banIndex,
+    );
+    if (result.removedIds.length) {
+      const removed = new Set(result.removedIds);
+      originalQueue.current = originalQueue.current.filter(
+        (song) => !removed.has(song.id),
+      );
+      setQueue(result.queue);
+      if (radioEnabledRef.current) radioTopUp.current.exhaustedKey = "";
+    }
+    // Only skip for a ban made while listening, not one loaded at start.
+    if (!result.currentBanned || previous === null) return;
+    setPendingSkip(null);
+    if (currentIndex + 1 < result.queue.length) {
+      loadAt(
+        result.queue,
+        currentIndex + 1,
+        true,
+        true,
+        originFor(result.queue[currentIndex + 1]),
+      );
+    } else {
+      audioRef.current?.pause();
+      androidPlayerRef.current?.pause();
+      setIsPlaying(false);
+      continueWithRadio();
+    }
+  }, [
+    banIndex,
+    bansLoaded,
+    continueWithRadio,
+    currentIndex,
+    loadAt,
+    originFor,
+    queue,
+  ]);
 
   const answerSkip = useCallback(
     (reason: RadioSkipReasonId) => {

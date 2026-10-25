@@ -209,6 +209,8 @@ struct PersonalDataExport {
     favorites: Vec<serde_json::Value>,
     searches: Vec<serde_json::Value>,
     playlists: Vec<serde_json::Value>,
+    /// Artists, albums and tracks banned from Radio and Shuffle.
+    radio_bans: Vec<serde_json::Value>,
 }
 
 fn safe_backup_filename(value: &str) -> Option<&str> {
@@ -1317,6 +1319,11 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
             searches: object_rows(
                 "SELECT json_object('query', search, 'created_at', created_at) AS value
                  FROM search_item WHERE user_id = ? ORDER BY id DESC",
+                &mut connection,
+            )?,
+            radio_bans: object_rows(
+                "SELECT json_object('kind', kind, 'id', entity_id, 'created_at', created_at) AS value
+                 FROM user_radio_ban WHERE user_id = ? ORDER BY created_at DESC",
                 &mut connection,
             )?,
             playlists: object_rows(

@@ -21,6 +21,7 @@ import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/features/account/session-provider";
+import { useRadioBanIndex } from "@/features/library/radio-bans";
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
 import streamUrl from "@/lib/api/stream-url";
@@ -62,6 +63,7 @@ import {
   appendRadioPicks,
   markRadioPickLiked,
   radioExclusions,
+  withoutBannedRadioPicks,
   removeUpcomingItem,
   withoutRadioSection,
 } from "./radio-queue";
@@ -783,6 +785,52 @@ export function usePlayerController() {
       setIsPlaying,
     ],
   );
+
+  // Bans apply at once: banned Radio picks leave the queue, and a banned
+  // Radio pick that is playing is skipped (explicit plays are left alone).
+  const { index: banIndex, query: banQuery } = useRadioBanIndex();
+  const bansLoaded = Boolean(banQuery.data);
+  const appliedBanIndex = useRef<typeof banIndex | null>(null);
+  useEffect(() => {
+    if (!bansLoaded) {
+      return;
+    }
+    const previous = appliedBanIndex.current;
+    appliedBanIndex.current = banIndex;
+    if (previous === banIndex || !queueRef.current.length) {
+      return;
+    }
+    const result = withoutBannedRadioPicks(
+      queueRef.current,
+      index.current,
+      banIndex,
+    );
+    if (result.removed > 0) {
+      replaceQueueLocally(result.items, index.current);
+      if (radioEnabledRef.current) {
+        radioTopUp.current.exhaustedKey = "";
+      }
+    }
+    // Only skip for a ban made while listening, not for one loaded at start.
+    if (result.currentBanned && previous !== null) {
+      setPendingRadioSkip(null);
+      if (index.current + 1 < queueRef.current.length) {
+        playItem(index.current + 1);
+      } else {
+        audio.current?.pause();
+        setIsPlaying(false);
+        continueWithRadio();
+      }
+    }
+  }, [
+    audio,
+    banIndex,
+    bansLoaded,
+    continueWithRadio,
+    playItem,
+    replaceQueueLocally,
+    setIsPlaying,
+  ]);
 
   const answerRadioSkip = useCallback(
     (reason: RadioSkipReasonId) => {
