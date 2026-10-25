@@ -22,13 +22,18 @@ import { usePlayer } from "@/features/player/player-context";
 import getBaseURL from "@/lib/api/server-url";
 import { defaultCover } from "@/lib/images/default-cover";
 import {
+  getCatalogAlbums,
   getLibraryCatalog,
   getLibraryCatalogArtists,
   getPlaylists,
   type LibraryCatalogArtist,
   type LibraryCatalogSong,
 } from "@parson/music-sdk";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   Disc3,
   ChevronRight,
@@ -52,11 +57,17 @@ import {
   useLibrarySources,
 } from "@/features/streaming/library-sources";
 import { SavedPlaylistCopyCards } from "@/features/streaming/streaming-playlists";
+import type { LibraryAlbumEntry } from "@/features/streaming/streaming-model";
 import {
-  localAlbumEntry,
-  mergeLibraryAlbums,
-  type LibraryAlbumEntry,
-} from "@/features/streaming/streaming-model";
+  activeFocusCount,
+  catalogAlbumEntry,
+  emptyFocus,
+  parseLibraryFocus,
+  toCatalogFilter,
+  writeLibraryFocus,
+  type LibraryFocus,
+} from "@/features/streaming/library-focus";
+import { LibraryFocusBar } from "@/features/streaming/library-focus-bar";
 import {
   InfiniteLoad,
   LibraryLoading,
@@ -76,20 +87,38 @@ export default function LibraryOverview() {
       ? (requestedView as LibraryView)
       : "albums",
   );
-  const catalogEnabled = view === "albums" || view === "songs";
+  const catalogEnabled = view === "songs";
+  const [focus, setFocusState] = useState<LibraryFocus>(() =>
+    typeof window === "undefined"
+      ? emptyFocus
+      : parseLibraryFocus(new URLSearchParams(window.location.search)),
+  );
+  const catalogFilter = toCatalogFilter(focus);
 
   const catalog = useInfiniteQuery({
-    queryKey: ["library", "catalog", view],
+    queryKey: ["library", "catalog", "songs"],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      getLibraryCatalog(pageParam, PAGE_SIZE, view as "albums" | "songs"),
+      getLibraryCatalog(pageParam, PAGE_SIZE, "songs"),
     getNextPageParam: (lastPage, pages) => {
       const next = pages.length * PAGE_SIZE;
-      const total =
-        view === "albums" ? lastPage.totalAlbums : lastPage.totalSongs;
-      return next < total ? next : undefined;
+      return next < lastPage.totalSongs ? next : undefined;
     },
     enabled: catalogEnabled,
+  });
+  // Albums: local files and streaming library albums in one catalog, with
+  // Roon-style focus filters applied on the server.
+  const albumCatalog = useInfiniteQuery({
+    queryKey: ["library", "catalog-albums", catalogFilter],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      getCatalogAlbums(catalogFilter, { offset: pageParam, limit: PAGE_SIZE }),
+    getNextPageParam: (lastPage, pages) => {
+      const next = pages.length * PAGE_SIZE;
+      return next < lastPage.total ? next : undefined;
+    },
+    placeholderData: keepPreviousData,
+    enabled: view === "albums",
   });
   const artists = useInfiniteQuery({
     queryKey: ["library", "catalog", "artists"],
@@ -106,34 +135,43 @@ export default function LibraryOverview() {
   });
 
   const catalogPages = catalog.data?.pages ?? [];
-  const localAlbums = uniqueById(catalogPages.flatMap((page) => page.albums));
   const allSongs = uniqueById(catalogPages.flatMap((page) => page.songs));
-  const albumSources = useLibrarySources("album");
-  const trackSources = useLibrarySources("track");
-  const sources = view === "songs" ? trackSources : albumSources;
+  const sources = useLibrarySources("track");
   const streamingFilter =
     sources.source === "tidal" || sources.source === "qobuz"
       ? sources.source
       : null;
-  const allAlbums: LibraryAlbumEntry[] =
-    sources.source === "local"
-      ? localAlbums.map(localAlbumEntry)
-      : streamingFilter
-        ? albumSources.albums
-        : mergeLibraryAlbums(
-            localAlbums.map(localAlbumEntry),
-            albumSources.albums,
-            !catalog.hasNextPage,
-          );
+  const albumPages = albumCatalog.data?.pages ?? [];
+  const allAlbums: LibraryAlbumEntry[] = albumPages
+    .flatMap((page) => page.albums)
+    .map(catalogAlbumEntry);
+  const albumFacets = albumPages[0]?.facets;
+  const albumTotal = albumPages[0]?.total;
   const allArtists = uniqueById(artists.data?.pages.flat() ?? []);
   const initialLoading =
     (catalogEnabled && catalog.isPending && !catalog.data) ||
+    (view === "albums" && albumCatalog.isPending && !albumCatalog.data) ||
     (view === "artists" && artists.isPending && !artists.data) ||
     (view === "playlists" && playlists.isPending);
   const activeError =
     (catalogEnabled ? catalog.error : null) ??
+    (view === "albums" ? albumCatalog.error : null) ??
     (view === "artists" ? artists.error : null) ??
     (view === "playlists" ? playlists.error : null);
+
+  const setFocus = (next: LibraryFocus) => {
+    setFocusState(next);
+    sources.setSource(next.source);
+    const params = writeLibraryFocus(
+      new URLSearchParams(window.location.search),
+      next,
+    );
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `/library${params.size ? `?${params}` : ""}`,
+    );
+  };
 
   const selectView = (nextView: LibraryView) => {
     setView(nextView);
@@ -213,35 +251,52 @@ export default function LibraryOverview() {
         </p>
       )}
 
-      {(view === "albums" || view === "songs") && sources.showFilters && (
+      {view === "songs" && sources.showFilters && (
         <SourceFilterChips
           available={sources.available}
-          onChange={(next) => {
-            albumSources.setSource(next);
-            trackSources.setSource(next);
-          }}
+          onChange={(next) => setFocus({ ...focus, source: next })}
           source={sources.source}
         />
       )}
 
+      {view === "albums" && (albumTotal !== undefined || albumFacets) && (
+        <LibraryFocusBar
+          available={sources.available}
+          facets={albumFacets}
+          focus={focus}
+          onChange={setFocus}
+          total={albumTotal}
+        />
+      )}
+
       {view === "albums" &&
-        (streamingFilter && !albumSources.loading && !allAlbums.length ? (
+        (!initialLoading &&
+        !allAlbums.length &&
+        streamingFilter &&
+        activeFocusCount(focus) === 1 ? (
           <StreamingLibraryEmpty kind="albums" provider={streamingFilter} />
+        ) : !initialLoading &&
+          !allAlbums.length &&
+          activeFocusCount(focus) > 0 ? (
+          <LibraryMessage
+            title="No albums match this focus"
+            body="Turn off a filter, or choose Clear focus to see every album again."
+          />
         ) : (
           <AlbumsView
             albums={allAlbums}
-            hasMore={streamingFilter ? false : catalog.hasNextPage}
-            loading={streamingFilter ? albumSources.loading : initialLoading}
-            loadingMore={catalog.isFetchingNextPage}
-            onLoadMore={() => void catalog.fetchNextPage()}
+            hasMore={albumCatalog.hasNextPage}
+            loading={initialLoading}
+            loadingMore={albumCatalog.isFetchingNextPage}
+            onLoadMore={() => void albumCatalog.fetchNextPage()}
           />
         ))}
       {view === "songs" &&
         (streamingFilter ? (
-          trackSources.loading ? (
+          sources.loading ? (
             <LibraryLoading compact />
-          ) : trackSources.tracks.length ? (
-            <StreamingTrackList tracks={trackSources.tracks} />
+          ) : sources.tracks.length ? (
+            <StreamingTrackList tracks={sources.tracks} />
           ) : (
             <StreamingLibraryEmpty kind="tracks" provider={streamingFilter} />
           )
@@ -257,7 +312,7 @@ export default function LibraryOverview() {
             {sources.source === "all" && !catalog.hasNextPage && (
               <StreamingTrackList
                 title="Streaming tracks in your library"
-                tracks={trackSources.tracks}
+                tracks={sources.tracks}
               />
             )}
           </>

@@ -9,6 +9,7 @@ import {
   serviceAction,
   formatTone,
   formatToneFromLabel,
+  genreTileStyle,
   mergeLibraryAlbums,
   parseAlbumSourceFilter,
   providerStatusLine,
@@ -134,6 +135,7 @@ const status = (
   plan: null,
   quality: "hi_res_max",
   quality_options: [],
+  browse_sections: [],
   last_library_sync: null,
   credentials: {
     configured: false,
@@ -225,4 +227,15 @@ test("the player shows what the stream actually delivered", () => {
   expect(deliverySummary(delivery({ delivered: null })).badge).toBe(
     "Format unknown",
   );
+});
+
+test("genre tiles use service artwork or a stable gradient", () => {
+  expect(genreTileStyle("Jazz", "https://resources.tidal.com/x.jpg")).toEqual({
+    backgroundImage: 'url("https://resources.tidal.com/x.jpg")',
+    backgroundSize: "cover",
+  });
+  const jazz = genreTileStyle("Jazz", null);
+  expect(jazz.backgroundImage).toStartWith("linear-gradient(");
+  expect(genreTileStyle("jazz", "http://insecure.test/x.jpg")).toEqual(jazz);
+  expect(genreTileStyle("Pop", null)).not.toEqual(jazz);
 });

@@ -1,0 +1,551 @@
+[
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/genre/list",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "parents": [],
+          "genres": {
+            "limit": 100,
+            "offset": 0,
+            "total": 4,
+            "items": [
+              {
+                "id": 112,
+                "color": "#5eabc1",
+                "name": "Pop/Rock",
+                "path": [112],
+                "slug": "pop-rock"
+              },
+              {
+                "id": 80,
+                "color": "#5eabc1",
+                "name": "Jazz",
+                "path": [80],
+                "slug": "jazz"
+              },
+              {
+                "id": 10,
+                "color": "#5eabc1",
+                "name": "Classical",
+                "path": [10],
+                "slug": "classique"
+              },
+              {
+                "id": 64,
+                "color": "#5eabc1",
+                "name": "Electronic",
+                "path": [64],
+                "slug": "electro"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["genre_id", "112"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0harborhr04",
+                "title": "Harbor Lights",
+                "version": null,
+                "artist": {
+                  "id": 51004,
+                  "name": "Mara Vell",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                },
+                "release_date_original": "2024-03-08",
+                "tracks_count": 4,
+                "duration": 1014,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Tideline"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Pop/Rock"
+                },
+                "copyright": "(P) 2024 Tideline",
+                "url": "https://www.qobuz.com/gb-en/album/q0harborhr04"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["genre_id", "80"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0brasslate02",
+                "title": "Brass for Late Trains",
+                "version": null,
+                "artist": {
+                  "id": 51002,
+                  "name": "Northbound Brass",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                },
+                "release_date_original": "2020-10-02",
+                "tracks_count": 4,
+                "duration": 1043,
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Platform 9 Music"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Jazz"
+                },
+                "copyright": "(P) 2020 Platform 9 Music",
+                "url": "https://www.qobuz.com/gb-en/album/q0brasslate02"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["genre_id", "10"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0glassorch01",
+                "title": "Glass Orchard",
+                "version": null,
+                "artist": {
+                  "id": 51001,
+                  "name": "Ilse Marten",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                },
+                "release_date_original": "2025-02-14",
+                "tracks_count": 3,
+                "duration": 823,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Nordlicht Records"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Classical"
+                },
+                "copyright": "(P) 2025 Nordlicht Records",
+                "url": "https://www.qobuz.com/gb-en/album/q0glassorch01"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["genre_id", "64"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0kiteskana03",
+                "title": "Kites Over Kanazawa",
+                "version": null,
+                "artist": {
+                  "id": 51003,
+                  "name": "Sora Ueda",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                },
+                "release_date_original": "2024-06-21",
+                "tracks_count": 3,
+                "duration": 893,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Hoshi Label"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Ambient"
+                },
+                "copyright": "(P) 2024 Hoshi Label",
+                "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["type", "editor-picks"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 2,
+            "items": [
+              {
+                "id": "q0glassorch01",
+                "title": "Glass Orchard",
+                "version": null,
+                "artist": {
+                  "id": 51001,
+                  "name": "Ilse Marten",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                },
+                "release_date_original": "2025-02-14",
+                "tracks_count": 3,
+                "duration": 823,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Nordlicht Records"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Classical"
+                },
+                "copyright": "(P) 2025 Nordlicht Records",
+                "url": "https://www.qobuz.com/gb-en/album/q0glassorch01"
+              },
+              {
+                "id": "q0kiteskana03",
+                "title": "Kites Over Kanazawa",
+                "version": null,
+                "artist": {
+                  "id": 51003,
+                  "name": "Sora Ueda",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                },
+                "release_date_original": "2024-06-21",
+                "tracks_count": 3,
+                "duration": 893,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Hoshi Label"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Ambient"
+                },
+                "copyright": "(P) 2024 Hoshi Label",
+                "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["type", "most-streamed"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 2,
+            "items": [
+              {
+                "id": "q0harborhr04",
+                "title": "Harbor Lights",
+                "version": null,
+                "artist": {
+                  "id": 51004,
+                  "name": "Mara Vell",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                },
+                "release_date_original": "2024-03-08",
+                "tracks_count": 4,
+                "duration": 1014,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Tideline"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Pop/Rock"
+                },
+                "copyright": "(P) 2024 Tideline",
+                "url": "https://www.qobuz.com/gb-en/album/q0harborhr04"
+              },
+              {
+                "id": "q0brasslate02",
+                "title": "Brass for Late Trains",
+                "version": null,
+                "artist": {
+                  "id": 51002,
+                  "name": "Northbound Brass",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                },
+                "release_date_original": "2020-10-02",
+                "tracks_count": 4,
+                "duration": 1043,
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Platform 9 Music"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Jazz"
+                },
+                "copyright": "(P) 2020 Platform 9 Music",
+                "url": "https://www.qobuz.com/gb-en/album/q0brasslate02"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "query": [["type", "press-awards"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0glassorch01",
+                "title": "Glass Orchard",
+                "version": null,
+                "artist": {
+                  "id": 51001,
+                  "name": "Ilse Marten",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                },
+                "release_date_original": "2025-02-14",
+                "tracks_count": 3,
+                "duration": 823,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Nordlicht Records"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Classical"
+                },
+                "copyright": "(P) 2025 Nordlicht Records",
+                "url": "https://www.qobuz.com/gb-en/album/q0glassorch01"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+]

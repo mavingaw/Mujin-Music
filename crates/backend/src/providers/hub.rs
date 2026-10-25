@@ -19,10 +19,10 @@ use super::tidal::{DeviceAuthorization, DevicePoll, TidalClient};
 use super::transport::{ReqwestTransport, Transport};
 use super::vault::{SealPurpose, TokenVault};
 use super::{
-    AudioFormat, BrowsePage, BrowseSection, ClientCredentials, ItemKind, ProviderAlbum,
-    ProviderArtist, ProviderContext, ProviderError, ProviderId, ProviderPlaylist, ProviderSession,
-    ProviderTrack, QualityOption, ResolvedStream, SearchResults, SourcePreference, StreamQuality,
-    StreamSource, StreamingProvider, sandbox, unix_now,
+    AudioFormat, BrowsePage, BrowseSection, ClientCredentials, EditorialSection, ItemKind,
+    ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderGenre, ProviderId,
+    ProviderPlaylist, ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults,
+    SourcePreference, StreamQuality, StreamSource, StreamingProvider, sandbox, unix_now,
 };
 use crate::persistence::connection::DbPool;
 
@@ -112,6 +112,8 @@ pub struct ProviderStatus {
     pub plan: Option<String>,
     pub quality: StreamQuality,
     pub quality_options: &'static [QualityOption],
+    /// The service's editorial album lists, in its own app's order.
+    pub browse_sections: &'static [EditorialSection],
     pub last_library_sync: Option<i64>,
     pub credentials: CredentialSummary,
     pub server_credentials_available: bool,
@@ -151,6 +153,14 @@ pub struct ProviderSearch {
     pub results: Option<SearchResults>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// A genre page: the genre and its albums.
+#[derive(Debug, Serialize)]
+pub struct GenreAlbums {
+    pub genre: ProviderGenre,
+    #[serde(flatten)]
+    pub page: BrowsePage,
 }
 
 /// A page of a listener's streaming library.
@@ -296,7 +306,21 @@ pub struct StreamingHub {
     media: Arc<dyn MediaTransport>,
     deliveries: Mutex<HashMap<(i32, String), DeliveredStream>>,
     segment_indexes: Mutex<HashMap<String, media::SegmentIndex>>,
+    /// Each service's genre list per listener (genres vary by country),
+    /// with when it was read.
+    genre_lists: Mutex<GenreLists>,
+    /// Genres learned from genre pages, by album id. TIDAL albums carry no
+    /// genre, so an album found under TIDAL's "Jazz" is filed as Jazz when
+    /// it is added to the library.
+    genre_hints: Mutex<HashMap<String, String>>,
 }
+
+/// Genre lists by listener and service, with when each was read.
+type GenreLists = HashMap<(i32, ProviderId), (i64, Vec<ProviderGenre>)>;
+
+/// How long a service's genre list is reused.
+const GENRE_LIST_SECONDS: i64 = 6 * 60 * 60;
+const MAX_GENRE_HINTS: usize = 20_000;
 
 fn env_value(name: &str) -> Option<String> {
     std::env::var(name)
@@ -437,6 +461,8 @@ impl StreamingHub {
             media: Arc::new(media::FixtureMedia::new()),
             deliveries: Mutex::new(HashMap::new()),
             segment_indexes: Mutex::new(HashMap::new()),
+            genre_lists: Mutex::new(HashMap::new()),
+            genre_hints: Mutex::new(HashMap::new()),
         }
     }
 
@@ -819,6 +845,7 @@ impl StreamingHub {
             plan: row.and_then(|row| row.plan.clone()),
             quality: row.map_or(client.default_quality(), AccountRow::quality),
             quality_options: client.quality_options(),
+            browse_sections: client.editorial_sections(),
             last_library_sync: row.and_then(|row| row.last_library_sync),
             credentials: self.summarize(user_id, provider, row),
             server_credentials_available: self.has_server_credentials(provider),
@@ -1237,6 +1264,107 @@ impl StreamingHub {
         Ok(page)
     }
 
+    /// The service's genres, read at most every few hours per listener.
+    pub async fn genres(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+    ) -> HubResult<Vec<ProviderGenre>> {
+        let key = (user_id, provider);
+        if let Some((at, genres)) = self
+            .genre_lists
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&key)
+            && unix_now() - at < GENRE_LIST_SECONDS
+        {
+            return Ok(genres.clone());
+        }
+        let (genres, _) = self
+            .call(user_id, provider, |client, context| {
+                Box::pin(async move { client.genres(context).await })
+            })
+            .await?;
+        self.genre_lists
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key, (unix_now(), genres.clone()));
+        Ok(genres)
+    }
+
+    /// One genre's albums. Albums the service files without a genre (all of
+    /// TIDAL's) are labelled with this one, and Parson remembers it for
+    /// when they are added to the library.
+    pub async fn genre_albums(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        genre_id: String,
+        section: BrowseSection,
+        offset: u32,
+        limit: u32,
+    ) -> HubResult<GenreAlbums> {
+        let genre = self
+            .genres(user_id, provider)
+            .await?
+            .into_iter()
+            .find(|genre| genre.id == genre_id)
+            .ok_or(HubError::Provider(ProviderError::NotFound))?;
+        let (mut page, _) = self
+            .call(user_id, provider, move |client, context| {
+                let genre_id = genre_id.clone();
+                Box::pin(async move {
+                    client
+                        .genre_albums(context, &genre_id, section, offset, limit)
+                        .await
+                })
+            })
+            .await?;
+        for album in &mut page.albums {
+            album.genre.get_or_insert_with(|| genre.name.clone());
+        }
+        self.remember_genres(&page.albums);
+        let (albums, tracks) = self.library_ids(user_id, provider).await?;
+        mark_albums(&mut page.albums, &albums, &tracks);
+        Ok(GenreAlbums { genre, page })
+    }
+
+    fn remember_genres(&self, albums: &[ProviderAlbum]) {
+        let mut hints = self
+            .genre_hints
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if hints.len() + albums.len() > MAX_GENRE_HINTS {
+            hints.clear();
+        }
+        for album in albums {
+            if let Some(genre) = &album.genre {
+                hints
+                    .entry(album.id.clone())
+                    .or_insert_with(|| genre.clone());
+            }
+        }
+    }
+
+    /// Files an album without a genre under the genre it was found in.
+    fn apply_genre_hint(&self, album: &mut ProviderAlbum) {
+        if album.genre.is_none() {
+            album.genre = self
+                .genre_hints
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&album.id)
+                .cloned();
+        }
+    }
+
+    /// Every streaming album in the listener's library, for the unified
+    /// album catalog.
+    pub async fn library_albums(&self, user_id: i32) -> HubResult<Vec<LibraryItemRow>> {
+        self.db(move |connection| store::all_albums(connection, user_id))
+            .await
+    }
+
     /// "Add to library": snapshots the album or track into the listener's
     /// library and favorites it on the service, like the service's own apps.
     pub async fn add_to_library(
@@ -1246,22 +1374,33 @@ impl StreamingHub {
         kind: ItemKind,
         raw_id: String,
     ) -> HubResult<LibraryChange> {
+        enum Fetched {
+            Album(Box<ProviderAlbum>),
+            Track(Box<ProviderTrack>),
+        }
         let lookup_id = raw_id.clone();
-        let (item, _) = self
+        let (fetched, _) = self
             .call(user_id, provider, move |client, context| {
                 let raw_id = lookup_id.clone();
                 Box::pin(async move {
                     Ok(match kind {
                         ItemKind::Album => {
-                            NewLibraryItem::album(&client.album(context, &raw_id).await?)
+                            Fetched::Album(Box::new(client.album(context, &raw_id).await?))
                         }
                         ItemKind::Track => {
-                            NewLibraryItem::track(&client.track(context, &raw_id).await?)
+                            Fetched::Track(Box::new(client.track(context, &raw_id).await?))
                         }
                     })
                 })
             })
             .await?;
+        let item = match fetched {
+            Fetched::Album(mut album) => {
+                self.apply_genre_hint(&mut album);
+                NewLibraryItem::album(&album)
+            }
+            Fetched::Track(track) => NewLibraryItem::track(&track),
+        };
         let favorite_id = raw_id.clone();
         let service_updated = match self
             .call(user_id, provider, move |client, context| {
@@ -1321,13 +1460,16 @@ impl StreamingHub {
             let mut offset = 0;
             let mut complete = false;
             while offset < MAX_SYNC_ITEMS {
-                let (page, _) = self
+                let (mut page, _) = self
                     .call(user_id, provider, move |client, context| {
                         Box::pin(
                             async move { client.browse(context, section, offset, SYNC_PAGE).await },
                         )
                     })
                     .await?;
+                for album in &mut page.albums {
+                    self.apply_genre_hint(album);
+                }
                 let received = page.albums.len() + page.tracks.len();
                 items.extend(page.albums.iter().map(NewLibraryItem::album));
                 items.extend(page.tracks.iter().map(NewLibraryItem::track));

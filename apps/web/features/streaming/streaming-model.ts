@@ -254,6 +254,30 @@ export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
   };
 }
 
+/**
+ * Background for a genre tile: the service's artwork when it has one,
+ * otherwise a gradient whose hue is fixed by the genre name.
+ */
+export function genreTileStyle(
+  name: string,
+  imageUrl: string | null | undefined,
+): { backgroundImage: string; backgroundSize?: string } {
+  if (imageUrl && /^(https:|data:image\/)/.test(imageUrl)) {
+    return {
+      backgroundImage: `url("${imageUrl.replace(/["\\\n]/g, "")}")`,
+      backgroundSize: "cover",
+    };
+  }
+  let hash = 0;
+  for (const character of name.toLowerCase()) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  const hue = hash % 360;
+  return {
+    backgroundImage: `linear-gradient(135deg, hsl(${hue} 55% 38%), hsl(${(hue + 50) % 360} 60% 14%))`,
+  };
+}
+
 export function totalDurationLabel(seconds: number) {
   const minutes = Math.max(1, Math.round(seconds / 60));
   if (minutes < 60) return `${minutes} min`;

@@ -3,6 +3,7 @@
 import {
   browseStreaming,
   type StreamingBrowseSection,
+  type StreamingBrowseSectionInfo,
   type StreamingProviderId,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
@@ -16,20 +17,49 @@ import AlbumCard from "@/features/library/album-card";
 import { ProviderMark } from "./source-badge";
 import { SandboxNotice } from "./services-settings";
 import { StreamingTrackList } from "./library-sources";
+import { StreamingGenresSection } from "./streaming-genres";
 import { StreamingPlaylistsSection } from "./streaming-playlists";
 import { useStreamingProviders } from "./use-streaming";
 
-type Section = StreamingBrowseSection | "playlists";
+type Section = StreamingBrowseSection | "genres" | "playlists";
 
-const sections: { id: Section; label: string }[] = [
-  { id: "new_releases", label: "New releases" },
-  { id: "favorite_albums", label: "Favorite albums" },
-  { id: "favorite_tracks", label: "Favorite tracks" },
-  { id: "playlists", label: "Playlists" },
+const fallbackEditorial: StreamingBrowseSectionInfo[] = [
+  { id: "new_releases", label: "New releases", by_genre: false },
+];
+
+/**
+ * The service's own editorial lists (TIDAL: New, Recommended, Top; Qobuz:
+ * New releases, Editor's picks, Most streamed, Press awards), then Genres,
+ * the listener's favorites and playlists.
+ */
+export function browseSections(
+  editorial: StreamingBrowseSectionInfo[] | undefined,
+): { id: Section; label: string }[] {
+  return [
+    ...(editorial?.length ? editorial : fallbackEditorial).map((section) => ({
+      id: section.id as Section,
+      label: section.label,
+    })),
+    { id: "genres", label: "Genres" },
+    { id: "favorite_albums", label: "Favorite albums" },
+    { id: "favorite_tracks", label: "Favorite tracks" },
+    { id: "playlists", label: "Playlists" },
+  ];
+}
+
+const knownSections: Section[] = [
+  "new_releases",
+  "popular",
+  "editors_picks",
+  "press_awards",
+  "genres",
+  "favorite_albums",
+  "favorite_tracks",
+  "playlists",
 ];
 
 const isSection = (value: string | null): value is Section =>
-  sections.some((section) => section.id === value);
+  knownSections.includes(value as Section);
 
 function BrowseSectionView({
   provider,
@@ -101,11 +131,46 @@ export default function StreamingBrowse() {
     requested === "tidal" || requested === "qobuz" ? requested : null,
   );
   const requestedSection = useSearchParams().get("section");
-  const [section, setSection] = useState<Section>(
+  const [section, setSectionState] = useState<Section>(
     isSection(requestedSection) ? requestedSection : "new_releases",
+  );
+  const [genreId, setGenreIdState] = useState<string | null>(
+    useSearchParams().get("genre"),
   );
   const active =
     connected.find((provider) => provider.id === chosen) ?? connected[0];
+  const sections = browseSections(active?.browse_sections);
+  // A section this service does not publish (Press awards on TIDAL) falls
+  // back to its first list.
+  const shown = sections.some((item) => item.id === section)
+    ? section
+    : (sections[0]?.id ?? "new_releases");
+
+  const remember = (next: {
+    provider?: StreamingProviderId;
+    section: Section;
+    genre: string | null;
+  }) => {
+    const params = new URLSearchParams(window.location.search);
+    if (next.provider) params.set("provider", next.provider);
+    params.set("section", next.section);
+    if (next.genre) params.set("genre", next.genre);
+    else params.delete("genre");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `/streaming?${params}`,
+    );
+  };
+  const setSection = (next: Section) => {
+    setSectionState(next);
+    setGenreIdState(null);
+    remember({ section: next, genre: null });
+  };
+  const setGenreId = (next: string | null) => {
+    setGenreIdState(next);
+    remember({ section: "genres", genre: next });
+  };
 
   return (
     <section className="mx-auto w-full max-w-266 space-y-7 px-5 py-8 pb-36 sm:px-7">
@@ -123,7 +188,15 @@ export default function StreamingBrowse() {
                     : "border-white/12 text-zinc-300 hover:text-white",
                 )}
                 key={provider.id}
-                onClick={() => setChosen(provider.id)}
+                onClick={() => {
+                  setChosen(provider.id);
+                  setGenreIdState(null);
+                  remember({
+                    provider: provider.id,
+                    section: shown,
+                    genre: null,
+                  });
+                }}
                 role="tab"
                 type="button"
               >
@@ -159,14 +232,14 @@ export default function StreamingBrowse() {
         <>
           <nav
             aria-label={`${active.name} sections`}
-            className="flex gap-1 border-b border-white/8"
+            className="flex gap-1 overflow-x-auto border-b border-white/8 scrollbar-none [&::-webkit-scrollbar]:hidden"
           >
             {sections.map((item) => (
               <button
-                aria-current={section === item.id ? "page" : undefined}
+                aria-current={shown === item.id ? "page" : undefined}
                 className={cn(
-                  "relative h-11 px-4 text-sm font-medium",
-                  section === item.id
+                  "relative h-11 shrink-0 px-4 text-sm font-medium",
+                  shown === item.id
                     ? "text-white"
                     : "text-zinc-500 hover:text-zinc-200",
                 )}
@@ -175,22 +248,30 @@ export default function StreamingBrowse() {
                 type="button"
               >
                 {item.label}
-                {section === item.id && (
+                {shown === item.id && (
                   <span className="absolute inset-x-3 bottom-0 h-0.5 bg-white" />
                 )}
               </button>
             ))}
           </nav>
-          {section === "playlists" ? (
+          {shown === "playlists" ? (
             <StreamingPlaylistsSection
               key={`${active.id}-playlists`}
               provider={active.id}
             />
+          ) : shown === "genres" ? (
+            <StreamingGenresSection
+              genreId={genreId}
+              key={`${active.id}-genres`}
+              onGenreChange={setGenreId}
+              provider={active.id}
+              sections={active.browse_sections ?? []}
+            />
           ) : (
             <BrowseSectionView
-              key={`${active.id}-${section}`}
+              key={`${active.id}-${shown}`}
               provider={active.id}
-              section={section}
+              section={shown}
             />
           )}
         </>

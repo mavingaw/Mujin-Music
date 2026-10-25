@@ -14,10 +14,10 @@ use super::md5::hex_digest;
 use super::transport::{ApiRequest, Transport};
 use super::{
     AlbumRef, ArtistRef, ArtistSummary, AudioFormat, BrowsePage, BrowseSection, ClientCredentials,
-    ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist, ProviderContext,
-    ProviderError, ProviderId, ProviderPlaylist, ProviderResult, ProviderSession, ProviderTrack,
-    QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource, StreamingProvider,
-    decode_json, entity_id, status_error, unix_now,
+    EditorialSection, ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist,
+    ProviderContext, ProviderError, ProviderGenre, ProviderId, ProviderPlaylist, ProviderResult,
+    ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults, StreamQuality,
+    StreamSource, StreamingProvider, decode_json, entity_id, status_error, unix_now,
 };
 
 pub const API_BASE: &str = "https://www.qobuz.com/api.json/0.2";
@@ -45,9 +45,46 @@ static QUALITY_OPTIONS: [QualityOption; 4] = [
     },
 ];
 
+static EDITORIAL_SECTIONS: [EditorialSection; 4] = [
+    EditorialSection {
+        id: BrowseSection::NewReleases,
+        label: "New releases",
+        by_genre: true,
+    },
+    EditorialSection {
+        id: BrowseSection::EditorsPicks,
+        label: "Editor's picks",
+        by_genre: true,
+    },
+    EditorialSection {
+        id: BrowseSection::Popular,
+        label: "Most streamed",
+        by_genre: true,
+    },
+    EditorialSection {
+        id: BrowseSection::PressAwards,
+        label: "Press awards",
+        by_genre: true,
+    },
+];
+
 pub struct QobuzClient {
     transport: Arc<dyn Transport>,
     artwork: ArtworkMode,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QGenre {
+    #[serde(deserialize_with = "de_id")]
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QGenreList {
+    genres: QPage<QGenre>,
 }
 
 fn de_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -254,6 +291,16 @@ fn catalog_format(bit_depth: Option<u8>, sampling_rate: Option<f64>) -> AudioFor
         bit_depth.or(Some(16)),
         hz(sampling_rate).or(Some(44_100)),
     )
+}
+
+/// The `type` of `album/getFeatured` for each editorial list.
+fn featured_type(section: BrowseSection) -> &'static str {
+    match section {
+        BrowseSection::Popular => "most-streamed",
+        BrowseSection::EditorsPicks => "editor-picks",
+        BrowseSection::PressAwards => "press-awards",
+        _ => "new-releases-full",
+    }
 }
 
 /// Qobuz format ids: 5 = MP3 320, 6 = FLAC 16/44.1, 7 = FLAC 24/<=96,
@@ -521,6 +568,38 @@ impl QobuzClient {
         }
     }
 
+    /// `album/getFeatured`: Qobuz's editorial album lists, optionally
+    /// narrowed to one genre.
+    async fn featured(
+        &self,
+        context: &ProviderContext,
+        section: BrowseSection,
+        genre_id: Option<&str>,
+        offset: u32,
+        limit: u32,
+    ) -> ProviderResult<BrowsePage> {
+        let mut query = vec![
+            ("type", featured_type(section).to_string()),
+            ("offset", offset.to_string()),
+            ("limit", limit.to_string()),
+        ];
+        if let Some(genre_id) = genre_id {
+            query.push(("genre_id", genre_id.to_string()));
+        }
+        let body = self.get(context, "album/getFeatured", &query).await?;
+        let page: QFavorites = decode_json(&body)?;
+        Ok(BrowsePage {
+            total: page.albums.total,
+            albums: page
+                .albums
+                .items
+                .into_iter()
+                .map(|album| self.normalize_album(album))
+                .collect(),
+            tracks: Vec::new(),
+        })
+    }
+
     async fn favorites(
         &self,
         context: &ProviderContext,
@@ -681,29 +760,11 @@ impl StreamingProvider for QobuzClient {
     ) -> BoxFuture<'a, ProviderResult<BrowsePage>> {
         Box::pin(async move {
             match section {
-                BrowseSection::NewReleases => {
-                    let body = self
-                        .get(
-                            context,
-                            "album/getFeatured",
-                            &[
-                                ("type", "new-releases-full".to_string()),
-                                ("offset", offset.to_string()),
-                                ("limit", limit.to_string()),
-                            ],
-                        )
-                        .await?;
-                    let page: QFavorites = decode_json(&body)?;
-                    Ok(BrowsePage {
-                        total: page.albums.total,
-                        albums: page
-                            .albums
-                            .items
-                            .into_iter()
-                            .map(|album| self.normalize_album(album))
-                            .collect(),
-                        tracks: Vec::new(),
-                    })
+                BrowseSection::NewReleases
+                | BrowseSection::Popular
+                | BrowseSection::EditorsPicks
+                | BrowseSection::PressAwards => {
+                    self.featured(context, section, None, offset, limit).await
                 }
                 BrowseSection::FavoriteAlbums => {
                     let page = self.favorites(context, "albums", offset, limit).await?;
@@ -732,6 +793,53 @@ impl StreamingProvider for QobuzClient {
                     })
                 }
             }
+        })
+    }
+
+    fn editorial_sections(&self) -> &'static [EditorialSection] {
+        &EDITORIAL_SECTIONS
+    }
+
+    fn genres<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+    ) -> BoxFuture<'a, ProviderResult<Vec<ProviderGenre>>> {
+        Box::pin(async move {
+            let body = self
+                .get(context, "genre/list", &[("limit", "100".to_string())])
+                .await?;
+            let list: QGenreList = decode_json(&body)?;
+            Ok(list
+                .genres
+                .items
+                .into_iter()
+                .filter(|genre| super::valid_raw_id(&genre.id) && !genre.name.trim().is_empty())
+                .map(|genre| ProviderGenre {
+                    id: genre.id,
+                    provider: ProviderId::Qobuz,
+                    name: genre.name.trim().to_string(),
+                    image_url: None,
+                })
+                .collect())
+        })
+    }
+
+    fn genre_albums<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        genre_id: &'a str,
+        section: BrowseSection,
+        offset: u32,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<BrowsePage>> {
+        Box::pin(async move {
+            let section = if section.is_editorial() {
+                section
+            } else {
+                BrowseSection::NewReleases
+            };
+            self.featured(context, section, Some(genre_id), offset, limit)
+                .await
         })
     }
 
@@ -912,9 +1020,11 @@ mod tests {
     };
 
     const FIXTURES: &str = include_str!("fixtures/qobuz.json");
+    const BROWSE_FIXTURES: &str = include_str!("fixtures/qobuz_browse.json");
 
     fn client() -> (QobuzClient, Arc<FixtureTransport>) {
-        let transport = Arc::new(FixtureTransport::from_json(&[FIXTURES]).expect("fixtures"));
+        let transport =
+            Arc::new(FixtureTransport::from_json(&[BROWSE_FIXTURES, FIXTURES]).expect("fixtures"));
         (
             QobuzClient::new(transport.clone(), ArtworkMode::Live),
             transport,
@@ -1071,6 +1181,69 @@ mod tests {
                 .await,
             Err(ProviderError::InvalidCredentials(_))
         ));
+    }
+
+    #[actix_web::test]
+    async fn genres_and_editorial_lists_use_album_get_featured() {
+        let (client, transport) = client();
+        let genres = client.genres(&context()).await.expect("genres");
+        assert_eq!(
+            genres
+                .iter()
+                .map(|genre| (genre.id.as_str(), genre.name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("112", "Pop/Rock"),
+                ("80", "Jazz"),
+                ("10", "Classical"),
+                ("64", "Electronic")
+            ]
+        );
+
+        let jazz = client
+            .genre_albums(&context(), "80", BrowseSection::EditorsPicks, 0, 24)
+            .await
+            .expect("jazz");
+        assert_eq!(jazz.albums.len(), 1);
+        assert_eq!(jazz.albums[0].title, "Brass for Late Trains");
+        assert_eq!(jazz.albums[0].genre.as_deref(), Some("Jazz"));
+        let request = transport.requests().pop().expect("request");
+        assert!(request.url.ends_with("/album/getFeatured"));
+        assert_eq!(request.query_value("genre_id"), Some("80"));
+        assert_eq!(request.query_value("type"), Some("editor-picks"));
+        assert_eq!(request.query_value("limit"), Some("24"));
+
+        // A favorites section is not an editorial list: genre pages fall
+        // back to new releases.
+        client
+            .genre_albums(&context(), "80", BrowseSection::FavoriteAlbums, 0, 24)
+            .await
+            .expect("fallback");
+        assert_eq!(
+            transport
+                .requests()
+                .pop()
+                .expect("request")
+                .query_value("type"),
+            Some("new-releases-full")
+        );
+
+        for (section, kind, first) in [
+            (BrowseSection::EditorsPicks, "editor-picks", "Glass Orchard"),
+            (BrowseSection::Popular, "most-streamed", "Harbor Lights"),
+            (BrowseSection::PressAwards, "press-awards", "Glass Orchard"),
+        ] {
+            let page = client
+                .browse(&context(), section, 0, 50)
+                .await
+                .expect("editorial");
+            assert_eq!(page.albums[0].title, first, "{kind}");
+            let request = transport.requests().pop().expect("request");
+            assert_eq!(request.query_value("type"), Some(kind));
+            assert_eq!(request.query_value("genre_id"), None);
+        }
+        assert_eq!(client.editorial_sections().len(), 4);
+        assert!(client.editorial_sections().iter().all(|s| s.by_genre));
     }
 
     #[actix_web::test]

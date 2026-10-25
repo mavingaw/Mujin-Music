@@ -21,6 +21,9 @@ import {
   saveStreamingServerCredentials,
   type StreamingDelivery,
   getStreamingAlbum,
+  getCatalogAlbums,
+  getStreamingGenreAlbums,
+  getStreamingGenres,
   getStreamingLibrary,
   isStreamingId,
   parseStreamingId,
@@ -159,6 +162,50 @@ test("streaming resources call provider-scoped endpoints", async () => {
     "/providers/qobuz/library/album/q0harborhr04",
   );
   await expect(getStreamingAlbum("local-album")).rejects.toThrow();
+});
+
+test("genres, genre pages and the unified album catalog", async () => {
+  const calls: unknown[][] = [];
+  spyOn(api, "get").mockImplementation(async (...args: unknown[]) => {
+    calls.push(args);
+    return {
+      data: { genres: [{ id: "Jazz", provider: "tidal", name: "Jazz" }] },
+      status: 200,
+      headers: new Headers(),
+    } as never;
+  });
+
+  expect(await getStreamingGenres("tidal")).toEqual([
+    { id: "Jazz", provider: "tidal", name: "Jazz" },
+  ]);
+  await getStreamingGenreAlbums("qobuz", "112", {
+    section: "editors_picks",
+    limit: 24,
+  });
+  await getCatalogAlbums(
+    { source: "qobuz", genre: "Pop/Rock", decade: 1990, q: "" },
+    { offset: 100, limit: 100 },
+  );
+  await getCatalogAlbums();
+
+  expect(calls[0][0]).toBe("/providers/tidal/genres");
+  expect(calls[1]).toEqual([
+    "/providers/qobuz/genres/112/albums",
+    { params: { section: "editors_picks", limit: 24 } },
+  ]);
+  expect(calls[2]).toEqual([
+    "/providers/catalog/albums",
+    {
+      params: {
+        source: "qobuz",
+        genre: "Pop/Rock",
+        decade: 1990,
+        offset: 100,
+        limit: 100,
+      },
+    },
+  ]);
+  expect(calls[3]).toEqual(["/providers/catalog/albums", { params: {} }]);
 });
 
 test("server credentials and connection checks use their own routes", async () => {
