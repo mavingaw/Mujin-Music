@@ -1,5 +1,8 @@
 import {
+  defaultDspSettings,
+  normalizeDspSettings,
   decibelsToGain,
+  type DspSettings,
   volumeLevelingGain,
   type ClientSignalLeg,
   type Loudness,
@@ -10,6 +13,22 @@ import {
 } from "@parson/music-sdk";
 
 export const VOLUME_LEVELING_STORAGE_KEY = "parson.volume-leveling";
+export const DSP_STORAGE_KEY = "parson.dsp";
+
+/** Stored DSP settings, or the bypassed defaults. */
+export function parseStoredDsp(value: string | null | undefined): DspSettings {
+  if (!value) return defaultDspSettings();
+  try {
+    return normalizeDspSettings(JSON.parse(value));
+  } catch {
+    return defaultDspSettings();
+  }
+}
+
+/** The effects graph that runs the DSP chain exists on iOS and web only. */
+export function dspAvailable(platform: SignalPlatform) {
+  return platform !== "android";
+}
 
 export const volumeLevelingOptions: readonly {
   mode: VolumeLevelingMode;
@@ -81,6 +100,8 @@ export type MobileSignalState = {
   levelingUnavailable: boolean;
   casting: boolean;
   castDeviceName: string | null;
+  /** DSP chain in the effects graph; `null` where there is no graph. */
+  dsp: DspSettings | null;
 };
 
 /** This phone's leg of the signal path. */
@@ -105,6 +126,9 @@ export function mobileClientLeg(
     volume: null,
     leveling: state.leveling,
     levelingUnavailable: state.levelingUnavailable,
+    dsp: dspAvailable(state.platform) ? state.dsp : null,
+    // react-native-audio-api has no channel splitter for crossfeed.
+    crossfeedUnsupported: state.platform !== "web",
     output: state.casting
       ? { kind: "cast", name: state.castDeviceName }
       : { kind: "system" },

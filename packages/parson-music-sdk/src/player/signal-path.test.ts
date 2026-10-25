@@ -73,18 +73,52 @@ const plainBrowser: ClientSignalLeg = {
 const ids = (stages: { id: string }[]) => stages.map((stage) => stage.id);
 
 describe("signal path classification", () => {
-  test("an untouched lossless stream is only limited by the OS mixer", () => {
-    const path = buildSignalPath(originalServer(), plainBrowser);
+  test("an untouched lossless stream at the device rate is lossless", () => {
+    const path = buildSignalPath(originalServer(), {
+      ...plainBrowser,
+      deviceSampleRate: 96_000,
+      output: { kind: "system", name: "USB DAC", chosen: true },
+    });
     expect(ids(path.stages)).toEqual([
       "source",
       "server",
       "client-decode",
       "client-output",
     ]);
-    expect(path.quality).toBe("high_quality");
+    expect(path.quality).toBe("lossless");
     expect(path.bitPerfectToOutput).toBeTrue();
     expect(path.highRes).toBeTrue();
+    expect(path.stages[3]).toEqual(
+      expect.objectContaining({
+        title: "USB DAC",
+        detail: "Selected output, shared mode, 96kHz",
+        quality: "lossless",
+      }),
+    );
+    expect(path.description).toBe(
+      "A high-resolution lossless stream reaches USB DAC without being modified.",
+    );
     expect(signalPathSummary(path)).toBe("FLAC 96kHz 24bit 2ch");
+  });
+
+  test("a device at another rate adds the browser's resampling", () => {
+    const path = buildSignalPath(originalServer(), {
+      ...plainBrowser,
+      deviceSampleRate: 48_000,
+    });
+    expect(ids(path.stages)).toEqual([
+      "source",
+      "server",
+      "client-decode",
+      "client-device-resample",
+      "client-output",
+    ]);
+    expect(path.stages[3]!.detail).toBe("96kHz to 48kHz");
+    expect(path.stages[4]!.title).toBe("System default output");
+    expect(path.quality).toBe("high_quality");
+    expect(path.description).toBe(
+      "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 96kHz to 48kHz.",
+    );
   });
 
   test("Cast receivers keep the stream lossless end to end", () => {
@@ -119,16 +153,41 @@ describe("signal path classification", () => {
       "source",
       "server",
       "client-decode",
-      "client-resample",
+      "client-depth-in",
       "client-speed",
+      "client-resample",
       "client-reverb",
+      "client-depth-out",
       "client-output",
     ]);
-    expect(presets.stages[3]!.detail).toBe("96kHz to 48kHz");
+    expect(presets.stages[3]!.detail).toBe("24bit to 32bit float");
     expect(presets.stages[4]!.detail).toBe("0.78x, pitch follows speed");
-    expect(presets.stages[5]!.detail).toBe("Convolution, 1.8s room, 18% wet");
+    expect(presets.stages[5]!.detail).toBe("96kHz to 48kHz");
+    expect(presets.stages[6]!.detail).toBe("Convolution, 1.8s room, 18% wet");
+    expect(presets.stages[7]!.detail).toBe("32bit float to output format");
+    // The unrequested resample decides the light, and the summary says
+    // both what was and was not asked for.
     expect(presets.quality).toBe("high_quality");
+    expect(presets.description).toContain("you did not ask for");
+    expect(presets.description).toContain(
+      "It also applies processing you asked for",
+    );
     expect(presets.bitPerfectToOutput).toBeFalse();
+
+    const matched = buildSignalPath(originalServer(), {
+      ...plainBrowser,
+      engine: "web-audio",
+      contextSampleRate: 96_000,
+      playbackRate: 0.78,
+      preservePitch: false,
+      reverbWet: 0.18,
+      presetLabel: "Slow",
+    });
+    expect(matched.quality).toBe("enhanced");
+    expect(matched.description).toStartWith(
+      "Parson is processing the audio because you asked it to: Slow: speed",
+    );
+    expect(matched.description).not.toContain("did not ask");
 
     const quiet = buildSignalPath(originalServer(), {
       ...plainBrowser,
@@ -152,6 +211,47 @@ describe("signal path classification", () => {
     };
     const path = buildSignalPath(originalServer(mp3), plainBrowser);
     expect(path.quality).toBe("low_quality");
+    expect(path.stages.every((stage) => stage.quality === "low_quality")).toBe(
+      true,
+    );
+    expect(path.description).toBe(
+      "A lossy format is involved: the source is a lossy file (MP3 44.1kHz 2ch 320kbps).",
+    );
+  });
+
+  test("stages after a lossy transcode are low quality, not lossless", () => {
+    const server = originalServer();
+    server.mode = "transcode";
+    server.stages.splice(1, 0, {
+      id: "encode",
+      kind: "encode",
+      title: "Transcode",
+      detail: "MP3 320kbps (LAME)",
+      quality: "low_quality",
+      explanation: "",
+    });
+    server.delivered = {
+      ...hiRes,
+      codec: "mp3",
+      lossless: false,
+      bit_depth: null,
+      summary: "MP3 48kHz 2ch 320kbps",
+    };
+    const path = buildSignalPath(server, {
+      ...plainBrowser,
+      leveling: volumeLevelingGain({ track_gain_db: -4 }, "track"),
+    });
+    expect(path.stages.map((stage) => [stage.id, stage.quality])).toEqual([
+      ["source", "lossless"],
+      ["encode", "low_quality"],
+      ["server", "low_quality"],
+      ["client-decode", "low_quality"],
+      ["client-leveling", "low_quality"],
+      ["client-output", "low_quality"],
+    ]);
+    expect(path.description).toBe(
+      "A lossy format is involved: transcode to MP3 320kbps (LAME). Parson also applies processing you asked for: Volume leveling (−4.0 dB, track ReplayGain).",
+    );
   });
 
   test("offline copies and unknown servers fall back to the song's audio", () => {
@@ -359,7 +459,12 @@ describe("volume leveling", () => {
     expect(
       untagged.stages.find((item) => item.id === "client-leveling")?.quality,
     ).toBeNull();
-    expect(untagged.quality).toBe("high_quality");
+    // Leveling that cannot run leaves the samples alone.
+    expect(untagged.quality).toBe("lossless");
+    expect(leveled.quality).toBe("enhanced");
+    expect(leveled.description).toStartWith(
+      "Parson is processing the audio because you asked it to: Volume leveling",
+    );
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  type DspChain,
   defaultProcessedAudioPreset,
   fillReverbImpulseChannel,
   getPlayerAudioPreset,
@@ -12,6 +13,10 @@ export type AudioPresetId = PlayerAudioPresetId;
 export type AudioPreset = PlayerAudioPreset;
 
 export type AudioGraph = {
+  /** Headroom, EQ and crossfeed between the source and the preset mix. */
+  chain: DspChain;
+  /** Rate asked of the context, `null` for the device's own. */
+  requestedRate: number | null;
   convolver: ConvolverNode;
   context: AudioContext;
   dryGain: GainNode;

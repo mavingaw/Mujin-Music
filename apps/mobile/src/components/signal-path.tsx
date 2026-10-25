@@ -1,8 +1,12 @@
 import {
+  activeEqBands,
+  dspMayClip,
+  eqPresets,
+  recommendedHeadroomDb,
   signalPathSummary,
   signalQualityColors,
-  signalQualityDescriptions,
   signalQualityLabels,
+  type DspSettings,
   type SignalPath,
   type SignalQuality,
   type SignalStage,
@@ -21,7 +25,14 @@ import {
   Volume2,
 } from "lucide-react-native";
 import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 
 import { palette } from "@/constants/colors";
@@ -126,14 +137,19 @@ function HiRes() {
 /** Drawer body: header, stages, leveling and legend. */
 export function SignalPathContent({
   casting,
+  dsp,
   levelingMode,
   loading,
+  onDspChange,
   onLevelingModeChange,
   path,
 }: {
   casting: boolean;
+  /** `null` where the device has no effects graph to run DSP in. */
+  dsp?: DspSettings | null;
   levelingMode: VolumeLevelingMode;
   loading: boolean;
+  onDspChange?: (settings: DspSettings) => void;
   onLevelingModeChange: (mode: VolumeLevelingMode) => void;
   path: SignalPath | null;
 }) {
@@ -190,12 +206,11 @@ export function SignalPathContent({
             source is described from the library.
           </Text>
         ) : null}
-        {path ? (
-          <Text style={styles.note}>
-            {signalQualityDescriptions[path.quality]}
-          </Text>
-        ) : null}
+        {path ? <Text style={styles.note}>{path.description}</Text> : null}
       </ScrollView>
+      {!casting && dsp && onDspChange ? (
+        <DspControls onChange={onDspChange} settings={dsp} />
+      ) : null}
       {!casting ? (
         <View style={styles.leveling}>
           <Text style={styles.levelingLabel}>Volume leveling</Text>
@@ -234,6 +249,112 @@ export function SignalPathContent({
             </Text>
           </View>
         ))}
+      </View>
+    </View>
+  );
+}
+
+const MOBILE_EQ_PRESETS = eqPresets.filter((preset) =>
+  ["flat", "bass", "treble", "vocal", "loudness"].includes(preset.id),
+);
+
+/** The DSP engine on the phone: headroom and parametric EQ presets. */
+function DspControls({
+  onChange,
+  settings,
+}: {
+  onChange: (settings: DspSettings) => void;
+  settings: DspSettings;
+}) {
+  const clipping = dspMayClip(settings);
+  const needed = recommendedHeadroomDb(settings);
+  const bands = activeEqBands({
+    ...settings,
+    enabled: true,
+    eq: { ...settings.eq, enabled: true },
+  }).length;
+  return (
+    <View style={styles.dsp}>
+      <View style={styles.dspRow}>
+        <Text style={styles.levelingLabel}>DSP engine</Text>
+        <Switch
+          accessibilityLabel="DSP engine"
+          onValueChange={(enabled) => onChange({ ...settings, enabled })}
+          trackColor={{ true: signalQualityColors.enhanced }}
+          value={settings.enabled}
+        />
+      </View>
+      <View style={[styles.dspRow, !settings.enabled && styles.dspOff]}>
+        <Text style={styles.dspLabel}>
+          Headroom {settings.headroom.gainDb.toFixed(1)} dB
+          {clipping ? `  ·  EQ needs ${needed.toFixed(1)} dB` : ""}
+        </Text>
+        <Switch
+          accessibilityLabel="Headroom adjustment"
+          disabled={!settings.enabled}
+          onValueChange={(enabled) =>
+            onChange({
+              ...settings,
+              headroom: {
+                enabled,
+                gainDb: enabled && clipping ? needed : settings.headroom.gainDb,
+              },
+            })
+          }
+          trackColor={{ true: signalQualityColors.enhanced }}
+          value={settings.headroom.enabled}
+        />
+      </View>
+      <View style={[styles.dspRow, !settings.enabled && styles.dspOff]}>
+        <Text style={styles.dspLabel}>
+          Parametric EQ, {bands} {bands === 1 ? "band" : "bands"}
+        </Text>
+        <Switch
+          accessibilityLabel="Parametric EQ"
+          disabled={!settings.enabled}
+          onValueChange={(enabled) =>
+            onChange({ ...settings, eq: { ...settings.eq, enabled } })
+          }
+          trackColor={{ true: signalQualityColors.enhanced }}
+          value={settings.eq.enabled}
+        />
+      </View>
+      <View
+        accessibilityRole="radiogroup"
+        style={[
+          styles.presetRow,
+          (!settings.enabled || !settings.eq.enabled) && styles.dspOff,
+        ]}
+      >
+        {MOBILE_EQ_PRESETS.map((preset) => {
+          const active = settings.eq.preset === preset.id;
+          return (
+            <Pressable
+              accessibilityLabel={`EQ ${preset.label}`}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: active }}
+              disabled={!settings.enabled || !settings.eq.enabled}
+              key={preset.id}
+              onPress={() =>
+                onChange({
+                  ...settings,
+                  eq: {
+                    ...settings.eq,
+                    preset: preset.id,
+                    bands: preset.bands.map((band) => ({ ...band })),
+                  },
+                })
+              }
+              style={[styles.segment, active && styles.segmentActive]}
+            >
+              <Text
+                style={[styles.segmentText, active && styles.segmentTextActive]}
+              >
+                {preset.label}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
@@ -385,6 +506,26 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: "white" },
   segmentText: { color: palette.secondary, fontSize: 12, fontWeight: "600" },
   segmentTextActive: { color: "black" },
+  dsp: {
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: palette.border,
+  },
+  dspRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  dspLabel: { color: palette.secondary, fontSize: 13, flexShrink: 1 },
+  dspOff: { opacity: 0.45 },
+  presetRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+  },
   legend: {
     flexDirection: "row",
     flexWrap: "wrap",

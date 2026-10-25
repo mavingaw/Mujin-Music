@@ -43,9 +43,15 @@ export function webClientLeg(input: WebSignalInput): ClientSignalLeg {
     muted: input.muted,
     leveling: input.signal.leveling,
     levelingUnavailable: input.signal.levelingUnavailable,
+    dsp: input.signal.dsp,
+    deviceSampleRate: input.signal.deviceSampleRate,
     output: input.casting
       ? { kind: "cast", name: input.castDeviceName }
-      : { kind: "system" },
+      : {
+          kind: "system",
+          name: input.signal.outputName,
+          chosen: input.signal.outputChosen,
+        },
   };
 }
 

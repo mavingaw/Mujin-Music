@@ -4,7 +4,6 @@ import {
   describeCollectionFormat,
   signalPathSummary,
   signalQualityColors,
-  signalQualityDescriptions,
   signalQualityLabels,
   type SignalPath,
   type SignalQuality,
@@ -22,6 +21,7 @@ import {
   type LucideIcon,
   Server,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   Speaker,
   Volume2,
@@ -106,6 +106,8 @@ type PopoverProps = {
   levelingMode: VolumeLevelingMode;
   loading?: boolean;
   onLevelingModeChange: (mode: VolumeLevelingMode) => void;
+  /** Opens the DSP engine, as Roon's signal path opens MUSE. */
+  onOpenDsp?: () => void;
   path: SignalPath | null;
   streamBitrate: number;
 };
@@ -237,6 +239,7 @@ function SignalPathPanel({
   loading,
   onClose,
   onLevelingModeChange,
+  onOpenDsp,
   path,
   streamBitrate,
 }: PopoverProps & {
@@ -368,8 +371,8 @@ function SignalPathPanel({
         ) : null}
         {path ? (
           <p className="mx-2 mt-3 text-[11px] leading-4 text-zinc-500">
-            {signalQualityDescriptions[path.quality]} The light describes
-            formats and processing, not the recording itself.
+            {path.description} The light describes formats and processing, not
+            the recording itself.
           </p>
         ) : null}
       </div>
@@ -392,14 +395,29 @@ function SignalPathPanel({
                   : "Original file"}
             </span>
           </span>
-          <Link
-            className="flex items-center gap-1 rounded-full px-2 py-1 text-zinc-400 hover:bg-white/6 hover:text-white"
-            href="/settings"
-            onClick={onClose}
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            Settings
-          </Link>
+          <span className="flex items-center gap-1">
+            {onOpenDsp ? (
+              <button
+                className="flex items-center gap-1 rounded-full px-2 py-1 text-zinc-300 hover:bg-white/6 hover:text-white"
+                onClick={() => {
+                  onClose();
+                  onOpenDsp();
+                }}
+                type="button"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                DSP engine
+              </button>
+            ) : null}
+            <Link
+              className="flex items-center gap-1 rounded-full px-2 py-1 text-zinc-400 hover:bg-white/6 hover:text-white"
+              href="/settings"
+              onClick={onClose}
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Settings
+            </Link>
+          </span>
         </div>
         <Legend />
       </footer>
