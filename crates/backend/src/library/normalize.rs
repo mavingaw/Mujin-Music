@@ -799,13 +799,7 @@ fn score_release_folder_markers(
         .iter()
         .filter_map(|path| {
             let path = std::path::Path::new(path);
-            let is_audio_file = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    ["mp3", "flac", "ogg", "m4a", "opus", "wav", "aac", "aiff"]
-                        .contains(&extension.to_ascii_lowercase().as_str())
-                });
+            let is_audio_file = crate::library::formats::is_audio_path(path);
             let directory = if is_audio_file {
                 path.parent().unwrap_or(path)
             } else {
@@ -1066,16 +1060,7 @@ fn base_track_title(title: &str) -> String {
 
 fn release_directory(path: &str) -> &str {
     let path = std::path::Path::new(path);
-    let is_audio_file = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            [
-                "aac", "aiff", "alac", "flac", "m4a", "mp3", "ogg", "opus", "wav",
-            ]
-            .contains(&extension.to_ascii_lowercase().as_str())
-        });
-    if is_audio_file {
+    if crate::library::formats::is_audio_path(path) {
         path.parent()
             .and_then(std::path::Path::to_str)
             .unwrap_or(path.as_os_str().to_str().unwrap_or_default())

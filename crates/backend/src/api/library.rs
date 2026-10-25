@@ -101,7 +101,10 @@ fn prune_transcode_cache(
             }
             continue;
         }
-        if path.extension().and_then(|value| value.to_str()) != Some("mp3") {
+        if !matches!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("mp3" | "flac" | "wav")
+        ) {
             continue;
         }
         total = total.saturating_add(metadata.len());
@@ -125,6 +128,11 @@ fn prune_transcode_cache(
     Ok(())
 }
 use crate::app::LocalApp;
+use crate::library::delivery::{
+    Delivery, DeliveryPlan, OutputCapabilities, PcmCodec, SourceFile, conversion_cache_name,
+    conversion_ffmpeg_args, plan_delivery,
+};
+use crate::library::dsd;
 use crate::library::indexer::{
     CatalogProgressSender, build_instant_library_preview,
     enrich_library_to_database_with_cancellation, hydrate_progressive_catalog_artwork,
@@ -1438,9 +1446,50 @@ fn write_library_paths(paths: &[String]) -> Result<(), Box<dyn std::error::Error
 
 #[derive(Deserialize)]
 pub struct BitrateQueryParams {
+    /// Lossy streaming bitrate in kbps; 0 (the default) means best quality.
+    #[serde(default)]
     pub bitrate: u32,
     pub slowed_reverb: Option<bool>,
     pub audio_effect: Option<StreamAudioEffect>,
+    /// Comma-separated format tokens the player decodes natively (see
+    /// [`OutputCapabilities`]). Without it the original bytes are sent.
+    pub accept: Option<String>,
+    pub max_sample_rate: Option<u32>,
+    pub max_bit_depth: Option<u8>,
+    pub max_channels: Option<u8>,
+    /// `pcm` (default), `dop` or `native`.
+    pub dsd: Option<String>,
+}
+
+impl BitrateQueryParams {
+    fn audio_effect(&self) -> StreamAudioEffect {
+        self.audio_effect.unwrap_or_else(|| {
+            if self.slowed_reverb.unwrap_or(false) {
+                StreamAudioEffect::SlowedReverb
+            } else {
+                StreamAudioEffect::None
+            }
+        })
+    }
+
+    fn capabilities(&self) -> OutputCapabilities {
+        OutputCapabilities::from_query(
+            self.accept.as_deref(),
+            self.max_sample_rate,
+            self.max_bit_depth,
+            self.max_channels,
+            self.dsd.as_deref(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), HttpResponse> {
+        if self.bitrate > MAX_STREAM_BITRATE
+            || (self.bitrate > 0 && self.bitrate < MIN_STREAM_BITRATE)
+        {
+            return Err(bad_request("Invalid bitrate.", "invalid_bitrate"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -1456,6 +1505,17 @@ pub enum StreamAudioEffect {
 }
 
 impl StreamAudioEffect {
+    fn plan_name(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::LightReverb => Some("light_reverb"),
+            Self::Reverb => Some("reverb"),
+            Self::DeepReverb => Some("deep_reverb"),
+            Self::PitchDown => Some("pitch_down"),
+            Self::SlowedReverb => Some("slowed_reverb"),
+        }
+    }
+
     fn cache_name(self) -> &'static str {
         match self {
             Self::None => "original",
@@ -1683,7 +1743,7 @@ fn content_type_for_path(path: &Path) -> &'static str {
         Some("opus") => "audio/opus",
         Some("webm") => "video/webm",
         Some("mkv") => "video/x-matroska",
-        _ => "application/octet-stream",
+        _ => crate::library::formats::content_type_for_path(path),
     }
 }
 
@@ -2383,21 +2443,19 @@ async fn stream_song(
     query: web::Query<BitrateQueryParams>,
     lifecycle: web::Data<LibraryLifecycle>,
 ) -> impl Responder {
-    let song_key = path.into_inner();
-    let bitrate = query.bitrate;
-    let audio_effect = query.audio_effect.unwrap_or_else(|| {
-        if query.slowed_reverb.unwrap_or(false) {
-            StreamAudioEffect::SlowedReverb
-        } else {
-            StreamAudioEffect::None
-        }
-    });
-
-    if bitrate > MAX_STREAM_BITRATE || (bitrate > 0 && bitrate < MIN_STREAM_BITRATE) {
-        return bad_request("Invalid bitrate.", "invalid_bitrate");
+    if let Err(response) = query.validate() {
+        return response;
     }
-
-    stream_song_profile(&req, &song_key, bitrate, audio_effect, &lifecycle).await
+    let song_key = path.into_inner();
+    stream_song_planned(
+        &req,
+        &song_key,
+        query.bitrate,
+        query.audio_effect(),
+        &query.capabilities(),
+        &lifecycle,
+    )
+    .await
 }
 
 #[head("/media/songs/{song}/stream")]
@@ -2406,73 +2464,125 @@ async fn head_stream_song(
     query: web::Query<BitrateQueryParams>,
     lifecycle: web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
-    let bitrate = query.bitrate;
-    let audio_effect = query.audio_effect.unwrap_or_else(|| {
-        if query.slowed_reverb.unwrap_or(false) {
-            StreamAudioEffect::SlowedReverb
-        } else {
-            StreamAudioEffect::None
-        }
-    });
-    if bitrate > MAX_STREAM_BITRATE || (bitrate > 0 && bitrate < MIN_STREAM_BITRATE) {
-        return bad_request("Invalid bitrate.", "invalid_bitrate");
+    if let Err(response) = query.validate() {
+        return response;
     }
-
+    let audio_effect = query.audio_effect();
     let song_key = path.into_inner();
     let (song_id, song_path) = match resolve_stream_song_with_refresh(&song_key, &lifecycle).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
-    if bitrate == 0 && audio_effect == StreamAudioEffect::None {
-        let metadata = match tokio::fs::metadata(&song_path).await {
-            Ok(metadata) => metadata,
-            Err(_) => return not_found("Song file not found.", "song_file_not_found"),
-        };
-        let modified = metadata
-            .modified()
+    let source = stream_source(&lifecycle, &song_id, &song_path).await;
+    let plan = plan_delivery(
+        &source,
+        &query.capabilities(),
+        query.bitrate,
+        audio_effect.plan_name(),
+    );
+    let cached_length = |path: PathBuf| async move {
+        tokio::fs::metadata(&path).await.ok().map(|metadata| {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            (metadata.len(), modified)
+        })
+    };
+    let mut response = match &plan.delivery {
+        Delivery::Original => {
+            let Some((length, modified)) = cached_length(song_path.clone()).await else {
+                return not_found("Song file not found.", "song_file_not_found");
+            };
+            let mut response = HttpResponse::Ok();
+            response
+                .insert_header((header::ACCEPT_RANGES, "bytes"))
+                .insert_header((header::CONTENT_TYPE, content_type_for_path(&song_path)))
+                .insert_header((header::CONTENT_LENGTH, length.to_string()))
+                .insert_header((header::ETAG, format!("\"{}-{}\"", song_id, modified)));
+            response
+        }
+        Delivery::Dop { .. } => {
+            let path = song_path.clone();
+            let length = tokio::task::spawn_blocking(move || {
+                read_dsd_stream(&path).map(|stream| dsd::dop_wav_length(&stream))
+            })
+            .await
             .ok()
-            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        return HttpResponse::Ok()
-            .insert_header((header::ACCEPT_RANGES, "bytes"))
-            .insert_header((header::CONTENT_TYPE, content_type_for_path(&song_path)))
-            .insert_header((header::CONTENT_LENGTH, metadata.len().to_string()))
-            .insert_header((header::ETAG, format!("\"{}-{}\"", song_id, modified)))
-            .finish();
-    }
+            .and_then(Result::ok);
+            let Some(length) = length else {
+                return unsupported_media("This DSD file cannot be sent as DoP.");
+            };
+            let mut response = HttpResponse::Ok();
+            response
+                .insert_header((header::ACCEPT_RANGES, "bytes"))
+                .insert_header((header::CONTENT_TYPE, "audio/wav"))
+                .insert_header((header::CONTENT_LENGTH, length.to_string()));
+            response
+        }
+        Delivery::Pcm { .. } => {
+            let cache_path = conversion_cache_path(&song_id, &song_path, &plan.delivery);
+            let mut response = HttpResponse::Ok();
+            response.insert_header((header::CONTENT_TYPE, plan.content_type.clone()));
+            if let Some(cache_path) = cache_path
+                && let Some((length, modified)) = cached_length(cache_path).await
+            {
+                response
+                    .insert_header((header::ACCEPT_RANGES, "bytes"))
+                    .insert_header((header::CONTENT_LENGTH, length.to_string()))
+                    .insert_header((header::ETAG, format!("\"{song_id}-pcm-{modified}\"")));
+            }
+            response
+        }
+        Delivery::Mp3 { bitrate } => {
+            let cache_identity = mp3_cache_identity(&song_id, audio_effect);
+            let cache_path = transcode_cache_path(&cache_identity, &song_path, *bitrate);
+            let mut response = HttpResponse::Ok();
+            response.insert_header((header::CONTENT_TYPE, "audio/mpeg"));
+            if let Some((length, modified)) = cached_length(cache_path).await {
+                response
+                    .insert_header((header::ACCEPT_RANGES, "bytes"))
+                    .insert_header((header::CONTENT_LENGTH, length.to_string()))
+                    .insert_header((
+                        header::ETAG,
+                        format!("\"{}-{}k-{}\"", cache_identity, bitrate, modified),
+                    ));
+            }
+            response
+        }
+    };
+    response.insert_header((DELIVERY_HEADER, plan.mode));
+    response.finish()
+}
 
-    let output_bitrate = if audio_effect != StreamAudioEffect::None {
-        192
-    } else {
-        bitrate
-    };
-    let cache_identity = if audio_effect == StreamAudioEffect::None {
-        song_id
-    } else {
-        format!("{song_id}-{}", audio_effect.cache_name())
-    };
-    let cache_path = transcode_cache_path(&cache_identity, &song_path, output_bitrate);
-    if let Ok(metadata) = tokio::fs::metadata(&cache_path).await {
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        return HttpResponse::Ok()
-            .insert_header((header::ACCEPT_RANGES, "bytes"))
-            .insert_header((header::CONTENT_TYPE, "audio/mpeg"))
-            .insert_header((header::CONTENT_LENGTH, metadata.len().to_string()))
-            .insert_header((
-                header::ETAG,
-                format!("\"{}-{}k-{}\"", cache_identity, output_bitrate, modified),
-            ))
-            .finish();
+/// Describes how the server would deliver a track to this player: the same
+/// decision `GET .../stream` makes for the same query.
+#[get("/media/songs/{song}/delivery")]
+async fn song_delivery(
+    path: web::Path<String>,
+    query: web::Query<BitrateQueryParams>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    if let Err(response) = query.validate() {
+        return response;
     }
+    let song_key = path.into_inner();
+    let (song_id, song_path) = match resolve_stream_song_with_refresh(&song_key, &lifecycle).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
+    let source = stream_source(&lifecycle, &song_id, &song_path).await;
+    let plan = plan_delivery(
+        &source,
+        &query.capabilities(),
+        query.bitrate,
+        query.audio_effect().plan_name(),
+    );
     HttpResponse::Ok()
-        .insert_header((header::CONTENT_TYPE, "audio/mpeg"))
-        .finish()
+        .insert_header((header::CACHE_CONTROL, "no-store"))
+        .json(serde_json::json!({ "song_id": song_id, "plan": plan }))
 }
 
 async fn resolve_stream_song_with_refresh(
@@ -2502,68 +2612,690 @@ async fn resolve_stream_song_with_refresh(
     }
 }
 
-async fn stream_song_profile(
+/// Response header naming the delivery mode (`original`, `lossless_conversion`, `dop`, `lossy_transcode`).
+const DELIVERY_HEADER: &str = "x-parson-delivery";
+/// Polling interval while following a conversion that is still being written.
+const CONVERSION_POLL: Duration = Duration::from_millis(25);
+/// A conversion that runs longer than this is abandoned.
+const CONVERSION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+fn unsupported_media(message: &str) -> HttpResponse {
+    HttpResponse::UnsupportedMediaType()
+        .json(serde_json::json!({ "error": "unsupported_media", "message": message }))
+}
+
+/// What the library knows about a track's file, for delivery planning.
+async fn stream_source(
+    lifecycle: &web::Data<LibraryLifecycle>,
+    song_id: &str,
+    song_path: &Path,
+) -> SourceFile {
+    let audio = lifecycle
+        .cache()
+        .await
+        .ok()
+        .and_then(|cache| cache.song(song_id).and_then(|song| song.audio.clone()));
+    SourceFile::new(&song_path.to_string_lossy(), audio.as_ref())
+}
+
+fn mp3_cache_identity(song_id: &str, audio_effect: StreamAudioEffect) -> String {
+    if audio_effect == StreamAudioEffect::None {
+        song_id.to_string()
+    } else {
+        format!("{song_id}-{}", audio_effect.cache_name())
+    }
+}
+
+fn conversion_cache_path(song_id: &str, path: &Path, delivery: &Delivery) -> Option<PathBuf> {
+    let name = conversion_cache_name(delivery)?;
+    let mp3_style = transcode_cache_path(&format!("{song_id}-{name}"), path, 0);
+    let extension = match delivery {
+        Delivery::Pcm {
+            codec: PcmCodec::Wav,
+            ..
+        } => "wav",
+        _ => "flac",
+    };
+    Some(mp3_style.with_extension(extension))
+}
+
+fn read_dsd_stream(path: &Path) -> Result<dsd::DsdStream, String> {
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    let mut reader = std::io::BufReader::new(file);
+    let is_dff = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dff"));
+    if is_dff {
+        dsd::parse_dff(&mut reader, length)
+    } else {
+        dsd::parse_dsf(&mut reader)
+    }
+}
+
+fn with_delivery_header(mut response: HttpResponse, plan: &DeliveryPlan) -> HttpResponse {
+    if let Ok(value) = header::HeaderValue::from_str(plan.mode) {
+        response
+            .headers_mut()
+            .insert(header::HeaderName::from_static(DELIVERY_HEADER), value);
+    }
+    response
+}
+
+async fn stream_song_planned(
     req: &HttpRequest,
     song_key: &str,
     bitrate: u32,
     audio_effect: StreamAudioEffect,
+    capabilities: &OutputCapabilities,
     lifecycle: &web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
     let (song_id, song_path) = match resolve_stream_song_with_refresh(song_key, lifecycle).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
-
-    if bitrate == 0 && audio_effect == StreamAudioEffect::None {
-        stream_file_range(req, &song_path, &song_id, content_type_for_path(&song_path)).await
-    } else {
-        let output_bitrate = if audio_effect != StreamAudioEffect::None {
-            192
-        } else {
-            bitrate
-        };
-        let cache_identity = if audio_effect == StreamAudioEffect::None {
-            song_id.clone()
-        } else {
-            format!("{song_id}-{}", audio_effect.cache_name())
-        };
-        let cache_path = transcode_cache_path(&cache_identity, &song_path, output_bitrate);
-        stream_cached_transcode(
-            req,
-            &song_path,
-            &cache_path,
-            &format!("{}-{}k", cache_identity, output_bitrate),
-            output_bitrate,
-            audio_effect,
-        )
-        .await
-    }
+    let source = stream_source(lifecycle, &song_id, &song_path).await;
+    let plan = plan_delivery(&source, capabilities, bitrate, audio_effect.plan_name());
+    let response = match &plan.delivery {
+        Delivery::Original => {
+            stream_file_range(req, &song_path, &song_id, content_type_for_path(&song_path)).await
+        }
+        Delivery::Mp3 { bitrate } => {
+            let cache_identity = mp3_cache_identity(&song_id, audio_effect);
+            let cache_path = transcode_cache_path(&cache_identity, &song_path, *bitrate);
+            stream_cached_transcode(
+                req,
+                &song_path,
+                &cache_path,
+                &format!("{}-{}k", cache_identity, bitrate),
+                *bitrate,
+                audio_effect,
+            )
+            .await
+        }
+        Delivery::Pcm { .. } => {
+            let (Some(cache_path), Some(args)) = (
+                conversion_cache_path(&song_id, &song_path, &plan.delivery),
+                conversion_ffmpeg_args(&source, &plan.delivery),
+            ) else {
+                return internal_server_error("Failed to plan conversion.", "transcode_failed");
+            };
+            stream_conversion(
+                req,
+                &song_path,
+                &cache_path,
+                &format!("{song_id}-pcm"),
+                &plan.content_type,
+                args,
+            )
+            .await
+        }
+        Delivery::Dop { .. } => stream_dop(req, &song_path, &song_id).await,
+    };
+    with_delivery_header(response, &plan)
 }
 
-/// Streams receiver-safe audio for Google Cast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConversionState {
+    Running,
+    Done,
+    Failed,
+}
+
+type ConversionJobs =
+    Mutex<HashMap<PathBuf, (PathBuf, tokio::sync::watch::Receiver<ConversionState>)>>;
+static CONVERSION_JOBS: OnceLock<ConversionJobs> = OnceLock::new();
+
+fn conversion_jobs() -> &'static ConversionJobs {
+    CONVERSION_JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Starts (or joins) a background ffmpeg conversion into the transcode cache.
+///
+/// The conversion writes a seekable temporary file so the finished cache entry
+/// has a complete header (exact length, seek table), and it runs to the end
+/// even when the first listener disconnects, so seeking and replays are served
+/// from the cache with byte ranges.
+async fn start_conversion(
+    input_path: &Path,
+    cache_path: &Path,
+    args: Vec<String>,
+) -> Result<(PathBuf, tokio::sync::watch::Receiver<ConversionState>), HttpResponse> {
+    let mut jobs = conversion_jobs().lock().await;
+    if let Some((temp_path, state)) = jobs.get(cache_path) {
+        return Ok((temp_path.clone(), state.clone()));
+    }
+    let Some(parent) = cache_path.parent() else {
+        return Err(internal_server_error(
+            "Failed to prepare converted stream.",
+            "transcode_failed",
+        ));
+    };
+    if tokio::fs::create_dir_all(parent).await.is_err() {
+        return Err(internal_server_error(
+            "Failed to prepare converted stream.",
+            "transcode_failed",
+        ));
+    }
+    let Ok(permit) = transcode_slots().try_acquire_owned() else {
+        return Err(service_unavailable(
+            "The transcoder is busy. Retry shortly.",
+            "transcode_capacity_reached",
+        ));
+    };
+    let temp_path = cache_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut command = Command::new("ffmpeg");
+    command
+        .kill_on_drop(true)
+        .args(["-y", "-nostdin", "-v", "error", "-i"])
+        .arg(input_path)
+        .args(&args)
+        .args(["-threads", "2"])
+        .arg(&temp_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let Ok(mut child) = command.spawn() else {
+        return Err(internal_server_error(
+            "Failed to start transcoder.",
+            "transcode_failed",
+        ));
+    };
+    let (sender, receiver) = tokio::sync::watch::channel(ConversionState::Running);
+    jobs.insert(
+        cache_path.to_path_buf(),
+        (temp_path.clone(), receiver.clone()),
+    );
+    drop(jobs);
+    let cache_path = cache_path.to_path_buf();
+    let job_temp = temp_path.clone();
+    tokio::spawn(async move {
+        let mut stderr = child.stderr.take();
+        let status = tokio::time::timeout(CONVERSION_TIMEOUT, child.wait()).await;
+        let mut message = String::new();
+        if let Some(stderr) = stderr.as_mut() {
+            let _ = stderr.take(4096).read_to_string(&mut message).await;
+        }
+        let succeeded = matches!(status, Ok(Ok(status)) if status.success());
+        let promoted = succeeded && tokio::fs::rename(&job_temp, &cache_path).await.is_ok();
+        if !promoted {
+            if status.is_err() {
+                let _ = child.kill().await;
+            }
+            warn!(path = %cache_path.display(), error = %message.trim(), "audio conversion failed");
+            let _ = tokio::fs::remove_file(&job_temp).await;
+        }
+        let _ = sender.send(if promoted {
+            ConversionState::Done
+        } else {
+            ConversionState::Failed
+        });
+        conversion_jobs().lock().await.remove(&cache_path);
+        drop(permit);
+        if promoted && let Some(directory) = cache_path.parent().map(Path::to_path_buf) {
+            let protected = cache_path.clone();
+            let max_bytes = transcode_cache_max_bytes();
+            let _ = tokio::task::spawn_blocking(move || {
+                prune_transcode_cache(
+                    &directory,
+                    &protected,
+                    max_bytes,
+                    Duration::from_secs(10 * 60),
+                )
+            })
+            .await;
+        }
+    });
+    Ok((temp_path, receiver))
+}
+
+/// Streams a lossless conversion: from the cache with byte ranges when it is
+/// complete, otherwise by following the file ffmpeg is still writing.
+async fn stream_conversion(
+    req: &HttpRequest,
+    input_path: &Path,
+    cache_path: &Path,
+    etag_key: &str,
+    content_type: &str,
+    args: Vec<String>,
+) -> HttpResponse {
+    let content_type: &'static str = match content_type {
+        "audio/wav" => "audio/wav",
+        _ => "audio/flac",
+    };
+    if tokio::fs::metadata(cache_path).await.is_ok() {
+        return stream_file_range(req, cache_path, etag_key, content_type).await;
+    }
+    let (temp_path, mut state) = match start_conversion(input_path, cache_path, args).await {
+        Ok(job) => job,
+        Err(response) => return response,
+    };
+    // Wait for ffmpeg to create its output.
+    let started = Instant::now();
+    let file = loop {
+        if let Ok(file) = tokio::fs::File::open(&temp_path).await {
+            break file;
+        }
+        let current = *state.borrow();
+        match current {
+            ConversionState::Done => {
+                return stream_file_range(req, cache_path, etag_key, content_type).await;
+            }
+            ConversionState::Failed => {
+                return unsupported_media("The server could not decode this file.");
+            }
+            ConversionState::Running if started.elapsed() > Duration::from_secs(15) => {
+                return internal_server_error("The transcoder did not start.", "transcode_failed");
+            }
+            ConversionState::Running => {
+                let _ = tokio::time::timeout(CONVERSION_POLL, state.changed()).await;
+            }
+        }
+    };
+
+    struct Follow {
+        file: tokio::fs::File,
+        state: tokio::sync::watch::Receiver<ConversionState>,
+        finished: bool,
+    }
+    let stream = futures::stream::unfold(
+        Follow {
+            file,
+            state,
+            finished: false,
+        },
+        |mut follow| async move {
+            if follow.finished {
+                return None;
+            }
+            let mut buffer = vec![0; STREAM_BUFFER_SIZE];
+            loop {
+                let current = *follow.state.borrow();
+                match follow.file.read(&mut buffer).await {
+                    Ok(0) => match current {
+                        ConversionState::Running => {
+                            let _ =
+                                tokio::time::timeout(CONVERSION_POLL, follow.state.changed()).await;
+                        }
+                        // Everything ffmpeg wrote before finishing has been read.
+                        ConversionState::Done => return None,
+                        ConversionState::Failed => {
+                            follow.finished = true;
+                            return Some((
+                                Err(std::io::Error::other("audio conversion failed")),
+                                follow,
+                            ));
+                        }
+                    },
+                    Ok(size) => {
+                        buffer.truncate(size);
+                        return Some((Ok(web::Bytes::from(buffer)), follow));
+                    }
+                    Err(error) => {
+                        follow.finished = true;
+                        return Some((Err(error), follow));
+                    }
+                }
+            }
+        },
+    );
+    HttpResponse::Ok()
+        .insert_header((header::CONTENT_TYPE, content_type))
+        .insert_header((header::CACHE_CONTROL, "no-store"))
+        .streaming(stream)
+}
+
+/// Streams a DSF/DFF file as DoP v1.1 in a 24-bit WAV, with byte ranges.
+async fn stream_dop(req: &HttpRequest, path: &Path, song_id: &str) -> HttpResponse {
+    const CHUNK: u64 = 192 * 1024;
+    let source = path.to_path_buf();
+    let opened = tokio::task::spawn_blocking(move || {
+        let stream = read_dsd_stream(&source)?;
+        let file = std::fs::File::open(&source).map_err(|error| error.to_string())?;
+        Ok::<_, String>((stream, file))
+    })
+    .await;
+    let Ok(Ok((stream, file))) = opened else {
+        return unsupported_media("This DSD file cannot be sent as DoP.");
+    };
+    if !stream.supports_dop() {
+        return unsupported_media("DST-compressed DSD cannot be sent as DoP.");
+    }
+    let total = dsd::dop_wav_length(&stream);
+    let range = req.headers().get("Range").and_then(|v| v.to_str().ok());
+    let (start, end, partial) = match parse_range(range, total) {
+        Ok(range) => range,
+        Err(mut response) => {
+            if let Ok(value) = header::HeaderValue::from_str(&format!("bytes */{total}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, value);
+            }
+            return response;
+        }
+    };
+    let stream = Arc::new(stream);
+    let body = futures::stream::unfold(
+        (Some(std::io::BufReader::new(file)), start),
+        move |(reader, offset)| {
+            let stream = Arc::clone(&stream);
+            async move {
+                let mut reader = reader?;
+                if offset > end {
+                    return None;
+                }
+                let chunk_end = (offset + CHUNK - 1).min(end);
+                let result = tokio::task::spawn_blocking(move || {
+                    let bytes = dsd::dop_wav_range(&mut reader, &stream, offset, chunk_end);
+                    (reader, bytes)
+                })
+                .await;
+                match result {
+                    Ok((reader, Ok(bytes))) if !bytes.is_empty() => Some((
+                        Ok::<_, std::io::Error>(web::Bytes::from(bytes)),
+                        (Some(reader), chunk_end + 1),
+                    )),
+                    Ok((_, Ok(_))) => None,
+                    Ok((_, Err(error))) => {
+                        Some((Err(std::io::Error::other(error)), (None, end + 1)))
+                    }
+                    Err(error) => Some((Err(std::io::Error::other(error)), (None, end + 1))),
+                }
+            }
+        },
+    );
+    let mut response = if partial {
+        HttpResponse::PartialContent()
+    } else {
+        HttpResponse::Ok()
+    };
+    response
+        .insert_header((header::ACCEPT_RANGES, "bytes"))
+        .insert_header((header::CONTENT_TYPE, "audio/wav"))
+        .insert_header((header::CONTENT_LENGTH, (end - start + 1).to_string()))
+        .insert_header((header::ETAG, format!("\"{song_id}-dop\"")));
+    if partial {
+        response.insert_header((
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        ));
+    }
+    response.no_chunking(end - start + 1).streaming(body)
+}
+
+/// Plans delivery to a Google Cast receiver (FLAC up to 24-bit/96 kHz).
+pub(crate) fn cast_delivery_plan(song: &crate::domain::Song) -> DeliveryPlan {
+    plan_delivery(
+        &SourceFile::new(&song.path, song.audio.as_ref()),
+        &OutputCapabilities::google_cast(),
+        0,
+        None,
+    )
+}
+
+/// Streams receiver-safe audio for Google Cast, at the best quality it accepts.
 pub(crate) async fn stream_cast_compatible(
     req: &HttpRequest,
     song_key: &str,
     lifecycle: &web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
-    let direct = lifecycle
-        .cache()
-        .await
-        .ok()
-        .and_then(|cache| cache.song(song_key).map(|song| song.path.clone()))
-        .and_then(|path| {
-            Path::new(&path)
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .map(str::to_ascii_lowercase)
-        })
-        .is_some_and(|extension| matches!(extension.as_str(), "mp3" | "aac" | "m4a" | "mp4"));
-    stream_song_profile(
+    stream_song_planned(
         req,
         song_key,
-        if direct { 0 } else { 192 },
+        0,
         StreamAudioEffect::None,
+        &OutputCapabilities::google_cast(),
         lifecycle,
     )
     .await
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    //! On-demand conversion and DoP streaming, end to end through ffmpeg.
+
+    use std::path::{Path, PathBuf};
+
+    use actix_web::body::to_bytes;
+    use actix_web::http::{StatusCode, header};
+
+    use super::{conversion_ffmpeg_args, dsd, plan_delivery, stream_conversion, stream_dop};
+    use crate::domain::AudioProperties;
+    use crate::library::delivery::{Delivery, OutputCapabilities, SourceFile};
+
+    fn ffmpeg_available() -> bool {
+        ["ffmpeg", "ffprobe"].iter().all(|program| {
+            std::process::Command::new(program)
+                .arg("-version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        })
+    }
+
+    fn scratch() -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("parson-delivery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    /// `(codec, sample_rate, bits_per_raw_sample, channels, samples)` of a file.
+    fn probe(path: &Path) -> (String, u32, u32, u32, u64) {
+        let output = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-count_packets",
+                "-show_entries",
+                "stream=codec_name,sample_rate,bits_per_raw_sample,channels,duration_ts",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(path)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        let field = |name: &str| {
+            text.lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(path)
+            .args(["-f", "s32le", "-ac", "1", "-"])
+            .output()
+            .unwrap()
+            .stdout
+            .len() as u64
+            / 4;
+        (
+            field("codec_name"),
+            field("sample_rate").parse().unwrap_or_default(),
+            field("bits_per_raw_sample").parse().unwrap_or_default(),
+            field("channels").parse().unwrap_or_default(),
+            decoded,
+        )
+    }
+
+    async fn convert(
+        directory: &Path,
+        input: &Path,
+        audio: AudioProperties,
+        capabilities: &OutputCapabilities,
+    ) -> (PathBuf, Vec<u8>) {
+        let source = SourceFile::new(&input.to_string_lossy(), Some(&audio));
+        let plan = plan_delivery(&source, capabilities, 0, None);
+        assert_eq!(plan.mode, "lossless_conversion");
+        let args = conversion_ffmpeg_args(&source, &plan.delivery).unwrap();
+        let cache = directory.join(format!("{}.flac", uuid::Uuid::new_v4()));
+        let request = actix_web::test::TestRequest::get().to_http_request();
+        let response =
+            stream_conversion(&request, input, &cache, "test", &plan.content_type, args).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body()).await.unwrap().to_vec();
+        (cache, body)
+    }
+
+    #[actix_web::test]
+    async fn wavpack_converts_to_bit_identical_24_bit_flac_and_is_cached() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: ffmpeg is not installed");
+            return;
+        }
+        let directory = scratch();
+        let input = directory.join("track.wv");
+        std::fs::write(
+            &input,
+            include_bytes!("../../testdata/audio/wavpack-96k-24bit-stereo.wv"),
+        )
+        .unwrap();
+        let audio = AudioProperties {
+            codec: Some("wavpack".into()),
+            container: Some("wavpack".into()),
+            sample_rate: Some(96_000),
+            bit_depth: Some(24),
+            channels: Some(2),
+            bitrate_kbps: None,
+            lossless: Some(true),
+        };
+        let browser = OutputCapabilities::from_query(Some("flac,mp3,opus"), None, None, None, None);
+        let (cache, live) = convert(&directory, &input, audio, &browser).await;
+        assert_eq!(&live[..4], b"fLaC");
+        assert!(cache.exists(), "the finished conversion is cached");
+
+        let (codec, rate, bits, channels, samples) = probe(&cache);
+        assert_eq!(
+            (codec.as_str(), rate, bits, channels),
+            ("flac", 96_000, 24, 2)
+        );
+        assert_eq!(samples, probe(&input).4, "no samples added or lost");
+        // The decoded audio is bit-identical to the WavPack source.
+        let pcm = |path: &Path| {
+            std::process::Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(path)
+                .args(["-f", "s32le", "-"])
+                .output()
+                .unwrap()
+                .stdout
+        };
+        assert_eq!(pcm(&cache), pcm(&input));
+
+        // Replays come from the cache with byte ranges.
+        let request = actix_web::test::TestRequest::get()
+            .insert_header((header::RANGE, "bytes=0-3"))
+            .to_http_request();
+        let response =
+            stream_conversion(&request, &input, &cache, "test", "audio/flac", Vec::new()).await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            to_bytes(response.into_body()).await.unwrap().as_ref(),
+            b"fLaC"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[actix_web::test]
+    async fn dsd64_converts_to_24_bit_176k_flac() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: ffmpeg is not installed");
+            return;
+        }
+        let directory = scratch();
+        let input = directory.join("track.dsf");
+        let samples = 2_822_400 / 5;
+        std::fs::write(&input, dsd::fixtures::dsf(2_822_400, 2, samples, &[])).unwrap();
+        let audio = AudioProperties {
+            codec: Some("dsd".into()),
+            container: Some("dsf".into()),
+            sample_rate: Some(2_822_400),
+            bit_depth: Some(1),
+            channels: Some(2),
+            bitrate_kbps: None,
+            lossless: Some(true),
+        };
+        let browser = OutputCapabilities::from_query(Some("flac,mp3"), None, None, None, None);
+        let (cache, _) = convert(&directory, &input, audio, &browser).await;
+        let (codec, rate, bits, channels, decoded) = probe(&cache);
+        assert_eq!(
+            (codec.as_str(), rate, bits, channels),
+            ("flac", 176_400, 24, 2)
+        );
+        let expected = samples / 16;
+        assert!(
+            decoded.abs_diff(expected) <= 64,
+            "{decoded} frames, expected about {expected}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[actix_web::test]
+    async fn dop_streams_serve_exact_byte_ranges() {
+        let directory = scratch();
+        let input = directory.join("track.dsf");
+        let bytes = dsd::fixtures::dsf(2_822_400, 2, 160_000, &[]);
+        std::fs::write(&input, &bytes).unwrap();
+        let stream = dsd::parse_dsf(&mut std::io::Cursor::new(&bytes)).unwrap();
+        let total = dsd::dop_wav_length(&stream);
+        let whole =
+            dsd::dop_wav_range(&mut std::io::Cursor::new(&bytes), &stream, 0, total - 1).unwrap();
+
+        let request = actix_web::test::TestRequest::get().to_http_request();
+        let response = stream_dop(&request, &input, "song").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok()),
+            Some(total.to_string().as_str())
+        );
+        assert_eq!(
+            to_bytes(response.into_body()).await.unwrap().as_ref(),
+            whole
+        );
+
+        let request = actix_web::test::TestRequest::get()
+            .insert_header((header::RANGE, "bytes=1000-299999"))
+            .to_http_request();
+        let response = stream_dop(&request, &input, "song").await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            to_bytes(response.into_body()).await.unwrap().as_ref(),
+            &whole[1000..300_000.min(whole.len())]
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn cast_receivers_get_hi_res_flac_instead_of_mp3() {
+        let song = crate::domain::Song {
+            path: "/m/track.wv".into(),
+            audio: Some(AudioProperties {
+                codec: Some("wavpack".into()),
+                container: Some("wavpack".into()),
+                sample_rate: Some(192_000),
+                bit_depth: Some(24),
+                channels: Some(2),
+                bitrate_kbps: None,
+                lossless: Some(true),
+            }),
+            ..Default::default()
+        };
+        let plan = super::cast_delivery_plan(&song);
+        assert_eq!(plan.content_type, "audio/flac");
+        assert!(matches!(
+            plan.delivery,
+            Delivery::Pcm {
+                sample_rate: 96_000,
+                bit_depth: 24,
+                ..
+            }
+        ));
+    }
 }

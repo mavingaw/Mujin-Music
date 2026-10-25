@@ -12,7 +12,7 @@ use crate::api::{filesystem, library};
 use crate::library::state::{LibraryLifecycle, LibraryReadinessState};
 use crate::persistence::connection::DbPool;
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
+use crate::library::formats::AUDIO_EXTENSIONS;
 const MAX_SUGGESTION_CANDIDATES: usize = 24;
 #[cfg(unix)]
 const MAX_MOUNT_ENTRIES: usize = 64;
