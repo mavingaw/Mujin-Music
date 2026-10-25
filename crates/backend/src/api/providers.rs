@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::auth::{Claims, authenticated_user_id};
 use crate::api::error::{forbidden, json_error};
+use crate::library::state::LibraryLifecycle;
+use crate::providers::catalog::{self, CatalogFilter, CatalogPage, CatalogSource, QualityTier};
 use crate::providers::hub::{HubError, LibraryRequest, StreamingHub, user_message};
 pub(crate) use crate::providers::media::byte_range;
 use crate::providers::media::{self, MediaError};
@@ -498,6 +500,169 @@ async fn browse(
     )
 }
 
+#[derive(Serialize)]
+struct GenresResponse {
+    genres: Vec<crate::providers::ProviderGenre>,
+}
+
+#[get("/{provider}/genres")]
+async fn genres(
+    request: HttpRequest,
+    path: web::Path<String>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let (user_id, provider) = user_and_provider!(request, &path);
+    respond(
+        hub.genres(user_id, provider)
+            .await
+            .map(|genres| GenresResponse { genres }),
+    )
+}
+
+#[derive(Deserialize)]
+struct GenreAlbumsParameters {
+    section: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+}
+
+/// A genre's albums, optionally from one editorial list (Qobuz).
+#[get("/{provider}/genres/{genre}/albums")]
+async fn genre_albums(
+    request: HttpRequest,
+    path: web::Path<(String, String)>,
+    query: web::Query<GenreAlbumsParameters>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let (user_id, provider) = user_and_provider!(request, &path.0);
+    if !valid_raw_id(&path.1) {
+        return hub_error_response(HubError::Invalid("Unknown genre."));
+    }
+    let section = match query.section.as_deref() {
+        None | Some("") => BrowseSection::NewReleases,
+        Some(value) => match BrowseSection::parse(value).filter(|section| section.is_editorial()) {
+            Some(section) => section,
+            None => return hub_error_response(HubError::Invalid("Unknown browse section.")),
+        },
+    };
+    respond(
+        hub.genre_albums(
+            user_id,
+            provider,
+            path.1.clone(),
+            section,
+            query.offset.unwrap_or(0).min(10_000),
+            query.limit.unwrap_or(50).clamp(1, 100),
+        )
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct CatalogParameters {
+    source: Option<String>,
+    genre: Option<String>,
+    decade: Option<u16>,
+    quality: Option<String>,
+    q: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+const MAX_GENRE_FILTER_CHARACTERS: usize = 128;
+
+fn catalog_filter(query: &CatalogParameters) -> Result<CatalogFilter, &'static str> {
+    let source = match query.source.as_deref() {
+        None | Some("") | Some("all") => None,
+        Some(value) => Some(CatalogSource::parse(value).ok_or("Unknown source.")?),
+    };
+    let quality = match query.quality.as_deref() {
+        None | Some("") => None,
+        Some(value) => Some(QualityTier::parse(value).ok_or("Unknown quality.")?),
+    };
+    let genre = query
+        .genre
+        .as_deref()
+        .map(str::trim)
+        .filter(|genre| !genre.is_empty())
+        .map(str::to_string);
+    if genre
+        .as_deref()
+        .is_some_and(|genre| genre.chars().count() > MAX_GENRE_FILTER_CHARACTERS)
+    {
+        return Err("Genre names are at most 128 characters.");
+    }
+    if query
+        .decade
+        .is_some_and(|decade| !decade.is_multiple_of(10) || !(1000..=2990).contains(&decade))
+    {
+        return Err("A decade is a year ending in 0, such as 1990.");
+    }
+    Ok(CatalogFilter {
+        source,
+        genre,
+        decade: query.decade,
+        quality,
+        text: query
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| text.chars().take(MAX_SEARCH_QUERY_CHARACTERS).collect()),
+    })
+}
+
+#[derive(Serialize)]
+struct CatalogResponse {
+    #[serde(flatten)]
+    page: CatalogPage,
+    /// Whether local albums are included (the local library is indexed).
+    local_ready: bool,
+}
+
+/// Local and streaming albums in one catalog, filtered by source, genre,
+/// decade and quality together, with counts for each filter.
+#[get("/catalog/albums")]
+async fn catalog_albums(
+    request: HttpRequest,
+    query: web::Query<CatalogParameters>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let filter = match catalog_filter(&query) {
+        Ok(filter) => filter,
+        Err(message) => return hub_error_response(HubError::Invalid(message)),
+    };
+    let rows = match hub.library_albums(user_id).await {
+        Ok(rows) => rows,
+        Err(error) => return hub_error_response(error),
+    };
+    let lifecycle = request.app_data::<web::Data<LibraryLifecycle>>().cloned();
+    let cache = match lifecycle {
+        Some(lifecycle) => lifecycle.cache().await.ok(),
+        None => None,
+    };
+    let local_ready = cache.is_some();
+    let offset = query.offset.unwrap_or(0).min(100_000);
+    let limit = query.limit.unwrap_or(100);
+    let page = tokio::task::spawn_blocking(move || {
+        let mut albums = cache
+            .map(|cache| catalog::local_albums(&cache.artists, &cache.album_genres))
+            .unwrap_or_default();
+        albums.extend(catalog::streaming_albums(&rows));
+        catalog::fill_missing_genres(&mut albums);
+        catalog::query(albums, &filter, offset, limit)
+    })
+    .await;
+    match page {
+        Ok(page) => HttpResponse::Ok().json(CatalogResponse { page, local_ready }),
+        Err(error) => hub_error_response(HubError::Database(error.to_string())),
+    }
+}
+
 #[get("/{provider}/playlists")]
 async fn playlists(
     request: HttpRequest,
@@ -813,8 +978,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(list_server_credentials)
             .service(save_server_credentials)
             .service(remove_server_credentials)
+            .service(catalog_albums)
             .service(check_connection)
             .service(stream_delivery)
+            .service(genres)
+            .service(genre_albums)
             .service(playlist_copies)
             .service(playlists)
             .service(playlist_copy)
@@ -1392,6 +1560,187 @@ mod tests {
         let (_, body) = call!(&app, test::TestRequest::get().uri("/providers")).await;
         assert_eq!(body["providers"][0]["library"]["albums"], 2);
         assert!(body["providers"][0]["last_library_sync"].as_i64().is_some());
+    }
+
+    #[actix_web::test]
+    async fn genre_pages_and_editorial_lists_browse_each_service() {
+        let pool = pool();
+        let hub = signed_in_app_state(&pool).await;
+        let app = app!(hub, 1);
+
+        let (_, body) = call!(&app, test::TestRequest::get().uri("/providers")).await;
+        let sections = |index: usize| {
+            body["providers"][index]["browse_sections"]
+                .as_array()
+                .expect("sections")
+                .iter()
+                .map(|section| section["id"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sections(0), ["new_releases", "editors_picks", "popular"]);
+        assert_eq!(
+            sections(1),
+            ["new_releases", "editors_picks", "popular", "press_awards"]
+        );
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/genres")
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["genres"][0]["name"], "Pop");
+        assert_eq!(body["genres"].as_array().map(Vec::len), Some(4));
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/genres/Jazz/albums"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["genre"]["name"], "Jazz");
+        assert_eq!(body["albums"][0]["title"], "Night Shift Standards");
+        assert_eq!(
+            body["albums"][0]["genre"], "Jazz",
+            "TIDAL albums are labelled with the genre page they came from"
+        );
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get()
+                .uri("/providers/qobuz/genres/10/albums?section=press_awards&limit=10"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["genre"]["name"], "Classical");
+        assert_eq!(body["albums"][0]["title"], "Glass Orchard");
+
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/genres/Polka/albums"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get()
+                .uri("/providers/qobuz/genres/10/albums?section=favorite_tracks"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/qobuz/browse/editors_picks"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["albums"][0]["title"], "Glass Orchard");
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/browse/press_awards"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[actix_web::test]
+    async fn the_album_catalog_combines_source_genre_and_decade_filters() {
+        let pool = pool();
+        let hub = signed_in_app_state(&pool).await;
+        let app = app!(hub, 1);
+
+        // Visiting TIDAL's Jazz page files its albums under Jazz.
+        call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/genres/Jazz/albums"),
+        )
+        .await;
+        for uri in [
+            "/providers/tidal/library/album/300400",
+            "/providers/tidal/library/album/300100",
+            "/providers/qobuz/library/album/q0harborhr04",
+            "/providers/qobuz/library/album/q0brasslate02",
+        ] {
+            let (status, _) = call!(&app, test::TestRequest::put().uri(uri)).await;
+            assert_eq!(status, StatusCode::OK, "{uri}");
+        }
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/catalog/albums"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["total"], 4);
+        assert_eq!(body["local_ready"], false);
+        assert_eq!(body["albums"][0]["artist_name"], "Mara Vell");
+
+        let (_, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/catalog/albums?source=tidal&genre=jazz"),
+        )
+        .await;
+        assert_eq!(body["total"], 1);
+        assert_eq!(body["albums"][0]["id"], "tidal:300400");
+        assert_eq!(body["albums"][0]["genres"][0], "Jazz");
+        assert_eq!(body["albums"][0]["source"], "tidal");
+        let jazz_sources = body["facets"]["sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .map(|facet| (facet["value"].to_string(), facet["count"].as_u64()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            jazz_sources,
+            [
+                ("\"tidal\"".to_string(), Some(1)),
+                ("\"qobuz\"".to_string(), Some(1))
+            ],
+            "Jazz on each service"
+        );
+
+        let (_, body) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/catalog/albums?genre=Pop%2FRock"),
+        )
+        .await;
+        assert_eq!(body["total"], 2, "the TIDAL copy borrows Qobuz's genre");
+        assert_eq!(body["albums"][0]["source"], "tidal");
+        assert_eq!(body["albums"][0]["genre_inferred"], true);
+
+        let (_, body) = call!(
+            &app,
+            test::TestRequest::get()
+                .uri("/providers/catalog/albums?source=qobuz&decade=2020&quality=hi_res"),
+        )
+        .await;
+        assert_eq!(body["total"], 1);
+        assert_eq!(body["albums"][0]["format_label"], "24/192 FLAC");
+        let decades = body["facets"]["decades"]
+            .as_array()
+            .expect("decades")
+            .iter()
+            .map(|facet| facet["value"].as_u64())
+            .collect::<Vec<_>>();
+        assert_eq!(decades, [Some(2020)]);
+
+        for bad in ["decade=1995", "source=spotify", "quality=mqa"] {
+            let (status, _) = call!(
+                &app,
+                test::TestRequest::get().uri(&format!("/providers/catalog/albums?{bad}")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+
+        let other = app!(hub_for(pool.clone()), 2);
+        let (_, body) = call!(
+            &other,
+            test::TestRequest::get().uri("/providers/catalog/albums"),
+        )
+        .await;
+        assert_eq!(body["total"], 0, "each listener has their own catalog");
     }
 
     #[actix_web::test]

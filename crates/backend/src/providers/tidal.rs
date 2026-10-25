@@ -15,10 +15,10 @@ use super::artwork::ArtworkMode;
 use super::transport::{ApiRequest, Transport};
 use super::{
     AlbumRef, ArtistRef, ArtistSummary, AudioFormat, BrowsePage, BrowseSection, ClientCredentials,
-    ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist, ProviderContext,
-    ProviderError, ProviderId, ProviderPlaylist, ProviderResult, ProviderSession, ProviderTrack,
-    QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource, StreamingProvider,
-    decode_json, entity_id, status_error, unix_now,
+    EditorialSection, ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist,
+    ProviderContext, ProviderError, ProviderGenre, ProviderId, ProviderPlaylist, ProviderResult,
+    ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults, StreamQuality,
+    StreamSource, StreamingProvider, decode_json, entity_id, status_error, unix_now,
 };
 
 pub const AUTH_BASE: &str = "https://auth.tidal.com/v1/oauth2";
@@ -50,9 +50,36 @@ static QUALITY_OPTIONS: [QualityOption; 4] = [
     },
 ];
 
+static EDITORIAL_SECTIONS: [EditorialSection; 3] = [
+    EditorialSection {
+        id: BrowseSection::NewReleases,
+        label: "New",
+        by_genre: false,
+    },
+    EditorialSection {
+        id: BrowseSection::EditorsPicks,
+        label: "Recommended",
+        by_genre: false,
+    },
+    EditorialSection {
+        id: BrowseSection::Popular,
+        label: "Top",
+        by_genre: false,
+    },
+];
+
 pub struct TidalClient {
     transport: Arc<dyn Transport>,
     artwork: ArtworkMode,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct TGenre {
+    name: String,
+    path: String,
+    has_albums: Option<bool>,
+    image: Option<String>,
 }
 
 /// A pending device authorization. Stored sealed until the listener approves
@@ -906,6 +933,17 @@ impl StreamingProvider for TidalClient {
                     self.album_page(context, "/featured/new/albums", offset, limit, &[])
                         .await
                 }
+                BrowseSection::Popular => {
+                    self.album_page(context, "/featured/top/albums", offset, limit, &[])
+                        .await
+                }
+                BrowseSection::EditorsPicks => {
+                    self.album_page(context, "/featured/recommended/albums", offset, limit, &[])
+                        .await
+                }
+                BrowseSection::PressAwards => Err(ProviderError::Unavailable(
+                    "TIDAL does not publish a press awards list.".into(),
+                )),
                 BrowseSection::FavoriteAlbums => {
                     self.album_page(
                         context,
@@ -944,6 +982,53 @@ impl StreamingProvider for TidalClient {
                     })
                 }
             }
+        })
+    }
+
+    fn editorial_sections(&self) -> &'static [EditorialSection] {
+        &EDITORIAL_SECTIONS
+    }
+
+    fn genres<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+    ) -> BoxFuture<'a, ProviderResult<Vec<ProviderGenre>>> {
+        Box::pin(async move {
+            let body = self.get(context, "/genres", &[]).await?;
+            let genres: Vec<TGenre> = decode_json(&body)?;
+            Ok(genres
+                .into_iter()
+                .filter(|genre| genre.has_albums.unwrap_or(true))
+                .filter(|genre| super::valid_raw_id(&genre.path) && !genre.name.trim().is_empty())
+                .map(|genre| ProviderGenre {
+                    image_url: self.artwork.tidal(genre.image.as_deref(), 640),
+                    id: genre.path,
+                    provider: ProviderId::Tidal,
+                    name: genre.name.trim().to_string(),
+                })
+                .collect())
+        })
+    }
+
+    fn genre_albums<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        genre_id: &'a str,
+        _section: BrowseSection,
+        offset: u32,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<BrowsePage>> {
+        // TIDAL's genre pages have one album list; editorial lists are not
+        // split by genre.
+        Box::pin(async move {
+            self.album_page(
+                context,
+                &format!("/genres/{genre_id}/albums"),
+                offset,
+                limit,
+                &[],
+            )
+            .await
         })
     }
 
@@ -1199,9 +1284,11 @@ mod tests {
     };
 
     const FIXTURES: &str = include_str!("fixtures/tidal.json");
+    const BROWSE_FIXTURES: &str = include_str!("fixtures/tidal_browse.json");
 
     fn client() -> (TidalClient, Arc<FixtureTransport>) {
-        let transport = Arc::new(FixtureTransport::from_json(&[FIXTURES]).expect("fixtures"));
+        let transport =
+            Arc::new(FixtureTransport::from_json(&[BROWSE_FIXTURES, FIXTURES]).expect("fixtures"));
         (
             TidalClient::new(transport.clone(), ArtworkMode::Live),
             transport,
@@ -1275,6 +1362,80 @@ mod tests {
         assert_eq!(
             token_request.form_value("client_secret"),
             Some("listener-client-secret")
+        );
+    }
+
+    #[actix_web::test]
+    async fn genres_and_editorial_lists_follow_the_v1_featured_paths() {
+        let (client, transport) = client();
+        let context = context();
+        let genres = client.genres(&context).await.expect("genres");
+        assert_eq!(
+            genres
+                .iter()
+                .map(|genre| genre.id.as_str())
+                .collect::<Vec<_>>(),
+            ["Pop", "Jazz", "Classical", "Electronic"],
+            "genres without albums are left out"
+        );
+        assert!(
+            genres[0]
+                .image_url
+                .as_deref()
+                .is_some_and(|url| url.starts_with("https://resources.tidal.com/images/"))
+        );
+        assert_eq!(
+            transport
+                .requests()
+                .pop()
+                .expect("request")
+                .query_value("countryCode"),
+            Some("GB")
+        );
+
+        let pop = client
+            .genre_albums(&context, "Pop", BrowseSection::NewReleases, 0, 24)
+            .await
+            .expect("pop");
+        assert_eq!(
+            pop.albums
+                .iter()
+                .map(|album| album.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Harbor Lights", "Paper Moons"]
+        );
+        // TIDAL albums carry no genre of their own; the hub labels them.
+        assert!(pop.albums.iter().all(|album| album.genre.is_none()));
+        assert!(
+            transport
+                .requests()
+                .pop()
+                .expect("request")
+                .url
+                .ends_with("/v1/genres/Pop/albums")
+        );
+
+        let top = client
+            .browse(&context, BrowseSection::Popular, 0, 50)
+            .await
+            .expect("top");
+        assert_eq!(top.albums[0].title, "Night Shift Standards");
+        let recommended = client
+            .browse(&context, BrowseSection::EditorsPicks, 0, 50)
+            .await
+            .expect("recommended");
+        assert_eq!(recommended.albums[0].title, "Low Tide Hymns");
+        assert!(matches!(
+            client
+                .browse(&context, BrowseSection::PressAwards, 0, 50)
+                .await,
+            Err(ProviderError::Unavailable(_))
+        ));
+        assert!(
+            client
+                .editorial_sections()
+                .iter()
+                .all(|section| section.id != BrowseSection::PressAwards)
         );
     }
 

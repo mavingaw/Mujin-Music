@@ -6,6 +6,7 @@
 //! Credentials and tokens are sealed per user by [`vault::TokenVault`].
 
 pub mod artwork;
+pub mod catalog;
 pub mod hub;
 pub mod md5;
 pub mod media;
@@ -315,6 +316,12 @@ pub struct ArtistSummary {
 #[serde(rename_all = "snake_case")]
 pub enum BrowseSection {
     NewReleases,
+    /// TIDAL "Top", Qobuz "Most streamed".
+    Popular,
+    /// TIDAL "Recommended", Qobuz "Editor's picks".
+    EditorsPicks,
+    /// Qobuz only: albums with press awards.
+    PressAwards,
     FavoriteAlbums,
     FavoriteTracks,
 }
@@ -323,11 +330,42 @@ impl BrowseSection {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "new_releases" => Some(Self::NewReleases),
+            "popular" => Some(Self::Popular),
+            "editors_picks" => Some(Self::EditorsPicks),
+            "press_awards" => Some(Self::PressAwards),
             "favorite_albums" => Some(Self::FavoriteAlbums),
             "favorite_tracks" => Some(Self::FavoriteTracks),
             _ => None,
         }
     }
+
+    pub fn is_editorial(self) -> bool {
+        matches!(
+            self,
+            Self::NewReleases | Self::Popular | Self::EditorsPicks | Self::PressAwards
+        )
+    }
+}
+
+/// An editorial album list a service publishes, in the order its own app
+/// shows them.
+#[derive(Clone, Debug, Serialize)]
+pub struct EditorialSection {
+    pub id: BrowseSection,
+    pub label: &'static str,
+    /// Whether the list can be narrowed to one genre.
+    pub by_genre: bool,
+}
+
+/// A genre as the service names it. `id` is the service's own key (a number
+/// on Qobuz, a path such as `Pop` on TIDAL).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderGenre {
+    pub id: String,
+    pub provider: ProviderId,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -529,6 +567,27 @@ pub trait StreamingProvider: Send + Sync {
     fn browse<'a>(
         &'a self,
         context: &'a ProviderContext,
+        section: BrowseSection,
+        offset: u32,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<BrowsePage>>;
+
+    /// The editorial lists this service publishes (new releases, top
+    /// albums, editor's picks, ...).
+    fn editorial_sections(&self) -> &'static [EditorialSection];
+
+    /// The service's top-level genres.
+    fn genres<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+    ) -> BoxFuture<'a, ProviderResult<Vec<ProviderGenre>>>;
+
+    /// Albums in one genre. `section` picks the editorial list where the
+    /// service can narrow it by genre; otherwise the genre's own page.
+    fn genre_albums<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        genre_id: &'a str,
         section: BrowseSection,
         offset: u32,
         limit: u32,

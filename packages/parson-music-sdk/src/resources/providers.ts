@@ -18,8 +18,27 @@ export type StreamQuality =
 export type StreamingAccountStatus =
   "configured" | "pending" | "signed_in" | "expired" | "error";
 export type StreamingItemKind = "album" | "track";
+/** Editorial lists (`new_releases` ... `press_awards`) and favorites. */
+export type StreamingEditorialSection =
+  "new_releases" | "popular" | "editors_picks" | "press_awards";
 export type StreamingBrowseSection =
-  "new_releases" | "favorite_albums" | "favorite_tracks";
+  StreamingEditorialSection | "favorite_albums" | "favorite_tracks";
+
+/** An editorial list a service publishes, in its own app's order. */
+export interface StreamingBrowseSectionInfo {
+  id: StreamingEditorialSection;
+  label: string;
+  /** Whether the list can be narrowed to one genre (Qobuz). */
+  by_genre: boolean;
+}
+
+/** A service genre; `id` is the service's own key. */
+export interface StreamingGenre {
+  id: string;
+  provider: StreamingProviderId;
+  name: string;
+  image_url?: string | null;
+}
 
 export const STREAMING_PROVIDERS: readonly StreamingProviderId[] = [
   "tidal",
@@ -136,6 +155,7 @@ export interface StreamingProviderStatus {
   plan: string | null;
   quality: StreamQuality;
   quality_options: StreamingQualityOption[];
+  browse_sections: StreamingBrowseSectionInfo[];
   last_library_sync: number | null;
   credentials: {
     configured: boolean;
@@ -615,6 +635,108 @@ export async function browseStreaming(
     await api.get(`/providers/${provider}/browse/${section}`, {
       params: options,
     })
+  ).data;
+}
+
+export async function getStreamingGenres(
+  provider: StreamingProviderId,
+): Promise<StreamingGenre[]> {
+  return (
+    await api.get<{ genres: StreamingGenre[] }>(`/providers/${provider}/genres`)
+  ).data.genres;
+}
+
+export interface StreamingGenreAlbums {
+  genre: StreamingGenre;
+  albums: StreamingAlbum[];
+  total: number | null;
+}
+
+/** One genre's albums, optionally from one editorial list (Qobuz). */
+export async function getStreamingGenreAlbums(
+  provider: StreamingProviderId,
+  genreId: string,
+  options: {
+    section?: StreamingEditorialSection;
+    offset?: number;
+    limit?: number;
+  } = {},
+): Promise<StreamingGenreAlbums> {
+  return (
+    await api.get<StreamingGenreAlbums>(
+      `/providers/${provider}/genres/${encodeURIComponent(genreId)}/albums`,
+      { params: options },
+    )
+  ).data;
+}
+
+/** Where an album in the unified catalog lives. */
+export type CatalogSource = "local" | StreamingProviderId;
+export type CatalogQuality = "hi_res" | "lossless" | "lossy";
+
+/** One album tile: local files or a streaming library album. */
+export interface CatalogAlbum {
+  key: string;
+  /** A library album id, or a provider-scoped id such as `qobuz:...`. */
+  id: string;
+  name: string;
+  artist_id: string;
+  artist_name: string;
+  /** A library cover path, or an artwork URL for streaming albums. */
+  cover: string;
+  year: number | null;
+  genres: string[];
+  source: CatalogSource;
+  format_label: string | null;
+  quality: CatalogQuality | null;
+  /** The genres came from another copy of the album (TIDAL has none). */
+  genre_inferred?: boolean;
+}
+
+export interface CatalogFacet<T> {
+  value: T;
+  count: number;
+}
+
+export interface CatalogFacets {
+  sources: CatalogFacet<CatalogSource>[];
+  genres: CatalogFacet<string>[];
+  decades: CatalogFacet<number>[];
+  qualities: CatalogFacet<CatalogQuality>[];
+}
+
+export interface CatalogAlbumPage {
+  albums: CatalogAlbum[];
+  total: number;
+  /** Each facet counts albums matching every other filter. */
+  facets: CatalogFacets;
+  local_ready: boolean;
+}
+
+export interface CatalogFilter {
+  source?: CatalogSource;
+  genre?: string;
+  /** A year ending in 0, e.g. 1990. */
+  decade?: number;
+  quality?: CatalogQuality;
+  q?: string;
+}
+
+/**
+ * Local and streaming albums in one catalog, filtered by source, genre,
+ * decade and quality together (Roon's Focus).
+ */
+export async function getCatalogAlbums(
+  filter: CatalogFilter = {},
+  page: { offset?: number; limit?: number } = {},
+): Promise<CatalogAlbumPage> {
+  const params = Object.fromEntries(
+    Object.entries({ ...filter, ...page }).filter(
+      ([, value]) => value !== undefined && value !== "",
+    ),
+  );
+  return (
+    await api.get<CatalogAlbumPage>("/providers/catalog/albums", { params })
   ).data;
 }
 

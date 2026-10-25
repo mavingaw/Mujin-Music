@@ -12,6 +12,10 @@ use crate::library::search::normalize;
 
 pub const TIDAL_FIXTURES: &str = include_str!("fixtures/tidal.json");
 pub const QOBUZ_FIXTURES: &str = include_str!("fixtures/qobuz.json");
+/// Genre and editorial lists. Loaded first: their routes are more specific
+/// than the generic recorded `album/getFeatured` reply.
+pub const TIDAL_BROWSE_FIXTURES: &str = include_str!("fixtures/tidal_browse.json");
+pub const QOBUZ_BROWSE_FIXTURES: &str = include_str!("fixtures/qobuz_browse.json");
 
 /// Length of a sandbox preview.
 pub const PREVIEW_SECONDS: u32 = 30;
@@ -24,8 +28,13 @@ pub fn enabled_from_env() -> bool {
 }
 
 pub fn transport() -> FixtureTransport {
-    FixtureTransport::from_json(&[TIDAL_FIXTURES, QOBUZ_FIXTURES])
-        .expect("embedded streaming fixtures are valid JSON")
+    FixtureTransport::from_json(&[
+        TIDAL_BROWSE_FIXTURES,
+        QOBUZ_BROWSE_FIXTURES,
+        TIDAL_FIXTURES,
+        QOBUZ_FIXTURES,
+    ])
+    .expect("embedded streaming fixtures are valid JSON")
 }
 
 /// Recorded search responses are not query-specific, so sandbox search keeps

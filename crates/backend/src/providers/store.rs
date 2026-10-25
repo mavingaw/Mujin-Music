@@ -824,6 +824,27 @@ pub fn list_items(
     Ok((rows, total))
 }
 
+/// Streaming albums a listener's library can hold in the unified catalog;
+/// TIDAL itself stops at about 10,000 favorites.
+pub const MAX_CATALOG_ALBUMS: i64 = 10_000;
+
+/// Every streaming album in a listener's library (up to
+/// [`MAX_CATALOG_ALBUMS`]), for the unified album catalog.
+pub fn all_albums(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+) -> QueryResult<Vec<LibraryItemRow>> {
+    diesel::sql_query(
+        "SELECT provider, kind, provider_item_id, title, artist_name, album_title, cover_url,
+                release_date, duration, track_count, format_label, payload, origin, added_at
+         FROM provider_library_item WHERE user_id = ? AND kind = 'album'
+         ORDER BY added_at DESC LIMIT ?",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<BigInt, _>(MAX_CATALOG_ALBUMS)
+    .load(connection)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct LibraryCounts {
     pub albums: i64,
