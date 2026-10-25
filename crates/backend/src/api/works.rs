@@ -871,7 +871,7 @@ pub async fn identify_album(
     .await
     {
         Ok(identification) => {
-            wake().notify_one();
+            wake().notify_all();
             HttpResponse::Accepted().json(serde_json::json!({ "identification": identification }))
         }
         Err(error) => {
@@ -896,7 +896,7 @@ pub async fn clear_identification(
     .await
     {
         Ok(()) => {
-            wake().notify_one();
+            wake().notify_all();
             HttpResponse::Accepted().finish()
         }
         Err(error) => {

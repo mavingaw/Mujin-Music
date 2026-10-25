@@ -3,6 +3,7 @@
 import type { AboutCredit } from "@parson/music-sdk/types";
 import Link from "next/link";
 import { creditHref, creditTracksLabel, groupCredits } from "./credit-roles";
+import { PersonAvatar } from "./person-avatar";
 
 function SourceMark({ sources }: { sources: AboutCredit["sources"] }) {
   if (!sources.includes("musicbrainz")) return null;
@@ -61,7 +62,7 @@ export function CreditsList({
     <dl className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
       {groups.map((group) => (
         <div className="min-w-0" key={group.key}>
-          <dt className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500">
+          <dt className="mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500">
             {group.label}
           </dt>
           {group.credits.map((credit) => {
@@ -71,9 +72,14 @@ export function CreditsList({
                 : "";
             return (
               <dd
-                className="flex min-w-0 items-baseline gap-2 py-1 text-[15px]"
+                className="flex min-w-0 items-center gap-3 py-1.5 text-[15px]"
                 key={`${credit.id ?? ""}-${credit.name}`}
               >
+                <PersonAvatar
+                  imageUrl={credit.image_url}
+                  name={credit.name}
+                  size={36}
+                />
                 <CreditName
                   className="truncate font-medium text-zinc-100"
                   credit={credit}

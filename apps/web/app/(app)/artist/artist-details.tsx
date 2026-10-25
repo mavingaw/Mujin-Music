@@ -25,6 +25,8 @@ import { ArtistCreditsPanel } from "./artist-credits";
 import { ArtistCompositionsPanel } from "./artist-compositions";
 import { useArtistWorks } from "@/features/library/works/use-works";
 import { ArtistOverview } from "./artist-overview";
+import { PersonAvatar } from "@/features/library/credits/person-avatar";
+import { lifeSpanFacts } from "@/features/library/credits/credit-roles";
 import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
@@ -198,53 +200,78 @@ export default function ArtistDetails({
     .filter(Boolean)
     .join(" · ");
 
+  const lifeSpan = lifeSpanFacts(about?.facts)
+    .map((fact) => `${fact.label} ${fact.value}`)
+    .join(" · ");
+  const kicker = isComposer
+    ? "Composer"
+    : !artist
+      ? "Contributor"
+      : about?.facts?.kind === "Group" || about?.facts?.kind === "Orchestra"
+        ? about.facts.kind
+        : "Artist";
+
   return (
     <div className="tidal-route relative text-zinc-50">
-      <div className="hidden">
-        <div
-          className="absolute inset-0 bg-cover bg-center opacity-80"
-          style={{
-            backgroundImage: artistIconURL
-              ? `url(${artistIconURL})`
-              : undefined,
-          }}
-        />
-        <div className="absolute inset-0 bg-black/45" />
-      </div>
-
-      <div className="relative z-10 mx-auto max-w-225 px-5 pb-24 pt-10 sm:px-7">
-        <div className="mb-8 flex items-end gap-5">
-          {heroImageURL && (
-            <figure className="shrink-0">
-              <div className="relative h-32 w-32 overflow-hidden rounded-full border border-white/10 sm:h-40 sm:w-40">
+      <header
+        aria-label={`${name} header`}
+        className="relative isolate mb-8 overflow-hidden rounded-2xl border border-white/8 bg-zinc-900/60"
+      >
+        {heroImageURL ? (
+          <div aria-hidden className="absolute inset-0 -z-10">
+            <Image
+              alt=""
+              className="scale-125 object-cover object-[50%_25%] opacity-50 blur-2xl"
+              fill
+              sizes="920px"
+              src={heroImageURL}
+            />
+            <div className="absolute inset-0 bg-linear-to-t from-black/85 via-black/45 to-black/10" />
+          </div>
+        ) : (
+          <div
+            aria-hidden
+            className="absolute inset-0 -z-10 bg-linear-to-br from-zinc-800/70 via-zinc-900/60 to-black"
+          />
+        )}
+        <div className="flex flex-col gap-6 px-6 pb-7 pt-10 sm:flex-row sm:items-end sm:px-8 sm:pt-16">
+          <figure className="shrink-0">
+            {heroImageURL ? (
+              <div className="relative h-36 w-36 overflow-hidden rounded-full border border-white/15 shadow-2xl shadow-black/60 sm:h-48 sm:w-48">
                 <Image
                   src={heroImageURL}
                   alt={name}
                   fill
-                  className="object-cover"
-                  sizes="160px"
+                  className="object-cover object-[50%_20%]"
+                  sizes="192px"
                   priority
                 />
               </div>
-            </figure>
-          )}
-          <div className="min-w-0">
-            {!artist && (
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-                Contributor
-              </p>
+            ) : (
+              <PersonAvatar
+                className="shadow-2xl shadow-black/60"
+                name={name}
+                size={160}
+              />
             )}
+          </figure>
+          <div className="min-w-0 pb-1">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+              {kicker}
+            </p>
             <h1 className="min-w-0 wrap-break-word text-4xl font-black leading-none text-white sm:text-6xl">
               {name}
             </h1>
-            {subtitle && (
-              <p className="mt-3 text-sm text-zinc-400">{subtitle}</p>
+            {(subtitle || lifeSpan) && (
+              <p className="mt-3 text-sm text-zinc-300">
+                {[subtitle, lifeSpan].filter(Boolean).join(" · ")}
+              </p>
             )}
             {!artistIconURL && about?.image && (
-              <p className="mt-2 text-xs text-zinc-500">
+              <p className="mt-2 text-xs text-zinc-400">
                 Photo:{" "}
                 <a
-                  className="hover:text-zinc-300 hover:underline"
+                  className="hover:text-zinc-200 hover:underline"
                   href={about.image.page_url}
                   rel="noreferrer"
                   target="_blank"
@@ -254,7 +281,7 @@ export default function ArtistDetails({
                 ,{" "}
                 {about.image.license_url ? (
                   <a
-                    className="hover:text-zinc-300 hover:underline"
+                    className="hover:text-zinc-200 hover:underline"
                     href={about.image.license_url}
                     rel="noreferrer license"
                     target="_blank"
@@ -269,7 +296,9 @@ export default function ArtistDetails({
             )}
           </div>
         </div>
+      </header>
 
+      <div className="relative z-10">
         {tabs.length > 1 && (
           <div
             aria-label="Artist sections"

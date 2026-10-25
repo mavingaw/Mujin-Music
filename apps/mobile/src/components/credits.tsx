@@ -19,6 +19,7 @@ import {
   View,
 } from "react-native";
 
+import { PersonAvatar } from "@/components/person-avatar";
 import { palette } from "@/constants/colors";
 import { artistRoute } from "@/lib/credit-links";
 import { immediatePressFeedback } from "@/lib/press-feedback";
@@ -94,8 +95,16 @@ export function CreditsSection({
                 onPress={() =>
                   credit.id && router.push(artistRoute(credit.id, "credits"))
                 }
+                style={styles.personRow}
               >
-                <Text style={styles.person}>{credit.name}</Text>
+                <PersonAvatar
+                  imageUrl={credit.image_url}
+                  name={credit.name}
+                  size={34}
+                />
+                <Text numberOfLines={1} style={styles.person}>
+                  {credit.name}
+                </Text>
               </Pressable>
             ))}
           </View>
@@ -206,8 +215,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: "uppercase",
   },
-  people: { flexDirection: "row", flexWrap: "wrap", columnGap: 14, rowGap: 6 },
-  person: { color: "white", fontSize: 15, fontWeight: "600" },
+  people: { gap: 8 },
+  personRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  person: { color: "white", fontSize: 15, fontWeight: "600", flexShrink: 1 },
   privateRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   input: {
     minHeight: 110,

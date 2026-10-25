@@ -41,6 +41,8 @@ pub struct AboutCredit {
     pub track_ids: Vec<String>,
     /// `tags` and/or `musicbrainz`.
     pub sources: Vec<String>,
+    /// The person's cached photo (`/artists/{id}/image`), when there is one.
+    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -175,6 +177,7 @@ pub fn merge_album_credits(
             instrument: credit.credit.instrument,
             track_ids: credit.track_ids,
             sources: vec!["tags".into()],
+            image_url: None,
         });
     }
     for row in external {
@@ -225,6 +228,7 @@ pub fn merge_album_credits(
                         vec![row.track_id.clone()]
                     },
                     sources: vec![row.source.clone()],
+                    image_url: None,
                 });
             }
         }
@@ -555,7 +559,31 @@ async fn load_stored(
 fn parse_facts(profile: Option<&store::ProfileRow>) -> Option<Value> {
     profile
         .and_then(|profile| serde_json::from_str::<Value>(&profile.profile_json).ok())
+        .map(|mut value| {
+            // What Wikidata linked to is bookkeeping for later stages.
+            if let Some(object) = value.as_object_mut() {
+                object.remove(crate::enrichment::worker::WIKIDATA_KEY);
+            }
+            value
+        })
         .filter(|value| value.as_object().is_some_and(|object| !object.is_empty()))
+}
+
+/// The photo URL for a credited person who has one.
+pub(crate) fn artist_image_url(artist_id: &str) -> String {
+    format!("/artists/{artist_id}/image")
+}
+
+/// Looks up which credited people have a stored photo.
+async fn credited_images(pool: DbPool, ids: Vec<String>) -> std::collections::HashSet<String> {
+    web::block(move || {
+        let mut connection = pool.get().map_err(|error| error.to_string())?;
+        store::artists_with_images(&mut connection, &ids).map_err(|error| error.to_string())
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or_default()
 }
 
 #[get("/{id}/about")]
@@ -590,6 +618,7 @@ pub async fn album_about(
         }
     };
     let lookup = album_id.clone();
+    let image_pool = pool.get_ref().clone();
     let pool = pool.get_ref().clone();
     let works = web::block(move || {
         let mut connection = pool.get().map_err(|error| error.to_string())?;
@@ -623,11 +652,25 @@ pub async fn album_about(
         stored.credits.clear();
     }
     let mut texts = stored.texts;
+    let mut credits = merge_album_credits(album, &known, &stored.credits);
+    let ids = credits
+        .iter()
+        .filter_map(|credit| credit.artist_id.clone())
+        .filter(|id| !id.starts_with(EXTERNAL_PREFIX))
+        .collect::<Vec<_>>();
+    let images = credited_images(image_pool, ids).await;
+    for credit in &mut credits {
+        credit.image_url = credit
+            .artist_id
+            .as_deref()
+            .filter(|id| images.contains(*id))
+            .map(artist_image_url);
+    }
     HttpResponse::Ok().json(AlbumAbout {
         works: crate::api::works::album_track_works(&work_links, &work_rows, &people),
         identification,
         album_id,
-        credits: merge_album_credits(album, &known, &stored.credits),
+        credits,
         background: texts.remove("background"),
         review: texts.remove("reception"),
         facts: parse_facts(stored.profile.as_ref()),
@@ -743,7 +786,7 @@ pub async fn artist_about(
     let mut texts = stored.texts;
     HttpResponse::Ok().json(ArtistAbout {
         image: stored.image.map(|image| EditorialImage {
-            url: format!("/artists/{artist_id}/image"),
+            url: artist_image_url(&artist_id),
             author: image.author,
             license: image.license,
             license_url: image.license_url,
@@ -879,6 +922,17 @@ pub struct EnrichmentOverview {
     pub settings: store::EnrichmentSettings,
     pub counts: store::TaskCounts,
     pub sources: Vec<&'static str>,
+    /// Each lookup stage's queue, with its own host and back-off.
+    pub stages: Vec<StageStatus>,
+}
+
+#[derive(Serialize)]
+pub struct StageStatus {
+    pub stage: store::Stage,
+    pub host: &'static str,
+    pub counts: store::TaskCounts,
+    /// Seconds until the host is asked again after it said it was busy.
+    pub paused_seconds: u64,
 }
 
 async fn overview(pool: DbPool) -> HttpResponse {
@@ -887,12 +941,21 @@ async fn overview(pool: DbPool) -> HttpResponse {
         Ok::<_, String>(EnrichmentOverview {
             settings: store::load_settings(&mut connection).map_err(|error| error.to_string())?,
             counts: store::task_counts(&mut connection).map_err(|error| error.to_string())?,
-            sources: vec![
-                "musicbrainz.org",
-                "wikidata.org",
-                "wikipedia.org",
-                "commons.wikimedia.org",
-            ],
+            sources: store::Stage::ALL.iter().map(|stage| stage.host()).collect(),
+            stages: store::Stage::ALL
+                .iter()
+                .map(|stage| {
+                    Ok(StageStatus {
+                        stage: *stage,
+                        host: stage.host(),
+                        counts: store::stage_counts(&mut connection, *stage)?,
+                        paused_seconds: crate::enrichment::worker::backoffs()
+                            .paused_for(*stage, std::time::Instant::now())
+                            .as_secs(),
+                    })
+                })
+                .collect::<diesel::QueryResult<Vec<_>>>()
+                .map_err(|error| error.to_string())?,
         })
     })
     .await
@@ -965,7 +1028,7 @@ pub async fn put_enrichment(
     .await;
     match saved {
         Ok(Ok(())) => {
-            wake().notify_one();
+            wake().notify_all();
             overview(pool.get_ref().clone()).await
         }
         _ => internal_server_error("Could not save enrichment settings.", "enrichment_failed"),
@@ -1004,7 +1067,7 @@ pub async fn refresh_enrichment(
     .await
     {
         Ok(Ok(())) => {
-            wake().notify_one();
+            wake().notify_all();
             HttpResponse::Accepted().finish()
         }
         _ => internal_server_error("Could not queue the refresh.", "enrichment_failed"),
