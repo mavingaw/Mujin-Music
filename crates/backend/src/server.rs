@@ -271,6 +271,7 @@ pub async fn build_server_with_shutdown_timeout(
         .expect("new library lifecycle has no active scan");
     let database = web::Data::new(local_app.database);
     data::start_automatic_backups(database.get_ref().clone());
+    crate::library::works_online::start_musicbrainz_enrichment(database.get_ref().clone());
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()

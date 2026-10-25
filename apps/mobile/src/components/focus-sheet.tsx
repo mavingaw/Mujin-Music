@@ -3,6 +3,7 @@ import {
   createSmartPlaylist,
   cycleFilter,
   decadeCriterion,
+  isYearFacet,
   decadesFromYears,
   deleteSavedFocus,
   effectiveDirection,
@@ -96,7 +97,15 @@ export function FocusSheet({
   const [bookmarkName, setBookmarkName] = useState("");
   const [busy, setBusy] = useState<"bookmark" | "smart" | null>(null);
   const [message, setMessage] = useState("");
-  const columns = visibleFacets(facets.data?.facets ?? [], query.entity);
+  const columns = visibleFacets(facets.data?.facets ?? [], query.entity, {
+    composerScoped: Boolean(
+      query.scope?.some(
+        (criterion) =>
+          criterion.facet === "credit" && criterion.role === "composer",
+      ),
+    ),
+    query,
+  });
   const sort = effectiveSort(query);
   const direction = effectiveDirection(query);
   const focused = query.filters.length > 0 || Boolean(query.text?.trim());
@@ -377,7 +386,8 @@ function FacetSection({
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
 }) {
-  if (facet.key === "year") {
+  if (isYearFacet(facet.key)) {
+    const yearKey = facet.key;
     return (
       <View>
         <Text style={styles.section}>{facetTitle(facet)}</Text>
@@ -388,9 +398,14 @@ function FacetSection({
               key={bucket.decade}
               label={`${bucket.decade}s`}
               onPress={() =>
-                setQuery(cycleFilter(query, decadeCriterion(bucket.decade)))
+                setQuery(
+                  cycleFilter(query, decadeCriterion(bucket.decade, yearKey)),
+                )
               }
-              state={filterState(query, decadeCriterion(bucket.decade))}
+              state={filterState(
+                query,
+                decadeCriterion(bucket.decade, yearKey),
+              )}
             />
           ))}
         </View>

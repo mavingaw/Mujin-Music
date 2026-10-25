@@ -11,6 +11,12 @@ import {
   type FocusQuery,
 } from "./focus";
 import {
+  SORT_OPTIONS,
+  composerFacts,
+  criterionForFacetValue,
+  isYearFacet,
+  workDescription,
+  workScope,
   albumScope,
   clearedFocus,
   composerScope,
@@ -355,5 +361,150 @@ describe("scoped focus", () => {
     });
     await getFocusPerson("a b");
     expect(get).toHaveBeenCalledWith("/library/focus/people/a%20b");
+  });
+});
+
+describe("compositions and work facets", () => {
+  test("work descriptions read like Roon's composer pages", () => {
+    expect(
+      workDescription({
+        form: "Symphony",
+        instrumentation: "Orchestra",
+        composedYear: 1812,
+      }),
+    ).toBe("Symphony for Orchestra · Composed 1812");
+    // The specific scoring wins over the category.
+    expect(
+      workDescription({
+        form: "Concerto",
+        instrumentation: "Solo Instrument & Orchestra",
+        scoring: "Violin & Orchestra",
+        composedYear: 1806,
+      }),
+    ).toBe("Concerto for Violin & Orchestra · Composed 1806");
+    expect(workDescription({ form: "Nocturne" })).toBe("Nocturne");
+    expect(workDescription({ composedYear: 1900 })).toBe("Composed 1900");
+    expect(workDescription({})).toBe("");
+  });
+
+  test("composer facts list nationality, period and life dates", () => {
+    expect(
+      composerFacts({
+        nationality: "German",
+        period: "Classical",
+        birthYear: 1770,
+        deathYear: 1827,
+      }),
+    ).toBe("German · Classical · 1770–1827");
+    expect(composerFacts({ birthYear: 1935, nationality: "Estonian" })).toBe(
+      "Estonian · b. 1935",
+    );
+    expect(composerFacts({})).toBe("");
+  });
+
+  test("form, period and composition date facets build filters and chips", () => {
+    const form = criterionForFacetValue(
+      { key: "form" },
+      { value: "Symphony", label: "Symphony", count: 3 },
+    );
+    expect(form).toEqual({ facet: "form", value: "Symphony" });
+    expect(filterKey(form)).toBe("form:symphony");
+    const composed = criterionForFacetValue(
+      { key: "composed" },
+      { value: "1812", label: "1812", count: 1 },
+    );
+    expect(composed).toEqual({ facet: "composed", from: 1812, to: 1812 });
+    expect(criterionLabel(decadeCriterion(1800, "composed"))).toBe(
+      "Composed 1800s",
+    );
+    expect(isYearFacet("composed")).toBe(true);
+    expect(isYearFacet("form")).toBe(false);
+    expect(facetTitle({ key: "instrumentation" })).toBe("Instrumentation");
+    expect(facetTitle({ key: "period" })).toBe("Period");
+    expect(facetTitle({ key: "nationality" })).toBe("Nationality");
+    // A different composition decade replaces the range, like release years.
+    let query = cycleFilter(
+      emptyFocus("compositions"),
+      decadeCriterion(1800, "composed"),
+    );
+    query = cycleFilter(query, decadeCriterion(1810, "composed"));
+    expect(query.filters).toEqual([
+      { facet: "composed", from: 1810, to: 1819, exclude: false },
+    ]);
+    expect(
+      criterionLabel({ facet: "work", work_id: "wk_1", name: "Eroica" }),
+    ).toBe("Eroica");
+    expect(workScope("wk_1", "Eroica")).toEqual({
+      facet: "work",
+      work_id: "wk_1",
+      name: "Eroica",
+    });
+  });
+
+  test("the Compositions browser has its own sorts, nouns and endpoint", () => {
+    expect(SORT_OPTIONS.compositions.map((option) => option.value)).toContain(
+      "release_date",
+    );
+    expect(effectiveSort(emptyFocus("compositions"))).toBe("title");
+    expect(usesFocusEndpoint(emptyFocus("compositions"))).toBe(true);
+    expect(entityNoun("compositions", 2)).toBe("compositions");
+    expect(
+      SORT_OPTIONS.composers.find((option) => option.value === "release_date")
+        ?.label,
+    ).toBe("Chronological");
+    const decoded = decodeFocus(
+      JSON.stringify({ filters: [{ facet: "form", value: "Sonata" }] }),
+      "compositions",
+    );
+    expect(decoded.filters).toEqual([{ facet: "form", value: "Sonata" }]);
+  });
+
+  test("work facets replace genres, dates and artists for compositions", () => {
+    const facets = [
+      {
+        key: "form" as const,
+        total: 1,
+        values: [{ value: "Symphony", label: "Symphony", count: 2 }],
+      },
+      {
+        key: "genre" as const,
+        total: 1,
+        values: [{ value: "Classical", label: "Classical", count: 2 }],
+      },
+      {
+        key: "year" as const,
+        total: 1,
+        values: [{ value: "1978", label: "1978", count: 2 }],
+      },
+      {
+        key: "artist" as const,
+        total: 1,
+        values: [{ value: "a", label: "A", count: 2 }],
+      },
+      {
+        key: "nationality" as const,
+        total: 1,
+        values: [{ value: "German", label: "German", count: 2 }],
+      },
+      {
+        key: "credit" as const,
+        role: "composer",
+        total: 1,
+        values: [{ value: "c", label: "Composer", count: 2 }],
+      },
+    ];
+    expect(
+      visibleFacets(facets, "compositions").map((facet) => facet.key),
+    ).toEqual(["form", "nationality", "credit"]);
+    // On a composer's page the composer and nationality columns only
+    // repeat the composer.
+    expect(
+      visibleFacets(facets, "compositions", { composerScoped: true }).map(
+        (facet) => facet.key,
+      ),
+    ).toEqual(["form"]);
+    expect(visibleFacets(facets, "albums").map((facet) => facet.key)).toContain(
+      "genre",
+    );
   });
 });

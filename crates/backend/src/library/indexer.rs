@@ -46,7 +46,7 @@ use crate::library::storage::get_cover_art_path;
 use crate::persistence::connection::{DbPool, connect};
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
-const TAG_PARSER_VERSION: &str = "18";
+const TAG_PARSER_VERSION: &str = "19";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -261,6 +261,10 @@ struct TagWork {
     movement_number: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     release_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    composed_year: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -833,6 +837,10 @@ struct ExistingFileSnapshot {
     movement_number: Option<i32>,
     #[diesel(sql_type = Nullable<Text>)]
     release_type: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    work_mbid: Option<String>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    composed_year: Option<i32>,
 }
 
 #[derive(Debug, QueryableByName)]
@@ -2315,6 +2323,8 @@ struct FileExtrasStage<'a> {
     movement: Option<&'a str>,
     movement_number: Option<u16>,
     release_type: Option<&'a str>,
+    work_mbid: Option<&'a str>,
+    composed_year: Option<u16>,
 }
 
 fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
@@ -2333,6 +2343,8 @@ fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
         movement: parsed.work.movement.as_deref(),
         movement_number: parsed.work.movement_number,
         release_type: parsed.work.release_type.as_deref(),
+        work_mbid: parsed.work.work_id.as_deref(),
+        composed_year: parsed.work.composed_year,
     })
 }
 
@@ -4952,6 +4964,7 @@ fn populate_lofty_credits(credits: &mut TagCredits, tag: &lofty::tag::Tag) {
         (ItemKey::Movement, "MOVEMENTNAME"),
         (ItemKey::MovementNumber, "MOVEMENT"),
         (ItemKey::MusicBrainzReleaseType, "RELEASETYPE"),
+        (ItemKey::MusicBrainzWorkId, "MUSICBRAINZ_WORKID"),
     ] {
         for value in tag.get_strings(key) {
             credits.apply_named(role, value);
@@ -5240,6 +5253,8 @@ fn parsed_file_from_result(
             movement: metadata.credits.movement.clone(),
             movement_number: metadata.credits.movement_number,
             release_type: metadata.credits.release_type.clone(),
+            work_id: metadata.credits.work_id.clone(),
+            composed_year: metadata.credits.composed_year,
         },
         credits: metadata.credits.credits,
         tag_parse_us: metadata.tag_parse_us,
@@ -5343,6 +5358,10 @@ fn snapshot_to_parsed(snapshot: &ExistingFileSnapshot) -> ParsedFile {
                 .movement_number
                 .and_then(|value| u16::try_from(value).ok()),
             release_type: snapshot.release_type.clone(),
+            work_id: snapshot.work_mbid.clone(),
+            composed_year: snapshot
+                .composed_year
+                .and_then(|value| u16::try_from(value).ok()),
         },
         tag_parse_us: 0,
         duration_us: 0,
@@ -6849,7 +6868,8 @@ fn existing_snapshots(
                 rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
                 rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc,
-                rfm.work, rfm.movement, rfm.movement_number, rfm.release_type
+                rfm.work, rfm.movement, rfm.movement_number, rfm.release_type,
+                rfm.work_mbid, rfm.composed_year
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.root_id = {root_id}"
@@ -6870,7 +6890,8 @@ fn all_available_snapshots(conn: &mut SqliteConnection) -> QueryResult<Vec<Exist
                 rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
                 rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc,
-                rfm.work, rfm.movement, rfm.movement_number, rfm.release_type
+                rfm.work, rfm.movement, rfm.movement_number, rfm.release_type,
+                rfm.work_mbid, rfm.composed_year
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.availability = 'available'",
@@ -7209,7 +7230,7 @@ fn upsert_file_metadata(
              musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id, error,
              embedded_artwork_offset, embedded_artwork_length,
              codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc,
-             work, movement, movement_number, release_type)
+             work, movement, movement_number, release_type, work_mbid, composed_year)
          SELECT file.id, stage.title, stage.album, stage.track_artists_json, stage.album_artists_json,
                 stage.genres_json, stage.release_date, stage.cover_url, stage.parser_version,
                 stage.cover_resolver_version, stage.classification_version,
@@ -7223,7 +7244,9 @@ fn upsert_file_metadata(
                 json_extract(stage.extras_json, '$.label'), json_extract(stage.extras_json, '$.isrc'),
                 json_extract(stage.extras_json, '$.work'), json_extract(stage.extras_json, '$.movement'),
                 json_extract(stage.extras_json, '$.movement_number'),
-                json_extract(stage.extras_json, '$.release_type')
+                json_extract(stage.extras_json, '$.release_type'),
+                json_extract(stage.extras_json, '$.work_mbid'),
+                json_extract(stage.extras_json, '$.composed_year')
          FROM file_metadata_stage stage JOIN file_entry file USING(path) WHERE stage.was_parsed
          ON CONFLICT(file_id) DO UPDATE SET
              title = excluded.title, album = excluded.album, track_artists_json = excluded.track_artists_json,
@@ -7248,6 +7271,7 @@ fn upsert_file_metadata(
              credits_json = excluded.credits_json, label = excluded.label, isrc = excluded.isrc,
              work = excluded.work, movement = excluded.movement,
              movement_number = excluded.movement_number, release_type = excluded.release_type,
+             work_mbid = excluded.work_mbid, composed_year = excluded.composed_year,
              parsed_at = CURRENT_TIMESTAMP
          WHERE raw_file_metadata.title IS NOT excluded.title OR raw_file_metadata.album IS NOT excluded.album
             OR raw_file_metadata.track_artists_json IS NOT excluded.track_artists_json
@@ -7277,7 +7301,9 @@ fn upsert_file_metadata(
             OR raw_file_metadata.work IS NOT excluded.work
             OR raw_file_metadata.movement IS NOT excluded.movement
             OR raw_file_metadata.movement_number IS NOT excluded.movement_number
-            OR raw_file_metadata.release_type IS NOT excluded.release_type;
+            OR raw_file_metadata.release_type IS NOT excluded.release_type
+            OR raw_file_metadata.work_mbid IS NOT excluded.work_mbid
+            OR raw_file_metadata.composed_year IS NOT excluded.composed_year;
 
          DELETE FROM duration_repair_queue
          WHERE file_id IN (
@@ -10740,6 +10766,8 @@ mod external_library_tests {
             movement: None,
             movement_number: None,
             release_type: None,
+            work_mbid: None,
+            composed_year: None,
         }
     }
 
@@ -14045,6 +14073,11 @@ mod technical_and_credit_tests {
             ))
             .expect("works and composers schema");
         connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-10-27-121500_focus_compositions/up.sql"
+            ))
+            .expect("compositions schema");
+        connection
     }
 
     fn credited_track() -> ParsedFile {
@@ -14157,6 +14190,8 @@ mod technical_and_credit_tests {
             movement: Some("Allegro con brio".into()),
             movement_number: Some(1),
             release_type: Some("album".into()),
+            work_id: Some("1f9df192-a621-4e4d-9a53-9a0e8b8a4b1e".into()),
+            composed_year: Some(1808),
         };
         let file = discovered("flac-96k-24bit-stereo.flac", 32_182);
         let files = vec![file.clone()];
@@ -14200,6 +14235,11 @@ mod technical_and_credit_tests {
         assert_eq!(snapshot.movement.as_deref(), Some("Allegro con brio"));
         assert_eq!(snapshot.movement_number, Some(1));
         assert_eq!(snapshot.release_type.as_deref(), Some("album"));
+        assert_eq!(
+            snapshot.work_mbid.as_deref(),
+            Some("1f9df192-a621-4e4d-9a53-9a0e8b8a4b1e")
+        );
+        assert_eq!(snapshot.composed_year, Some(1808));
 
         let reused = snapshot_to_parsed(snapshot);
         assert_eq!(reused.technical, parsed.technical);

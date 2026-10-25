@@ -6,6 +6,8 @@ import {
   recordingCaption,
   recordingSongs,
   smartPlaylistName,
+  durationLabel,
+  workCaption,
 } from "./library-focus";
 
 test("only catalog browsers have a Focus", () => {
@@ -83,4 +85,19 @@ test("a composition recording plays in movement order with album context", () =>
   expect(
     recordingCaption({ ...recording, performers: [], releaseYear: null }),
   ).toBe("Berliner Philharmoniker");
+});
+
+test("compositions show their composer, form, scoring and date", () => {
+  expect(
+    workCaption({
+      composers: [{ id: "b", name: "Ludwig van Beethoven" }],
+      form: "Symphony",
+      instrumentation: "Orchestra",
+      composedYear: 1812,
+    }),
+  ).toBe("Ludwig van Beethoven · Symphony for Orchestra · Composed 1812");
+  expect(workCaption({ composers: [], form: null })).toBe("");
+  expect(focusEntityForSection("compositions")).toBe("compositions");
+  expect(durationLabel(245)).toBe("4:05");
+  expect(durationLabel(0)).toBe("");
 });

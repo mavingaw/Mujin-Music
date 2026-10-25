@@ -47,6 +47,8 @@ pub enum FocusEntity {
     Artists,
     /// People credited as composer on at least one track.
     Composers,
+    /// Musical works (see [`crate::library::works`]).
+    Compositions,
 }
 
 impl FocusEntity {
@@ -56,6 +58,7 @@ impl FocusEntity {
             Self::Songs => "songs",
             Self::Artists => "artists",
             Self::Composers => "composers",
+            Self::Compositions => "compositions",
         }
     }
 }
@@ -207,6 +210,36 @@ pub enum Criterion {
     AddedWithin {
         days: i64,
     },
+    /// Work form: Symphony, Sonata, Concerto, String Quartet, Song, ...
+    Form {
+        value: String,
+    },
+    /// Instrumentation category: Orchestra, Solo Keyboard, Keyboard Trio, ...
+    Instrumentation {
+        value: String,
+    },
+    /// Musical period. In the Composers browser it is the composer's
+    /// period; elsewhere the period of the work.
+    Period {
+        value: String,
+    },
+    /// Year of composition.
+    Composed {
+        #[serde(default)]
+        from: Option<i64>,
+        #[serde(default)]
+        to: Option<i64>,
+    },
+    /// Nationality of a composer.
+    Nationality {
+        value: String,
+    },
+    /// The recordings of one work, used to scope a focus to a composition.
+    Work {
+        work_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -323,6 +356,12 @@ impl FocusQuery {
                 Criterion::Genre { value }
                 | Criterion::Format { value }
                 | Criterion::Label { value } => valid_text(value, MAX_TEXT_CHARS),
+                Criterion::Form { value }
+                | Criterion::Instrumentation { value }
+                | Criterion::Period { value }
+                | Criterion::Nationality { value } => valid_text(value, 100),
+                Criterion::Composed { from, to } => valid_range(*from, *to, 9_999),
+                Criterion::Work { work_id, .. } => valid_text(work_id, 256),
                 Criterion::ReleaseType { value } => valid_text(value, 64),
                 Criterion::Year { from, to } => valid_range(*from, *to, 9_999),
                 Criterion::SampleRate { min, max } => valid_range(*min, *max, 10_000_000),
@@ -348,22 +387,37 @@ impl FocusQuery {
     pub fn effective_sort(&self) -> FocusSort {
         let requested = self.sort.unwrap_or(match self.entity {
             FocusEntity::Albums | FocusEntity::Songs => FocusSort::Artist,
-            FocusEntity::Artists | FocusEntity::Composers => FocusSort::Title,
+            FocusEntity::Artists | FocusEntity::Composers | FocusEntity::Compositions => {
+                FocusSort::Title
+            }
         });
         let supported = match self.entity {
             FocusEntity::Albums => !matches!(requested, FocusSort::Album),
             FocusEntity::Songs => !matches!(requested, FocusSort::TrackCount),
-            FocusEntity::Artists | FocusEntity::Composers => !matches!(
+            FocusEntity::Artists => !matches!(
                 requested,
                 FocusSort::Album
                     | FocusSort::ReleaseDate
                     | FocusSort::Duration
                     | FocusSort::Quality
             ),
+            // Release date sorts composers by birth year.
+            FocusEntity::Composers => !matches!(
+                requested,
+                FocusSort::Album | FocusSort::Duration | FocusSort::Quality
+            ),
+            // Release date sorts works by composition year; artist by composer.
+            FocusEntity::Compositions => !matches!(
+                requested,
+                FocusSort::Album | FocusSort::Duration | FocusSort::Quality
+            ),
         };
         if supported {
             requested
-        } else if matches!(self.entity, FocusEntity::Artists | FocusEntity::Composers) {
+        } else if matches!(
+            self.entity,
+            FocusEntity::Artists | FocusEntity::Composers | FocusEntity::Compositions
+        ) {
             FocusSort::Title
         } else {
             FocusSort::Artist
@@ -491,6 +545,55 @@ struct CriterionSets {
     albums: Option<Fragment>,
     /// Artist ids, when the criterion names artists directly.
     artists: Option<Fragment>,
+    /// Work ids, when the criterion is a property of the work itself.
+    works: Option<Fragment>,
+    /// Composer ids, when the criterion is a property of the composer
+    /// (period, nationality) rather than of the tracks they wrote.
+    composers: Option<Fragment>,
+}
+
+impl CriterionSets {
+    fn tracks(tracks: Fragment) -> Self {
+        Self {
+            tracks,
+            albums: None,
+            artists: None,
+            works: None,
+            composers: None,
+        }
+    }
+}
+
+/// Tracks that belong to a set of works.
+fn work_tracks(works: &Fragment) -> Fragment {
+    let mut tracks = Fragment::new("SELECT track_id FROM track_work WHERE work_id IN (");
+    tracks.append(works.clone()).push(")");
+    tracks
+}
+
+/// A work-level criterion: its works and the tracks recording them.
+fn work_level(works: Fragment) -> CriterionSets {
+    CriterionSets {
+        tracks: work_tracks(&works),
+        works: Some(works),
+        ..CriterionSets::tracks(Fragment::default())
+    }
+}
+
+/// A composer-level criterion: tracks composed by matching composers.
+fn composer_level(composers: Fragment) -> CriterionSets {
+    let mut tracks = Fragment::new(
+        "SELECT track_id FROM track_artist WHERE role = 'composer' AND artist_id IN (",
+    );
+    tracks.append(composers.clone()).push(")");
+    let mut works = Fragment::new("SELECT work_id FROM work_composer WHERE artist_id IN (");
+    works.append(composers.clone()).push(")");
+    CriterionSets {
+        tracks,
+        works: Some(works),
+        composers: Some(composers),
+        ..CriterionSets::tracks(Fragment::default())
+    }
 }
 
 fn primary_file_tracks(condition: Fragment) -> Fragment {
@@ -518,15 +621,11 @@ fn album_tracks(albums: &Fragment) -> Fragment {
 
 fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
     let user = i64::from(user_id);
-    let tracks_only = |tracks: Fragment| CriterionSets {
-        tracks,
-        albums: None,
-        artists: None,
-    };
+    let tracks_only = CriterionSets::tracks;
     let album_level = |albums: Fragment| CriterionSets {
         tracks: album_tracks(&albums),
         albums: Some(albums),
-        artists: None,
+        ..CriterionSets::tracks(Fragment::default())
     };
     match criterion {
         Criterion::Genre { value } => {
@@ -548,7 +647,7 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
             CriterionSets {
                 tracks,
                 albums: Some(albums),
-                artists: None,
+                ..CriterionSets::tracks(Fragment::default())
             }
         }
         Criterion::Year { from, to } => {
@@ -634,6 +733,8 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
             .text(artist_id.clone()),
             albums: None,
             artists: Some(Fragment::new("SELECT ?").text(artist_id.clone())),
+            works: None,
+            composers: None,
         },
         Criterion::Tag { tag_id, .. } => {
             let tag = |entity: &str| {
@@ -660,6 +761,8 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
                 tracks,
                 albums: None,
                 artists: Some(tag("artist")),
+                works: None,
+                composers: None,
             }
         }
         Criterion::Source { root_id, .. } => tracks_only(primary_file_tracks(
@@ -680,6 +783,44 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
         Criterion::AddedWithin { days } => tracks_only(
             Fragment::new("SELECT id FROM track_entity WHERE created_at >= datetime('now', ?)")
                 .text(format!("-{days} days")),
+        ),
+        Criterion::Form { value } => work_level(
+            Fragment::new("SELECT id FROM work_entity WHERE form = ? COLLATE NOCASE")
+                .text(value.trim()),
+        ),
+        Criterion::Instrumentation { value } => work_level(
+            Fragment::new("SELECT id FROM work_entity WHERE instrumentation = ? COLLATE NOCASE")
+                .text(value.trim()),
+        ),
+        Criterion::Composed { from, to } => {
+            let mut works = Fragment::new("SELECT id FROM work_entity WHERE ");
+            works.append(range_condition("composed_year", *from, *to));
+            work_level(works)
+        }
+        Criterion::Work { work_id, .. } => {
+            work_level(Fragment::new("SELECT ?").text(work_id.clone()))
+        }
+        Criterion::Period { value } => {
+            // Works by their own period; composers by theirs.
+            let works = Fragment::new("SELECT id FROM work_entity WHERE period = ? COLLATE NOCASE")
+                .text(value.trim());
+            CriterionSets {
+                tracks: work_tracks(&works),
+                works: Some(works),
+                composers: Some(
+                    Fragment::new(
+                        "SELECT artist_id FROM composer_entity WHERE period = ? COLLATE NOCASE",
+                    )
+                    .text(value.trim()),
+                ),
+                ..CriterionSets::tracks(Fragment::default())
+            }
+        }
+        Criterion::Nationality { value } => composer_level(
+            Fragment::new(
+                "SELECT artist_id FROM composer_entity WHERE nationality = ? COLLATE NOCASE",
+            )
+            .text(value.trim()),
         ),
     }
 }
@@ -716,6 +857,9 @@ fn entity_set(entity: FocusEntity, sets: CriterionSets) -> Fragment {
             artists
         }
         FocusEntity::Composers => {
+            if let Some(composers) = sets.composers {
+                return composers;
+            }
             let mut composers = Fragment::new(
                 "SELECT artist_id FROM track_artist WHERE role = 'composer' AND track_id IN (",
             );
@@ -726,6 +870,14 @@ fn entity_set(entity: FocusEntity, sets: CriterionSets) -> Fragment {
             }
             composers
         }
+        FocusEntity::Compositions => match sets.works {
+            Some(works) => works,
+            None => {
+                let mut works = Fragment::new("SELECT work_id FROM track_work WHERE track_id IN (");
+                works.append(sets.tracks).push(")");
+                works
+            }
+        },
     }
 }
 
@@ -734,6 +886,7 @@ fn entity_table(entity: FocusEntity) -> &'static str {
         FocusEntity::Albums => "album_entity",
         FocusEntity::Songs => "track_entity",
         FocusEntity::Artists | FocusEntity::Composers => "artist_entity",
+        FocusEntity::Compositions => "work_entity",
     }
 }
 
@@ -751,6 +904,7 @@ fn universe(entity: FocusEntity) -> &'static str {
         FocusEntity::Composers => {
             "e.id IN (SELECT artist_id FROM track_artist WHERE role = 'composer')"
         }
+        FocusEntity::Compositions => "1",
     }
 }
 
@@ -791,6 +945,13 @@ fn text_condition(entity: FocusEntity, text: &str) -> Fragment {
         FocusEntity::Artists | FocusEntity::Composers => {
             Fragment::new("e.name LIKE ? ESCAPE '\\'").text(pattern)
         }
+        FocusEntity::Compositions => Fragment::new(
+            "(e.title LIKE ? ESCAPE '\\' \
+             OR e.id IN (SELECT wc.work_id FROM work_composer wc \
+               JOIN artist_entity ar ON ar.id = wc.artist_id WHERE ar.name LIKE ? ESCAPE '\\'))",
+        )
+        .text(pattern.clone())
+        .text(pattern),
     }
 }
 
@@ -1006,12 +1167,53 @@ fn sort_plan(query: &FocusQuery, user_id: i32) -> SortPlan {
             };
             Fragment::new(format!("{column} {dir}"))
         }
+        (FocusEntity::Composers, FocusSort::ReleaseDate) => Fragment::new(format!(
+            "((SELECT birth_year FROM composer_entity WHERE artist_id = e.id) IS NULL) ASC, \
+             (SELECT birth_year FROM composer_entity WHERE artist_id = e.id) {dir}, \
+             COALESCE(e.sort_name, e.name) COLLATE NOCASE ASC"
+        )),
+        (FocusEntity::Compositions, FocusSort::Title) => {
+            Fragment::new(format!("e.title COLLATE NOCASE {dir}"))
+        }
+        (FocusEntity::Compositions, FocusSort::Artist) => Fragment::new(format!(
+            "(SELECT COALESCE(ar.sort_name, ar.name) FROM work_composer wc \
+               JOIN artist_entity ar ON ar.id = wc.artist_id \
+               WHERE wc.work_id = e.id ORDER BY wc.position LIMIT 1) COLLATE NOCASE {dir}, \
+             e.composed_year ASC, e.title COLLATE NOCASE ASC"
+        )),
+        (FocusEntity::Compositions, FocusSort::ReleaseDate) => Fragment::new(format!(
+            "(e.composed_year IS NULL) ASC, e.composed_year {dir}, e.title COLLATE NOCASE ASC"
+        )),
+        (FocusEntity::Compositions, FocusSort::DateAdded) => {
+            Fragment::new(format!("e.created_at {dir}, e.title COLLATE NOCASE ASC"))
+        }
+        (FocusEntity::Compositions, FocusSort::TrackCount) => Fragment::new(format!(
+            "(SELECT COUNT(*) FROM track_work WHERE work_id = e.id) {dir}"
+        )),
+        (FocusEntity::Compositions, FocusSort::MostPlayed | FocusSort::LastPlayed) => {
+            joins = Fragment::new(
+                " LEFT JOIN (SELECT tw.work_id AS id, COUNT(*) AS plays, MAX(h.listened_at) AS last \
+                   FROM listen_history_item h JOIN track_work tw ON tw.track_id = h.song_id \
+                   WHERE h.user_id = ? GROUP BY tw.work_id) sp ON sp.id = e.id",
+            )
+            .int(user);
+            let column = if sort == FocusSort::MostPlayed {
+                "COALESCE(sp.plays, 0)"
+            } else {
+                "COALESCE(sp.last, '')"
+            };
+            Fragment::new(format!("{column} {dir}"))
+        }
         // effective_sort() never yields the remaining combinations.
         (FocusEntity::Albums, FocusSort::Album)
         | (FocusEntity::Songs, FocusSort::TrackCount)
         | (
-            FocusEntity::Artists | FocusEntity::Composers,
+            FocusEntity::Artists,
             FocusSort::Album | FocusSort::ReleaseDate | FocusSort::Duration | FocusSort::Quality,
+        )
+        | (
+            FocusEntity::Composers | FocusEntity::Compositions,
+            FocusSort::Album | FocusSort::Duration | FocusSort::Quality,
         ) => Fragment::new("1"),
     };
     let mut order_by = order;
@@ -1074,6 +1276,7 @@ pub fn focus_ids(
     limit: usize,
 ) -> Result<FocusIds, Box<dyn std::error::Error + Send + Sync>> {
     query.validate()?;
+    crate::library::works::ensure_works(connection)?;
     let limit = limit.clamp(1, MAX_RESOLVED_IDS);
     let ids = select_sql(query, user_id, offset, limit)
         .into_query()
@@ -1106,7 +1309,12 @@ pub fn library_total(
 }
 
 /// Facet columns a focus panel can show.
-pub const FACET_KEYS: [&str; 13] = [
+pub const FACET_KEYS: [&str; 18] = [
+    "form",
+    "instrumentation",
+    "period",
+    "composed",
+    "nationality",
     "genre",
     "year",
     "artist",
@@ -1194,6 +1402,36 @@ fn scope_pairs(entity: FocusEntity) -> &'static str {
         FocusEntity::Composers => {
             "SELECT artist_id AS entity_id, track_id FROM track_artist \
              WHERE role = 'composer' AND artist_id IN (SELECT id FROM focused)"
+        }
+        FocusEntity::Compositions => {
+            "SELECT work_id AS entity_id, track_id FROM track_work \
+             WHERE work_id IN (SELECT id FROM focused)"
+        }
+    }
+}
+
+/// `(entity, work)` pairs for the focused set.
+fn work_pairs(entity: FocusEntity) -> &'static str {
+    match entity {
+        FocusEntity::Compositions => "SELECT id AS entity_id, id AS work_id FROM focused",
+        _ => {
+            "SELECT DISTINCT ft.entity_id AS entity_id, tw.work_id AS work_id FROM ft \
+             JOIN track_work tw ON tw.track_id = ft.track_id"
+        }
+    }
+}
+
+/// `(entity, composer)` pairs for the focused set.
+fn composer_pairs(entity: FocusEntity) -> &'static str {
+    match entity {
+        FocusEntity::Composers => "SELECT id AS entity_id, id AS artist_id FROM focused",
+        FocusEntity::Compositions => {
+            "SELECT work_id AS entity_id, artist_id FROM work_composer \
+             WHERE work_id IN (SELECT id FROM focused)"
+        }
+        _ => {
+            "SELECT DISTINCT ft.entity_id AS entity_id, ca.artist_id AS artist_id FROM ft \
+             JOIN track_artist ca ON ca.track_id = ft.track_id AND ca.role = 'composer'"
         }
     }
 }
@@ -1385,6 +1623,71 @@ fn facet_branch(
             limit,
             by_count,
         ),
+        "form" | "instrumentation" => grouped_branch(
+            key,
+            Fragment::new(format!(
+                "SELECT wp.entity_id AS entity_id, w.{key} AS value, w.{key} AS label \
+                 FROM ({pairs}) wp JOIN work_entity w ON w.id = wp.work_id \
+                 WHERE w.{key} IS NOT NULL",
+                pairs = work_pairs(entity),
+            )),
+            search,
+            limit,
+            by_count,
+        ),
+        "composed" => grouped_branch(
+            key,
+            Fragment::new(format!(
+                "SELECT wp.entity_id AS entity_id, w.composed_year AS value, \
+                 w.composed_year AS label FROM ({pairs}) wp \
+                 JOIN work_entity w ON w.id = wp.work_id WHERE w.composed_year > 0",
+                pairs = work_pairs(entity),
+            )),
+            search,
+            MAX_YEAR_VALUES,
+            "CAST(value AS INTEGER) ASC",
+        ),
+        "period" => {
+            let order = format!(
+                "CASE value {} ELSE {} END ASC",
+                crate::library::works::PERIODS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, period)| format!("WHEN '{period}' THEN {index}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                crate::library::works::PERIODS.len()
+            );
+            let source = if entity == FocusEntity::Composers {
+                // A composer's own period, as Roon's Composers browser shows.
+                Fragment::new(
+                    "SELECT ce.artist_id AS entity_id, ce.period AS value, ce.period AS label \
+                     FROM composer_entity ce WHERE ce.artist_id IN (SELECT id FROM focused) \
+                     AND ce.period IS NOT NULL",
+                )
+            } else {
+                Fragment::new(format!(
+                    "SELECT wp.entity_id AS entity_id, w.period AS value, w.period AS label \
+                     FROM ({pairs}) wp JOIN work_entity w ON w.id = wp.work_id \
+                     WHERE w.period IS NOT NULL",
+                    pairs = work_pairs(entity),
+                ))
+            };
+            grouped_branch(key, source, None, limit, &order)
+        }
+        "nationality" => grouped_branch(
+            key,
+            Fragment::new(format!(
+                "SELECT cp.entity_id AS entity_id, ce.nationality AS value, \
+                 ce.nationality AS label FROM ({pairs}) cp \
+                 JOIN composer_entity ce ON ce.artist_id = cp.artist_id \
+                 WHERE ce.nationality IS NOT NULL",
+                pairs = composer_pairs(entity),
+            )),
+            search,
+            limit,
+            by_count,
+        ),
         "status" => Fragment::new(
             "SELECT 'status' AS facet, NULL AS role, 'liked' AS value, 'liked' AS label, \
                COUNT(DISTINCT entity_id) AS count, 2 AS total FROM ft \
@@ -1428,6 +1731,52 @@ fn facet_branch(
     Some(branch)
 }
 
+const WORK_FACETS: [&str; 5] = [
+    "form",
+    "instrumentation",
+    "period",
+    "composed",
+    "nationality",
+];
+
+/// Whether a facet column belongs in a browser's panel. Works are browsed
+/// by their own facts, as in Roon, instead of album genres and dates.
+pub fn facet_applies(entity: FocusEntity, key: &str) -> bool {
+    match entity {
+        FocusEntity::Compositions => {
+            !matches!(key, "genre" | "year" | "artist" | "label" | "release_type")
+        }
+        FocusEntity::Composers => !matches!(key, "year" | "artist" | "label" | "release_type"),
+        _ => true,
+    }
+}
+
+/// Panel position of a facet column: work facets lead in the Compositions
+/// and Composers browsers and follow the credits elsewhere.
+pub fn facet_rank(entity: FocusEntity, key: &str) -> usize {
+    let position = FACET_KEYS
+        .iter()
+        .position(|candidate| *candidate == key)
+        .unwrap_or(FACET_KEYS.len());
+    match entity {
+        // Roon's Composers browser leads with period and nationality.
+        FocusEntity::Composers => match key {
+            "period" => 0,
+            "nationality" => 1,
+            _ => position + 2,
+        },
+        FocusEntity::Compositions => position,
+        _ if WORK_FACETS.contains(&key) => {
+            let credit = FACET_KEYS
+                .iter()
+                .position(|candidate| *candidate == "credit")
+                .unwrap_or(0);
+            credit * 10 + 5 + position
+        }
+        _ => position * 10,
+    }
+}
+
 pub fn facets_sql(query: &FocusQuery, user_id: i32, request: &FacetRequest) -> Fragment {
     let entity = query.entity;
     let limit = request
@@ -1451,6 +1800,9 @@ pub fn facets_sql(query: &FocusQuery, user_id: i32, request: &FacetRequest) -> F
     );
     for key in FACET_KEYS {
         if !request.only.is_empty() && !request.only.iter().any(|only| only == key) {
+            continue;
+        }
+        if !facet_applies(entity, key) {
             continue;
         }
         if let Some(branch) = facet_branch(key, entity, user_id, search, limit) {
@@ -1565,6 +1917,7 @@ pub fn focus_facets(
     request: &FacetRequest,
 ) -> Result<FocusFacets, Box<dyn std::error::Error + Send + Sync>> {
     query.validate()?;
+    crate::library::works::ensure_works(connection)?;
     if request
         .search
         .as_deref()
@@ -1582,10 +1935,7 @@ pub fn focus_facets(
             total = row.count;
             continue;
         }
-        let order = FACET_KEYS
-            .iter()
-            .position(|key| *key == row.facet)
-            .unwrap_or(FACET_KEYS.len());
+        let order = facet_rank(query.entity, &row.facet);
         let role_order = row.role.as_deref().map(credit_column_rank).unwrap_or(0);
         let facet = facets
             .entry((
@@ -1629,10 +1979,14 @@ pub struct FocusComposer {
     pub name: String,
     /// Tracks the person is credited as composer on.
     pub track_count: i64,
-    /// Distinct compositions (tagged works, or track titles without one).
+    /// Distinct compositions they wrote.
     pub work_count: i64,
     /// Albums with at least one of their compositions.
     pub album_count: i64,
+    pub birth_year: Option<i64>,
+    pub death_year: Option<i64>,
+    pub nationality: Option<String>,
+    pub period: Option<String>,
 }
 
 #[derive(QueryableByName)]
@@ -1647,17 +2001,27 @@ struct ComposerRow {
     work_count: i64,
     #[diesel(sql_type = BigInt)]
     album_count: i64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    birth_year: Option<i64>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    death_year: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    nationality: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    period: Option<String>,
 }
 
 const COMPOSER_STATS: &str = "SELECT ar.id AS id, ar.name AS name, \
      COUNT(DISTINCT ta.track_id) AS track_count, \
-     COUNT(DISTINCT COALESCE(lower(replace(replace(trim(pm.work), '.', ''), ',', '')), 'track:' || t.normalized_title)) AS work_count, \
-     COUNT(DISTINCT t.album_id) AS album_count \
+     COUNT(DISTINCT COALESCE(tw.work_id, 'track:' || t.id)) AS work_count, \
+     COUNT(DISTINCT t.album_id) AS album_count, \
+     CAST(ce.birth_year AS BIGINT) AS birth_year, CAST(ce.death_year AS BIGINT) AS death_year, \
+     ce.nationality AS nationality, ce.period AS period \
      FROM artist_entity ar \
      JOIN track_artist ta ON ta.artist_id = ar.id AND ta.role = 'composer' \
      JOIN track_entity t ON t.id = ta.track_id \
-     LEFT JOIN track_file pf ON pf.track_id = t.id AND pf.is_primary = 1 \
-     LEFT JOIN raw_file_metadata pm ON pm.file_id = pf.file_id";
+     LEFT JOIN track_work tw ON tw.track_id = t.id \
+     LEFT JOIN composer_entity ce ON ce.artist_id = ar.id";
 
 /// Composer rows for focused composer ids, in the given order.
 pub fn composer_rows(
@@ -1668,13 +2032,7 @@ pub fn composer_rows(
         return Ok(Vec::new());
     }
     let mut sql = Fragment::new(format!("{COMPOSER_STATS} WHERE ar.id IN ("));
-    for (index, id) in ids.iter().enumerate() {
-        if index > 0 {
-            sql.push(", ");
-        }
-        sql.push("?");
-        sql.binds.push(Bind::Text(id.clone()));
-    }
+    push_id_list(&mut sql, ids);
     sql.push(") GROUP BY ar.id");
     let mut rows = sql
         .into_query()
@@ -1689,6 +2047,139 @@ pub fn composer_rows(
                     track_count: row.track_count,
                     work_count: row.work_count,
                     album_count: row.album_count,
+                    birth_year: row.birth_year,
+                    death_year: row.death_year,
+                    nationality: row.nationality,
+                    period: row.period,
+                },
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(ids.iter().filter_map(|id| rows.remove(id)).collect())
+}
+
+fn push_id_list(sql: &mut Fragment, ids: &[String]) {
+    for (index, id) in ids.iter().enumerate() {
+        if index > 0 {
+            sql.push(", ");
+        }
+        sql.push("?");
+        sql.binds.push(Bind::Text(id.clone()));
+    }
+}
+
+/// A row in the Compositions browser.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusWork {
+    pub id: String,
+    pub title: String,
+    pub composers: Vec<NamedRef>,
+    pub form: Option<String>,
+    pub instrumentation: Option<String>,
+    /// The specific scoring when known ("Violin & Orchestra").
+    pub scoring: Option<String>,
+    pub composed_year: Option<i64>,
+    pub period: Option<String>,
+    /// Albums holding a recording of the work.
+    pub recording_count: i64,
+    pub track_count: i64,
+    /// Whether the title comes from a WORK tag or MusicBrainz.
+    pub tagged: bool,
+    pub musicbrainz_work_id: Option<String>,
+}
+
+#[derive(QueryableByName)]
+struct WorkRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    form: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    instrumentation: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    scoring: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    composed_year: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    period: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    recording_count: i64,
+    #[diesel(sql_type = BigInt)]
+    track_count: i64,
+    #[diesel(sql_type = BigInt)]
+    tagged: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    musicbrainz_work_id: Option<String>,
+}
+
+#[derive(QueryableByName)]
+struct WorkComposerRow {
+    #[diesel(sql_type = Text)]
+    work_id: String,
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    name: String,
+}
+
+/// Composition rows for focused work ids, in the given order.
+pub fn work_rows(
+    connection: &mut SqliteConnection,
+    ids: &[String],
+) -> Result<Vec<FocusWork>, diesel::result::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = Fragment::new(
+        "SELECT w.id AS id, w.title AS title, w.form AS form, \
+           w.instrumentation AS instrumentation, w.scoring AS scoring, \
+           CAST(w.composed_year AS BIGINT) AS composed_year, w.period AS period, \
+           COUNT(DISTINCT COALESCE(t.album_id, 'track:' || t.id)) AS recording_count, \
+           COUNT(DISTINCT tw.track_id) AS track_count, CAST(w.tagged AS BIGINT) AS tagged, \
+           w.musicbrainz_work_id AS musicbrainz_work_id \
+         FROM work_entity w LEFT JOIN track_work tw ON tw.work_id = w.id \
+         LEFT JOIN track_entity t ON t.id = tw.track_id WHERE w.id IN (",
+    );
+    push_id_list(&mut sql, ids);
+    sql.push(") GROUP BY w.id");
+    let rows = sql.into_query().load::<WorkRow>(connection)?;
+    let mut composers_sql = Fragment::new(
+        "SELECT wc.work_id AS work_id, ar.id AS id, ar.name AS name FROM work_composer wc \
+         JOIN artist_entity ar ON ar.id = wc.artist_id WHERE wc.work_id IN (",
+    );
+    push_id_list(&mut composers_sql, ids);
+    composers_sql.push(") ORDER BY wc.position, ar.name");
+    let mut composers = std::collections::HashMap::<String, Vec<NamedRef>>::new();
+    for row in composers_sql
+        .into_query()
+        .load::<WorkComposerRow>(connection)?
+    {
+        composers.entry(row.work_id).or_default().push(NamedRef {
+            id: row.id,
+            name: row.name,
+        });
+    }
+    let mut rows = rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.id.clone(),
+                FocusWork {
+                    composers: composers.remove(&row.id).unwrap_or_default(),
+                    id: row.id,
+                    title: row.title,
+                    form: row.form,
+                    instrumentation: row.instrumentation,
+                    scoring: row.scoring,
+                    composed_year: row.composed_year,
+                    period: row.period,
+                    recording_count: row.recording_count,
+                    track_count: row.track_count,
+                    tagged: row.tagged != 0,
+                    musicbrainz_work_id: row.musicbrainz_work_id,
                 },
             )
         })
@@ -1732,6 +2223,7 @@ pub fn focus_person(
     connection: &mut SqliteConnection,
     id: &str,
 ) -> Result<Option<FocusPerson>, diesel::result::Error> {
+    crate::library::works::ensure_works(connection)?;
     let name = Fragment::new("SELECT name FROM artist_entity WHERE id = ?")
         .text(id)
         .into_query()
@@ -1820,11 +2312,17 @@ pub struct CompositionRecording {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Composition {
+    /// The work id (`wk_...`).
     pub key: String,
     pub title: String,
-    /// Whether the title comes from a WORK tag (otherwise it is derived).
+    /// Whether the title comes from a WORK tag or MusicBrainz.
     pub tagged: bool,
     pub composers: Vec<NamedRef>,
+    pub form: Option<String>,
+    pub instrumentation: Option<String>,
+    pub scoring: Option<String>,
+    pub composed_year: Option<i64>,
+    pub period: Option<String>,
     pub movement_count: usize,
     pub recordings: Vec<CompositionRecording>,
 }
@@ -1860,7 +2358,21 @@ struct CompositionRow {
     #[diesel(sql_type = diesel::sql_types::Double)]
     duration_seconds: f64,
     #[diesel(sql_type = Nullable<Text>)]
-    work: Option<String>,
+    work_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    work_title: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    tagged: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    form: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    instrumentation: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    scoring: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    composed_year: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    period: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     movement: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
@@ -1881,41 +2393,20 @@ struct TrackCreditRow {
 
 /// Case- and punctuation-insensitive key for grouping titles.
 pub fn work_key(title: &str) -> String {
-    title
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .map(str::to_lowercase)
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::library::works::title_key(title)
 }
 
-/// Splits `Work: Movement` titles, e.g. "Symphony No. 5: I. Allegro".
-fn split_work_title(title: &str) -> Option<(&str, &str)> {
-    let (work, movement) = title.split_once(": ")?;
-    let (work, movement) = (work.trim(), movement.trim());
-    (work.chars().count() >= 3 && !movement.is_empty()).then_some((work, movement))
-}
-
-/// The movement label once the work title is known.
-fn movement_label(title: &str, work: &str, tagged: Option<&str>) -> Option<String> {
-    if let Some(tagged) = tagged.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(tagged.to_string());
-    }
-    let (prefix, rest) = split_work_title(title)?;
-    (work_key(prefix) == work_key(work)).then(|| rest.to_string())
-}
-
-/// Groups focused tracks into compositions, Roon style: tracks that share
-/// a WORK tag are one composition and each album holding them is one
-/// recording of it, with MOVEMENTNAME / MOVEMENT ordering its tracks.
-/// Untagged tracks titled `Work: Movement` are grouped when at least two
-/// tracks of the same album share the work; any other track is a
-/// composition of its own.
+/// Groups focused tracks into compositions, Roon style: each work (see
+/// [`crate::library::works`]) is one composition and each album holding
+/// it is one recording of it, with movement numbers ordering its tracks.
+/// Only the focused tracks of a work are shown, so a performer filter
+/// keeps just their recordings.
 pub fn focus_compositions(
     connection: &mut SqliteConnection,
     query: &FocusQuery,
     user_id: i32,
 ) -> Result<FocusCompositions, Box<dyn std::error::Error + Send + Sync>> {
+    crate::library::works::ensure_works(connection)?;
     let mut songs = query.as_songs();
     songs.sort = None;
     songs.direction = None;
@@ -1930,16 +2421,18 @@ pub fn focus_compositions(
         "SELECT t.id AS id, t.title AS title, t.album_id AS album_id, a.title AS album_name, \
            a.first_release_date AS release_date, aa.artist_id AS artist_id, aar.name AS artist_name, \
            CAST(COALESCE(t.duration_seconds, 0) AS REAL) AS duration_seconds, \
-           NULLIF(trim(pm.work), '') AS work, NULLIF(trim(pm.movement), '') AS movement, \
-           CAST(pm.movement_number AS BIGINT) AS movement_number \
+           w.id AS work_id, w.title AS work_title, CAST(COALESCE(w.tagged, 0) AS BIGINT) AS tagged, \
+           w.form AS form, w.instrumentation AS instrumentation, w.scoring AS scoring, \
+           CAST(w.composed_year AS BIGINT) AS composed_year, w.period AS period, \
+           tw.movement AS movement, CAST(tw.movement_number AS BIGINT) AS movement_number \
          FROM focused f JOIN track_entity t ON t.id = f.id \
+         LEFT JOIN track_work tw ON tw.track_id = t.id \
+         LEFT JOIN work_entity w ON w.id = tw.work_id \
          LEFT JOIN album_entity a ON a.id = t.album_id \
          LEFT JOIN album_artist aa ON aa.album_id = t.album_id AND aa.role = 'primary' \
            AND aa.artist_id = (SELECT artist_id FROM album_artist WHERE album_id = t.album_id \
              AND role = 'primary' ORDER BY position LIMIT 1) \
          LEFT JOIN artist_entity aar ON aar.id = aa.artist_id \
-         LEFT JOIN track_file pf ON pf.track_id = t.id AND pf.is_primary = 1 \
-         LEFT JOIN raw_file_metadata pm ON pm.file_id = pf.file_id \
          ORDER BY t.album_id, t.disc_number, t.track_number, t.id",
     );
     let rows = rows_sql.into_query().load::<CompositionRow>(connection)?;
@@ -1987,73 +2480,50 @@ pub fn focus_compositions(
         .get_result::<CountRow>(connection)?
         .count;
 
-    // Untagged `Work: Movement` prefixes shared by two tracks of one album.
-    let mut prefix_counts = std::collections::HashMap::<(Option<String>, String), usize>::new();
-    for row in rows.iter().filter(|row| row.work.is_none()) {
-        if let Some((prefix, _)) = split_work_title(&row.title) {
-            *prefix_counts
-                .entry((row.album_id.clone(), work_key(prefix)))
-                .or_default() += 1;
-        }
-    }
-
-    struct Building {
-        title: String,
-        tagged: bool,
-        composers: Vec<NamedRef>,
-        recordings: Vec<CompositionRecording>,
-    }
     let mut order = Vec::<String>::new();
-    let mut compositions = std::collections::HashMap::<String, Building>::new();
+    let mut compositions = std::collections::HashMap::<String, Composition>::new();
     for row in rows {
-        let (title, tagged) = match row.work.as_deref() {
-            Some(work) => (work.to_string(), true),
-            None => match split_work_title(&row.title) {
-                Some((prefix, _))
-                    if prefix_counts
-                        .get(&(row.album_id.clone(), work_key(prefix)))
-                        .is_some_and(|count| *count >= 2) =>
-                {
-                    (prefix.to_string(), false)
-                }
-                _ => (row.title.clone(), false),
-            },
-        };
-        let key = work_key(&title);
-        let key = if key.is_empty() {
-            format!("track:{}", row.id)
-        } else {
-            key
-        };
-        let movement = movement_label(&row.title, &title, row.movement.as_deref())
-            .filter(|movement| work_key(movement) != key);
-        let building = compositions.entry(key.clone()).or_insert_with(|| {
+        // Tracks outside the work tables (no composer and no WORK tag) are
+        // compositions of their own.
+        let key = row
+            .work_id
+            .clone()
+            .unwrap_or_else(|| format!("track:{}", row.id));
+        let title = row.work_title.clone().unwrap_or_else(|| row.title.clone());
+        let movement = row.movement.clone();
+        let composition = compositions.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
-            Building {
+            Composition {
+                key: key.clone(),
                 title: title.clone(),
-                tagged,
+                tagged: row.tagged != 0,
                 composers: Vec::new(),
+                form: row.form.clone(),
+                instrumentation: row.instrumentation.clone(),
+                scoring: row.scoring.clone(),
+                composed_year: row.composed_year,
+                period: row.period.clone(),
+                movement_count: 0,
                 recordings: Vec::new(),
             }
         });
-        building.tagged |= tagged;
         for composer in composers_by_track.remove(&row.id).unwrap_or_default() {
-            if !building
+            if !composition
                 .composers
                 .iter()
                 .any(|known| known.id == composer.id)
             {
-                building.composers.push(composer);
+                composition.composers.push(composer);
             }
         }
-        let recording = match building
+        let recording = match composition
             .recordings
             .iter_mut()
             .position(|recording| recording.album_id == row.album_id && row.album_id.is_some())
         {
-            Some(index) => &mut building.recordings[index],
+            Some(index) => &mut composition.recordings[index],
             None => {
-                building.recordings.push(CompositionRecording {
+                composition.recordings.push(CompositionRecording {
                     album_id: row.album_id.clone(),
                     album_name: row.album_name.clone(),
                     artist_id: row.artist_id.clone(),
@@ -2068,7 +2538,7 @@ pub fn focus_compositions(
                     duration_seconds: 0.0,
                     tracks: Vec::new(),
                 });
-                building
+                composition
                     .recordings
                     .last_mut()
                     .expect("recording just added")
@@ -2094,33 +2564,26 @@ pub fn focus_compositions(
     let mut compositions = order
         .into_iter()
         .filter_map(|key| {
-            let mut building = compositions.remove(&key)?;
-            for recording in &mut building.recordings {
+            let mut composition = compositions.remove(&key)?;
+            for recording in &mut composition.recordings {
                 // Tagged movement numbers order a recording; disc and track
                 // order (already applied) breaks ties.
                 recording
                     .tracks
                     .sort_by_key(|track| track.movement_number.unwrap_or(i64::MAX));
             }
-            building.recordings.sort_by(|left, right| {
+            composition.recordings.sort_by(|left, right| {
                 left.release_year
                     .cmp(&right.release_year)
                     .then_with(|| left.album_name.cmp(&right.album_name))
             });
-            let movement_count = building
+            composition.movement_count = composition
                 .recordings
                 .iter()
                 .map(|recording| recording.tracks.len())
                 .max()
                 .unwrap_or(0);
-            Some(Composition {
-                key,
-                title: building.title,
-                tagged: building.tagged,
-                composers: building.composers,
-                movement_count,
-                recordings: building.recordings,
-            })
+            Some(composition)
         })
         .collect::<Vec<_>>();
     compositions.sort_by(|left, right| {
@@ -2883,8 +3346,8 @@ mod tests {
         assert_eq!(rows[0].name, "Anna Hamilton");
         assert_eq!(rows[0].track_count, 4);
         assert_eq!(rows[0].album_count, 2);
-        // t6/t7 share a work; t3 and t4 are their own titles.
-        assert_eq!(rows[0].work_count, 3);
+        // t6/t7 share a tagged work; t3/t4 share a "Suite: ..." prefix.
+        assert_eq!(rows[0].work_count, 2);
 
         let facets = focus_facets(
             &mut connection,
@@ -3168,8 +3631,265 @@ mod tests {
             1,
         )
         .expect("focused compositions");
+        // The work stays the work: only its matching movement is shown.
         assert_eq!(lossy.total, 1);
-        assert_eq!(lossy.compositions[0].title, "Suite: II. Late");
+        assert_eq!(lossy.compositions[0].title, "Suite");
+        assert_eq!(
+            lossy.compositions[0].recordings[0].tracks[0]
+                .movement
+                .as_deref(),
+            Some("II. Late")
+        );
+    }
+
+    /// Beethoven works with forms, scorings and dates, plus MusicBrainz
+    /// facts for another composer.
+    fn works(connection: &mut SqliteConnection) {
+        classical(connection);
+        connection
+            .batch_execute(
+                "INSERT INTO artist_entity(id, name, normalized_name) VALUES
+                   ('a-beet', 'Ludwig van Beethoven', 'ludwig van beethoven');
+                 INSERT INTO track_artist(track_id, artist_id, role) VALUES
+                   ('t1', 'a-beet', 'composer'), ('t2', 'a-beet', 'composer'), ('t5', 'a-beet', 'composer');
+                 UPDATE raw_file_metadata SET work = 'Violin Concerto in D major, Op. 61' WHERE file_id = 1;
+                 UPDATE raw_file_metadata SET work = 'Piano Sonata No. 23 in F minor, Op. 57', composed_year = 1805 WHERE file_id = 2;
+                 UPDATE raw_file_metadata SET work_mbid = '0e3b5e4c-1111-4c1e-9d6f-000000000001' WHERE file_id = 5;
+                 INSERT INTO musicbrainz_work(mbid, title, work_type, composed_year, status) VALUES
+                   ('0e3b5e4c-1111-4c1e-9d6f-000000000001', 'An die ferne Geliebte', 'Song-cycle', 1816, 'ok');
+                 INSERT INTO musicbrainz_composer(mbid, name, normalized_name, birth_year, country, status) VALUES
+                   ('c0', 'Anna Hamilton', 'anna hamilton', 1950, 'GB', 'ok');",
+            )
+            .expect("works fixture");
+    }
+
+    fn facet_values(facets: &FocusFacets, key: &str) -> Vec<(String, i64)> {
+        facets
+            .facets
+            .iter()
+            .find(|facet| facet.key == key)
+            .map(|facet| {
+                facet
+                    .values
+                    .iter()
+                    .map(|value| (value.label.clone(), value.count))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn compositions_browse_by_form_instrumentation_period_and_date() {
+        let mut connection = catalog();
+        works(&mut connection);
+        let all = query(FocusEntity::Compositions, Vec::new());
+        let page = focus_ids(&mut connection, &all, 1, 0, 100).expect("compositions");
+        assert_eq!(
+            page.total, 5,
+            "concerto, sonata, song cycle, symphony, suite"
+        );
+        let rows = work_rows(&mut connection, &page.ids).expect("work rows");
+        let by_title = |title: &str| {
+            rows.iter()
+                .find(|row| row.title == title)
+                .unwrap_or_else(|| panic!("{title} in {rows:?}"))
+        };
+        let concerto = by_title("Violin Concerto in D major, Op. 61");
+        assert_eq!(concerto.form.as_deref(), Some("Concerto"));
+        assert_eq!(
+            concerto.instrumentation.as_deref(),
+            Some("Solo Instrument & Orchestra")
+        );
+        assert_eq!(concerto.scoring.as_deref(), Some("Violin & Orchestra"));
+        assert_eq!(concerto.composed_year, Some(1806));
+        assert_eq!(concerto.period.as_deref(), Some("Classical"));
+        assert_eq!(concerto.composers[0].name, "Ludwig van Beethoven");
+        assert_eq!(concerto.recording_count, 1);
+        let sonata = by_title("Piano Sonata No. 23 in F minor, Op. 57");
+        assert_eq!(sonata.instrumentation.as_deref(), Some("Solo Keyboard"));
+        assert_eq!(sonata.composed_year, Some(1805), "COMPOSITIONDATE tag");
+        let song_cycle = by_title("An die ferne Geliebte");
+        assert_eq!(song_cycle.form.as_deref(), Some("Song Cycle"));
+        assert_eq!(
+            song_cycle.instrumentation.as_deref(),
+            Some("Voice & Keyboard")
+        );
+        assert_eq!(song_cycle.period.as_deref(), Some("Classical"));
+        assert!(song_cycle.tagged);
+        let symphony = by_title("Symphony No. 1");
+        assert_eq!(symphony.form.as_deref(), Some("Symphony"));
+        assert_eq!(symphony.instrumentation.as_deref(), Some("Orchestra"));
+        // Anna Hamilton's MusicBrainz birth year dates her undated work.
+        assert_eq!(symphony.period.as_deref(), Some("Contemporary"));
+        // An untagged jazz "Suite" is not guessed at.
+        assert_eq!(by_title("Suite").form, None);
+
+        let facets = focus_facets(&mut connection, &all, 1, &FacetRequest::default())
+            .expect("composition facets");
+        let keys = facets
+            .facets
+            .iter()
+            .map(|facet| facet.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &keys[..4],
+            ["form", "instrumentation", "period", "composed"]
+        );
+        assert!(!keys.contains(&"genre") && !keys.contains(&"year") && !keys.contains(&"artist"));
+        assert_eq!(
+            facet_values(&facets, "period"),
+            [("Classical".into(), 3), ("Contemporary".into(), 2)]
+        );
+        assert!(facet_values(&facets, "form").contains(&("Concerto".into(), 1)));
+        assert!(facet_values(&facets, "instrumentation").contains(&("Solo Keyboard".into(), 1)));
+        assert_eq!(
+            facet_values(&facets, "composed"),
+            [("1805".into(), 1), ("1806".into(), 1), ("1816".into(), 1)]
+        );
+
+        let form = |value: &str| Criterion::Form {
+            value: value.into(),
+        };
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(FocusEntity::Compositions, vec![include(form("concerto"))])
+            ),
+            std::slice::from_ref(&concerto.id)
+        );
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Compositions,
+                    vec![exclude(Criterion::Period {
+                        value: "Classical".into()
+                    })]
+                )
+            )
+            .len(),
+            2
+        );
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Compositions,
+                    vec![include(Criterion::Composed {
+                        from: Some(1800),
+                        to: Some(1805)
+                    })]
+                )
+            ),
+            std::slice::from_ref(&sonata.id)
+        );
+        // Work facts filter the other browsers through their tracks.
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(FocusEntity::Albums, vec![include(form("Symphony"))])
+            ),
+            ["al-hires"]
+        );
+        // Performer credits filter works; Roon's "where X performs".
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Compositions,
+                    vec![include(Criterion::Credit {
+                        role: "conductor_ensemble".into(),
+                        artist_id: "a-cond".into(),
+                        name: None,
+                    })]
+                )
+            ),
+            std::slice::from_ref(&symphony.id)
+        );
+        // Sorting by composition date puts undated works last.
+        let mut dated = all.clone();
+        dated.sort = Some(FocusSort::ReleaseDate);
+        let order = focus_ids(&mut connection, &dated, 1, 0, 3)
+            .expect("dated")
+            .ids;
+        assert_eq!(order[..2], [sonata.id.clone(), concerto.id.clone()]);
+
+        // A work scope shows that work's recordings with its facts.
+        let one = focus_compositions(
+            &mut connection,
+            &scoped(
+                FocusEntity::Songs,
+                vec![Criterion::Work {
+                    work_id: concerto.id.clone(),
+                    name: None,
+                }],
+                Vec::new(),
+            ),
+            1,
+        )
+        .expect("one work");
+        assert_eq!(one.total, 1);
+        assert_eq!(one.compositions[0].key, concerto.id);
+        assert_eq!(one.compositions[0].form.as_deref(), Some("Concerto"));
+        assert_eq!(one.compositions[0].composed_year, Some(1806));
+    }
+
+    #[test]
+    fn composers_browse_by_period_and_nationality() {
+        let mut connection = catalog();
+        works(&mut connection);
+        let all = query(FocusEntity::Composers, Vec::new());
+        let facets = focus_facets(&mut connection, &all, 1, &FacetRequest::default())
+            .expect("composer facets");
+        assert_eq!(facets.facets[0].key, "period");
+        assert_eq!(facets.facets[1].key, "nationality");
+        assert_eq!(
+            facet_values(&facets, "period"),
+            [("Classical".into(), 1), ("Contemporary".into(), 1)]
+        );
+        assert_eq!(
+            facet_values(&facets, "nationality"),
+            [("British".into(), 1), ("German".into(), 1)]
+        );
+        let german = query(
+            FocusEntity::Composers,
+            vec![include(Criterion::Nationality {
+                value: "german".into(),
+            })],
+        );
+        assert_eq!(ids(&mut connection, &german), ["a-beet"]);
+        let classical_period = query(
+            FocusEntity::Composers,
+            vec![include(Criterion::Period {
+                value: "Classical".into(),
+            })],
+        );
+        assert_eq!(ids(&mut connection, &classical_period), ["a-beet"]);
+        let rows = composer_rows(&mut connection, &["a-beet".into(), "a-comp".into()])
+            .expect("composer rows");
+        assert_eq!(rows[0].birth_year, Some(1770));
+        assert_eq!(rows[0].death_year, Some(1827));
+        assert_eq!(rows[0].nationality.as_deref(), Some("German"));
+        assert_eq!(rows[0].period.as_deref(), Some("Classical"));
+        assert_eq!(rows[0].work_count, 3);
+        assert_eq!(rows[1].nationality.as_deref(), Some("British"));
+        // Chronological order by birth year.
+        let mut chronological = all.clone();
+        chronological.sort = Some(FocusSort::ReleaseDate);
+        assert_eq!(
+            focus_ids(&mut connection, &chronological, 1, 0, 10)
+                .expect("chronological")
+                .ids,
+            ["a-beet", "a-comp"]
+        );
+        // Albums are browsable by composer nationality too.
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(FocusEntity::Albums, german.filters.clone())
+            ),
+            ["al-pop", "al-single"]
+        );
     }
 
     #[test]

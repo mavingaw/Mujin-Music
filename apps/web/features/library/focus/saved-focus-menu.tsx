@@ -39,6 +39,7 @@ import {
   BookmarkPlus,
   Disc3,
   Music2,
+  ScrollText,
   Settings2,
   Trash2,
   UserRound,
@@ -53,6 +54,7 @@ const VIEW_ICONS = {
   songs: Music2,
   artists: UserRound,
   composers: Feather,
+  compositions: ScrollText,
 } as const;
 
 function sameFocus(left: FocusQuery, right: FocusQuery) {

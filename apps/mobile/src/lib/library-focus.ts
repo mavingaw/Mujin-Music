@@ -1,7 +1,9 @@
 import {
   focusSummary,
+  workDescription,
   type CompositionRecording,
   type FilterState,
+  type FocusWork,
   type LibrarySong,
   type FocusEntity,
   type FocusQuery,
@@ -16,6 +18,7 @@ export type LibrarySection =
   | "liked"
   | "artists"
   | "composers"
+  | "compositions"
   | "playlists";
 
 /** The browser a library section focuses, or null when it has no Focus. */
@@ -25,9 +28,38 @@ export function focusEntityForSection(
   return section === "albums" ||
     section === "songs" ||
     section === "artists" ||
-    section === "composers"
+    section === "composers" ||
+    section === "compositions"
     ? section
     : null;
+}
+
+/** "Beethoven · Symphony for Orchestra · Composed 1812" under a work. */
+export function workCaption(
+  work: Pick<
+    FocusWork,
+    | "composers"
+    | "form"
+    | "instrumentation"
+    | "scoring"
+    | "composedYear"
+    | "period"
+  >,
+): string {
+  return [
+    work.composers.map((composer) => composer.name).join(", "),
+    workDescription(work),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** "4:05" for a duration in seconds; empty when unknown. */
+export function durationLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes}:${rest < 10 ? "0" : ""}${rest}`;
 }
 
 /** A recording's tracks as playable songs, in movement order. */
