@@ -40,9 +40,13 @@ export function albumFacts(album: LibraryAlbum, about: AlbumAbout | undefined) {
     .map((entry) => entry.catalog_number)
     .filter((value): value is string => Boolean(value && value !== "[none]"))
     .join(", ");
-  const released =
-    formatPartialDate(facts?.first_release_date) ??
-    formatPartialDate(album.first_release_date);
+  // A release matched by title alone may be a later recording of the same
+  // programme; then the year in the tags wins.
+  const released = exact
+    ? (formatPartialDate(facts?.first_release_date) ??
+      formatPartialDate(album.first_release_date))
+    : (formatPartialDate(album.first_release_date) ??
+      formatPartialDate(facts?.first_release_date));
   const edition =
     exact && facts?.date && facts.date !== facts.first_release_date
       ? formatPartialDate(facts.date)
@@ -63,6 +67,10 @@ export function albumFacts(album: LibraryAlbum, about: AlbumAbout | undefined) {
       label: "Format",
       value: albumFormat(album.songs) as string,
     },
+    about?.identification && {
+      label: "Matched",
+      value: "By hand on MusicBrainz",
+    },
   ].filter(Boolean) as { label: string; value: string }[];
 }
 
@@ -74,10 +82,13 @@ export function AlbumAboutSection({
   album,
   about,
   isAdmin,
+  onIdentify,
 }: {
   album: LibraryAlbum;
   about: AlbumAbout | undefined;
   isAdmin: boolean;
+  /** Opens "Identify album" (administrators). */
+  onIdentify?: () => void;
 }) {
   const panels: { key: Panel; label: string }[] = [
     about?.review ? { key: "review" as const, label: "Review" } : null,
@@ -150,6 +161,26 @@ export function AlbumAboutSection({
                   )}
                 </p>
               )}
+              {isAdmin &&
+                onIdentify &&
+                about?.enrichment.enabled &&
+                !about.identification &&
+                about.enrichment.task?.status === "skipped" && (
+                  <p className="rounded-md border border-white/8 bg-white/3 px-3 py-2.5 text-sm leading-6 text-zinc-400">
+                    Parson found no confident MusicBrainz match for this album
+                    {about.enrichment.task.last_error
+                      ? ` (${about.enrichment.task.last_error})`
+                      : ""}
+                    .{" "}
+                    <button
+                      className="font-semibold text-white underline-offset-2 hover:underline"
+                      onClick={onIdentify}
+                      type="button"
+                    >
+                      Identify album…
+                    </button>
+                  </p>
+                )}
               <NoteEditor entityType="album" id={album.id} note={about?.note} />
             </div>
           )}

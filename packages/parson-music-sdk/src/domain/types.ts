@@ -466,6 +466,10 @@ export interface AlbumAbout {
   links: ExternalLink[];
   note: UserNote | null;
   enrichment: EnrichmentStatus;
+  /** The work (and the piece it belongs to) each track performs. */
+  works?: TrackWork[];
+  /** The release an administrator chose with "Identify album". */
+  identification?: AlbumIdentification | null;
 }
 
 export interface ArtistFacts {
@@ -540,4 +544,121 @@ export interface EnrichmentOverview extends EnrichmentSettings {
   counts: { pending: number; done: number; skipped: number; failed: number };
   /** Hosts enrichment contacts when enabled. */
   sources: string[];
+}
+
+/** A person on a work or recording. `artist_id` is a local artist id,
+ * `mb:<MusicBrainz id>` for someone only known from MusicBrainz, or null. */
+export interface PersonRef {
+  artist_id: string | null;
+  name: string;
+  instrument?: string | null;
+}
+
+/** A composition, keyed by its MusicBrainz work id. */
+export interface WorkSummary {
+  mbid: string;
+  title: string;
+  /** Form or MusicBrainz work type: Symphony, Sonata, Song, ... */
+  form: string | null;
+  key: string | null;
+  /** Catalogue number such as "Op. 125" or "BWV 1007". */
+  catalogue: string | null;
+  /** Year or range composed, e.g. "1822–1824". */
+  composed: string | null;
+  /** Style period from the composition year: Baroque, Classical, ... */
+  period: string | null;
+  composer: PersonRef | null;
+  language: string | null;
+  parent_mbid: string | null;
+  part_position: number | null;
+}
+
+/** A track's work; `parent` is the piece a movement belongs to. */
+export interface TrackWork {
+  track_id: string;
+  work: WorkSummary;
+  parent: WorkSummary | null;
+  /** The movement title under the piece's heading, e.g. "IV. Presto". */
+  part_title: string;
+}
+
+export interface RecordingTrack {
+  song: LibrarySong;
+  work_mbid: string;
+  part_title: string;
+  part_position: number | null;
+}
+
+/** One album's recording of a work. */
+export interface WorkRecording {
+  album: Album;
+  artist: Artist;
+  year: number | null;
+  conductors: PersonRef[];
+  ensembles: PersonRef[];
+  soloists: PersonRef[];
+  /** Track artists not already named as conductor, ensemble or soloist. */
+  artists: PersonRef[];
+  tracks: RecordingTrack[];
+  /** Every known movement of the work is on the album. */
+  complete: boolean;
+  duration: number;
+}
+
+export interface WorkPage {
+  work: WorkSummary;
+  parent: WorkSummary | null;
+  /** Movements with at least one recording in the library. */
+  parts: WorkSummary[];
+  recordings: WorkRecording[];
+  /** The work on MusicBrainz. */
+  url: string;
+}
+
+export interface ComposerWork {
+  work: WorkSummary;
+  track_count: number;
+  recording_count: number;
+}
+
+export interface ComposerWorks {
+  artist_id: string;
+  name: string | null;
+  works: ComposerWork[];
+}
+
+export interface AlbumIdentification {
+  release_mbid: string;
+  release_title: string;
+  release_artist: string;
+  created_at: string;
+}
+
+/** A MusicBrainz release offered by "Identify album". */
+export interface ReleaseMatch {
+  mbid: string;
+  title: string;
+  artist: string;
+  date: string | null;
+  country: string | null;
+  track_count: number | null;
+  labels: string[];
+  catalog_numbers: string[];
+  format: string | null;
+  release_type: string | null;
+  disambiguation: string | null;
+  score: number;
+  same_track_count: boolean;
+  url: string;
+}
+
+export interface IdentifySearch {
+  album_id: string;
+  /** The MusicBrainz search that ran. */
+  query: string;
+  title: string;
+  artist: string;
+  local_track_count: number;
+  identification: AlbumIdentification | null;
+  releases: ReleaseMatch[];
 }

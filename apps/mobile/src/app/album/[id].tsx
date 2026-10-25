@@ -1,5 +1,6 @@
 import {
   albumFormat,
+  albumWorkSections,
   getAlbumAbout,
   getAlbumInfo,
   type AboutCredit,
@@ -29,6 +30,7 @@ import {
   NoteBlock,
 } from "@/components/credits";
 import { joinMeta } from "@/lib/credit-links";
+import { WorkHeading } from "@/components/works";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { formatCollectionDuration } from "@/lib/format";
@@ -88,7 +90,9 @@ export default function AlbumScreen() {
     }));
   const facts = about.data?.facts;
   const year = /^\d{4}/.exec(
-    facts?.first_release_date || data.first_release_date || "",
+    (facts?.exact
+      ? facts.first_release_date || data.first_release_date
+      : data.first_release_date || facts?.first_release_date) || "",
   )?.[0];
   const label =
     data.label ?? (facts?.exact ? facts.labels?.[0]?.name : undefined);
@@ -191,16 +195,42 @@ export default function AlbumScreen() {
               </Pressable>
             </View>
           </View>
-          {data.songs.map((song, index) => (
-            <SongRow
-              key={song.id}
-              song={song}
-              queue={data.songs}
-              index={index}
-              showAlbum={false}
-              albumArtist={artist}
-              albumType={data.primary_type}
-            />
+          {albumWorkSections(
+            data.songs.map((song) => song.id),
+            about.data?.works,
+          ).map((section) => (
+            <View
+              key={`${section.work?.mbid ?? "track"}-${section.trackIds[0]}`}
+            >
+              {section.work ? <WorkHeading work={section.work} /> : null}
+              {section.trackIds.map((trackId) => {
+                const index = data.songs.findIndex(
+                  (song) => song.id === trackId,
+                );
+                const song = data.songs[index];
+                if (!song) return null;
+                const trackWork = about.data?.works?.find(
+                  (entry) => entry.track_id === song.id,
+                );
+                return (
+                  <SongRow
+                    key={song.id}
+                    song={song}
+                    queue={data.songs}
+                    index={index}
+                    showAlbum={false}
+                    albumArtist={artist}
+                    albumType={data.primary_type}
+                    title={section.work ? trackWork?.part_title : undefined}
+                    work={
+                      about.data
+                        ? (trackWork?.parent ?? trackWork?.work ?? null)
+                        : undefined
+                    }
+                  />
+                );
+              })}
+            </View>
           ))}
           {data.description ? (
             <Text style={styles.description}>{data.description}</Text>

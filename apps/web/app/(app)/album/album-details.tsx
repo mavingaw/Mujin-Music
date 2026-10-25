@@ -24,8 +24,10 @@ import {
   Play,
   Plus,
   RefreshCw,
+  ScanSearch,
   UserRound,
 } from "lucide-react";
+import { IdentifyAlbumDialog } from "@/features/library/works/identify-album-dialog";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { usePlayer } from "@/features/player/player-context";
 import { useSession } from "@/features/account/session-provider";
@@ -79,9 +81,17 @@ function splitQualifiedTitle(title: string) {
 
 function releaseYear(
   album: LibraryAlbum,
-  facts: { first_release_date?: string | null } | null | undefined,
+  facts:
+    | { first_release_date?: string | null; exact?: boolean | null }
+    | null
+    | undefined,
 ) {
-  const value = facts?.first_release_date || album.first_release_date || "";
+  // A release matched by title alone may be a later recording; the tags'
+  // year then wins.
+  const value =
+    (facts?.exact
+      ? facts.first_release_date || album.first_release_date
+      : album.first_release_date || facts?.first_release_date) || "";
   return /^\d{4}/.exec(value)?.[0] ?? null;
 }
 
@@ -97,6 +107,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const queryClient = useQueryClient();
   const [actionsOpen, setActionsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [identifyOpen, setIdentifyOpen] = useState(false);
   const playlists = useQuery({
     queryKey: ["playlists"],
     queryFn: getPlaylists,
@@ -428,6 +439,12 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
                   </DropdownMenuItem>
                 )}
               {session?.role === "admin" && (
+                <DropdownMenuItem onSelect={() => setIdentifyOpen(true)}>
+                  <ScanSearch className="h-4 w-4" />
+                  Identify album…
+                </DropdownMenuItem>
+              )}
+              {session?.role === "admin" && (
                 <AlbumEditor albumId={album.id} trigger="dropdown" />
               )}
             </DropdownMenuContent>
@@ -437,12 +454,21 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
             onOpenChange={setCreateOpen}
             open={createOpen}
           />
+          {session?.role === "admin" && (
+            <IdentifyAlbumDialog
+              albumId={album.id}
+              albumName={album.name}
+              onOpenChange={setIdentifyOpen}
+              open={identifyOpen}
+            />
+          )}
         </div>
 
         <AlbumAboutSection
           about={aboutQuery.data}
           album={album}
           isAdmin={session?.role === "admin"}
+          onIdentify={() => setIdentifyOpen(true)}
         />
 
         <div
@@ -493,6 +519,9 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               isPlaying={isPlaying}
               onPlay={playTrack}
               trackCredits={trackCredits}
+              works={
+                aboutQuery.data ? (aboutQuery.data.works ?? []) : undefined
+              }
             />
           </div>
         ) : (

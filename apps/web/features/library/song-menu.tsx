@@ -12,11 +12,18 @@ import {
 } from "@/components/ui/context-menu";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import { usePlayer } from "@/features/player/player-context";
-import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
+import {
+  addSongToPlaylist,
+  getPlaylists,
+  trackWorkTarget,
+  type WorkSummary,
+} from "@parson/music-sdk";
+import { useSongWorks } from "@/features/library/works/use-works";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Disc3,
   Info,
+  Music2,
   ListEnd,
   ListPlus,
   Loader2,
@@ -50,6 +57,9 @@ type SongMenuProps = {
   removeFromPlaylistLabel?: string;
   /** Shows "View credits…" when the caller can show the track's credits. */
   onViewCredits?: () => void;
+  /** The piece the track performs, when the caller already knows it.
+   * Left undefined, the menu looks it up when it opens. */
+  work?: WorkSummary | null;
 };
 
 export default function SongMenu({
@@ -65,12 +75,15 @@ export default function SongMenu({
   onRemoveFromPlaylist,
   removeFromPlaylistLabel = "Remove from playlist",
   onViewCredits,
+  work,
 }: SongMenuProps) {
   const player = usePlayer();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const entityLinks = songMenuEntityLinkVisibility(context);
+  const songWorks = useSongWorks(song_id, open && work === undefined);
+  const piece = work === undefined ? trackWorkTarget(songWorks.data) : work;
   const playlists = useQuery({
     queryKey: ["playlists"],
     queryFn: getPlaylists,
@@ -199,13 +212,22 @@ export default function SongMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
-          {(entityLinks.album || entityLinks.artist || onViewCredits) && (
-            <ContextMenuSeparator />
-          )}
+          {(entityLinks.album ||
+            entityLinks.artist ||
+            onViewCredits ||
+            piece) && <ContextMenuSeparator />}
           {onViewCredits && (
             <ContextMenuItem onSelect={onViewCredits}>
               <Info className="h-4 w-4" />
               View credits…
+            </ContextMenuItem>
+          )}
+          {piece && (
+            <ContextMenuItem asChild>
+              <Link href={`/work?id=${encodeURIComponent(piece.mbid)}`}>
+                <Music2 className="h-4 w-4" />
+                <span className="truncate">Go to work</span>
+              </Link>
             </ContextMenuItem>
           )}
           {entityLinks.album && (

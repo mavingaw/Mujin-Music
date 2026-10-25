@@ -13,3 +13,4 @@ pub mod musicbrainz;
 pub mod store;
 pub mod wikimedia;
 pub mod worker;
+pub mod works;
