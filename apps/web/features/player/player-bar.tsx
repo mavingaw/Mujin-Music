@@ -31,6 +31,7 @@ import {
 } from "@parson/music-sdk";
 import { useZones } from "./zones/zones-provider";
 import { ZonePickerButton } from "./zones/zone-picker";
+import { ZoneQualityLight } from "./zones/zone-signal-path";
 import {
   useZoneClock,
   useZoneQueue,
@@ -543,6 +544,7 @@ export default function PlayerBar() {
         volume={effectiveVolume}
         zonePicker={<ZonePickerButton />}
         zoneLabel={remote ? remote.name : null}
+        zoneSignal={remote ? <ZoneQualityLight compact zone={remote} /> : null}
       />
     </>
   );

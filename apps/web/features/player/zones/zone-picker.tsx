@@ -7,6 +7,7 @@ import {
   isDspActive,
   sleepTimerLabel,
   groupingPlan,
+  streamQuality,
   orderZones,
   zoneKindLabel,
   zoneQualityLabel,
@@ -54,6 +55,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { ZoneIcon } from "./zone-icons";
 import { ZoneSettingsDialog } from "./zone-settings";
+import { QualityLight, ZoneSignalPathDialog } from "./zone-signal-path";
 import { useZones } from "./zones-provider";
 
 const SLEEP_CHOICES = [15, 30, 45, 60, 90] as const;
@@ -457,7 +459,13 @@ function ZoneRow({
                   <Badge tone="linked">Linked · not sample-synced</Badge>
                 ))}
               {quality && (
-                <Badge tone={quality === "Bit-perfect" ? "synced" : "linked"}>
+                <Badge
+                  tone={
+                    quality === "Bit-perfect" || quality === "Lossless"
+                      ? "synced"
+                      : "linked"
+                  }
+                >
                   {quality}
                 </Badge>
               )}
@@ -600,13 +608,7 @@ function ZoneRow({
         </div>
       )}
       {!grouping && active && zone.output?.stream && (
-        <p className="mt-2 text-[11px] leading-4 text-zinc-400">
-          {[
-            zone.output.stream.source,
-            ...zone.output.stream.steps,
-            zone.output.stream.output,
-          ].join(" → ")}
-        </p>
+        <SignalPathSummary zone={zone} />
       )}
       {!grouping && active && zone.notes.length > 0 && (
         <ul className="mt-2 space-y-1">
@@ -626,6 +628,32 @@ function ZoneRow({
         zone={zone}
       />
     </li>
+  );
+}
+
+/** One line of the playing track's path; opens the full signal path. */
+function SignalPathSummary({ zone }: { zone: Zone }) {
+  const [open, setOpen] = useState(false);
+  const stream = zone.output?.stream;
+  if (!stream) return null;
+  return (
+    <>
+      <button
+        className="mt-2 flex w-full items-start gap-2 rounded-lg px-1 py-1 text-left text-[11px] leading-4 text-zinc-400 transition hover:bg-white/[0.04] hover:text-zinc-200"
+        data-signal-path-summary
+        onClick={() => setOpen(true)}
+        type="button"
+      >
+        <QualityLight className="mt-1" quality={streamQuality(stream)} />
+        <span className="min-w-0 flex-1">
+          {[stream.source, ...stream.steps, stream.output].join(" → ")}
+        </span>
+        <span className="shrink-0 font-medium text-zinc-300 underline-offset-2 hover:underline">
+          Signal path
+        </span>
+      </button>
+      <ZoneSignalPathDialog onOpenChange={setOpen} open={open} zone={zone} />
+    </>
   );
 }
 

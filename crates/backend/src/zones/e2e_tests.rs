@@ -1239,10 +1239,166 @@ fn sonos_stream_plan_keeps_native_formats_and_converts_hi_res() {
         plan(&song("a.m4a", "aac", 44_100, None)).mime_type,
         "audio/mp4"
     );
+    // Lossy decoders put out floating point: 24 bits keep all of it.
     assert_eq!(
         plan(&song("a.ogg", "opus", 48_000, None)).convert_to,
-        Some((48_000, 16))
+        Some((48_000, 24))
     );
+    assert_eq!(
+        plan(&song("a.ogg", "vorbis", 44_100, None)).convert_to,
+        Some((44_100, 24))
+    );
+    // Lossless files Sonos does not take natively keep their own depth.
+    assert_eq!(
+        plan(&song("a.aiff", "aiff", 44_100, Some(16))).convert_to,
+        Some((44_100, 16))
+    );
+}
+
+fn set_audio(
+    cache: &mut LibraryCache,
+    song_index: usize,
+    extension: &str,
+    codec: &str,
+    sample_rate: u32,
+    bit_depth: Option<u8>,
+) {
+    let song = &mut Arc::make_mut(&mut cache.artists)[0].albums[0].songs[song_index];
+    let path = std::path::Path::new(&song.path).with_extension(extension);
+    std::fs::write(&path, vec![0x66_u8; 4_096]).expect("fixture audio");
+    song.path = path.to_string_lossy().to_string();
+    song.audio = Some(AudioProperties {
+        codec: Some(codec.to_string()),
+        container: Some(extension.to_string()),
+        sample_rate: Some(sample_rate),
+        bit_depth,
+        channels: Some(2),
+        bitrate_kbps: None,
+        lossless: Some(bit_depth.is_some()),
+    });
+}
+
+#[actix_web::test]
+async fn sonos_signal_path_follows_the_playing_track_from_the_served_plan() {
+    const STUDIO: &str = "RINCON_STUDIO01400";
+    let (fake, sonos, service) = single_sonos_room("Studio", STUDIO).await;
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let mut cache = library(&directory);
+    set_audio(&mut cache, 0, "flac", "flac", 96_000, Some(24));
+    set_audio(&mut cache, 1, "ogg", "vorbis", 44_100, None);
+    set_audio(&mut cache, 2, "flac", "flac", 44_100, Some(16));
+    let zone_id = format!("sonos:{STUDIO}");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Load {
+                song_ids: ["song-1", "song-2", "song-3"].map(String::from).to_vec(),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let stream = |service: &ZoneService| {
+        service
+            .zone(USER, &zone_id, Some(&cache))
+            .expect("zone")
+            .output
+            .expect("output")
+            .stream
+            .expect("signal path while Parson plays")
+    };
+
+    // Hi-res FLAC: resampled into Sonos's 48 kHz ceiling, depth kept.
+    let path = stream(&service);
+    assert_eq!(path.source, "FLAC 96 kHz/24-bit");
+    assert_eq!(
+        path.steps,
+        [
+            "Sample rate conversion 96 kHz to 48 kHz (linear phase)",
+            "Re-encoded as FLAC (lossless)"
+        ]
+    );
+    assert_eq!(path.output, "FLAC 48 kHz/24-bit to Studio (Sonos One)");
+    assert!(!path.bit_perfect);
+    assert_eq!(path.quality, StreamQuality::High);
+    // The speaker was promised exactly that FLAC.
+    let (_, metadata) = fake.player(STUDIO).queue[0].clone();
+    assert!(metadata.contains("audio/flac"), "{metadata}");
+
+    // The path refreshes with the track: Ogg Vorbis is decoded to 24-bit.
+    service
+        .command(USER, &zone_id, ZoneCommand::Next, Some(&cache))
+        .await
+        .expect("next");
+    sonos.poll_all().await;
+    let path = stream(&service);
+    assert_eq!(path.source, "Ogg Vorbis 44.1 kHz");
+    assert_eq!(
+        path.steps,
+        [
+            "Decoded Ogg Vorbis to 24-bit PCM",
+            "Sent as lossless FLAC 44.1 kHz/24-bit"
+        ]
+    );
+    assert_eq!(path.output, "FLAC 44.1 kHz/24-bit to Studio (Sonos One)");
+    assert_eq!(path.quality, StreamQuality::Low);
+    assert!(
+        service
+            .zone(USER, &zone_id, Some(&cache))
+            .expect("zone")
+            .output
+            .expect("output")
+            .note
+            .contains("lossy files (Ogg Vorbis, Opus) are decoded to 24-bit"),
+        "the note matches what the speaker receives"
+    );
+
+    // CD-quality FLAC within the limit reaches the speaker untouched.
+    service
+        .command(USER, &zone_id, ZoneCommand::Next, Some(&cache))
+        .await
+        .expect("next");
+    sonos.poll_all().await;
+    let path = stream(&service);
+    assert!(path.bit_perfect);
+    assert!(path.steps.is_empty());
+    assert_eq!(path.quality, StreamQuality::Lossless);
+    assert_eq!(
+        path.output,
+        "Original FLAC file, untouched, to Studio (Sonos One)"
+    );
+
+    // Leveling: converted so the gain can be applied, shown while the
+    // loudness is measured.
+    service
+        .update_settings(
+            USER,
+            &zone_id,
+            ZoneSettingsPatch {
+                leveling: Some(LevelingMode::Track),
+                ..ZoneSettingsPatch::default()
+            },
+            super::Viewer::default(),
+            Some(&cache),
+        )
+        .await
+        .expect("leveling");
+    let path = stream(&service);
+    assert!(!path.bit_perfect);
+    assert_eq!(path.quality, StreamQuality::Enhanced);
+    assert_eq!(
+        path.steps[0],
+        "Volume leveling (measuring loudness; the gain shows here once measured)"
+    );
+    assert!(path.steps.contains(
+        &"Carried at 24-bit (from 16-bit) so the processing keeps full resolution".to_string()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Manual helper: runs the fake household until killed and prints the
@@ -1692,6 +1848,125 @@ async fn leveled_sonos_stream_reaches_the_target_loudness() {
         quiet.integrated_lufs > original_quiet.integrated_lufs + 5.0,
         "quiet track raised: {original_quiet:?} -> {quiet:?}"
     );
+    // Now measured, the zone's signal path shows the gain it applies.
+    let gain = service
+        .loudness()
+        .gain_for(&cache, "song-1", super::leveling::LevelBy::Track, -18, 0)
+        .await
+        .expect("gain");
+    let path = service
+        .zone(USER, &zone_id, Some(&cache))
+        .expect("zone")
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert_eq!(path.steps[0], format!("Volume leveling {gain:+.1} dB"));
+    assert!(gain.abs() >= 1.0, "a real gain is applied: {gain}");
+    assert_eq!(path.quality, StreamQuality::Enhanced);
+    server_handle.stop(false).await;
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// What the speaker actually receives for a lossy file: FLAC at 24 bits,
+/// as its signal path and format note say.
+#[actix_web::test]
+async fn sonos_gets_ogg_and_opus_as_24_bit_flac() {
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg is not installed; conversions need it");
+        return;
+    }
+    const DEN: &str = "RINCON_DEN000004400";
+    let (fake, _sonos, service) = single_sonos_room("Den", DEN).await;
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let mut cache = library(&directory);
+    for (index, extension, encoder, codec, rate) in [
+        (0_usize, "ogg", "libvorbis", "vorbis", 44_100_u32),
+        (1, "opus", "libopus", "opus", 48_000),
+    ] {
+        let path = directory.join(format!("tone-{index}.{extension}"));
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("sine=frequency=440:sample_rate={rate}:duration=2"))
+            .args(["-c:a", encoder])
+            .arg(&path)
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success());
+        let song = &mut Arc::make_mut(&mut cache.artists)[0].albums[0].songs[index];
+        song.path = path.to_string_lossy().to_string();
+        song.duration = 2.0;
+        song.audio = Some(AudioProperties {
+            codec: Some(codec.to_string()),
+            container: Some(extension.to_string()),
+            sample_rate: Some(rate),
+            bit_depth: None,
+            channels: Some(1),
+            bitrate_kbps: Some(128),
+            lossless: Some(false),
+        });
+    }
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle.set_ready(cache).await;
+    let cache = lifecycle.cache().await.expect("cache");
+    let service = web::Data::new(service);
+    let server_service = service.clone();
+    let server_lifecycle = web::Data::from(lifecycle.clone());
+    let server = HttpServer::new(move || {
+        App::new()
+            .app_data(server_service.clone())
+            .app_data(server_lifecycle.clone())
+            .configure(crate::api::zones::configure_device_routes)
+    })
+    .workers(1)
+    .bind(("127.0.0.1", 0))
+    .expect("bind test server");
+    let port = server.addrs()[0].port();
+    let server = server.run();
+    let server_handle = server.handle();
+    actix_web::rt::spawn(server);
+    service.set_port(port);
+    let zone_id = format!("sonos:{DEN}");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Load {
+                song_ids: vec!["song-1".into(), "song-2".into()],
+                current_position: 0,
+                position_ms: 0,
+                play: false,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("client");
+    let mut received = Vec::new();
+    for (index, (uri, metadata)) in fake.player(DEN).queue.into_iter().enumerate() {
+        assert!(metadata.contains("audio/flac"), "{metadata}");
+        let response = http.get(&uri).send().await.expect("stream");
+        assert_eq!(response.status(), 200);
+        let bytes = response.bytes().await.expect("audio");
+        let output = directory.join(format!("received-{index}.flac"));
+        std::fs::write(&output, &bytes).expect("write received audio");
+        let probe = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "a:0", "-show_entries"])
+            .args([
+                "stream=codec_name,sample_rate,bits_per_raw_sample",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&output)
+            .output()
+            .expect("ffprobe");
+        received.push(String::from_utf8_lossy(&probe.stdout).trim().to_string());
+    }
+    assert_eq!(received, ["flac,44100,24", "flac,48000,24"]);
     server_handle.stop(false).await;
     let _ = std::fs::remove_dir_all(&directory);
 }

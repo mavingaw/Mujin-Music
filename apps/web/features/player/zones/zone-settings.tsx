@@ -24,7 +24,7 @@ import {
   type ZoneSettingsDraft,
   type ZoneVolumeMode,
 } from "@parson/music-sdk";
-import { BadgeCheck, Lock, RotateCcw, TriangleAlert } from "lucide-react";
+import { Lock, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { ZONE_ICON_LABELS, ZoneIconGlyph } from "./zone-icons";
+import { SignalPathPanel } from "./zone-signal-path";
 import { useZones } from "./zones-provider";
 
 const LEVELING_MODES: ZoneLevelingMode[] = ["off", "auto", "track", "album"];
@@ -683,39 +684,10 @@ function isThisDeviceZone(zone: Zone, localZoneId: string | null): boolean {
 
 /** Format limits and the playing track's path from file to device. */
 export function SignalPath({ zone }: { zone: Zone }) {
-  const output = zone.output;
-  if (!output) return null;
-  const stream = output.stream;
+  if (!zone.output) return null;
   return (
     <Section title="Signal path">
-      <p className="text-[11px] leading-4 text-zinc-400">{output.note}</p>
-      {stream ? (
-        <div className="rounded-lg border border-white/[0.06] p-3 text-xs">
-          <p
-            className={`mb-2 flex items-center gap-1.5 font-medium ${stream.bit_perfect ? "text-emerald-300" : "text-amber-300"}`}
-          >
-            {stream.bit_perfect ? (
-              <BadgeCheck className="h-3.5 w-3.5" />
-            ) : (
-              <TriangleAlert className="h-3.5 w-3.5" />
-            )}
-            {stream.bit_perfect ? "Bit-perfect" : "Processed"}
-          </p>
-          <ol className="space-y-1 border-l border-white/10 pl-3 text-zinc-300">
-            <li>{stream.source}</li>
-            {stream.steps.map((step) => (
-              <li className="text-zinc-400" key={step}>
-                {step}
-              </li>
-            ))}
-            <li>{stream.output}</li>
-          </ol>
-        </div>
-      ) : (
-        <p className="text-[11px] text-zinc-600">
-          Nothing is playing here right now.
-        </p>
-      )}
+      <SignalPathPanel zone={zone} />
     </Section>
   );
 }

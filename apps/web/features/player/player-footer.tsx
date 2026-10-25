@@ -61,6 +61,7 @@ export function PlayerFooter({
   volume,
   zonePicker,
   zoneLabel,
+  zoneSignal,
 }: {
   albumCover?: string;
   albumId: string;
@@ -99,6 +100,8 @@ export function PlayerFooter({
   zonePicker?: ReactNode;
   /** Name of the remote zone being controlled, if any. */
   zoneLabel?: string | null;
+  /** The remote zone's quality light, beside "Playing on". */
+  zoneSignal?: ReactNode;
 }) {
   return (
     <SongMenu
@@ -127,6 +130,7 @@ export function PlayerFooter({
             title={title}
             explicit={explicit}
             zoneLabel={zoneLabel ?? null}
+            zoneSignal={zoneSignal}
           />
           <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
             <PlaybackControls
@@ -233,6 +237,7 @@ function TrackInfo({
   explicit,
   songId,
   zoneLabel,
+  zoneSignal,
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
@@ -241,6 +246,7 @@ function TrackInfo({
   explicit: boolean;
   songId: string;
   zoneLabel: string | null;
+  zoneSignal?: ReactNode;
 }) {
   return (
     <section className="flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden md:justify-self-start">
@@ -264,8 +270,11 @@ function TrackInfo({
           <ArtistCreditLinks credits={artistCredits} />
         </span>
         {zoneLabel && (
-          <span className="block truncate text-[11px] font-medium text-emerald-300">
-            Playing on {zoneLabel}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[11px] font-medium text-emerald-300">
+              Playing on {zoneLabel}
+            </span>
+            {zoneSignal}
           </span>
         )}
       </div>

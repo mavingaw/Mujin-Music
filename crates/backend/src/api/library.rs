@@ -1711,6 +1711,9 @@ fn transcode_cache_path_for(
         bit_depth,
     } = format
     {
+        // Files made before the high-quality resampler and 24-bit lossy
+        // decoding are not reused.
+        hasher.update(b"resampler-v2");
         if gain_tenths_db != 0 {
             hasher.update(b"gain");
             hasher.update(gain_tenths_db.to_le_bytes());
@@ -1874,8 +1877,10 @@ pub(crate) fn renderer_stream_plan(
         mime_type: "audio/flac",
         convert_to: Some((
             renderer_rate(sample_rate, limits.max_sample_rate),
-            if processed {
-                // 24 bits keep the resolution a gain change would otherwise lose.
+            if processed || !lossless_codec(&codec) {
+                // 24 bits keep the resolution a gain change would otherwise
+                // lose, and everything a lossy decoder puts out (it decodes
+                // to floating point, not to 16 bits).
                 depth_limit
             } else {
                 bit_depth.clamp(16, depth_limit)
@@ -1885,9 +1890,30 @@ pub(crate) fn renderer_stream_plan(
     }
 }
 
+/// The resampler the FLAC a renderer gets is made with.
+fn renderer_resample_filter(sample_rate: u32, bit_depth: u8) -> String {
+    let (sample_format, dither) = if bit_depth > 16 {
+        ("s32", "none")
+    } else {
+        ("s16", "triangular_hp")
+    };
+    format!(
+        "aresample={sample_rate}:filter_size=64:phase_shift=10:cutoff=0.97:linear_interp=1:osf={sample_format}:dither_method={dither}"
+    )
+}
+
+/// Codecs that keep every sample of the original recording.
+pub(crate) fn lossless_codec(codec: &str) -> bool {
+    matches!(
+        codec,
+        "flac" | "alac" | "pcm" | "wav" | "aiff" | "ape" | "wavpack" | "wv"
+    )
+}
+
 /// Sonos plays MP3, AAC, FLAC, ALAC and WAV up to 48 kHz/24-bit. Anything
 /// above that, or any other codec, becomes FLAC at the nearest supported rate
-/// (44.1 kHz for the 44.1 family, else 48 kHz) and at most 24 bits.
+/// (44.1 kHz for the 44.1 family, else 48 kHz): lossless sources at their own
+/// depth (at most 24 bits), lossy ones (Ogg Vorbis, Opus) at 24 bits.
 pub(crate) fn sonos_stream_plan(song: &crate::domain::Song) -> SonosStreamPlan {
     renderer_stream_plan(song, crate::outputs::FormatLimits::SONOS, false)
 }
@@ -2443,7 +2469,11 @@ async fn stream_cached_transcode(
             if let Some(filter) = dsp.ffmpeg_filter() {
                 filters.push(filter);
             }
-            if !filters.is_empty() && audio_effect.ffmpeg_filter().is_none() {
+            // A long linear-phase filter for any rate change, and TPDF
+            // dither (high-passed) when the result is cut to 16 bits,
+            // instead of ffmpeg's short default filter and truncation.
+            filters.push(renderer_resample_filter(sample_rate, bit_depth));
+            if audio_effect.ffmpeg_filter().is_none() {
                 command.args(["-af", &filters.join(",")]);
             }
             command

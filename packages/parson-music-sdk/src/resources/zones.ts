@@ -42,11 +42,25 @@ export interface ZoneDsp {
 }
 
 /** Signal path of the playing track, from file to device. */
+/**
+ * Roon-style rating of a signal path, worst stage first: `low` when a lossy
+ * file is involved, `high` when the output needs a conversion (sample rate,
+ * bit depth, software volume), `enhanced` for processing the listener asked
+ * for (leveling, DSP), `lossless` when the file reaches the output untouched.
+ */
+export type ZoneStreamQuality = "lossless" | "enhanced" | "high" | "low";
+
+/** The playing track's path from file to output, as the server plans it. */
 export interface ZoneStreamInfo {
+  /** e.g. `FLAC 96 kHz/24-bit`. */
   source: string;
+  /** e.g. `FLAC 48 kHz/24-bit to Living Room (Sonos Five)`. */
   output: string;
   bit_perfect: boolean;
+  /** Processing in the order it runs. */
   steps: string[];
+  /** Missing from servers older than the rating. */
+  quality?: ZoneStreamQuality;
 }
 
 /** What a zone plays as-is and what happens to everything else. */
@@ -611,11 +625,53 @@ export function deviceVolumeLabel(volume: ZoneVolume | null): string | null {
     : `${current} of ${range.max} on the device`;
 }
 
-/** A one-line quality badge: `Bit-perfect`, `Converted`, or `null`. */
+const STREAM_QUALITY_TEXT: Record<
+  ZoneStreamQuality,
+  { label: string; description: string }
+> = {
+  lossless: {
+    label: "Lossless",
+    description: "The file reaches the output without being changed.",
+  },
+  enhanced: {
+    label: "Enhanced",
+    description:
+      "Parson processes the audio because you asked it to (leveling or DSP).",
+  },
+  high: {
+    label: "High quality",
+    description:
+      "Converted so the output can play it (sample rate, bit depth or volume), without lossy compression.",
+  },
+  low: {
+    label: "Low quality",
+    description: "A lossy file or lossy stream is part of the path.",
+  },
+};
+
+/** The signal path rating of `stream`, inferring it for older servers. */
+export function streamQuality(stream: ZoneStreamInfo): ZoneStreamQuality {
+  if (stream.quality) return stream.quality;
+  return stream.bit_perfect ? "lossless" : "high";
+}
+
+/** Label and one-sentence meaning of a signal path rating. */
+export function streamQualityText(quality: ZoneStreamQuality): {
+  label: string;
+  description: string;
+} {
+  return STREAM_QUALITY_TEXT[quality];
+}
+
+/**
+ * A one-line quality badge: `Bit-perfect`, `Enhanced`, `High quality`,
+ * `Low quality`, or `null` when nothing plays.
+ */
 export function zoneQualityLabel(zone: Zone): string | null {
   const stream = zone.output?.stream;
   if (!stream) return null;
-  return stream.bit_perfect ? "Bit-perfect" : "Converted";
+  if (stream.bit_perfect) return "Bit-perfect";
+  return STREAM_QUALITY_TEXT[streamQuality(stream)].label;
 }
 
 export function zoneStatusLabel(zone: Zone): string {

@@ -460,8 +460,38 @@ pub struct ZoneStreamInfo {
     pub output: String,
     /// Nothing between the file and the device changed a sample.
     pub bit_perfect: bool,
-    /// Processing on the way, e.g. `Converted to 48 kHz`, `Volume leveling`.
+    /// Processing on the way, in the order it happens, e.g.
+    /// `Sample rate conversion 96 kHz to 48 kHz`, `Volume leveling -6.4 dB`.
     pub steps: Vec<String>,
+    /// Roon-style rating of the whole path.
+    pub quality: StreamQuality,
+}
+
+/// How much of the original reaches the output, worst stage first: a lossy
+/// file anywhere makes the path `Low`; a conversion the output needs (rate,
+/// bit depth, software volume) makes it `High`; processing the listener
+/// asked for (leveling, DSP) makes it `Enhanced`; otherwise `Lossless`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamQuality {
+    Lossless,
+    Enhanced,
+    High,
+    Low,
+}
+
+impl StreamQuality {
+    pub fn rate(lossless_source: bool, converted: bool, enhanced: bool) -> Self {
+        if !lossless_source {
+            Self::Low
+        } else if converted {
+            Self::High
+        } else if enhanced {
+            Self::Enhanced
+        } else {
+            Self::Lossless
+        }
+    }
 }
 
 /// A zone's settings as clients show them.

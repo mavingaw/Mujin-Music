@@ -31,7 +31,10 @@ const MAX_CLIENT_ZONES_PER_USER: usize = 32;
 const MAX_PENDING_COMMANDS: usize = 32;
 const MAX_LINKED_GROUPS_PER_USER: usize = 16;
 const MEDIA_URL_LIFETIME_SECONDS: i64 = 12 * 60 * 60;
-const SONOS_FORMAT_NOTE: &str = "Sonos plays up to 48 kHz/24-bit. MP3, AAC, ALAC, FLAC and WAV within that limit stream untouched; anything else is converted to 24-bit FLAC at 44.1 or 48 kHz.";
+/// What Sonos plays untouched and what Parson converts for it.
+fn sonos_format_note() -> String {
+    crate::outputs::FormatLimits::SONOS.note("Sonos")
+}
 /// Path prefix of signed Sonos media URLs.
 pub const ZONE_MEDIA_PATH: &str = "/api/v1/zones/media/";
 
@@ -1048,7 +1051,7 @@ impl ZoneService {
             })
             .collect();
         let (repeat, sonos_shuffles) = RepeatMode::from_sonos_play_mode(&group.play_mode);
-        let mut notes = vec![SONOS_FORMAT_NOTE.to_string()];
+        let mut notes = vec![sonos_format_note()];
         if let Some(queue) = queue
             && queue.song_ids.len() > queue.window_len
         {
@@ -1075,6 +1078,43 @@ impl ZoneService {
                 .unwrap_or(group.duration_ms),
             ZoneSource::External => group.duration_ms,
         };
+        // The path of the track playing now, from the plan the signed media
+        // URL follows; rebuilt with every view, so it follows track changes.
+        let stream = queue
+            .zip(cache)
+            .filter(|_| source == ZoneSource::Parson)
+            .and_then(|(queue, cache)| {
+                let song_id = queue.song_ids.get(current_position)?;
+                let song = cache.song(song_id)?;
+                let players: Vec<_> = group
+                    .members
+                    .iter()
+                    .filter_map(|member| sonos.player(member))
+                    .collect();
+                let rooms = players
+                    .iter()
+                    .map(|player| player.room_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                let mut models: Vec<&str> = players
+                    .iter()
+                    .map(|player| player.model_name.as_str())
+                    .collect();
+                models.dedup();
+                let target = if players.is_empty() {
+                    group.name.clone()
+                } else {
+                    format!("{rooms} ({})", models.join(", "))
+                };
+                let leveling = sonos_leveling(&settings, &queue.song_ids, current_position, cache);
+                Some(hosted::served_stream_info(
+                    song,
+                    crate::outputs::FormatLimits::SONOS,
+                    hosted::cached_leveling_gain(&self.loudness, cache, song_id, leveling),
+                    &ZoneDsp::default(),
+                    &target,
+                ))
+            });
         let mut setting_notes = vec![
             "Sonos crossfades with its own fixed length: any crossfade time above 0 s turns Sonos crossfade on.".to_string(),
         ];
@@ -1153,10 +1193,10 @@ impl ZoneService {
                 max_sample_rate: crate::outputs::FormatLimits::SONOS.max_sample_rate,
                 max_bit_depth: crate::outputs::FormatLimits::SONOS.max_bit_depth,
                 formats: crate::outputs::FormatLimits::SONOS.formats(),
-                note: SONOS_FORMAT_NOTE.to_string(),
+                note: sonos_format_note(),
                 exclusive: None,
                 volume_mode: None,
-                stream: None,
+                stream,
             }),
             notes,
         }

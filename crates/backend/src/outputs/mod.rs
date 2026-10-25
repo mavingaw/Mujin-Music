@@ -95,17 +95,16 @@ impl FormatLimits {
             [only] => (*only).to_string(),
             [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
         };
-        let target = if self.flac {
+        let depth = self.max_bit_depth.clamp(16, 24);
+        let rest = if self.flac {
             format!(
-                "converted to {}-bit FLAC at up to {}",
-                self.max_bit_depth.min(24),
-                format_rate(self.max_sample_rate)
+                "Anything else is sent as FLAC: higher sample rates become the nearest rate it takes in the same family (44.1 or 48 kHz multiples), lossless files keep their own bit depth up to {depth}-bit, and lossy files (Ogg Vorbis, Opus) are decoded to {depth}-bit."
             )
         } else {
-            "converted to 320 kbps MP3".to_string()
+            "Anything else is converted to 320 kbps MP3.".to_string()
         };
         format!(
-            "{device} plays up to {}/{}-bit. {listed} within that stream untouched; anything else is {target}.",
+            "{device} plays up to {}/{}-bit. {listed} within that reach it untouched. {rest}",
             format_rate(self.max_sample_rate),
             self.max_bit_depth
         )
@@ -122,16 +121,21 @@ pub fn format_rate(rate: u32) -> String {
     }
 }
 
+/// Codec names as people know them: `FLAC`, `Ogg Vorbis`, `WAV`.
+pub fn codec_name(source: &SourceFormat) -> String {
+    match source.codec.as_deref() {
+        Some("vorbis") => "Ogg Vorbis".to_string(),
+        Some("opus") => "Opus".to_string(),
+        Some("pcm" | "wav") => "WAV".to_string(),
+        Some("wavpack" | "wv") => "WavPack".to_string(),
+        Some(other) => other.to_ascii_uppercase(),
+        None => "Audio".to_string(),
+    }
+}
+
 /// `FLAC 96 kHz/24-bit`, `MP3 44.1 kHz`.
 pub fn describe_source(source: &SourceFormat) -> String {
-    let codec = source
-        .codec
-        .as_deref()
-        .map(|codec| match codec {
-            "pcm" => "PCM".to_string(),
-            other => other.to_ascii_uppercase(),
-        })
-        .unwrap_or_else(|| "Audio".to_string());
+    let codec = codec_name(source);
     match (source.sample_rate, source.bit_depth) {
         (Some(rate), Some(depth)) if source.lossless() => {
             format!("{codec} {}/{depth}-bit", format_rate(rate))
@@ -238,7 +242,7 @@ mod tests {
         assert_eq!(format_rate(96_000), "96 kHz");
         assert_eq!(
             FormatLimits::CHROMECAST.note("Chromecast"),
-            "Chromecast plays up to 96 kHz/24-bit. FLAC, MP3 and AAC within that stream untouched; anything else is converted to 24-bit FLAC at up to 96 kHz."
+            "Chromecast plays up to 96 kHz/24-bit. FLAC, MP3 and AAC within that reach it untouched. Anything else is sent as FLAC: higher sample rates become the nearest rate it takes in the same family (44.1 or 48 kHz multiples), lossless files keep their own bit depth up to 24-bit, and lossy files (Ogg Vorbis, Opus) are decoded to 24-bit."
         );
         let capped = FormatLimits::SONOS.capped(Some(44_100), Some(16));
         assert_eq!((capped.max_sample_rate, capped.max_bit_depth), (44_100, 16));
