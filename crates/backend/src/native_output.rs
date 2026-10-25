@@ -20,14 +20,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use parson_output::dsd::{DsdPacking, DsdPcm, DsdReader, DsdSource, plan_dsd};
 use parson_output::dsp::{
     DspChain, DspPcm, DspSettings, DspStats, ProcessingPlan, ResamplerKind, plan_processing,
     selectable_rates,
 };
 use parson_output::player::{InputFormat, PcmOpener, PcmSource, Player, PlayerState, PlayerStatus};
+use parson_output::procfs::{HardwareInfo, HardwareStatus};
 use parson_output::{
-    Backend, DepthChange, DeviceInfo, Driver, FormatSupport, OutputPlan, OutputSettings, PlanError,
-    SampleFormat, SourceFormat, StreamFormat, format_support, plan_output,
+    Backend, DepthChange, DeviceInfo, Driver, DsdMode, FormatSupport, OutputPlan, OutputSettings,
+    PlanError, SampleFormat, SourceFormat, StreamFormat, format_support, plan_output,
 };
 use serde::Serialize;
 
@@ -64,6 +66,11 @@ pub struct DeviceView {
     /// The chain was saved for this device (rather than the defaults).
     pub dsp_customized: bool,
     pub dsp_support: DspSupport,
+    /// Native DSD containers the driver accepts, e.g. `DSD_U32_BE`.
+    pub dsd_formats: Vec<&'static str>,
+    /// What the kernel reports about the hardware: USB product name and
+    /// id, and the formats its descriptors declare.
+    pub hardware: Option<HardwareInfo>,
 }
 
 /// What the server-side DSP chain can do on a device.
@@ -108,6 +115,9 @@ pub struct SessionView {
     /// The server-side DSP chain, when anything processes.
     pub processing: Option<ProcessingPlan>,
     pub signal_path: ServerSignalPath,
+    /// What the operating system says the hardware is running at, read
+    /// while it plays (Linux: the PCM's `hw_params`).
+    pub hardware: Option<HardwareStatus>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -158,6 +168,8 @@ struct Session {
     stats: Arc<DspStats>,
     signal_path: ServerSignalPath,
     player: Player,
+    backend: Arc<dyn Backend>,
+    stream: StreamFormat,
 }
 
 impl Session {
@@ -166,17 +178,30 @@ impl Session {
         if let Some(processing) = &mut signal_path.processing {
             processing.status = Some(self.stats.snapshot());
         }
+        let status = self.player.status();
+        let hardware = matches!(status.state, PlayerState::Playing | PlayerState::Starting)
+            .then(|| self.backend.hardware_status(&self.device_id, &self.stream))
+            .flatten();
+        if let Some(hardware) = &hardware {
+            crate::signal_path::add_hardware_report(
+                &mut signal_path,
+                &self.device_name,
+                hardware,
+                &self.stream,
+            );
+        }
         SessionView {
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
             song_id: self.song.id.clone(),
             user_id: self.user_id,
             duration_ms: self.duration_ms,
-            status: self.player.status(),
+            status,
             plan: self.plan.clone(),
             leveling: self.leveling.clone(),
             processing: self.processing.clone(),
             signal_path,
+            hardware,
         }
     }
 }
@@ -532,7 +557,7 @@ impl NativeOutputs {
     ) -> Result<(OutputPlan, ServerSignalPath), NativeError> {
         let (device, settings, dsp, _) = self.device(device_id)?;
         self.plan_and_path(&device, &settings, &dsp, song, None)
-            .map(|(plan, _, path)| (plan, path))
+            .map(|(plan, _, path, _)| (plan, path))
     }
 
     fn plan_and_path(
@@ -542,22 +567,54 @@ impl NativeOutputs {
         dsp: &DspSettings,
         song: &Song,
         leveling: Option<&LevelingRequest>,
-    ) -> Result<(OutputPlan, Option<ProcessingPlan>, ServerSignalPath), NativeError> {
-        let source = source_format(song.audio.as_ref()).ok_or(NativeError::UnknownFormat)?;
-        let mut plan =
-            plan_output(source, device.caps.as_ref(), settings).map_err(NativeError::Plan)?;
+    ) -> Result<
+        (
+            OutputPlan,
+            Option<ProcessingPlan>,
+            ServerSignalPath,
+            SourceFormat,
+        ),
+        NativeError,
+    > {
+        let (mut plan, source) = match dsd_source(song.audio.as_ref()) {
+            Some(dsd_source) => {
+                // DSP and leveling run on PCM, so they convert DSD first.
+                let force_pcm = (dsp.processes() || leveling.is_some())
+                    .then_some("the DSP engine or volume leveling is on, and both work on PCM");
+                let plan = plan_dsd(dsd_source, device.caps.as_ref(), settings, force_pcm)
+                    .map_err(NativeError::Plan)?;
+                (plan, parson_output::dsd::pcm_source(dsd_source))
+            }
+            None => {
+                let source =
+                    source_format(song.audio.as_ref()).ok_or(NativeError::UnknownFormat)?;
+                (
+                    plan_output(source, device.caps.as_ref(), settings)
+                        .map_err(NativeError::Plan)?,
+                    source,
+                )
+            }
+        };
+        let sent_as_dsd = plan
+            .dsd
+            .as_ref()
+            .is_some_and(|dsd| dsd.mode != DsdMode::Pcm);
         // Processing the listener asked for changes the samples on purpose;
         // it then runs in the server's own chain, before the device.
-        let processing = device.caps.as_ref().and_then(|caps| {
-            plan_processing(
-                &mut plan,
-                &source,
-                dsp,
-                leveling.map(|leveling| leveling.gain_db),
-                caps,
-                settings,
-            )
-        });
+        let processing = device
+            .caps
+            .as_ref()
+            .filter(|_| !sent_as_dsd)
+            .and_then(|caps| {
+                plan_processing(
+                    &mut plan,
+                    &source,
+                    dsp,
+                    leveling.map(|leveling| leveling.gain_db),
+                    caps,
+                    settings,
+                )
+            });
         let extension = Path::new(&song.path)
             .extension()
             .and_then(|extension| extension.to_str());
@@ -579,7 +636,7 @@ impl NativeOutputs {
                 processing: processing.as_ref(),
             },
         );
-        Ok((plan, processing, path))
+        Ok((plan, processing, path, source))
     }
 
     /// Plays `song` on `device_id` from `position_ms`, replacing any
@@ -593,9 +650,8 @@ impl NativeOutputs {
         leveling: Option<LevelingRequest>,
     ) -> Result<SessionView, NativeError> {
         let (device, settings, dsp, backend) = self.device(device_id)?;
-        let (plan, processing, signal_path) =
+        let (plan, processing, signal_path, source) =
             self.plan_and_path(&device, &settings, &dsp, song, leveling.as_ref())?;
-        let source = source_format(song.audio.as_ref()).ok_or(NativeError::UnknownFormat)?;
         let mut session = self.session();
         // Release the device (and any other) before opening it again.
         if let Some(previous) = session.take() {
@@ -610,13 +666,22 @@ impl NativeOutputs {
         let open_id = device.id.clone();
         let song_path = PathBuf::from(&song.path);
         let stats = Arc::new(DspStats::default());
-        let opener: PcmOpener = match processing.clone() {
-            None => {
+        let dsd_packing = plan.dsd.as_ref().and_then(|dsd| match dsd.mode {
+            DsdMode::Native => Some(DsdPacking::Native(plan.sample_format)),
+            DsdMode::Dop => Some(DsdPacking::Dop(plan.sample_format)),
+            DsdMode::Pcm => None,
+        });
+        let opener: PcmOpener = match (dsd_packing, processing.clone()) {
+            (Some(packing), _) => {
+                let path = song_path.clone();
+                Box::new(move |position| open_dsd(&path, packing, position))
+            }
+            (None, None) => {
                 let decoder = Arc::clone(&self.decoder);
                 let decode_plan = plan.clone();
                 Box::new(move |position| decoder(&song_path, &decode_plan, &source, None, position))
             }
-            Some(processing) => {
+            (None, Some(processing)) => {
                 let decoder = Arc::clone(&self.float_decoder);
                 let resample_to = (processing.resampler == Some(ResamplerKind::Decoder))
                     .then_some(processing.output_rate);
@@ -636,11 +701,16 @@ impl NativeOutputs {
                 })
             }
         };
+        let open_backend = Arc::clone(&backend);
         let player = Player::start(
-            Box::new(move || backend.open(&open_id, stream, exclusive)),
+            Box::new(move || open_backend.open(&open_id, stream, exclusive)),
             opener,
             stream,
-            InputFormat::for_container(plan.sample_format),
+            if dsd_packing.is_some() {
+                InputFormat::Raw
+            } else {
+                InputFormat::for_container(plan.sample_format)
+            },
             position_ms,
         )
         .map_err(|error| NativeError::Device(format!("{}: {error}", device.name)))?;
@@ -656,6 +726,8 @@ impl NativeOutputs {
             stats,
             signal_path,
             player,
+            backend,
+            stream,
         };
         let view = started.view();
         *session = Some(started);
@@ -763,9 +835,45 @@ fn view(
             .caps
             .as_ref()
             .map(|caps| (caps.min_channels, caps.max_channels)),
+        dsd_formats: device
+            .caps
+            .as_ref()
+            .map(|caps| {
+                caps.dsd_formats
+                    .iter()
+                    .map(|format| format.label())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        hardware: device.hardware.clone(),
         settings,
         in_use,
     }
+}
+
+/// A DSD track's rate and channels, from its indexed properties.
+pub fn dsd_source(audio: Option<&AudioProperties>) -> Option<DsdSource> {
+    let audio = audio?;
+    if audio.codec.as_deref() != Some("dsd") {
+        return None;
+    }
+    Some(DsdSource {
+        rate: audio.sample_rate.filter(|rate| *rate > 0)?,
+        channels: audio.channels.filter(|channels| *channels > 0).unwrap_or(2),
+    })
+}
+
+/// Opens a DSD file at `position_ms`, packed for the device.
+fn open_dsd(path: &Path, packing: DsdPacking, position_ms: u64) -> io::Result<PcmSource> {
+    let mut file = io::BufReader::new(std::fs::File::open(path)?);
+    let info = parson_output::dsd::read_info(&mut file)?;
+    let per_frame = packing.bytes_per_frame() as u64;
+    let start = info.byte_at_ms(position_ms) / per_frame * per_frame;
+    Ok(Box::new(DsdPcm::new(
+        DsdReader::new(file, info, start),
+        info.channels,
+        packing,
+    )))
 }
 
 /// The decoder's view of a track; `None` without a known sample rate.
@@ -846,7 +954,8 @@ pub fn decode_args(
     }
     let (codec, format) = match InputFormat::for_container(plan.sample_format) {
         InputFormat::S16 => ("pcm_s16le", "s16le"),
-        InputFormat::S32 => ("pcm_s32le", "s32le"),
+        // DSD is read by the server itself, never through ffmpeg.
+        InputFormat::S32 | InputFormat::Raw => ("pcm_s32le", "s32le"),
     };
     for arg in [
         "-ac".to_string(),
@@ -1092,6 +1201,7 @@ mod tests {
             exclusive: true,
             max_sample_rate: Some(48_000),
             max_bit_depth: None,
+            ..OutputSettings::default()
         };
         let updated = outputs
             .set_settings(SIMULATED_DEVICE_ID, capped.clone())
@@ -1159,6 +1269,209 @@ mod tests {
         assert!(outputs.current().is_none());
         assert_eq!(outputs.stop(), Err(NativeError::NoSession));
         assert!(!outputs.devices(false).devices[0].in_use);
+    }
+
+    fn dsd_song(dir: &Path) -> Song {
+        let bytes: Vec<u8> = (0..352_800_u32).map(|n| (n * 37 % 251) as u8).collect();
+        let path = dir.join("track.dsf");
+        std::fs::write(&path, parson_output::dsd::write_dsf(2_822_400, 2, &bytes)).unwrap();
+        Song {
+            id: "dsd-1".into(),
+            path: path.display().to_string(),
+            duration: 0.5,
+            audio: Some(AudioProperties {
+                codec: Some("dsd".into()),
+                container: Some("dsf".into()),
+                sample_rate: Some(2_822_400),
+                bit_depth: Some(1),
+                channels: Some(2),
+                bitrate_kbps: Some(5_644),
+                lossless: Some(true),
+            }),
+            ..Song::default()
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("parson-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn stage_ids(path: &ServerSignalPath) -> Vec<&'static str> {
+        path.stages.iter().map(|stage| stage.id).collect()
+    }
+
+    #[test]
+    fn dsd_follows_the_device_strategy() {
+        use crate::signal_path::SignalQuality;
+        let dir = temp_dir("dsd-strategy");
+        let song = dsd_song(&dir);
+        let outputs = outputs(None);
+        // The simulated DAC reports native DSD_U32_BE up to DSD128.
+        let native = outputs
+            .play(1, SIMULATED_DEVICE_ID, &song, 0, None)
+            .unwrap();
+        let dsd = native.plan.dsd.clone().unwrap();
+        assert_eq!(dsd.mode, DsdMode::Native);
+        assert_eq!(native.plan.sample_format, SampleFormat::DsdU32Be);
+        assert_eq!(native.plan.sample_rate, 88_200);
+        assert!(native.plan.bit_perfect);
+        assert_eq!(native.signal_path.quality, SignalQuality::Lossless);
+        assert!(stage_ids(&native.signal_path).contains(&"native-dsd-read"));
+        let output = native.signal_path.stages.last().unwrap();
+        assert!(
+            output.detail.contains("native DSD64 (DSD_U32_BE"),
+            "{}",
+            output.detail
+        );
+        assert_eq!(native.signal_path.source.summary, "DSF DSD64 2.8MHz 2ch");
+        assert_eq!(
+            native.signal_path.delivered.summary,
+            "Native DSD64 2.8MHz 2ch"
+        );
+        // The real player thread reads and plays the file to the end.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while outputs.current().unwrap().status.state != PlayerState::Ended
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let finished = outputs.current().unwrap();
+        assert_eq!(
+            finished.status.state,
+            PlayerState::Ended,
+            "{:?}",
+            finished.status
+        );
+        assert!(finished.status.position_ms >= 450);
+
+        let dop = OutputSettings {
+            dsd_strategy: parson_output::DsdStrategy::Dop,
+            ..OutputSettings::default()
+        };
+        outputs.set_settings(SIMULATED_DEVICE_ID, dop).unwrap();
+        let session = outputs
+            .play(1, SIMULATED_DEVICE_ID, &song, 0, None)
+            .unwrap();
+        assert_eq!(session.plan.dsd.as_ref().unwrap().mode, DsdMode::Dop);
+        assert_eq!(session.plan.sample_rate, 176_400);
+        assert_eq!(session.plan.sample_format, SampleFormat::S24Packed);
+        assert!(stage_ids(&session.signal_path).contains(&"native-dop"));
+        assert_eq!(session.signal_path.quality, SignalQuality::Lossless);
+
+        let pcm = OutputSettings {
+            dsd_strategy: parson_output::DsdStrategy::Pcm,
+            ..OutputSettings::default()
+        };
+        outputs.set_settings(SIMULATED_DEVICE_ID, pcm).unwrap();
+        let (plan, path) = outputs.describe(SIMULATED_DEVICE_ID, &song).unwrap();
+        assert_eq!(plan.dsd.as_ref().unwrap().mode, DsdMode::Pcm);
+        // 352.8 kHz from the decoder, converted to the DAC's 176.4 kHz.
+        assert_eq!(plan.resample, Some((352_800, 176_400)));
+        assert!(!plan.bit_perfect);
+        assert!(stage_ids(&path).contains(&"dsd-to-pcm"));
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+
+        // DSP works on PCM, so it converts DSD even under Native.
+        outputs
+            .set_settings(SIMULATED_DEVICE_ID, OutputSettings::default())
+            .unwrap();
+        outputs
+            .set_dsp(SIMULATED_DEVICE_ID, boosted(-3.0, Some(-3.0)))
+            .unwrap();
+        let (plan, path) = outputs.describe(SIMULATED_DEVICE_ID, &song).unwrap();
+        let dsd = plan.dsd.as_ref().unwrap();
+        assert_eq!(dsd.mode, DsdMode::Pcm);
+        assert!(dsd.fallback_reason.as_deref().unwrap().contains("DSP"));
+        assert!(path.processing.is_some());
+        outputs.stop().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The simulated DAC with a driver that reports what the hardware runs.
+    struct ReportingBackend {
+        report: Option<&'static str>,
+    }
+
+    impl Backend for ReportingBackend {
+        fn driver(&self) -> Driver {
+            Driver::Simulated
+        }
+
+        fn devices(&self) -> Vec<DeviceInfo> {
+            SimulatedBackend.devices()
+        }
+
+        fn open(
+            &self,
+            device_id: &str,
+            format: StreamFormat,
+            exclusive: bool,
+        ) -> io::Result<Box<dyn parson_output::Sink>> {
+            SimulatedBackend.open(device_id, format, exclusive)
+        }
+
+        fn hardware_status(
+            &self,
+            _device_id: &str,
+            stream: &StreamFormat,
+        ) -> Option<HardwareStatus> {
+            let params = parson_output::procfs::parse_hw_params(self.report?)?;
+            Some(HardwareStatus {
+                source: "/proc/asound/card1/pcm0p/sub0/hw_params".into(),
+                matches_stream: parson_output::procfs::params_match(&params, stream),
+                params,
+                momentary_hz: Some(96_000),
+            })
+        }
+    }
+
+    #[test]
+    fn the_driver_report_confirms_or_breaks_the_path() {
+        use crate::signal_path::SignalQuality;
+        let reporting = |report| {
+            NativeOutputs::new(
+                vec![Arc::new(ReportingBackend { report })],
+                true,
+                None,
+                Arc::new(|_, _, _, _, _| Ok(Box::new(io::repeat(0)) as PcmSource)),
+                "test resampler",
+            )
+        };
+        let matching = reporting(Some(
+            "access: RW_INTERLEAVED\nformat: S24_3LE\nsubformat: STD\nchannels: 2\nrate: 96000 (96000/1)\n",
+        ));
+        let view = matching
+            .play(1, SIMULATED_DEVICE_ID, &song(96_000, 24, true), 0, None)
+            .unwrap();
+        let hardware = view.hardware.expect("the driver reports while playing");
+        assert!(hardware.matches_stream);
+        let stage = view.signal_path.stages.last().unwrap();
+        assert_eq!(stage.id, "native-hardware");
+        assert_eq!(stage.detail, "S24_3LE at 96kHz 2ch, USB clock 96kHz");
+        assert_eq!(view.signal_path.quality, SignalQuality::Lossless);
+        matching.stop().unwrap();
+
+        // Something below Parson (a misconfigured plug, a driver quirk)
+        // runs the device at another rate: the path says so.
+        let converted = reporting(Some(
+            "access: RW_INTERLEAVED\nformat: S16_LE\nsubformat: STD\nchannels: 2\nrate: 48000 (48000/1)\n",
+        ));
+        let view = converted
+            .play(1, SIMULATED_DEVICE_ID, &song(96_000, 24, true), 0, None)
+            .unwrap();
+        assert!(!view.hardware.unwrap().matches_stream);
+        assert_eq!(view.signal_path.quality, SignalQuality::HighQuality);
+        converted.stop().unwrap();
+
+        let silent = reporting(None);
+        let view = silent
+            .play(1, SIMULATED_DEVICE_ID, &song(96_000, 24, true), 0, None)
+            .unwrap();
+        assert!(view.hardware.is_none());
+        assert!(!stage_ids(&view.signal_path).contains(&"native-hardware"));
+        silent.stop().unwrap();
     }
 
     #[test]

@@ -5,7 +5,65 @@ import type { ServerSignalPath } from "../player/signal-path";
 /** How the server drives a device. */
 export type NativeOutputDriver = "alsa" | "wasapi" | "core_audio" | "simulated";
 
-export type NativeSampleFormat = "s16" | "s24_packed" | "s24_in32" | "s32";
+export type NativeSampleFormat =
+  | "s16"
+  | "s24_packed"
+  | "s24_in32"
+  | "s32"
+  | "dsd_u8"
+  | "dsd_u16_le"
+  | "dsd_u16_be"
+  | "dsd_u32_le"
+  | "dsd_u32_be";
+
+/**
+ * How DSD files reach the device (Roon's "DSD Playback Strategy").
+ * `auto` sends native DSD when the driver reports it and converts to PCM
+ * otherwise; DoP is never guessed, because a DAC that does not decode it
+ * plays the carrier as noise.
+ */
+export type DsdStrategy = "auto" | "native" | "dop" | "pcm";
+
+export const DSD_STRATEGIES: {
+  value: DsdStrategy;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "auto",
+    label: "Automatic",
+    description:
+      "Native DSD when the driver reports it, otherwise convert to PCM.",
+  },
+  {
+    value: "native",
+    label: "Native DSD",
+    description:
+      "Send DSD in the driver's DSD format (ALSA DSD_U32_BE and similar).",
+  },
+  {
+    value: "dop",
+    label: "DSD over PCM (DoP v1.0)",
+    description:
+      "Pack DSD into 24-bit PCM frames under DoP markers. Only for DACs that decode DoP.",
+  },
+  {
+    value: "pcm",
+    label: "Convert to PCM",
+    description:
+      "Always convert DSD to PCM, which the DSP engine can then process.",
+  },
+];
+
+/** DSD64, DSD128, DSD256 and DSD512 one-bit rates. */
+export const DSD_RATES = [
+  2_822_400, 5_644_800, 11_289_600, 22_579_200,
+] as const;
+
+/** `DSD64` for 2 822 400 Hz. */
+export function dsdRateLabel(rate: number): string {
+  return `DSD${Math.round(rate / 44_100)}`;
+}
 
 export interface NativeOutputSettings {
   /** Open the device exclusively (bit-perfect). */
@@ -14,6 +72,54 @@ export interface NativeOutputSettings {
   max_sample_rate: number | null;
   /** Highest bit depth to send, or `null`. */
   max_bit_depth: number | null;
+  /** DSD playback strategy (older servers omit it: `auto`). */
+  dsd_strategy?: DsdStrategy;
+  /** Highest DSD rate sent as DSD; above it DSD is converted to PCM. */
+  max_dsd_rate?: number | null;
+}
+
+/** One playback alternate setting a USB DAC's descriptors declare. */
+export interface UsbAltset {
+  interface: number | null;
+  altset: number | null;
+  /** Kernel format names, e.g. `S24_3LE`, `DSD_U32_BE`. */
+  formats: string[];
+  channels: number | null;
+  rates: number[];
+  bits: number | null;
+}
+
+/** What the operating system reports about a device's hardware. */
+export interface NativeHardwareInfo {
+  bus: string;
+  /** e.g. `21b4:0082`. */
+  usb_id: string | null;
+  /** From the USB descriptors, e.g. `AudioQuest DragonFly Red v1.0`. */
+  product: string | null;
+  /** e.g. `high speed`. */
+  speed: string | null;
+  /** `driver` when libasound probed it; `usb_descriptors` when busy. */
+  caps_source: "driver" | "usb_descriptors";
+  altsets: UsbAltset[];
+}
+
+/** The kernel's report of what a playing device runs at. */
+export interface NativeHardwareStatus {
+  /** The file read, e.g. `/proc/asound/card1/pcm0p/sub0/hw_params`. */
+  source: string;
+  params: {
+    access: string | null;
+    /** e.g. `S24_3LE`. */
+    format: string;
+    channels: number;
+    rate: number;
+    period_size: number | null;
+    buffer_size: number | null;
+  };
+  /** A USB DAC's measured clock while streaming. */
+  momentary_hz: number | null;
+  /** The hardware runs exactly what the server opened. */
+  matches_stream: boolean;
 }
 
 export interface FormatSupportEntry {
@@ -42,6 +148,10 @@ export interface NativeOutputDevice {
   formats: {
     sample_rates: FormatSupportEntry[];
     bit_depths: FormatSupportEntry[];
+    /** DSD rates: `supported` natively, `allowed` by the max DSD rate. */
+    dsd_rates?: FormatSupportEntry[];
+    /** DSD rates whose DoP carrier the device accepts as PCM. */
+    dop_rates?: number[];
   } | null;
   /** Sample containers, e.g. `24-bit packed`. */
   sample_formats: string[];
@@ -57,6 +167,10 @@ export interface NativeOutputDevice {
   /** The chain was saved for this device rather than left at defaults. */
   dsp_customized?: boolean;
   dsp_support?: NativeDspSupport;
+  /** Native DSD containers the driver accepts, e.g. `DSD_U32_BE`. */
+  dsd_formats?: string[];
+  /** What the kernel says about the hardware (Linux). */
+  hardware?: NativeHardwareInfo | null;
 }
 
 /** What the server's DSP chain can do on one device. */
@@ -101,6 +215,23 @@ export interface NativeOutputPlan {
   channel_change: [number, number] | null;
   exclusive: boolean;
   bit_perfect: boolean;
+  /** How a DSD source is sent; absent for PCM. */
+  dsd?: NativeDsdPlan;
+}
+
+export interface NativeDsdPlan {
+  mode: "native" | "dop" | "pcm";
+  dsd_rate: number;
+  /** e.g. `DSD64`. */
+  dsd_label: string;
+  strategy: DsdStrategy;
+  /** e.g. `DSD_U32_BE`, or the DoP carrier's container. */
+  container: string | null;
+  frame_rate: number | null;
+  /** The PCM rate DSD is decoded to, when converted. */
+  pcm_rate: number | null;
+  /** Why DSD was converted although the strategy asked for DSD. */
+  fallback_reason: string | null;
 }
 
 export interface NativeOutputSession {
@@ -116,6 +247,8 @@ export interface NativeOutputSession {
   plan: NativeOutputPlan;
   leveling: NativeOutputLeveling | null;
   signal_path: ServerSignalPath;
+  /** What the hardware runs at, from the kernel, while playing. */
+  hardware?: NativeHardwareStatus | null;
 }
 
 /**

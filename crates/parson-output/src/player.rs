@@ -19,6 +19,9 @@ pub enum InputFormat {
     /// Interleaved left-justified signed 32-bit little endian, packed into
     /// the device's container.
     S32,
+    /// Already in the device's container (DSD, native or DoP), copied
+    /// as-is.
+    Raw,
 }
 
 impl InputFormat {
@@ -31,10 +34,11 @@ impl InputFormat {
         }
     }
 
-    fn bytes(self) -> usize {
+    fn bytes(self, container: SampleFormat) -> usize {
         match self {
             Self::S16 => 2,
             Self::S32 => 4,
+            Self::Raw => container.bytes(),
         }
     }
 }
@@ -286,7 +290,7 @@ impl Engine {
 
     fn run(&mut self, receiver: &Receiver<Command>) {
         let channels = usize::from(self.stream.channels.max(1));
-        let input_frame = self.input.bytes() * channels;
+        let input_frame = self.input.bytes(self.stream.sample_format) * channels;
         let mut block = vec![0_u8; BLOCK_FRAMES * input_frame];
         let mut packed = Vec::with_capacity(BLOCK_FRAMES * self.stream.frame_bytes());
         self.set(PlayerState::Playing, self.base_ms, None);
@@ -314,7 +318,7 @@ impl Engine {
             let whole = filled / input_frame * input_frame;
             if whole > 0 {
                 let data: &[u8] = match self.input {
-                    InputFormat::S16 => &block[..whole],
+                    InputFormat::S16 | InputFormat::Raw => &block[..whole],
                     InputFormat::S32 => {
                         pack_samples(&block[..whole], self.stream.sample_format, &mut packed);
                         &packed

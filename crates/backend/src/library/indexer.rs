@@ -45,7 +45,9 @@ use crate::library::search::normalize as normalize_search_text;
 use crate::library::storage::get_cover_art_path;
 use crate::persistence::connection::{DbPool, connect};
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac", "dsf", "dff",
+];
 const TAG_PARSER_VERSION: &str = "18";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
@@ -76,6 +78,10 @@ enum AudioFormat {
     Wav,
     Aiff,
     Alac,
+    /// Sony DSD Stream File.
+    Dsf,
+    /// Philips DSDIFF.
+    Dff,
     Unknown,
 }
 
@@ -90,6 +96,8 @@ impl AudioFormat {
             "wav" => Self::Wav,
             "aiff" => Self::Aiff,
             "alac" => Self::Alac,
+            "dsf" => Self::Dsf,
+            "dff" => Self::Dff,
             _ => Self::Unknown,
         }
     }
@@ -104,6 +112,8 @@ impl AudioFormat {
             Self::Wav => "wav",
             Self::Aiff => "aiff",
             Self::Alac => "alac",
+            Self::Dsf => "dsf",
+            Self::Dff => "dff",
             Self::Unknown => "unknown",
         }
     }
@@ -191,6 +201,7 @@ enum ParserStrategy {
     OggOpusFast,
     WavFast,
     AiffFast,
+    DsdFast,
     Lofty,
     LoftyFlacFallback,
     LoftyMp4Fallback,
@@ -210,6 +221,7 @@ impl ParserStrategy {
             Self::OggOpusFast => "ogg_opus_fast",
             Self::WavFast => "wav_fast",
             Self::AiffFast => "aiff_fast",
+            Self::DsdFast => "dsd_fast",
             Self::Lofty => "lofty",
             Self::LoftyFlacFallback => "lofty_flac_fallback",
             Self::LoftyMp4Fallback => "lofty_mp4_fallback",
@@ -1769,9 +1781,13 @@ fn tag_region_bytes() -> usize {
 fn tag_region_plan(format: AudioFormat, file_length: u64) -> (usize, usize) {
     let budget = tag_region_bytes().min(file_length as usize);
     match format {
-        AudioFormat::Ogg | AudioFormat::Opus | AudioFormat::M4a | AudioFormat::Alac => {
-            (budget / 2, budget - budget / 2)
-        }
+        // DSF and DSDIFF keep their ID3 tag after the audio.
+        AudioFormat::Ogg
+        | AudioFormat::Opus
+        | AudioFormat::M4a
+        | AudioFormat::Alac
+        | AudioFormat::Dsf
+        | AudioFormat::Dff => (budget / 2, budget - budget / 2),
         _ => (budget, 0),
     }
 }
@@ -4204,6 +4220,65 @@ fn parse_aiff_fast<R: Read + Seek>(
     Ok(metadata)
 }
 
+/// DSF and DSDIFF: the DSD rate, channels and length from the header,
+/// and tags from the ID3v2 block both formats keep after the audio.
+fn parse_dsd_fast<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata, String> {
+    const MAX_TAG_BYTES: u32 = 16 * 1024 * 1024;
+    let started = Instant::now();
+    let info = parson_output::dsd::read_info(reader).map_err(|error| error.to_string())?;
+    let mut metadata = RawAudioMetadata {
+        parse_strategy: ParserStrategy::DsdFast,
+        ..RawAudioMetadata::default()
+    };
+    metadata.duration_seconds = info.duration_seconds();
+    metadata.duration_source = Some(if metadata.duration_seconds > 0.0 {
+        DurationSource::Exact
+    } else {
+        DurationSource::Unavailable
+    });
+    metadata.audio_offset = Some(info.data_offset);
+    metadata.audio_bytes = Some(info.data_bytes);
+    metadata.technical = AudioProperties {
+        codec: Some("dsd".into()),
+        container: Some(
+            match info.container {
+                parson_output::dsd::DsdContainer::Dsf => "dsf",
+                parson_output::dsd::DsdContainer::Dff => "dff",
+            }
+            .into(),
+        ),
+        sample_rate: Some(info.rate),
+        bit_depth: Some(1),
+        channels: Some(info.channels),
+        bitrate_kbps: Some(info.rate / 1000 * u32::from(info.channels)),
+        lossless: None,
+    };
+    if let Some(offset) = info.metadata_offset {
+        reader
+            .seek(SeekFrom::Start(offset))
+            .map_err(|error| error.to_string())?;
+        let mut header = [0_u8; 10];
+        reader
+            .read_exact(&mut header)
+            .map_err(|error| error.to_string())?;
+        if &header[..3] == b"ID3"
+            && let Some(size) = syncsafe_u32(header[6..10].try_into().expect("ID3 size"))
+            && size <= MAX_TAG_BYTES
+        {
+            let mut tag = header.to_vec();
+            tag.resize(10 + size as usize, 0);
+            reader
+                .read_exact(&mut tag[10..])
+                .map_err(|error| error.to_string())?;
+            if let Ok(tag) = id3::Tag::read_from2(std::io::Cursor::new(tag)) {
+                populate_id3_metadata(&mut metadata, &tag);
+            }
+        }
+    }
+    metadata.tag_parse_us = elapsed_us(started.elapsed());
+    Ok(metadata)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Mp4Atom {
     kind: [u8; 4],
@@ -4793,6 +4868,8 @@ fn container_for_format(format: AudioFormat) -> Option<&'static str> {
         AudioFormat::M4a | AudioFormat::Alac => Some("mp4"),
         AudioFormat::Wav => Some("wav"),
         AudioFormat::Aiff => Some("aiff"),
+        AudioFormat::Dsf => Some("dsf"),
+        AudioFormat::Dff => Some("dff"),
         AudioFormat::Unknown => None,
     }
 }
@@ -4985,6 +5062,7 @@ fn parse_audio_reader<R: Read + Seek>(
         }
         AudioFormat::Wav => parse_wav_fast(reader, file.size_bytes.max(0) as u64),
         AudioFormat::Aiff => parse_aiff_fast(reader, file.size_bytes.max(0) as u64),
+        AudioFormat::Dsf | AudioFormat::Dff => parse_dsd_fast(reader),
         _ => parse_with_lofty(reader),
     };
     (parsed, parser_fallbacks, fast_path_error)
@@ -6509,6 +6587,7 @@ fn attach_fallback_local_covers<S>(
 
 fn quality_rank(file: &DiscoveredFile, parsed: &ParsedFile) -> i32 {
     let extension_score = match file.format {
+        AudioFormat::Dsf | AudioFormat::Dff => 11_000,
         AudioFormat::Flac | AudioFormat::Alac | AudioFormat::Wav | AudioFormat::Aiff => 10_000,
         AudioFormat::M4a | AudioFormat::Opus => 5_000,
         AudioFormat::Ogg => 4_000,
@@ -12470,6 +12549,41 @@ mod external_library_tests {
             .expect("PARSON_TEST_LIBRARY must point to the intended music directory");
         super::benchmark_and_cache_indexer_device_profile(Path::new(&path))
             .expect("offline device profiling should succeed");
+    }
+
+    #[test]
+    fn dsd_files_report_their_dsd_rate_and_id3_tags() {
+        use id3::TagLike;
+        let bytes: Vec<u8> = (0..20_000_u32).map(|n| (n % 251) as u8).collect();
+        let mut dsf = parson_output::dsd::write_dsf(2_822_400, 2, &bytes);
+        let mut tag = id3::Tag::new();
+        tag.set_title("Spem in alium");
+        tag.set_artist("The Tallis Scholars");
+        tag.set_album("Tallis: Spem in alium");
+        let mut encoded = Vec::new();
+        tag.write_to(&mut encoded, id3::Version::Id3v24).unwrap();
+        let offset = dsf.len() as u64;
+        dsf[20..28].copy_from_slice(&offset.to_le_bytes());
+        dsf.extend_from_slice(&encoded);
+        let metadata = super::parse_dsd_fast(&mut Cursor::new(dsf)).unwrap();
+        assert_eq!(metadata.parse_strategy, ParserStrategy::DsdFast);
+        assert_eq!(metadata.title.as_deref(), Some("Spem in alium"));
+        assert_eq!(metadata.track_artists, ["The Tallis Scholars"]);
+        assert_eq!(metadata.technical.codec.as_deref(), Some("dsd"));
+        assert_eq!(metadata.technical.container.as_deref(), Some("dsf"));
+        assert_eq!(metadata.technical.sample_rate, Some(2_822_400));
+        assert_eq!(metadata.technical.bit_depth, Some(1));
+        // 10 000 bytes per channel at 352 800 bytes per second.
+        assert!((metadata.duration_seconds - 10_000.0 / 352_800.0).abs() < 1e-9);
+        assert_eq!(crate::domain::codec_is_lossless("dsd"), Some(true));
+
+        let dff = parson_output::dsd::write_dff(5_644_800, 2, &bytes);
+        let metadata = super::parse_dsd_fast(&mut Cursor::new(dff)).unwrap();
+        assert_eq!(metadata.technical.container.as_deref(), Some("dff"));
+        assert_eq!(metadata.technical.sample_rate, Some(5_644_800));
+        assert_eq!(AudioFormat::from_extension("dsf"), AudioFormat::Dsf);
+        assert_eq!(AudioFormat::from_extension("dff"), AudioFormat::Dff);
+        assert!(super::AUDIO_EXTENSIONS.contains(&"dsf"));
     }
 
     #[test]

@@ -1,9 +1,12 @@
 "use client";
 
 import {
+  dsdRateLabel,
+  DSD_STRATEGIES,
   nativeFormatLabel,
   refreshNativeOutputs,
   updateNativeOutputSettings,
+  type DsdStrategy,
   type FormatSupportEntry,
   type NativeOutputDevice,
   type NativeOutputSettings,
@@ -20,11 +23,16 @@ import {
 } from "@/features/player/use-native-outputs";
 import { useOutputDeviceChoice } from "@/features/player/dsp-store";
 import {
+  descriptorLines,
   deviceCapabilitySummary,
   driverLabels,
+  dsdStrategyNote,
+  dsdSupportSummary,
   formatTone,
   formatToneLabel,
+  hardwareSummary,
   maxDepthOptions,
+  maxDsdRateOptions,
   maxRateOptions,
 } from "./audio-outputs-model";
 
@@ -111,6 +119,8 @@ function DeviceCard({
   const queryClient = useQueryClient();
   const rateId = useId();
   const depthId = useId();
+  const strategyId = useId();
+  const dsdRateId = useId();
   const save = useMutation({
     mutationFn: (settings: NativeOutputSettings) =>
       updateNativeOutputSettings(device.id, settings),
@@ -154,7 +164,16 @@ function DeviceCard({
           </p>
           <p className="mt-1 text-xs text-zinc-400">
             {deviceCapabilitySummary(device)}
+            {dsdSupportSummary(device) ? ` · ${dsdSupportSummary(device)}` : ""}
           </p>
+          {hardwareSummary(device) ? (
+            <p
+              className="mt-0.5 text-[11px] text-zinc-500"
+              data-hardware-summary
+            >
+              {hardwareSummary(device)}
+            </p>
+          ) : null}
         </div>
         <button
           className={cn(
@@ -242,6 +261,59 @@ function DeviceCard({
           </label>
         </div>
 
+        {device.formats?.dsd_rates ? (
+          <div className="grid gap-3 sm:grid-cols-2" data-dsd-settings>
+            <label className="grid gap-1.5" htmlFor={strategyId}>
+              <span className="text-xs font-medium text-zinc-300">
+                DSD playback strategy
+              </span>
+              <select
+                className={selectClass}
+                disabled={!editable}
+                id={strategyId}
+                onChange={(event) =>
+                  change({ dsd_strategy: event.target.value as DsdStrategy })
+                }
+                value={settings.dsd_strategy ?? "auto"}
+              >
+                {DSD_STRATEGIES.map((strategy) => (
+                  <option key={strategy.value} value={strategy.value}>
+                    {strategy.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1.5" htmlFor={dsdRateId}>
+              <span className="text-xs font-medium text-zinc-300">
+                Max DSD rate
+              </span>
+              <select
+                className={selectClass}
+                disabled={!editable || maxDsdRateOptions(device).length === 0}
+                id={dsdRateId}
+                onChange={(event) =>
+                  change({
+                    max_dsd_rate: event.target.value
+                      ? Number(event.target.value)
+                      : null,
+                  })
+                }
+                value={settings.max_dsd_rate ?? ""}
+              >
+                <option value="">No limit</option>
+                {maxDsdRateOptions(device).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs leading-5 text-zinc-500 sm:col-span-2">
+              {dsdStrategyNote(device)}
+            </p>
+          </div>
+        ) : null}
+
         <section aria-label="Bit-Perfect Format Support">
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Bit-Perfect Format Support
@@ -269,6 +341,32 @@ function DeviceCard({
                   />
                 ))}
               </ul>
+              {device.formats.dsd_rates ? (
+                <ul
+                  className="mt-1.5 flex flex-wrap gap-1.5"
+                  data-format-list="dsd"
+                >
+                  {device.formats.dsd_rates.map((entry) => (
+                    <FormatChip
+                      entry={entry}
+                      key={entry.value}
+                      label={dsdRateLabel(entry.value)}
+                    />
+                  ))}
+                </ul>
+              ) : null}
+              {descriptorLines(device).length ? (
+                <div className="mt-3" data-usb-descriptors>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    USB descriptors (from the kernel)
+                  </p>
+                  <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-zinc-400">
+                    {descriptorLines(device).map((line, index) => (
+                      <li key={index}>{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <p className="mt-2 text-[11px] leading-4 text-zinc-500">
                 Tracks in a format marked in red, or above your limits, are
                 converted on the server to the closest supported format, and the

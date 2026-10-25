@@ -25,6 +25,8 @@ pub fn simulated_caps() -> DeviceCaps {
         ],
         min_channels: 2,
         max_channels: 2,
+        dsd_formats: vec![SampleFormat::DsdU32Be],
+        dsd_rates: vec![2_822_400, 5_644_800],
     }
 }
 
@@ -45,6 +47,7 @@ impl Backend for SimulatedBackend {
             caps: Some(simulated_caps()),
             probe_error: None,
             is_default: false,
+            hardware: None,
         }]
     }
 
@@ -61,10 +64,17 @@ impl Backend for SimulatedBackend {
             ));
         }
         let caps = simulated_caps();
-        if !caps.sample_rates.contains(&format.sample_rate)
-            || !caps.sample_formats.contains(&format.sample_format)
-            || format.channels != 2
-        {
+        let accepted = if format.sample_format.is_dsd() {
+            caps.dsd_formats.contains(&format.sample_format)
+                && caps
+                    .dsd_rates
+                    .iter()
+                    .any(|rate| format.sample_format.dsd_frame_rate(*rate) == format.sample_rate)
+        } else {
+            caps.sample_rates.contains(&format.sample_rate)
+                && caps.sample_formats.contains(&format.sample_format)
+        };
+        if !accepted || format.channels != 2 {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "the simulated device does not accept this format",

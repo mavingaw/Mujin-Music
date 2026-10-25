@@ -11,7 +11,9 @@ use jwalk::{Parallelism, WalkDir};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::warn;
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac", "dsf", "dff",
+];
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 const DEFAULT_INITIAL_CAPACITY: usize = 4_096;
 const DEFAULT_MAX_THREADS: usize = 8;

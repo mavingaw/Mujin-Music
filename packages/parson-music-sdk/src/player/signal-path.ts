@@ -199,6 +199,15 @@ export interface SignalPath {
   /** The chain measured samples past full scale: the light turns red. */
   clipping: boolean;
   /**
+   * The operating system's own report of what the hardware runs at, read
+   * while a server output plays: `true` when it matches what Parson
+   * opened, `false` when something converted it, `null` when there is no
+   * report (not playing, or not Linux).
+   */
+  hardwareVerified: boolean | null;
+  /** The driver's report, e.g. `S24_3LE at 96kHz 2ch`. */
+  hardwareReport: string | null;
+  /**
    * One sentence naming what decided the light, built from the stages
    * present: what you asked for, what you did not, what was lossy.
    */
@@ -306,7 +315,25 @@ const CODEC_LABELS: Record<string, string> = {
   pcm_float: "PCM float",
   wavpack: "WavPack",
   ape: "Monkey's Audio",
+  dsd: "DSD",
 };
+
+const DSD_CONTAINER_LABELS: Record<string, string> = {
+  dsf: "DSF",
+  dff: "DSDIFF",
+};
+
+/** `DSD64 2.8MHz` for a one-bit DSD rate. */
+export function formatDsdRate(rate: number) {
+  return `DSD${Math.round(rate / 44_100)} ${(rate / 1_000_000).toFixed(1)}MHz`;
+}
+
+/** Rate label for a format: `96kHz`, or `DSD64` for DSD. */
+function formatRateFor(codec: string | null | undefined, rate: number) {
+  return codec === "dsd"
+    ? `DSD${Math.round(rate / 44_100)}`
+    : formatSampleRate(rate);
+}
 
 /** Short format label for songs without a server leg (badges, offline). */
 export function describeAudioFormat(
@@ -315,6 +342,24 @@ export function describeAudioFormat(
   if (!audio) return null;
   const codec = audio.codec;
   const parts: string[] = [];
+  if (codec === "dsd") {
+    parts.push(
+      (audio.container && DSD_CONTAINER_LABELS[audio.container]) ?? "DSD",
+    );
+    if (audio.sample_rate) parts.push(formatDsdRate(audio.sample_rate));
+    if (audio.channels) parts.push(`${audio.channels}ch`);
+    return {
+      codec: audio.codec,
+      container: audio.container,
+      sample_rate: audio.sample_rate,
+      bit_depth: audio.bit_depth,
+      channels: audio.channels,
+      bitrate_kbps: audio.bitrate_kbps,
+      lossless: audio.lossless,
+      high_res: audio.lossless !== false,
+      summary: parts.join(" "),
+    };
+  }
   if (codec) parts.push(CODEC_LABELS[codec] ?? codec.toUpperCase());
   else if (audio.container) parts.push(audio.container.toUpperCase());
   else parts.push("Unknown format");
@@ -763,6 +808,15 @@ function listTitles(stages: SignalStage[]) {
 }
 
 /**
+ * The format part of a server output's detail, e.g. `96kHz 24bit 2ch`
+ * from `ALSA hw, exclusive, 96kHz 24bit 2ch`, or the DSD description.
+ */
+export function outputFormatFromDetail(detail: string) {
+  const dsd = detail.match(/(native DSD\d+.*|DoP: .*)$/);
+  return dsd ? dsd[1] : (detail.split(", ").at(-1) ?? detail);
+}
+
+/**
  * The sentence under the light. It names the stages that decided it, so a
  * path you processed on purpose never reads as an accident.
  */
@@ -785,12 +839,12 @@ export function describeSignalPath(
   switch (quality) {
     case "lossless":
       return outputStage?.id === "native-output"
-        ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, in exclusive mode at ${outputStage.detail.split(", ").at(-1)}.`
+        ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, in exclusive mode at ${outputFormatFromDetail(outputStage.detail)}.`
         : `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
     case "enhanced":
       return outputStage?.id === "native-output" &&
         outputStage.quality === "lossless"
-        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output} bit-exact, in exclusive mode at ${outputStage.detail.split(", ").at(-1)}.`
+        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output} bit-exact, in exclusive mode at ${outputFormatFromDetail(outputStage.detail)}.`
         : `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
     case "high_quality": {
       const unknown = stages.some(
@@ -863,17 +917,26 @@ export function buildSignalPath(
     server && !client.localFile ? (server.processing ?? null) : null;
   const clipping = processing?.status?.clipping === true;
   const clipped = processing?.status?.clipped_samples ?? 0;
+  const hardwareStage = stages.find((stage) => stage.id === "native-hardware");
   const description = `${describeSignalPath(stages, {
     highRes,
     output: outputStage?.title,
   })}${
+    hardwareStage?.quality === "lossless"
+      ? ` The driver confirms the hardware is running ${hardwareStage.detail}.`
+      : ""
+  }${
     clipping
       ? ` Clipping detected: ${clipped} ${clipped === 1 ? "sample" : "samples"} went past full scale and were limited. Lower the headroom adjustment in the DSP engine.`
       : ""
   }`;
   const beforeOutput = rated.filter((stage) => stage.kind !== "output");
   const ratedOutput = rated.find((stage) => stage.kind === "output");
+  const hardware = rated.find((stage) => stage.id === "native-hardware");
+  const hardwareVerified = hardware ? hardware.quality === "lossless" : null;
   return {
+    hardwareVerified,
+    hardwareReport: hardware?.detail ?? null,
     exactAfterProcessing:
       quality === "enhanced" &&
       Boolean(processing) &&
@@ -933,16 +996,37 @@ export function describeCollectionFormat(
   const codecs = [...new Set(known.map((audio) => audio.codec!))].map(
     (codec) => CODEC_LABELS[codec] ?? codec.toUpperCase(),
   );
-  const parts = [codecs.slice(0, 3).join(" / ")];
+  const allDsd = known.every((audio) => audio.codec === "dsd");
+  // An all-DSD album names its containers (`DSF / DSDIFF DSD64–DSD128`).
+  const labels = allDsd
+    ? [
+        ...new Set(
+          known.map(
+            (audio) =>
+              (audio.container && DSD_CONTAINER_LABELS[audio.container]) ??
+              "DSD",
+          ),
+        ),
+      ]
+    : codecs;
+  const parts = [labels.slice(0, 3).join(" / ")];
   const rate = range(
-    known.flatMap((audio) => (audio.sample_rate ? [audio.sample_rate] : [])),
-    formatSampleRate,
+    known.flatMap((audio) =>
+      audio.sample_rate && (allDsd || audio.codec !== "dsd")
+        ? [audio.sample_rate]
+        : [],
+    ),
+    (value) => formatRateFor(allDsd ? "dsd" : null, value),
   );
   if (rate) parts.push(rate);
-  const depth = range(
-    known.flatMap((audio) => (audio.bit_depth ? [audio.bit_depth] : [])),
-    (value) => `${value}bit`,
-  );
+  const depth = allDsd
+    ? null
+    : range(
+        known.flatMap((audio) =>
+          audio.bit_depth && audio.codec !== "dsd" ? [audio.bit_depth] : [],
+        ),
+        (value) => `${value}bit`,
+      );
   if (depth) parts.push(depth);
   let quality: SignalQuality | null = null;
   for (const audio of audios) {

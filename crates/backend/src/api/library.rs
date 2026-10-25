@@ -1541,6 +1541,44 @@ fn transcode_filter_graph(audio_effect: StreamAudioEffect) -> String {
     }
 }
 
+use crate::signal_path::DSD_COMPAT_RATE;
+
+pub(crate) fn is_dsd_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("dsf") || extension.eq_ignore_ascii_case("dff")
+        })
+}
+
+/// What a cached transcode is encoded as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TranscodeCodec {
+    Mp3,
+    /// DSD converted to 24-bit FLAC at [`DSD_COMPAT_RATE`].
+    DsdFlac,
+}
+
+impl TranscodeCodec {
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Mp3 => "audio/mpeg",
+            Self::DsdFlac => "audio/flac",
+        }
+    }
+}
+
+fn dsd_compat_filter_graph() -> String {
+    format!(
+        "[0:a:0]aresample={DSD_COMPAT_RATE}:filter_size=64:phase_shift=10:cutoff=0.97:dither_method=triangular,aformat=sample_fmts=s32:{}[a]",
+        TRANSCODE_CHANNEL_FILTER.trim_start_matches("aformat=")
+    )
+}
+
+fn dsd_compat_cache_path(song_id: &str, path: &Path) -> PathBuf {
+    transcode_cache_path(&format!("{song_id}-dsd-flac"), path, 0).with_extension("flac")
+}
+
 const MAX_STREAM_BITRATE: u32 = 320;
 const MIN_STREAM_BITRATE: u32 = 32;
 const STREAM_BUFFER_SIZE: usize = 131072;
@@ -2358,9 +2396,10 @@ async fn stream_cached_transcode(
     etag_key: &str,
     bitrate: u32,
     audio_effect: StreamAudioEffect,
+    codec: TranscodeCodec,
 ) -> HttpResponse {
     if tokio::fs::metadata(cache_path).await.is_ok() {
-        return stream_file_range(req, cache_path, etag_key, "audio/mpeg").await;
+        return stream_file_range(req, cache_path, etag_key, codec.content_type()).await;
     }
 
     let cache_lock = {
@@ -2374,7 +2413,7 @@ async fn stream_cached_transcode(
     if tokio::fs::metadata(cache_path).await.is_ok() {
         drop(cache_guard);
         release_transcode_lock(cache_path, &cache_lock).await;
-        return stream_file_range(req, cache_path, etag_key, "audio/mpeg").await;
+        return stream_file_range(req, cache_path, etag_key, codec.content_type()).await;
     }
     let Some(parent) = cache_path.parent() else {
         drop(cache_guard);
@@ -2405,23 +2444,43 @@ async fn stream_cached_transcode(
     let mut command = Command::new("ffmpeg");
     command.kill_on_drop(true);
     command.args(["-y", "-i"]).arg(input_path);
+    match codec {
+        TranscodeCodec::Mp3 => {
+            command.args([
+                "-filter_complex",
+                &transcode_filter_graph(audio_effect),
+                "-map",
+                "[a]",
+            ]);
+            command.args([
+                "-b:a",
+                &bitrate_arg,
+                "-f",
+                "mp3",
+                "-c:a",
+                "libmp3lame",
+                "-compression_level",
+                "0",
+                "-write_xing",
+                "0",
+            ]);
+        }
+        TranscodeCodec::DsdFlac => {
+            command.args([
+                "-filter_complex",
+                &dsd_compat_filter_graph(),
+                "-map",
+                "[a]",
+                "-c:a",
+                "flac",
+                "-bits_per_raw_sample",
+                "24",
+                "-f",
+                "flac",
+            ]);
+        }
+    }
     command.args([
-        "-filter_complex",
-        &transcode_filter_graph(audio_effect),
-        "-map",
-        "[a]",
-    ]);
-    command.args([
-        "-b:a",
-        &bitrate_arg,
-        "-f",
-        "mp3",
-        "-c:a",
-        "libmp3lame",
-        "-compression_level",
-        "0",
-        "-write_xing",
-        "0",
         "-flush_packets",
         "1",
         "-threads",
@@ -2770,6 +2829,19 @@ async fn stream_song_profile(
     };
 
     match transcode_bitrate(bitrate, audio_effect != StreamAudioEffect::None) {
+        None if is_dsd_path(&song_path) => {
+            let cache_path = dsd_compat_cache_path(&song_id, &song_path);
+            stream_cached_transcode(
+                req,
+                &song_path,
+                &cache_path,
+                &format!("{song_id}-dsd-flac"),
+                0,
+                StreamAudioEffect::None,
+                TranscodeCodec::DsdFlac,
+            )
+            .await
+        }
         None => {
             stream_file_range(req, &song_path, &song_id, content_type_for_path(&song_path)).await
         }
@@ -2787,6 +2859,7 @@ async fn stream_song_profile(
                 &format!("{}-{}k", cache_identity, output_bitrate),
                 output_bitrate,
                 audio_effect,
+                TranscodeCodec::Mp3,
             )
             .await
         }
@@ -2819,4 +2892,64 @@ pub(crate) async fn stream_cast_compatible(
         lifecycle,
     )
     .await
+}
+
+#[cfg(test)]
+mod dsd_stream_tests {
+    use super::*;
+
+    #[test]
+    fn dsd_streams_become_24_bit_flac_at_88_2_khz() {
+        assert!(is_dsd_path(Path::new("/music/a.DSF")));
+        assert!(is_dsd_path(Path::new("/music/a.dff")));
+        assert!(!is_dsd_path(Path::new("/music/a.flac")));
+        let cache = dsd_compat_cache_path("song", Path::new("/music/a.dsf"));
+        assert_eq!(cache.extension().and_then(|e| e.to_str()), Some("flac"));
+        assert_ne!(
+            cache,
+            transcode_cache_path("song", Path::new("/music/a.dsf"), 0)
+        );
+        assert_eq!(TranscodeCodec::DsdFlac.content_type(), "audio/flac");
+
+        // The same graph the stream uses, run through the real ffmpeg.
+        let dir = std::env::temp_dir().join(format!("parson-dsd-stream-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("tone.dsf");
+        let bytes: Vec<u8> = (0..70_560_u32)
+            .map(|n| if n % 2 == 0 { 0x69 } else { 0x96 })
+            .collect();
+        std::fs::write(&input, parson_output::dsd::write_dsf(2_822_400, 2, &bytes)).unwrap();
+        let output = dir.join("tone.flac");
+        let Ok(status) = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-v", "error", "-y", "-i"])
+            .arg(&input)
+            .args([
+                "-filter_complex",
+                &dsd_compat_filter_graph(),
+                "-map",
+                "[a]",
+                "-c:a",
+                "flac",
+                "-bits_per_raw_sample",
+                "24",
+                "-f",
+                "flac",
+            ])
+            .arg(&output)
+            .status()
+        else {
+            return; // No ffmpeg on this machine.
+        };
+        assert!(status.success());
+        let flac = std::fs::read(&output).unwrap();
+        assert_eq!(&flac[..4], b"fLaC");
+        // STREAMINFO: sample rate (20 bits) and bits per sample - 1 (5 bits).
+        let info = &flac[8..];
+        let rate =
+            (u32::from(info[10]) << 12) | (u32::from(info[11]) << 4) | (u32::from(info[12]) >> 4);
+        let bits = (((info[12] & 0x01) << 4) | (info[13] >> 4)) + 1;
+        assert_eq!(rate, DSD_COMPAT_RATE);
+        assert_eq!(bits, 24);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

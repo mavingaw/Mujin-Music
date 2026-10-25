@@ -327,6 +327,9 @@ fn caps_from(formats: &[RangedDescription]) -> DeviceCaps {
         sample_formats,
         min_channels: if max_channels == 0 { 2 } else { min_channels },
         max_channels: if max_channels == 0 { 2 } else { max_channels },
+        // CoreAudio has no native DSD; DSD reaches it only as DoP.
+        dsd_formats: Vec::new(),
+        dsd_rates: Vec::new(),
     }
 }
 
@@ -399,6 +402,7 @@ impl Backend for CoreAudioBackend {
                         .then(|| "The device is in exclusive use by another program".to_string())
                         .or(probe_error),
                     is_default: default == Some(device),
+                    hardware: None,
                 })
             })
             .collect()
@@ -627,6 +631,16 @@ impl Sink for CoreAudioSink {
                 .iter()
                 .map(|s| (i32::from_le_bytes(*s) >> 8) as f32 * SCALE_24)
                 .collect(),
+            SampleFormat::DsdU8
+            | SampleFormat::DsdU16Le
+            | SampleFormat::DsdU16Be
+            | SampleFormat::DsdU32Le
+            | SampleFormat::DsdU32Be => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "CoreAudio has no native DSD; use DoP",
+                ));
+            }
         };
         let limit = self.format.sample_rate as usize * self.shared.channels / 4;
         let mut offset = 0;

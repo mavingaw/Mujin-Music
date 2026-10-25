@@ -1031,7 +1031,10 @@ fn quantize(
                 };
                 bytes.extend_from_slice(&(value as i16).to_le_bytes());
             }
-            InputFormat::S32 => bytes.extend_from_slice(&((value << shift) as i32).to_le_bytes()),
+            // The chain never feeds a DSD container; it writes 32-bit words.
+            InputFormat::S32 | InputFormat::Raw => {
+                bytes.extend_from_slice(&((value << shift) as i32).to_le_bytes());
+            }
         }
     }
     stats.peak_bits.store(peak.to_bits(), Ordering::Relaxed);
@@ -1497,6 +1500,7 @@ mod tests {
             ],
             min_channels: 2,
             max_channels: 2,
+            ..DeviceCaps::default()
         };
         let source = SourceFormat {
             sample_rate: 44_100,

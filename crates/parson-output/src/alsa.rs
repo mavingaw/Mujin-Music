@@ -10,8 +10,10 @@ use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::io;
 use std::sync::OnceLock;
 
+use crate::procfs::{self, CapsSource, HardwareInfo, HardwareStatus};
 use crate::{
-    Backend, DeviceCaps, DeviceInfo, Driver, STANDARD_RATES, SampleFormat, Sink, StreamFormat,
+    Backend, DSD_FORMATS, DSD_RATES, DeviceCaps, DeviceInfo, Driver, STANDARD_RATES, SampleFormat,
+    Sink, StreamFormat,
 };
 
 type Ctl = c_void;
@@ -27,6 +29,11 @@ const FORMAT_S16_LE: c_int = 2;
 const FORMAT_S24_LE: c_int = 6;
 const FORMAT_S32_LE: c_int = 10;
 const FORMAT_S24_3LE: c_int = 32;
+const FORMAT_DSD_U8: c_int = 48;
+const FORMAT_DSD_U16_LE: c_int = 49;
+const FORMAT_DSD_U32_LE: c_int = 50;
+const FORMAT_DSD_U16_BE: c_int = 51;
+const FORMAT_DSD_U32_BE: c_int = 52;
 /// Requested device buffer, in microseconds.
 const LATENCY_US: c_uint = 200_000;
 
@@ -36,6 +43,11 @@ fn alsa_format(format: SampleFormat) -> c_int {
         SampleFormat::S24Packed => FORMAT_S24_3LE,
         SampleFormat::S24In32 => FORMAT_S24_LE,
         SampleFormat::S32 => FORMAT_S32_LE,
+        SampleFormat::DsdU8 => FORMAT_DSD_U8,
+        SampleFormat::DsdU16Le => FORMAT_DSD_U16_LE,
+        SampleFormat::DsdU16Be => FORMAT_DSD_U16_BE,
+        SampleFormat::DsdU32Le => FORMAT_DSD_U32_LE,
+        SampleFormat::DsdU32Be => FORMAT_DSD_U32_BE,
     }
 }
 
@@ -103,6 +115,8 @@ alsa_api! {
     snd_pcm_hw_params_any: fn(*mut Pcm, *mut HwParams) -> c_int;
     snd_pcm_hw_params_test_rate: fn(*mut Pcm, *mut HwParams, c_uint, c_int) -> c_int;
     snd_pcm_hw_params_test_format: fn(*mut Pcm, *mut HwParams, c_int) -> c_int;
+    snd_pcm_hw_params_set_format: fn(*mut Pcm, *mut HwParams, c_int) -> c_int;
+    snd_pcm_hw_params_copy: fn(*mut HwParams, *const HwParams) -> ();
     snd_pcm_hw_params_get_channels_min: fn(*const HwParams, *mut c_uint) -> c_int;
     snd_pcm_hw_params_get_channels_max: fn(*const HwParams, *mut c_uint) -> c_int;
     snd_pcm_set_params: fn(*mut Pcm, c_int, c_int, c_uint, c_uint, c_int, c_uint) -> c_int;
@@ -177,6 +191,7 @@ fn pcm_name(device_id: &str, exclusive: bool) -> Option<String> {
 }
 
 struct CardDevice {
+    card: c_int,
     card_id: String,
     card_name: String,
     card_longname: String,
@@ -243,6 +258,7 @@ fn enumerate(api: &Api) -> Vec<CardDevice> {
                         }
                     };
                     found.push(CardDevice {
+                        card,
                         card_id: card_id.clone(),
                         card_name: card_name.clone(),
                         card_longname: card_longname.clone(),
@@ -297,17 +313,95 @@ fn probe(api: &Api, name: &str) -> io::Result<DeviceCaps> {
             let mut max: c_uint = 0;
             (api.snd_pcm_hw_params_get_channels_min)(params, &mut min);
             (api.snd_pcm_hw_params_get_channels_max)(params, &mut max);
+            let dsd_formats: Vec<SampleFormat> = DSD_FORMATS
+                .into_iter()
+                .filter(|format| {
+                    (api.snd_pcm_hw_params_test_format)(pcm, params, alsa_format(*format)) == 0
+                })
+                .collect();
+            let dsd_rates = match dsd_formats.first() {
+                Some(preferred) => probe_dsd_rates(api, pcm, params, *preferred),
+                None => Vec::new(),
+            };
             Ok(DeviceCaps {
                 sample_rates,
                 sample_formats,
                 min_channels: min.clamp(1, 255) as u8,
                 max_channels: max.clamp(1, 255) as u8,
+                dsd_formats,
+                dsd_rates,
             })
         };
         (api.snd_pcm_hw_params_free)(params);
         (api.snd_pcm_close)(pcm);
         result
     }
+}
+
+/// DSD rates the device takes in `format`: the rate is tested with the
+/// format fixed, because a DSD container's frame rate is its own.
+///
+/// # Safety
+/// `pcm` and `params` must be live handles from [`probe`].
+unsafe fn probe_dsd_rates(
+    api: &Api,
+    pcm: *mut Pcm,
+    params: *mut HwParams,
+    format: SampleFormat,
+) -> Vec<u32> {
+    let mut scratch = std::ptr::null_mut();
+    // SAFETY: the scratch parameters are freed before returning.
+    unsafe {
+        if (api.snd_pcm_hw_params_malloc)(&mut scratch) < 0 {
+            return Vec::new();
+        }
+        (api.snd_pcm_hw_params_copy)(scratch, params);
+        let rates = if (api.snd_pcm_hw_params_set_format)(pcm, scratch, alsa_format(format)) == 0 {
+            DSD_RATES
+                .into_iter()
+                .filter(|rate| {
+                    (api.snd_pcm_hw_params_test_rate)(pcm, scratch, format.dsd_frame_rate(*rate), 0)
+                        == 0
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (api.snd_pcm_hw_params_free)(scratch);
+        rates
+    }
+}
+
+/// The kernel's view of a card: USB descriptors and product name.
+fn hardware_info(
+    root: &std::path::Path,
+    found: &CardDevice,
+    probed: bool,
+) -> Option<(HardwareInfo, Option<DeviceCaps>)> {
+    let (usb_id, stream) = procfs::read_usb(root, &format!("card{}", found.card), found.device)?;
+    let caps = procfs::caps_from_usb(&stream);
+    Some((
+        HardwareInfo {
+            bus: "usb".into(),
+            usb_id,
+            product: stream.product.clone(),
+            speed: stream.speed.clone(),
+            caps_source: if probed {
+                CapsSource::Driver
+            } else {
+                CapsSource::UsbDescriptors
+            },
+            altsets: stream.playback,
+        },
+        caps,
+    ))
+}
+
+/// `alsa:USB:0` to its card id and device number.
+fn card_and_device(device_id: &str) -> Option<(&str, i32)> {
+    let rest = device_id.strip_prefix("alsa:")?;
+    let (card, device) = rest.rsplit_once(':')?;
+    Some((card, device.parse().ok()?))
 }
 
 impl Backend for AlsaBackend {
@@ -324,14 +418,27 @@ impl Backend for AlsaBackend {
             .map(|found| {
                 let id = format!("alsa:{}:{}", found.card_id, found.device);
                 let hw = format!("hw:CARD={},DEV={}", found.card_id, found.device);
-                let (caps, probe_error) = match probe(api, &hw) {
+                let (mut caps, probe_error) = match probe(api, &hw) {
                     Ok(caps) => (Some(caps), None),
                     Err(error) => (None, Some(error.to_string())),
                 };
-                let name = if found.pcm_name.is_empty() || found.pcm_name == found.card_name {
-                    found.card_name.clone()
-                } else {
-                    format!("{} {}", found.card_name, found.pcm_name)
+                let root = std::path::Path::new(procfs::PROC_ASOUND);
+                let hardware = hardware_info(root, &found, caps.is_some()).map(
+                    |(hardware, descriptor_caps)| {
+                        // A busy DAC cannot be probed, but its descriptors
+                        // still say what it takes.
+                        if caps.is_none() {
+                            caps = descriptor_caps;
+                        }
+                        hardware
+                    },
+                );
+                let name = match hardware.as_ref().and_then(|hw| hw.product.clone()) {
+                    Some(product) => product,
+                    None if found.pcm_name.is_empty() || found.pcm_name == found.card_name => {
+                        found.card_name.clone()
+                    }
+                    None => format!("{} {}", found.card_name, found.pcm_name),
                 };
                 DeviceInfo {
                     id,
@@ -346,6 +453,7 @@ impl Backend for AlsaBackend {
                     caps,
                     probe_error,
                     is_default: false,
+                    hardware,
                 }
             })
             .collect()
@@ -361,6 +469,16 @@ impl Backend for AlsaBackend {
         let name = pcm_name(device_id, exclusive)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not an ALSA device id"))?;
         Ok(Box::new(open_pcm(api, &name, format, exclusive)?))
+    }
+
+    fn hardware_status(&self, device_id: &str, stream: &StreamFormat) -> Option<HardwareStatus> {
+        let (card, device) = card_and_device(device_id)?;
+        procfs::read_status(
+            std::path::Path::new(procfs::PROC_ASOUND),
+            card,
+            device,
+            stream,
+        )
     }
 }
 
@@ -685,5 +803,75 @@ mod tests {
         let status = stats.snapshot();
         assert!(status.realtime_factor.is_some_and(|factor| factor > 1.0));
         assert!(!status.clipping);
+    }
+
+    /// A DSF file played the way the server plays it: read, packed and
+    /// written by the real player thread into libasound.
+    fn dsd_through_alsa(
+        packing: crate::dsd::DsdPacking,
+        frame_rate: u32,
+        bytes: &[u8],
+    ) -> Option<Vec<u8>> {
+        use crate::dsd::{DsdPcm, DsdReader, read_info, write_dsf};
+        let file = write_dsf(2_822_400, 2, bytes);
+        let container = match packing {
+            crate::dsd::DsdPacking::Native(format) | crate::dsd::DsdPacking::Dop(format) => format,
+        };
+        let format = StreamFormat {
+            sample_rate: frame_rate,
+            sample_format: container,
+            channels: 2,
+        };
+        record_through_alsa(format, crate::player::InputFormat::Raw, move |_| {
+            let mut cursor = io::Cursor::new(file.clone());
+            let info = read_info(&mut cursor)?;
+            Ok(
+                Box::new(DsdPcm::new(DsdReader::new(cursor, info, 0), 2, packing))
+                    as crate::player::PcmSource,
+            )
+        })
+    }
+
+    fn dsd_pattern() -> Vec<u8> {
+        // 0.1 s of DSD64 stereo, as whole 32-bit words.
+        (0..35_280_usize)
+            .flat_map(|n| [(n * 37 % 251) as u8, (n * 91 % 241 + 3) as u8])
+            .collect()
+    }
+
+    #[test]
+    fn dop_reaches_libasound_with_every_dsd_bit_and_marker() {
+        let bytes = dsd_pattern();
+        let Some(recorded) = dsd_through_alsa(
+            crate::dsd::DsdPacking::Dop(SampleFormat::S24Packed),
+            176_400,
+            &bytes,
+        ) else {
+            return;
+        };
+        let decoded = crate::dsd::unpack_dop(&recorded, 2, SampleFormat::S24Packed)
+            .expect("the markers alternate, so a DAC sees DoP");
+        assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn native_dsd_reaches_libasound_unchanged() {
+        let bytes = dsd_pattern();
+        let Some(recorded) = dsd_through_alsa(
+            crate::dsd::DsdPacking::Native(SampleFormat::DsdU32Be),
+            88_200,
+            &bytes,
+        ) else {
+            return;
+        };
+        // Undo DSD_U32_BE's per-channel words to compare in time order.
+        let mut restored = Vec::with_capacity(recorded.len());
+        for frame in recorded.as_chunks::<8>().0 {
+            for time in 0..4 {
+                restored.push(frame[time]);
+                restored.push(frame[4 + time]);
+            }
+        }
+        assert_eq!(restored, bytes);
     }
 }

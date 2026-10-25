@@ -2,6 +2,8 @@ import {
   activeEqBands,
   crossfeedActive,
   crossfeedStrengthLabels,
+  dsdRateLabel,
+  DSD_STRATEGIES,
   formatDecibels,
   formatRealtimeFactor,
   formatSampleRate,
@@ -86,4 +88,54 @@ export function serverDspStatusLine(status: ServerDspStatus | null) {
     parts.push(`Peak ${formatDecibels(status.peak_dbfs)}FS`);
   if (status.clipping) parts.push(`Clipping (${status.clipped_samples})`);
   return parts.length ? parts.join(" · ") : null;
+}
+
+/** e.g. `DSD: native DSD64–DSD256 · Automatic`, or `null` without DSD info. */
+export function serverDsdLine(device: NativeOutputDevice) {
+  const entries = device.formats?.dsd_rates;
+  if (!entries) return null;
+  const native = entries.filter((entry) => entry.supported).map((e) => e.value);
+  const dop = device.formats?.dop_rates ?? [];
+  const span = (rates: number[]) =>
+    rates.length === 1
+      ? dsdRateLabel(rates[0]!)
+      : `${dsdRateLabel(rates[0]!)}–${dsdRateLabel(rates.at(-1)!)}`;
+  const support = native.length
+    ? `native ${span(native)}`
+    : dop.length
+      ? `DoP up to ${dsdRateLabel(dop.at(-1)!)}`
+      : "converted to PCM";
+  const strategy =
+    DSD_STRATEGIES.find(
+      (item) => item.value === (device.settings.dsd_strategy ?? "auto"),
+    )?.label ?? "Automatic";
+  return `DSD: ${support} · ${strategy}`;
+}
+
+/** e.g. `USB 21b4:0082 · AudioQuest DragonFly Red v1.0`. */
+export function serverHardwareLine(device: NativeOutputDevice) {
+  const hardware = device.hardware;
+  if (!hardware) return null;
+  return [
+    `${hardware.bus.toUpperCase()}${hardware.usb_id ? ` ${hardware.usb_id}` : ""}`,
+    hardware.speed,
+    hardware.caps_source === "usb_descriptors"
+      ? "formats from USB descriptors"
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * The kernel's report while the server plays, e.g. `Driver: S24_3LE at
+ * 96kHz 2ch, matches`, or `null` when there is none.
+ */
+export function serverDriverLine(session: NativeOutputSession) {
+  const hardware = session.hardware;
+  if (!hardware) return null;
+  const params = hardware.params;
+  return `Driver: ${params.format} at ${formatSampleRate(params.rate)} ${params.channels}ch, ${
+    hardware.matches_stream ? "as opened" : "converted after Parson"
+  }`;
 }

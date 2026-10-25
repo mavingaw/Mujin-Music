@@ -365,6 +365,22 @@ function SignalPathPanel({
               Bit-perfect up to the {casting ? "Cast device" : "system mixer"}
             </p>
           ) : null}
+          {path?.hardwareVerified !== null &&
+          path?.hardwareVerified !== undefined ? (
+            <p
+              className="mt-1 text-[11px] leading-4"
+              data-hardware-verified={path.hardwareVerified}
+              style={{
+                color: path.hardwareVerified
+                  ? signalQualityColors.lossless
+                  : signalQualityColors.high_quality,
+              }}
+            >
+              {path.hardwareVerified
+                ? `Confirmed by the driver: the hardware is running ${path.hardwareReport}.`
+                : `The driver reports ${path.hardwareReport}, not the format Parson opened.`}
+            </p>
+          ) : null}
           {path && !serverOutput && !casting ? (
             <p className="mt-1 text-[11px] leading-4 text-zinc-500">
               Browsers only reach the device in shared mode. For exclusive,

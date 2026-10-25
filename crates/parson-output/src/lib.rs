@@ -16,8 +16,10 @@
 //! unmodified or which conversion is unavoidable. [`player::Player`] then
 //! plays decoded PCM to the device on its own thread.
 
+pub mod dsd;
 pub mod dsp;
 pub mod player;
+pub mod procfs;
 pub mod simulated;
 
 #[cfg(target_os = "linux")]
@@ -30,6 +32,8 @@ mod wasapi;
 use std::io;
 
 use serde::{Deserialize, Serialize};
+
+pub use dsd::{DsdMode, DsdPlan};
 
 /// PCM sample rates probed on every device, as Roon's "Bit-Perfect Format
 /// Support" list shows them.
@@ -83,6 +87,38 @@ pub enum SampleFormat {
     S24In32,
     /// 32-bit little endian.
     S32,
+    /// Native DSD, 8 one-bit samples per channel in a byte, first sample
+    /// in the most significant bit (ALSA `DSD_U8`).
+    DsdU8,
+    /// Native DSD, 16 samples per channel, little endian word (ALSA
+    /// `DSD_U16_LE`).
+    DsdU16Le,
+    /// Native DSD, 16 samples per channel, big endian word (`DSD_U16_BE`).
+    DsdU16Be,
+    /// Native DSD, 32 samples per channel, little endian word (`DSD_U32_LE`).
+    DsdU32Le,
+    /// Native DSD, 32 samples per channel, big endian word (`DSD_U32_BE`).
+    DsdU32Be,
+}
+
+/// Native DSD containers, in the order Parson prefers them (the widest
+/// word keeps the frame rate, and so the interrupt rate, lowest).
+pub const DSD_FORMATS: [SampleFormat; 5] = [
+    SampleFormat::DsdU32Be,
+    SampleFormat::DsdU32Le,
+    SampleFormat::DsdU16Be,
+    SampleFormat::DsdU16Le,
+    SampleFormat::DsdU8,
+];
+
+/// DSD rates (one-bit samples per second per channel) Parson knows:
+/// DSD64, DSD128, DSD256 and DSD512 in the 44.1 kHz family.
+pub const DSD_RATES: [u32; 4] = [2_822_400, 5_644_800, 11_289_600, 22_579_200];
+
+/// `DSD64` for 2.8224 MHz, `DSD128` for 5.6448 MHz, and so on.
+pub fn dsd_rate_label(rate: u32) -> String {
+    let multiple = (f64::from(rate) / 44_100.0).round() as u32;
+    format!("DSD{multiple}")
 }
 
 impl SampleFormat {
@@ -91,16 +127,25 @@ impl SampleFormat {
             Self::S16 => 2,
             Self::S24Packed => 3,
             Self::S24In32 | Self::S32 => 4,
+            Self::DsdU8 => 1,
+            Self::DsdU16Le | Self::DsdU16Be => 2,
+            Self::DsdU32Le | Self::DsdU32Be => 4,
         }
     }
 
-    /// Bits of precision the container carries.
+    /// Bits of precision the container carries (1 for native DSD).
     pub fn bits(self) -> u8 {
         match self {
             Self::S16 => 16,
             Self::S24Packed | Self::S24In32 => 24,
             Self::S32 => 32,
+            Self::DsdU8 | Self::DsdU16Le | Self::DsdU16Be | Self::DsdU32Le | Self::DsdU32Be => 1,
         }
+    }
+
+    /// A native DSD container rather than PCM.
+    pub fn is_dsd(self) -> bool {
+        self.bits() == 1
     }
 
     pub fn label(self) -> &'static str {
@@ -109,7 +154,18 @@ impl SampleFormat {
             Self::S24Packed => "24-bit packed",
             Self::S24In32 => "24-bit in 32",
             Self::S32 => "32-bit",
+            Self::DsdU8 => "DSD_U8",
+            Self::DsdU16Le => "DSD_U16_LE",
+            Self::DsdU16Be => "DSD_U16_BE",
+            Self::DsdU32Le => "DSD_U32_LE",
+            Self::DsdU32Be => "DSD_U32_BE",
         }
+    }
+
+    /// The device frame rate that carries a DSD stream of `dsd_rate` in
+    /// this native container (e.g. DSD64 in `DSD_U32_BE` is 88.2 kHz).
+    pub fn dsd_frame_rate(self, dsd_rate: u32) -> u32 {
+        dsd_rate / (8 * self.bytes() as u32)
     }
 }
 
@@ -118,16 +174,28 @@ impl SampleFormat {
 pub struct DeviceCaps {
     /// Supported entries of [`STANDARD_RATES`], ascending.
     pub sample_rates: Vec<u32>,
-    /// Supported sample containers, best first within each depth.
+    /// Supported PCM sample containers, best first within each depth.
     pub sample_formats: Vec<SampleFormat>,
     pub min_channels: u8,
     pub max_channels: u8,
+    /// Native DSD containers the device accepts (see [`DSD_FORMATS`]);
+    /// empty for a PCM-only device.
+    #[serde(default)]
+    pub dsd_formats: Vec<SampleFormat>,
+    /// Entries of [`DSD_RATES`] the device takes natively.
+    #[serde(default)]
+    pub dsd_rates: Vec<u32>,
 }
 
 impl DeviceCaps {
     /// Supported entries of [`STANDARD_BIT_DEPTHS`].
     pub fn bit_depths(&self) -> Vec<u8> {
-        let mut depths: Vec<u8> = self.sample_formats.iter().map(|f| f.bits()).collect();
+        let mut depths: Vec<u8> = self
+            .sample_formats
+            .iter()
+            .filter(|f| !f.is_dsd())
+            .map(|f| f.bits())
+            .collect();
         depths.sort_unstable();
         depths.dedup();
         depths
@@ -165,6 +233,9 @@ pub struct DeviceInfo {
     /// Why probing failed, e.g. the device is in use by another app.
     pub probe_error: Option<String>,
     pub is_default: bool,
+    /// What the kernel reports about the hardware (Linux), e.g. the USB
+    /// product name and the formats its descriptors declare.
+    pub hardware: Option<procfs::HardwareInfo>,
 }
 
 /// Per-device user settings, mirroring Roon's device setup.
@@ -180,6 +251,41 @@ pub struct OutputSettings {
     /// Highest bit depth to send.
     #[serde(default)]
     pub max_bit_depth: Option<u8>,
+    /// How DSD files reach the device (Roon's "DSD Playback Strategy").
+    #[serde(default)]
+    pub dsd_strategy: DsdStrategy,
+    /// Highest DSD rate to send as DSD (native or DoP); above it, DSD is
+    /// converted to PCM. One of [`DSD_RATES`].
+    #[serde(default)]
+    pub max_dsd_rate: Option<u32>,
+}
+
+/// How DSD reaches a device.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DsdStrategy {
+    /// Native DSD when the driver reports it, otherwise PCM. DoP is never
+    /// guessed: a DAC that does not decode it plays the carrier as noise.
+    #[default]
+    Auto,
+    /// Native DSD (ALSA `DSD_U32_BE` and friends); PCM when unavailable.
+    Native,
+    /// DSD over PCM v1.0: 16 DSD bits per channel in each 24-bit PCM
+    /// sample, under alternating 0x05/0xFA markers.
+    Dop,
+    /// Always convert DSD to PCM.
+    Pcm,
+}
+
+impl DsdStrategy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic",
+            Self::Native => "Native DSD",
+            Self::Dop => "DSD over PCM (DoP v1.0)",
+            Self::Pcm => "Convert to PCM",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -192,6 +298,8 @@ impl Default for OutputSettings {
             exclusive: true,
             max_sample_rate: None,
             max_bit_depth: None,
+            dsd_strategy: DsdStrategy::Auto,
+            max_dsd_rate: None,
         }
     }
 }
@@ -207,6 +315,11 @@ impl OutputSettings {
             && !STANDARD_BIT_DEPTHS.contains(&bits)
         {
             return Err(format!("{bits} bit is not a supported bit depth"));
+        }
+        if let Some(rate) = self.max_dsd_rate
+            && !DSD_RATES.contains(&rate)
+        {
+            return Err(format!("{rate} Hz is not a DSD rate"));
         }
         Ok(())
     }
@@ -226,6 +339,12 @@ pub struct FormatSupportEntry<T> {
 pub struct FormatSupport {
     pub sample_rates: Vec<FormatSupportEntry<u32>>,
     pub bit_depths: Vec<FormatSupportEntry<u8>>,
+    /// Every entry of [`DSD_RATES`]: `supported` when the device takes it
+    /// natively, `allowed` under the max DSD rate setting.
+    pub dsd_rates: Vec<FormatSupportEntry<u32>>,
+    /// DSD rates that fit a DoP carrier the device accepts (DoP itself
+    /// cannot be probed; the DAC must decode it).
+    pub dop_rates: Vec<u32>,
 }
 
 /// Every standard rate and depth, marked supported or not, for the UI.
@@ -247,6 +366,19 @@ pub fn format_support(caps: &DeviceCaps, settings: &OutputSettings) -> FormatSup
                 supported: depths.contains(&bits),
                 allowed: settings.max_bit_depth.is_none_or(|max| bits <= max),
             })
+            .collect(),
+        dsd_rates: DSD_RATES
+            .iter()
+            .map(|&rate| FormatSupportEntry {
+                value: rate,
+                supported: !caps.dsd_formats.is_empty() && caps.dsd_rates.contains(&rate),
+                allowed: settings.max_dsd_rate.is_none_or(|max| rate <= max),
+            })
+            .collect(),
+        dop_rates: DSD_RATES
+            .iter()
+            .copied()
+            .filter(|rate| dsd::dop_carrier(caps, *rate).is_some())
             .collect(),
     }
 }
@@ -293,6 +425,9 @@ pub struct OutputPlan {
     /// The samples reach the device unmodified: exclusive access, no
     /// resampling, no depth reduction and no downmix.
     pub bit_perfect: bool,
+    /// How a DSD source is sent, `None` for PCM sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsd: Option<DsdPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -408,6 +543,7 @@ pub fn plan_output(
         channel_change,
         exclusive: settings.exclusive,
         bit_perfect,
+        dsd: None,
     })
 }
 
@@ -451,6 +587,15 @@ pub trait Backend: Send + Sync {
         format: StreamFormat,
         exclusive: bool,
     ) -> io::Result<Box<dyn Sink>>;
+    /// What the hardware is running at while `device_id` plays `stream`,
+    /// as the operating system reports it; `None` where it cannot say.
+    fn hardware_status(
+        &self,
+        _device_id: &str,
+        _stream: &StreamFormat,
+    ) -> Option<procfs::HardwareStatus> {
+        None
+    }
 }
 
 /// This platform's native backend, or `None` where there is none (or the
@@ -499,6 +644,12 @@ pub fn pack_samples(input: &[u8], format: SampleFormat, output: &mut Vec<u8>) {
                 output.extend_from_slice(&sample[2..4]);
             }
         }
+        // DSD is never decoded to PCM words; it arrives already packed.
+        SampleFormat::DsdU8
+        | SampleFormat::DsdU16Le
+        | SampleFormat::DsdU16Be
+        | SampleFormat::DsdU32Le
+        | SampleFormat::DsdU32Be => output.extend_from_slice(input),
     }
 }
 
@@ -512,6 +663,7 @@ mod tests {
             sample_formats: formats.to_vec(),
             min_channels: 2,
             max_channels: 2,
+            ..DeviceCaps::default()
         }
     }
 
@@ -573,6 +725,7 @@ mod tests {
             exclusive: true,
             max_sample_rate: Some(96_000),
             max_bit_depth: Some(24),
+            ..OutputSettings::default()
         };
         let plan = plan_output(flac(192_000, 24), Some(&caps), &settings).unwrap();
         assert_eq!(plan.resample, Some((192_000, 96_000)));
