@@ -118,7 +118,22 @@ pub struct ServerLegRequest {
     pub target: StreamTarget,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+/// The server's own DSP chain on a native output, and how it is running.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SignalProcessing {
+    /// e.g. `Parson DSP, 64-bit float`.
+    pub engine: String,
+    /// Stage ids the chain runs, in order.
+    pub stages: Vec<&'static str>,
+    /// Things the chain could not do as asked, in plain language.
+    pub notes: Vec<String>,
+    /// Live measurements while it plays; `None` when only described.
+    pub status: Option<parson_output::dsp::DspStatus>,
+}
+
+pub const SERVER_DSP_ENGINE: &str = "Parson DSP, 64-bit float";
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ServerSignalPath {
     pub song_id: String,
     pub target: StreamTarget,
@@ -132,6 +147,9 @@ pub struct ServerSignalPath {
     pub requested_bitrate_kbps: u32,
     pub effect: Option<&'static str>,
     pub stages: Vec<SignalStage>,
+    /// The server-side DSP chain, on a native output that processes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processing: Option<SignalProcessing>,
 }
 
 /// Bitrate the stream is transcoded at, or `None` for the original bytes.
@@ -376,6 +394,7 @@ pub fn describe_server_leg(
             requested_bitrate_kbps: request.bitrate_kbps,
             effect: None,
             stages,
+            processing: None,
         };
     };
 
@@ -506,6 +525,7 @@ pub fn describe_server_leg(
         requested_bitrate_kbps: request.bitrate_kbps,
         effect: effect.map(|effect| effect.id),
         stages,
+        processing: None,
     }
 }
 
@@ -542,6 +562,9 @@ pub struct NativeOutputTarget<'a> {
     pub resampler: &'a str,
     /// Volume leveling the listener turned on, applied by the server.
     pub leveling: Option<NativeLeveling<'a>>,
+    /// The server's DSP chain for this track, when anything processes.
+    /// Leveling alone (without a plan) is treated as a chain of one gain.
+    pub processing: Option<&'a parson_output::dsp::ProcessingPlan>,
 }
 
 fn plan_format_summary(plan: &parson_output::OutputPlan) -> String {
@@ -586,7 +609,33 @@ pub fn describe_native_leg(
             "The server decodes {codec} itself and writes the samples to the device, so no browser, phone or system mixer handles them. Decoding is exact."
         ),
     });
-    if let Some(leveling) = target.leveling {
+    let derived;
+    let processing = match (target.processing, target.leveling) {
+        (Some(processing), _) => Some(processing),
+        (None, Some(leveling)) => {
+            derived = parson_output::dsp::ProcessingPlan {
+                leveling_db: Some(leveling.gain_db),
+                headroom_db: None,
+                bands: Vec::new(),
+                crossfeed: None,
+                crossfeed_skipped: false,
+                channels: plan.channels,
+                input_rate: plan.resample.map_or(plan.sample_rate, |(from, _)| from),
+                output_rate: plan.sample_rate,
+                rate_requested: false,
+                requested_rate_unavailable: None,
+                resampler: plan
+                    .resample
+                    .map(|_| parson_output::dsp::ResamplerKind::Decoder),
+                output_bits: plan.bit_depth,
+            };
+            Some(&derived)
+        }
+        (None, None) => None,
+    };
+    let mut chain: Vec<&'static str> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(processing) = processing {
         stages.push(SignalStage {
             id: "native-float-in",
             kind: StageKind::Conversion,
@@ -596,49 +645,150 @@ pub fn describe_native_leg(
                 None => "Decoded to 64bit float".into(),
             },
             quality: Some(SignalQuality::Lossless),
-            explanation: "64-bit float holds every integer sample exactly, so moving into it for processing loses nothing.".into(),
+            explanation: "64-bit float holds every integer sample exactly, so moving into it for processing loses nothing. Every stage below runs on the server, before the device, in 64-bit float.".into(),
         });
-        stages.push(SignalStage {
-            id: "native-leveling",
-            kind: StageKind::Dsp,
-            title: "Volume leveling".into(),
-            detail: format!(
-                "{}, {} ReplayGain",
-                format_decibels(leveling.gain_db),
-                leveling.source
-            ),
-            quality: Some(SignalQuality::Enhanced),
-            explanation: "Volume leveling, which you turned on, is applied by the server in 64-bit float using the track's ReplayGain tags, so tracks play at a similar loudness. The device's volume stays fixed.".into(),
-        });
+        if let Some(gain_db) = processing.leveling_db {
+            chain.push("native-leveling");
+            stages.push(SignalStage {
+                id: "native-leveling",
+                kind: StageKind::Dsp,
+                title: "Volume leveling".into(),
+                detail: format!(
+                    "{}, {} ReplayGain",
+                    format_decibels(gain_db),
+                    target.leveling.map_or("track", |leveling| leveling.source)
+                ),
+                quality: Some(SignalQuality::Enhanced),
+                explanation: "Volume leveling, which you turned on, is applied by the server in 64-bit float using the track's ReplayGain tags, so tracks play at a similar loudness. The device's volume stays fixed.".into(),
+            });
+        }
+        if let Some(headroom) = processing.headroom_db {
+            chain.push("native-headroom");
+            stages.push(SignalStage {
+                id: "native-headroom",
+                kind: StageKind::Dsp,
+                title: "Headroom adjustment".into(),
+                detail: format_decibels(headroom),
+                quality: Some(SignalQuality::Enhanced),
+                explanation: "Headroom management lowers the level before the EQ, in 64-bit float, so its boosts cannot push loud passages past full scale.".into(),
+            });
+        }
+        if !processing.bands.is_empty() {
+            chain.push("native-eq");
+            let count = processing.bands.len();
+            stages.push(SignalStage {
+                id: "native-eq",
+                kind: StageKind::Dsp,
+                title: "Parametric EQ".into(),
+                detail: format!(
+                    "{count} {}: {}",
+                    if count == 1 { "band" } else { "bands" },
+                    processing
+                        .bands
+                        .iter()
+                        .map(parson_output::dsp::EqBand::describe)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                quality: Some(SignalQuality::Enhanced),
+                explanation: format!(
+                    "The parametric EQ you set up for {}, run by the server as {count} biquad filter{} with 64-bit coefficients and state, at {}.",
+                    target.device_name,
+                    if count == 1 { "" } else { "s" },
+                    format_rate(match processing.resampler {
+                        Some(parson_output::dsp::ResamplerKind::Decoder) => processing.output_rate,
+                        _ => processing.input_rate,
+                    })
+                ),
+            });
+        }
+        if let Some(strength) = processing.crossfeed {
+            chain.push("native-crossfeed");
+            let (cutoff, feed, delay) = strength.parameters();
+            stages.push(SignalStage {
+                id: "native-crossfeed",
+                kind: StageKind::Dsp,
+                title: "Crossfeed".into(),
+                detail: format!(
+                    "{}: {cutoff:.0} Hz, {}, {delay} ms",
+                    strength.label(),
+                    format_decibels(feed)
+                ),
+                quality: Some(SignalQuality::Enhanced),
+                explanation: "Crossfeed mixes a delayed, low-passed share of each channel into the other ear, so headphone listening sounds less like the music is inside your head. The server runs it in 64-bit float.".into(),
+            });
+        } else if processing.crossfeed_skipped {
+            notes.push(format!(
+                "Crossfeed is on but this track plays in {} channels, so it is skipped.",
+                processing.channels
+            ));
+        }
+        if let Some(rate) = processing.requested_rate_unavailable {
+            notes.push(format!(
+                "{} does not accept {} as configured, so the DSP sample rate choice is ignored for this track.",
+                target.device_name,
+                format_rate(rate)
+            ));
+        }
     }
     if let Some((from, to)) = plan.resample {
+        let (converter, requested) = match processing {
+            Some(processing) => (
+                match processing.resampler {
+                    Some(parson_output::dsp::ResamplerKind::Parson) => {
+                        parson_output::dsp::resampler_label()
+                    }
+                    _ => target.resampler.to_string(),
+                },
+                processing.rate_requested,
+            ),
+            None => (target.resampler.to_string(), false),
+        };
+        if processing.is_some() {
+            chain.push("native-resample");
+        }
         stages.push(SignalStage {
             id: "native-resample",
             kind: StageKind::Conversion,
             title: "Sample rate conversion".into(),
-            detail: format!("{} to {} ({})", format_rate(from), format_rate(to), target.resampler),
-            quality: Some(SignalQuality::HighQuality),
-            explanation: format!(
-                "{} cannot play {} as configured, so the server converts it to {}, the closest rate it accepts in the same family. High quality, not bit-perfect. Raise the device's max sample rate in Settings if it really supports {}.",
-                target.device_name,
-                format_rate(from),
-                format_rate(to),
-                format_rate(from)
-            ),
+            detail: format!("{} to {} ({converter})", format_rate(from), format_rate(to)),
+            quality: Some(if requested {
+                SignalQuality::Enhanced
+            } else {
+                SignalQuality::HighQuality
+            }),
+            explanation: if requested {
+                format!(
+                    "You chose {} as the DSP sample rate, so the server converts the track to it with a linear-phase filter in 64-bit float, after the EQ and crossfeed. The device receives exactly that rate; nothing converts it again.",
+                    format_rate(to)
+                )
+            } else {
+                format!(
+                    "{} cannot play {} as configured, so the server converts it to {}, the closest rate it accepts in the same family. High quality, not bit-perfect. Raise the device's max sample rate in Settings if it really supports {}.",
+                    target.device_name,
+                    format_rate(from),
+                    format_rate(to),
+                    format_rate(from)
+                )
+            },
         });
     }
-    if target.leveling.is_some() {
+    if processing.is_some() {
+        chain.push("native-depth");
         stages.push(SignalStage {
             id: "native-depth",
             kind: StageKind::Conversion,
             title: "Bit depth conversion".into(),
             detail: format!("64bit float to {}bit, TPDF dither", plan.bit_depth),
             quality: Some(SignalQuality::Enhanced),
-            explanation: "After processing, the samples are returned to the device's integer format with triangular dither. Part of the processing you asked for.".into(),
+            explanation: format!(
+                "After processing, the samples are returned to the device's integer format with triangular dither, at the highest depth {} accepts ({} bits). Part of the processing you asked for.",
+                target.device_name, plan.bit_depth
+            ),
         });
     }
     match plan.depth {
-        _ if target.leveling.is_some() => {}
+        _ if processing.is_some() => {}
         DepthChange::None => {}
         DepthChange::Pad { from, to } => stages.push(SignalStage {
             id: "native-depth",
@@ -748,6 +898,12 @@ pub fn describe_native_leg(
         requested_bitrate_kbps: 0,
         effect: None,
         stages,
+        processing: processing.map(|_| SignalProcessing {
+            engine: SERVER_DSP_ENGINE.into(),
+            stages: chain,
+            notes,
+            status: None,
+        }),
     }
 }
 
@@ -1056,6 +1212,7 @@ mod tests {
         simulated: false,
         resampler: "soxr, very high quality",
         leveling: None,
+        processing: None,
     };
 
     #[test]

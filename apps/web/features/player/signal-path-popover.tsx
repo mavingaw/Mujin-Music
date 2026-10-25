@@ -2,6 +2,11 @@
 
 import {
   describeCollectionFormat,
+  formatDecibels,
+  formatRealtimeFactor,
+  SIGNAL_CLIPPING_COLOR,
+  signalLightColor,
+  signalLightLabel,
   signalPathSummary,
   signalQualityColors,
   signalQualityLabels,
@@ -66,12 +71,19 @@ export function QualityGlyph({
   quality,
   size = 14,
   className,
+  clipping = false,
 }: {
   quality: SignalQuality | null;
   size?: number;
   className?: string;
+  /** The DSP chain is clipping: the light turns red. */
+  clipping?: boolean;
 }) {
-  const color = quality ? signalQualityColors[quality] : "#71717a";
+  const color = clipping
+    ? SIGNAL_CLIPPING_COLOR
+    : quality
+      ? signalQualityColors[quality]
+      : "#71717a";
   const sparkle = quality === "lossless" || quality === "enhanced";
   return (
     <svg
@@ -98,7 +110,7 @@ export function QualityGlyph({
 }
 
 function qualityText(path: SignalPath) {
-  return signalQualityLabels[path.quality];
+  return signalLightLabel(path);
 }
 
 type PopoverProps = {
@@ -142,6 +154,7 @@ export function SignalPathLight({
             : "inline-flex h-8 max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/4 pl-2.5 pr-3 text-xs text-zinc-300 transition-colors hover:bg-white/8",
           className,
         )}
+        data-signal-clipping={path?.clipping ? "true" : undefined}
         data-signal-quality={path?.quality ?? "unknown"}
         onClick={() => setOpen((value) => !value)}
         ref={triggerRef}
@@ -149,6 +162,7 @@ export function SignalPathLight({
         type="button"
       >
         <QualityGlyph
+          clipping={path?.clipping}
           quality={path?.quality ?? null}
           size={variant === "compact" ? 15 : 13}
         />
@@ -156,7 +170,7 @@ export function SignalPathLight({
           <>
             <span
               className="shrink-0 font-semibold"
-              style={{ color: signalQualityColors[path.quality] }}
+              style={{ color: signalLightColor(path) }}
             >
               {qualityText(path)}
             </span>
@@ -304,7 +318,11 @@ function SignalPathPanel({
             Signal path:{" "}
             <span
               style={{
-                color: quality ? signalQualityColors[quality] : undefined,
+                color: path
+                  ? signalLightColor(path)
+                  : quality
+                    ? signalQualityColors[quality]
+                    : undefined,
               }}
             >
               {path ? qualityText(path) : loading ? "Checking" : "Unknown"}
@@ -328,6 +346,15 @@ function SignalPathPanel({
             >
               <QualityGlyph quality="lossless" size={10} />
               Bit-perfect to {serverOutput.title}
+            </p>
+          ) : path?.exactAfterProcessing && serverOutput ? (
+            <p
+              className="mt-1.5 flex items-center gap-1.5 text-xs font-medium"
+              data-exact-after-processing
+              style={{ color: signalQualityColors.enhanced }}
+            >
+              <QualityGlyph quality="enhanced" size={10} />
+              Processed on the server, then bit-exact to {serverOutput.title}
             </p>
           ) : path?.bitPerfectToOutput && path.quality !== "lossless" ? (
             <p
@@ -387,6 +414,7 @@ function SignalPathPanel({
             shown.
           </p>
         ) : null}
+        {path?.processing ? <ProcessingSummary path={path} /> : null}
         {path ? (
           <p className="mx-2 mt-3 text-[11px] leading-4 text-zinc-500">
             {path.description} The light describes formats and processing, not
@@ -443,6 +471,59 @@ function SignalPathPanel({
       </footer>
     </div>,
     document.body,
+  );
+}
+
+/** Roon's MUSE footer: where the chain runs and how fast. */
+function ProcessingSummary({ path }: { path: SignalPath }) {
+  const processing = path.processing;
+  if (!processing) return null;
+  const status = processing.status;
+  return (
+    <div
+      className="mx-2 mt-2 space-y-1 rounded-lg border px-3 py-2 text-xs leading-5"
+      data-signal-processing
+      style={{
+        borderColor: status?.clipping
+          ? `${SIGNAL_CLIPPING_COLOR}66`
+          : "rgba(255,255,255,0.08)",
+      }}
+    >
+      <p className="flex items-center gap-1.5 text-zinc-300">
+        <Cpu className="h-3.5 w-3.5 text-zinc-500" />
+        {processing.engine}
+      </p>
+      <p className="flex flex-wrap gap-x-3 text-zinc-500">
+        <span>
+          Processing speed{" "}
+          <span className="font-semibold tabular-nums text-zinc-200">
+            {status?.realtime_factor
+              ? formatRealtimeFactor(status.realtime_factor)
+              : "measured while playing"}
+          </span>
+        </span>
+        {status?.peak_dbfs !== null && status?.peak_dbfs !== undefined ? (
+          <span className="tabular-nums">
+            Peak {formatDecibels(status.peak_dbfs)}FS
+          </span>
+        ) : null}
+      </p>
+      {status?.clipping ? (
+        <p
+          className="font-semibold"
+          data-signal-clipping-note
+          style={{ color: SIGNAL_CLIPPING_COLOR }}
+        >
+          Clipping detected: {status.clipped_samples.toLocaleString()} samples
+          were limited. Add headroom in the DSP engine.
+        </p>
+      ) : null}
+      {processing.notes.map((note) => (
+        <p className="text-amber-300/80" key={note}>
+          {note}
+        </p>
+      ))}
+    </div>
   );
 }
 
@@ -550,6 +631,10 @@ function Legend() {
           {signalQualityLabels[quality]}
         </li>
       ))}
+      <li className="flex items-center gap-1.5">
+        <QualityGlyph clipping quality="enhanced" size={10} />
+        Clipping
+      </li>
     </ul>
   );
 }

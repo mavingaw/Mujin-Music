@@ -342,6 +342,7 @@ export default function PlayerBar() {
       ) : null}
 
       <DspPanel
+        casting={casting}
         onChange={setDsp}
         onOpenChange={setDspOpen}
         open={dspOpen}

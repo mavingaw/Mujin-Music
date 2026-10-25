@@ -360,32 +360,42 @@ impl Backend for AlsaBackend {
         let api = api().ok_or_else(|| io::Error::other("libasound is not available"))?;
         let name = pcm_name(device_id, exclusive)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not an ALSA device id"))?;
-        let c_name = CString::new(name.clone()).map_err(|_| io::Error::other("invalid name"))?;
-        let mut pcm = std::ptr::null_mut();
-        // SAFETY: the handle is owned by the returned sink, which closes it.
-        unsafe {
-            let code = (api.snd_pcm_open)(&mut pcm, c_name.as_ptr(), STREAM_PLAYBACK, 0);
-            if code < 0 {
-                return Err(error(api, code, &name));
-            }
-            // soft_resample is off in exclusive mode: set_params fails rather
-            // than play at a rate other than the one asked for.
-            let code = (api.snd_pcm_set_params)(
-                pcm,
-                alsa_format(format.sample_format),
-                ACCESS_RW_INTERLEAVED,
-                c_uint::from(format.channels),
-                format.sample_rate,
-                c_int::from(!exclusive),
-                LATENCY_US,
-            );
-            if code < 0 {
-                (api.snd_pcm_close)(pcm);
-                return Err(error(api, code, &name));
-            }
-        }
-        Ok(Box::new(AlsaSink { api, pcm, format }))
+        Ok(Box::new(open_pcm(api, &name, format, exclusive)?))
     }
+}
+
+/// Opens an ALSA PCM by name for `format`. With `exclusive`, ALSA's
+/// soft_resample is off, so a rate the PCM cannot take is an error
+/// instead of a silent conversion.
+fn open_pcm(
+    api: &'static Api,
+    name: &str,
+    format: StreamFormat,
+    exclusive: bool,
+) -> io::Result<AlsaSink> {
+    let c_name = CString::new(name).map_err(|_| io::Error::other("invalid name"))?;
+    let mut pcm = std::ptr::null_mut();
+    // SAFETY: the handle is owned by the returned sink, which closes it.
+    unsafe {
+        let code = (api.snd_pcm_open)(&mut pcm, c_name.as_ptr(), STREAM_PLAYBACK, 0);
+        if code < 0 {
+            return Err(error(api, code, name));
+        }
+        let code = (api.snd_pcm_set_params)(
+            pcm,
+            alsa_format(format.sample_format),
+            ACCESS_RW_INTERLEAVED,
+            c_uint::from(format.channels),
+            format.sample_rate,
+            c_int::from(!exclusive),
+            LATENCY_US,
+        );
+        if code < 0 {
+            (api.snd_pcm_close)(pcm);
+            return Err(error(api, code, name));
+        }
+    }
+    Ok(AlsaSink { api, pcm, format })
 }
 
 struct AlsaSink {
@@ -464,6 +474,7 @@ impl Drop for AlsaSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn device_ids_map_to_hw_and_plughw_names() {
@@ -526,5 +537,153 @@ mod tests {
         sink.write(&vec![0; 4_410 * 4]).unwrap();
         sink.flush().unwrap();
         sink.drain().unwrap();
+    }
+
+    /// Plays `pcm` through the real libasound `file` plugin (a software
+    /// PCM that records exactly what the driver layer receives) and
+    /// returns the bytes it recorded.
+    fn record_through_alsa(
+        format: StreamFormat,
+        input: crate::player::InputFormat,
+        pcm: impl FnMut(u64) -> io::Result<crate::player::PcmSource> + Send + 'static,
+    ) -> Option<Vec<u8>> {
+        let api = api()?;
+        let path = std::env::temp_dir().join(format!(
+            "parson-alsa-{}-{}.raw",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        let name = format!("file:FILE={},FORMAT=raw", path.display());
+        // Probe first: a libasound without its configuration has no `file`.
+        drop(open_pcm(api, &name, format, true).ok()?);
+        let _ = std::fs::remove_file(&path);
+        let player = crate::player::Player::start(
+            Box::new(move || {
+                open_pcm(api, &name, format, true).map(|sink| Box::new(sink) as Box<dyn Sink>)
+            }),
+            Box::new(pcm),
+            format,
+            input,
+            0,
+        )
+        .expect("the file PCM opens in exclusive mode");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while player.status().state != crate::player::PlayerState::Ended {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                player.status()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        player.stop();
+        let recorded = std::fs::read(&path).expect("the file plugin wrote the stream");
+        let _ = std::fs::remove_file(&path);
+        Some(recorded)
+    }
+
+    #[test]
+    fn untouched_pcm_reaches_libasound_bit_for_bit() {
+        let samples: Vec<u8> = (0..44_100 / 5)
+            .flat_map(|n: i32| {
+                let value = ((n * 7_919) % 65_536 - 32_768) as i16;
+                [value.to_le_bytes(), (!value).to_le_bytes()].concat()
+            })
+            .collect();
+        let format = StreamFormat {
+            sample_rate: 44_100,
+            sample_format: SampleFormat::S16,
+            channels: 2,
+        };
+        let source = samples.clone();
+        let Some(recorded) =
+            record_through_alsa(format, crate::player::InputFormat::S16, move |_| {
+                Ok(Box::new(io::Cursor::new(source.clone())) as crate::player::PcmSource)
+            })
+        else {
+            return;
+        };
+        assert_eq!(recorded.len(), samples.len());
+        assert!(recorded == samples, "ALSA received different samples");
+    }
+
+    #[test]
+    fn equalised_audio_reaches_libasound_exactly_as_the_dsp_computed_it() {
+        use crate::dsp::{DspChain, DspPcm, DspStats, EqBand, EqFilterType, ProcessingPlan};
+        use std::sync::Arc;
+        let plan = ProcessingPlan {
+            leveling_db: None,
+            headroom_db: Some(-6.0),
+            bands: vec![EqBand {
+                id: "band-1".into(),
+                enabled: true,
+                filter_type: EqFilterType::Lowshelf,
+                frequency: 80.0,
+                gain_db: 5.0,
+                q: 0.71,
+            }],
+            crossfeed: Some(crate::dsp::CrossfeedStrength::Medium),
+            crossfeed_skipped: false,
+            channels: 2,
+            input_rate: 44_100,
+            output_rate: 96_000,
+            rate_requested: true,
+            requested_rate_unavailable: None,
+            resampler: Some(crate::dsp::ResamplerKind::Parson),
+            output_bits: 24,
+        };
+        let floats: Vec<u8> = (0..44_100 / 5)
+            .flat_map(|n| {
+                let t = f64::from(n) / 44_100.0;
+                let left = 0.4 * (2.0 * std::f64::consts::PI * 60.0 * t).sin();
+                let right = 0.3 * (2.0 * std::f64::consts::PI * 3_000.0 * t).sin();
+                [left.to_le_bytes(), right.to_le_bytes()].concat()
+            })
+            .collect();
+        // What the chain computes, packed for a 24-bit packed device.
+        let mut expected = Vec::new();
+        DspPcm::new(
+            Box::new(io::Cursor::new(floats.clone())),
+            DspChain::new(
+                &plan,
+                44_100,
+                crate::player::InputFormat::S32,
+                Arc::new(DspStats::default()),
+            ),
+        )
+        .read_to_end(&mut expected)
+        .unwrap();
+        let mut packed = Vec::new();
+        crate::pack_samples(&expected, SampleFormat::S24Packed, &mut packed);
+        let format = StreamFormat {
+            sample_rate: 96_000,
+            sample_format: SampleFormat::S24Packed,
+            channels: 2,
+        };
+        let stats = Arc::new(DspStats::default());
+        let chain_stats = Arc::clone(&stats);
+        let Some(recorded) =
+            record_through_alsa(format, crate::player::InputFormat::S32, move |_| {
+                Ok(Box::new(DspPcm::new(
+                    Box::new(io::Cursor::new(floats.clone())),
+                    DspChain::new(
+                        &plan,
+                        44_100,
+                        crate::player::InputFormat::S32,
+                        Arc::clone(&chain_stats),
+                    ),
+                )) as crate::player::PcmSource)
+            })
+        else {
+            return;
+        };
+        assert_eq!(recorded.len(), packed.len());
+        assert!(recorded == packed, "ALSA received different samples");
+        let status = stats.snapshot();
+        assert!(status.realtime_factor.is_some_and(|factor| factor > 1.0));
+        assert!(!status.clipping);
     }
 }

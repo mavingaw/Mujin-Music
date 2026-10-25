@@ -4,6 +4,7 @@ import {
   biquadMagnitudeDb,
   createDspChain,
   defaultDspSettings,
+  dspAvailability,
   dspMayClip,
   dspNeedsGraph,
   dspProcesses,
@@ -333,5 +334,75 @@ describe("DSP stages in the signal path", () => {
       audio,
     );
     expect(chainQuality(forced)).toBe("high_quality");
+  });
+});
+
+describe("where the DSP chain can run", () => {
+  test("a server output runs it in 64-bit float within the device's rates", () => {
+    const availability = dspAvailability({
+      kind: "server",
+      deviceName: "USB DAC",
+      support: {
+        available: true,
+        reason: null,
+        engine: "Parson DSP, 64-bit float",
+        crossfeed: true,
+        sample_rates: [44_100, 48_000, 96_000],
+        output_bits: 32,
+      },
+    });
+    expect(availability.available).toBeTrue();
+    expect(availability.precision).toBe("64-bit float");
+    expect(availability.engine).toBe(
+      "Parson DSP, 64-bit float, on the server before USB DAC",
+    );
+    expect(availability.sampleRates).toEqual([44_100, 48_000, 96_000]);
+    expect(availability.crossfeed.available).toBeTrue();
+  });
+
+  test("controls are greyed only where the chain truly cannot apply", () => {
+    const unprobed = dspAvailability({
+      kind: "server",
+      deviceName: "USB DAC",
+      support: {
+        available: false,
+        reason: "Parson could not read the formats USB DAC accepts.",
+        engine: "Parson DSP, 64-bit float",
+        crossfeed: false,
+        sample_rates: [],
+        output_bits: null,
+      },
+    });
+    expect(unprobed.available).toBeFalse();
+    expect(unprobed.reason).toContain("could not read");
+    const mono = dspAvailability({
+      kind: "server",
+      deviceName: "Mono speaker",
+      support: {
+        available: true,
+        reason: null,
+        engine: "Parson DSP, 64-bit float",
+        crossfeed: false,
+        sample_rates: [48_000],
+        output_bits: 16,
+      },
+    });
+    expect(mono.available).toBeTrue();
+    expect(mono.crossfeed).toEqual({
+      available: false,
+      reason: "Mono speaker does not open in stereo, which crossfeed needs.",
+    });
+    expect(
+      dspAvailability({ kind: "server", deviceName: "X", support: undefined })
+        .available,
+    ).toBeFalse();
+    expect(dspAvailability({ kind: "cast" }).available).toBeFalse();
+    expect(
+      dspAvailability({ kind: "client", webAudio: false }).available,
+    ).toBeFalse();
+    const browser = dspAvailability({ kind: "client", webAudio: true });
+    expect(browser.available).toBeTrue();
+    expect(browser.precision).toBe("32-bit float");
+    expect(browser.sampleRates).toBeNull();
   });
 });

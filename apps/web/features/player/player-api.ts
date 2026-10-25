@@ -103,6 +103,8 @@ export type PlayerOutputState = {
   serverDevices: NativeOutputDevice[];
   /** The server is playing (or will play) instead of this browser. */
   serverOutputId: string | null;
+  /** Saving the server output's DSP chain failed. */
+  serverDspError: string | null;
 };
 
 export const PlayerContext = createContext<Omit<Player, "currentTime"> | null>(

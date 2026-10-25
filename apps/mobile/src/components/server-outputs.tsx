@@ -1,22 +1,32 @@
 import {
+  SIGNAL_CLIPPING_COLOR,
   buildSignalPath,
+  defaultDspSettings,
   getNativeOutputSession,
   getNativeOutputs,
+  normalizeDspSettings,
   playOnNativeOutput,
   sendNativeOutputCommand,
+  signalLightColor,
+  signalLightLabel,
   signalQualityColors,
-  signalQualityLabels,
+  updateNativeOutputDsp,
+  type DspSettings,
   type NativeOutputCommand,
+  type NativeOutputs,
 } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { palette } from "@/constants/colors";
+import { useState } from "react";
 import {
+  serverDspStatusLine,
+  serverDspSummary,
   serverOutputSummary,
   serverSessionLine,
   unsupportedRates,
 } from "@/lib/server-outputs";
-import { QualityGlyph } from "./signal-path";
+import { DspControls, QualityGlyph } from "./signal-path";
 
 const sessionKey = ["native-output-session"] as const;
 
@@ -65,9 +75,49 @@ export function ServerOutputs({
     mutationFn: (name: NativeOutputCommand) => sendNativeOutputCommand(name),
     onSuccess: (next) => queryClient.setQueryData(sessionKey, next),
   });
+  // Edits show at once; the server saves them and restarts the track.
+  const [draft, setDraft] = useState<{
+    id: string;
+    settings: DspSettings;
+  } | null>(null);
+  const saveDsp = useMutation({
+    mutationFn: (input: { id: string; settings: DspSettings }) =>
+      updateNativeOutputDsp(input.id, input.settings),
+    onSuccess: (saved) => {
+      queryClient.setQueryData<NativeOutputs>(["native-outputs"], (old) =>
+        old
+          ? {
+              ...old,
+              devices: old.devices.map((item) =>
+                item.id === saved.id ? saved : item,
+              ),
+            }
+          : old,
+      );
+      void queryClient.invalidateQueries({ queryKey: sessionKey });
+      // Drop the draft once the server holds it (a newer edit stays).
+      setDraft((pending) =>
+        pending?.id === saved.id &&
+        JSON.stringify(normalizeDspSettings(pending.settings)) ===
+          JSON.stringify(normalizeDspSettings(saved.dsp))
+          ? null
+          : pending,
+      );
+    },
+  });
   const devices = outputs.data?.devices ?? [];
   if (!outputs.data?.supported || !devices.length) return null;
   const current = session.data ?? null;
+  const focused =
+    devices.find((device) => device.id === current?.device_id) ?? devices[0]!;
+  const focusedDsp =
+    draft?.id === focused.id
+      ? draft.settings
+      : focused.dsp
+        ? normalizeDspSettings(focused.dsp)
+        : defaultDspSettings();
+  const status = current?.signal_path.processing?.status ?? null;
+  const statusLine = serverDspStatusLine(status);
   const path = current
     ? buildSignalPath(current.signal_path, {
         platform: "web",
@@ -89,19 +139,34 @@ export function ServerOutputs({
       {current && path ? (
         <View style={styles.session}>
           <View style={styles.row}>
-            <QualityGlyph quality={path.quality} size={12} />
+            <QualityGlyph
+              clipping={path.clipping}
+              quality={path.quality}
+              size={12}
+            />
             <Text style={styles.sessionName}>{current.device_name}</Text>
             <Text
-              style={[
-                styles.sessionQuality,
-                { color: signalQualityColors[path.quality] },
-              ]}
+              style={[styles.sessionQuality, { color: signalLightColor(path) }]}
             >
-              {signalQualityLabels[path.quality]}
-              {path.bitPerfect ? " · bit-perfect" : ""}
+              {signalLightLabel(path)}
+              {path.bitPerfect
+                ? " · bit-perfect"
+                : path.exactAfterProcessing
+                  ? " · bit-exact after DSP"
+                  : ""}
             </Text>
           </View>
           <Text style={styles.detail}>{serverSessionLine(current)}</Text>
+          {statusLine ? (
+            <Text
+              style={[
+                styles.detail,
+                status?.clipping && { color: SIGNAL_CLIPPING_COLOR },
+              ]}
+            >
+              {statusLine}
+            </Text>
+          ) : null}
           <View style={styles.row}>
             {current.state === "paused" ? (
               <SmallButton
@@ -132,6 +197,14 @@ export function ServerOutputs({
                 Converted: {unsupportedRates(device)}
               </Text>
             ) : null}
+            {serverDspSummary(device) ? (
+              <Text
+                numberOfLines={1}
+                style={[styles.detail, { color: signalQualityColors.enhanced }]}
+              >
+                Server DSP: {serverDspSummary(device)}
+              </Text>
+            ) : null}
           </View>
           <SmallButton
             disabled={!songId || !device.formats || play.isPending}
@@ -140,6 +213,29 @@ export function ServerOutputs({
           />
         </View>
       ))}
+      <DspControls
+        crossfeed={focused.dsp_support ? focused.dsp_support.crossfeed : null}
+        onChange={(settings) => {
+          setDraft({ id: focused.id, settings });
+          saveDsp.mutate({ id: focused.id, settings });
+        }}
+        settings={focusedDsp}
+        title={`DSP on ${focused.name} (server, 64-bit)`}
+        unavailable={
+          !focused.dsp_support
+            ? "This server does not run a DSP engine for its outputs."
+            : focused.dsp_support.available
+              ? null
+              : focused.dsp_support.reason
+        }
+      />
+      {saveDsp.error ? (
+        <Text style={styles.unsupported}>
+          {saveDsp.error instanceof Error
+            ? saveDsp.error.message
+            : "The server did not save the DSP settings."}
+        </Text>
+      ) : null}
       {play.error ? (
         <Text style={styles.unsupported}>
           {play.error instanceof Error

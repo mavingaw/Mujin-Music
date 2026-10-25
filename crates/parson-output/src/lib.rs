@@ -16,6 +16,7 @@
 //! unmodified or which conversion is unavoidable. [`player::Player`] then
 //! plays decoded PCM to the device on its own thread.
 
+pub mod dsp;
 pub mod player;
 pub mod simulated;
 

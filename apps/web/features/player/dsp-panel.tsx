@@ -7,6 +7,7 @@ import {
   crossfeedParameters,
   crossfeedStrengthLabels,
   defaultDspSettings,
+  dspAvailability,
   dspMayClip,
   eqFilterTypeLabels,
   eqFrequencies,
@@ -14,18 +15,28 @@ import {
   eqResponseDb,
   formatDecibels,
   formatFrequency,
+  formatRealtimeFactor,
   formatSampleRate,
   recommendedHeadroomDb,
-  signalQualityColors,
-  signalQualityLabels,
+  SIGNAL_CLIPPING_COLOR,
+  signalLightColor,
+  signalLightLabel,
   type CrossfeedStrength,
+  type DspAvailability,
   type DspSampleRateMode,
   type DspSettings,
   type EqBand,
   type EqFilterType,
   type SignalPath,
 } from "@parson/music-sdk";
-import { AlertTriangle, Plus, RotateCcw, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Gauge,
+  Plus,
+  RotateCcw,
+  Server,
+  Trash2,
+} from "lucide-react";
 import { useId, useMemo } from "react";
 import {
   Dialog,
@@ -99,6 +110,7 @@ function Section({
   masterOn,
   children,
   badge,
+  unavailable,
 }: {
   title: string;
   description: string;
@@ -107,8 +119,10 @@ function Section({
   masterOn: boolean;
   children: React.ReactNode;
   badge?: React.ReactNode;
+  /** Why this section cannot run on the current output, if it cannot. */
+  unavailable?: string | null;
 }) {
-  const live = enabled && masterOn;
+  const live = enabled && masterOn && !unavailable;
   return (
     <section
       className={cn(
@@ -126,9 +140,18 @@ function Section({
           <p className="mt-0.5 text-xs leading-5 text-zinc-500">
             {description}
           </p>
+          {unavailable ? (
+            <p
+              className="mt-1 text-[11px] leading-4 text-amber-300/80"
+              data-dsp-unavailable
+            >
+              {unavailable}
+            </p>
+          ) : null}
         </div>
         <Switch
-          checked={enabled}
+          checked={enabled && !unavailable}
+          disabled={Boolean(unavailable)}
           label={`${title} ${enabled ? "on" : "off"}`}
           onChange={onToggle}
         />
@@ -323,13 +346,45 @@ function BandRow({
   );
 }
 
-function sampleRateLabel(mode: DspSampleRateMode) {
-  if (mode === "device") return "Output device rate";
+function hasWebAudio() {
+  return (
+    typeof window !== "undefined" &&
+    Boolean(
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: unknown })
+        .webkitAudioContext,
+    )
+  );
+}
+
+/** Where the chain runs for the chosen output, and what it can do there. */
+export function panelAvailability(
+  output: Pick<PlayerOutputState, "serverOutputId" | "serverDevices">,
+  casting: boolean,
+  webAudio = hasWebAudio(),
+): DspAvailability {
+  if (casting) return dspAvailability({ kind: "cast" });
+  if (output.serverOutputId) {
+    const device = output.serverDevices.find(
+      (item) => item.id === output.serverOutputId,
+    );
+    return dspAvailability({
+      kind: "server",
+      deviceName: device?.name ?? "the server output",
+      support: device?.dsp_support,
+    });
+  }
+  return dspAvailability({ kind: "client", webAudio });
+}
+
+function sampleRateLabel(mode: DspSampleRateMode, deviceLabel: string) {
+  if (mode === "device") return deviceLabel;
   if (mode === "source") return "Match source";
   return formatSampleRate(mode);
 }
 
 export function DspPanel({
+  casting = false,
   open,
   onOpenChange,
   output,
@@ -337,6 +392,7 @@ export function DspPanel({
   settings,
   onChange,
 }: {
+  casting?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   output: PlayerOutputState;
@@ -344,6 +400,10 @@ export function DspPanel({
   settings: DspSettings;
   onChange: (settings: DspSettings) => void;
 }) {
+  const availability = panelAvailability(output, casting);
+  const blocked = availability.available ? null : availability.reason;
+  const serverRun = Boolean(output.serverOutputId) && availability.available;
+  const status = path?.processing?.status ?? null;
   const outputSelectId = useId();
   const headroomId = useId();
   const update = (patch: Partial<DspSettings>) =>
@@ -369,13 +429,15 @@ export function DspPanel({
             </DialogTitle>
             <DialogDescription className="mt-0.5 text-xs text-zinc-500">
               Processing for <span className="text-zinc-300">{outputName}</span>
-              . Each output device keeps its own settings.
+              {availability.precision ? `, ${availability.engine}` : ""}. Each
+              output device keeps its own settings.
             </DialogDescription>
           </div>
           <div className="flex items-center gap-2 pt-1 text-xs text-zinc-400">
             {settings.enabled ? "On" : "Bypassed"}
             <Switch
-              checked={settings.enabled}
+              checked={settings.enabled && !blocked}
+              disabled={Boolean(blocked)}
               label={`DSP engine ${settings.enabled ? "on" : "bypassed"}`}
               onChange={(enabled) => update({ enabled })}
             />
@@ -387,19 +449,83 @@ export function DspPanel({
             className="flex items-start gap-2.5 border-b border-white/6 px-5 py-3"
             data-dsp-light
           >
-            <QualityGlyph className="mt-0.5" quality={quality} size={14} />
+            <QualityGlyph
+              className="mt-0.5"
+              clipping={path.clipping}
+              quality={quality}
+              size={14}
+            />
             <p className="text-xs leading-5 text-zinc-400">
               <span
                 className="font-semibold"
-                style={{
-                  color: quality ? signalQualityColors[quality] : undefined,
-                }}
+                style={{ color: signalLightColor(path) }}
               >
-                {quality ? signalQualityLabels[quality] : "Unknown"}
+                {signalLightLabel(path)}
               </span>
               {". "}
               {path.description}
             </p>
+          </div>
+        ) : null}
+
+        {serverRun && (status || path?.processing?.notes.length) ? (
+          <div
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-white/6 px-5 py-2.5 text-[11px] text-zinc-400"
+            data-dsp-processing
+          >
+            {status?.realtime_factor ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Gauge className="h-3.5 w-3.5" />
+                Processing speed{" "}
+                <span
+                  className="font-semibold tabular-nums text-zinc-100"
+                  data-dsp-speed
+                >
+                  {formatRealtimeFactor(status.realtime_factor)}
+                </span>
+              </span>
+            ) : null}
+            {status?.peak_dbfs !== null && status?.peak_dbfs !== undefined ? (
+              <span className="tabular-nums">
+                Peak {formatDecibels(status.peak_dbfs)}FS
+              </span>
+            ) : null}
+            {status?.clipping ? (
+              <span
+                className="inline-flex items-center gap-1 font-semibold"
+                data-dsp-clipping
+                style={{ color: SIGNAL_CLIPPING_COLOR }}
+              >
+                <AlertTriangle className="h-3.5 w-3.5" /> Clipping detected (
+                {status.clipped_samples.toLocaleString()} samples)
+                {recommended < 0 ? (
+                  <button
+                    className="ml-1 rounded-full border border-current px-2 py-0.5 font-medium hover:bg-white/6"
+                    onClick={() =>
+                      update({
+                        headroom: {
+                          enabled: true,
+                          gainDb: Math.min(
+                            recommended,
+                            settings.headroom.enabled
+                              ? settings.headroom.gainDb - 1
+                              : recommended,
+                          ),
+                        },
+                      })
+                    }
+                    type="button"
+                  >
+                    Add headroom
+                  </button>
+                ) : null}
+              </span>
+            ) : null}
+            {path?.processing?.notes.map((note) => (
+              <span className="w-full text-amber-300/80" key={note}>
+                {note}
+              </span>
+            ))}
           </div>
         ) : null}
 
@@ -458,18 +584,35 @@ export function DspPanel({
                 Show device names
               </button>
             ) : null}
+            {blocked ? (
+              <p
+                className="w-full rounded-lg bg-white/4 px-3 py-2 text-[11px] leading-4 text-amber-300/90"
+                data-dsp-blocked
+              >
+                {blocked}
+              </p>
+            ) : null}
+            {output.serverDspError ? (
+              <p className="w-full text-[11px] text-red-300">
+                {output.serverDspError}
+              </p>
+            ) : null}
             {output.serverOutputId ? (
-              <p className="w-full text-[11px] leading-4 text-zinc-500">
-                The server plays this output itself, with fixed volume, so the
-                browser DSP below does not apply. Set Exclusive Mode and format
-                limits in{" "}
-                <a
-                  className="text-zinc-300 underline underline-offset-2"
-                  href="/settings?tab=outputs"
-                >
-                  Settings → Audio outputs
-                </a>
-                .
+              <p className="flex w-full items-start gap-1.5 text-[11px] leading-4 text-zinc-500">
+                <Server className="mt-px h-3 w-3 shrink-0" />
+                <span>
+                  The server runs this chain itself, in 64-bit float, before the
+                  device. In exclusive mode the result reaches it with no mixer
+                  or second resampler after Parson. Set Exclusive Mode and
+                  format limits in{" "}
+                  <a
+                    className="text-zinc-300 underline underline-offset-2"
+                    href="/settings?tab=outputs"
+                  >
+                    Settings → Audio outputs
+                  </a>
+                  .
+                </span>
               </p>
             ) : !output.selectable ? (
               <p className="w-full text-[11px] text-zinc-500">
@@ -488,7 +631,7 @@ export function DspPanel({
             }
             description="Lowers the level before the EQ so boosts cannot clip."
             enabled={settings.headroom.enabled}
-            masterOn={settings.enabled}
+            masterOn={settings.enabled && !blocked}
             onToggle={(enabled) =>
               update({ headroom: { ...settings.headroom, enabled } })
             }
@@ -536,9 +679,13 @@ export function DspPanel({
           </Section>
 
           <Section
-            description="The rate the processing graph runs at. Matching the source avoids a conversion; the device may still convert after Parson."
+            description={
+              serverRun
+                ? "The rate the server sends to the device. Its converter is a linear-phase 64-bit polyphase sinc that runs after the EQ and crossfeed; the device receives that rate with no further conversion."
+                : "The rate the processing graph runs at. Matching the source avoids a conversion; the device may still convert after Parson."
+            }
             enabled={settings.sampleRate.enabled}
-            masterOn={settings.enabled}
+            masterOn={settings.enabled && !blocked}
             onToggle={(enabled) =>
               update({ sampleRate: { ...settings.sampleRate, enabled } })
             }
@@ -559,8 +706,21 @@ export function DspPanel({
             >
               {(["device", "source", ...DSP_SAMPLE_RATES] as const).map(
                 (mode) => (
-                  <option key={mode} value={String(mode)}>
-                    {sampleRateLabel(mode)}
+                  <option
+                    disabled={
+                      typeof mode === "number" &&
+                      availability.sampleRates !== null &&
+                      !availability.sampleRates.includes(mode)
+                    }
+                    key={mode}
+                    value={String(mode)}
+                  >
+                    {sampleRateLabel(mode, availability.deviceRateLabel)}
+                    {typeof mode === "number" &&
+                    availability.sampleRates !== null &&
+                    !availability.sampleRates.includes(mode)
+                      ? " (not supported by the device)"
+                      : ""}
                   </option>
                 ),
               )}
@@ -568,9 +728,9 @@ export function DspPanel({
           </Section>
 
           <Section
-            description={`${activeEqBands({ ...settings, enabled: true, eq: { ...settings.eq, enabled: true } }).length} active of ${settings.eq.bands.length} bands. Biquad filters, 32-bit float.`}
+            description={`${activeEqBands({ ...settings, enabled: true, eq: { ...settings.eq, enabled: true } }).length} active of ${settings.eq.bands.length} bands. Biquad filters, ${availability.precision || "32-bit float"}.`}
             enabled={settings.eq.enabled}
-            masterOn={settings.enabled}
+            masterOn={settings.enabled && !blocked}
             onToggle={(enabled) => update({ eq: { ...settings.eq, enabled } })}
             title="Parametric EQ"
           >
@@ -665,11 +825,16 @@ export function DspPanel({
           <Section
             description="Feeds a delayed, low-passed share of each channel to the other ear for more natural headphone listening."
             enabled={settings.crossfeed.enabled}
-            masterOn={settings.enabled}
+            masterOn={settings.enabled && !blocked}
             onToggle={(enabled) =>
               update({ crossfeed: { ...settings.crossfeed, enabled } })
             }
             title="Crossfeed"
+            unavailable={
+              availability.crossfeed.available
+                ? null
+                : availability.crossfeed.reason
+            }
           >
             <div
               aria-label="Crossfeed strength"

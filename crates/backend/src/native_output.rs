@@ -20,7 +20,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use parson_output::player::{InputFormat, PcmOpener, PcmSource, Player, PlayerStatus};
+use parson_output::dsp::{
+    DspChain, DspPcm, DspSettings, DspStats, ProcessingPlan, ResamplerKind, plan_processing,
+    selectable_rates,
+};
+use parson_output::player::{InputFormat, PcmOpener, PcmSource, Player, PlayerState, PlayerStatus};
 use parson_output::{
     Backend, DepthChange, DeviceInfo, Driver, FormatSupport, OutputPlan, OutputSettings, PlanError,
     SampleFormat, SourceFormat, StreamFormat, format_support, plan_output,
@@ -55,6 +59,28 @@ pub struct DeviceView {
     pub channels: Option<(u8, u8)>,
     /// The native session is playing on this device.
     pub in_use: bool,
+    /// The device's DSP chain, run by the server before the device.
+    pub dsp: DspSettings,
+    /// The chain was saved for this device (rather than the defaults).
+    pub dsp_customized: bool,
+    pub dsp_support: DspSupport,
+}
+
+/// What the server-side DSP chain can do on a device.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct DspSupport {
+    /// The chain can run: the device's formats are known.
+    pub available: bool,
+    /// Why it cannot, when it cannot.
+    pub reason: Option<String>,
+    /// e.g. `Parson DSP, 64-bit float`.
+    pub engine: &'static str,
+    /// The device opens in stereo, which crossfeed needs.
+    pub crossfeed: bool,
+    /// Fixed DSP sample rates the device accepts as configured.
+    pub sample_rates: Vec<u32>,
+    /// Depth the chain dithers to.
+    pub output_bits: Option<u8>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -79,6 +105,8 @@ pub struct SessionView {
     pub plan: OutputPlan,
     /// Volume leveling the server applies, if any.
     pub leveling: Option<LevelingRequest>,
+    /// The server-side DSP chain, when anything processes.
+    pub processing: Option<ProcessingPlan>,
     pub signal_path: ServerSignalPath,
 }
 
@@ -121,27 +149,34 @@ impl NativeError {
 struct Session {
     device_id: String,
     device_name: String,
-    song_id: String,
+    song: Song,
     user_id: i32,
     duration_ms: u64,
     plan: OutputPlan,
     leveling: Option<LevelingRequest>,
+    processing: Option<ProcessingPlan>,
+    stats: Arc<DspStats>,
     signal_path: ServerSignalPath,
     player: Player,
 }
 
 impl Session {
     fn view(&self) -> SessionView {
+        let mut signal_path = self.signal_path.clone();
+        if let Some(processing) = &mut signal_path.processing {
+            processing.status = Some(self.stats.snapshot());
+        }
         SessionView {
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
-            song_id: self.song_id.clone(),
+            song_id: self.song.id.clone(),
             user_id: self.user_id,
             duration_ms: self.duration_ms,
             status: self.player.status(),
             plan: self.plan.clone(),
             leveling: self.leveling.clone(),
-            signal_path: self.signal_path.clone(),
+            processing: self.processing.clone(),
+            signal_path,
         }
     }
 }
@@ -152,6 +187,7 @@ struct State {
     probed: bool,
     settings: HashMap<String, OutputSettings>,
     settings_loaded: bool,
+    dsp: HashMap<String, DspSettings>,
 }
 
 /// How decoded PCM is produced for a track; ffmpeg in production.
@@ -160,6 +196,21 @@ pub type DecoderFactory = Arc<
         + Send
         + Sync,
 >;
+
+/// What a float decoder produces: interleaved `f64le` at `sample_rate`
+/// with `channels` channels. `resample_to` asks the decoder itself to
+/// convert (for ratios the chain's polyphase table cannot hold).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloatDecode {
+    pub channels: u8,
+    pub sample_rate: u32,
+    pub resample_to: Option<u32>,
+}
+
+/// Decodes a track to 64-bit float for the DSP chain; ffmpeg in
+/// production.
+pub type FloatDecoderFactory =
+    Arc<dyn Fn(&Path, &FloatDecode, u64) -> io::Result<PcmSource> + Send + Sync>;
 
 /// Volume leveling a client asks the server to apply.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -186,6 +237,7 @@ pub struct NativeOutputs {
     simulated: bool,
     settings_path: Option<PathBuf>,
     decoder: DecoderFactory,
+    float_decoder: FloatDecoderFactory,
     resampler: &'static str,
     state: Mutex<State>,
     session: Mutex<Option<Session>>,
@@ -231,10 +283,23 @@ impl NativeOutputs {
             simulated,
             settings_path,
             decoder,
+            float_decoder: Arc::new(ffmpeg_float_decoder),
             resampler,
             state: Mutex::new(State::default()),
             session: Mutex::new(None),
         }
+    }
+
+    /// Replaces the float decoder the DSP chain reads from.
+    pub fn with_float_decoder(mut self, decoder: FloatDecoderFactory) -> Self {
+        self.float_decoder = decoder;
+        self
+    }
+
+    fn dsp_path(&self) -> Option<PathBuf> {
+        self.settings_path
+            .as_ref()
+            .map(|path| path.with_file_name("native-dsp.json"))
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -263,18 +328,32 @@ impl NativeOutputs {
                 .filter(|(_, settings)| settings.validate().is_ok())
                 .collect();
         }
+        if let Some(path) = self.dsp_path()
+            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(chains) = serde_json::from_str::<HashMap<String, DspSettings>>(&text)
+        {
+            state.dsp = chains
+                .into_iter()
+                .take(64)
+                .map(|(id, settings)| (id, settings.normalized()))
+                .collect();
+        }
     }
 
-    fn save_settings(&self, settings: &HashMap<String, OutputSettings>) -> io::Result<()> {
-        let Some(path) = &self.settings_path else {
+    fn save_json<T: Serialize>(path: Option<PathBuf>, value: &T) -> io::Result<()> {
+        let Some(path) = path else {
             return Ok(());
         };
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(settings)?)?;
+        std::fs::write(&temp, serde_json::to_vec_pretty(value)?)?;
         std::fs::rename(temp, path)
+    }
+
+    fn save_settings(&self, settings: &HashMap<String, OutputSettings>) -> io::Result<()> {
+        Self::save_json(self.settings_path.clone(), settings)
     }
 
     /// Lists devices, probing them the first time or when `refresh`. The
@@ -312,6 +391,7 @@ impl NativeOutputs {
                 view(
                     device,
                     settings,
+                    state.dsp.get(&device.id),
                     busy.as_deref() == Some(device.id.as_str()),
                 )
             })
@@ -353,13 +433,78 @@ impl NativeOutputs {
         self.save_settings(&next)
             .map_err(|error| format!("Could not save the device settings: {error}"))?;
         state.settings = next;
-        Ok(view(&device, settings, busy))
+        let dsp = state.dsp.get(device_id).cloned();
+        drop(state);
+        self.restart_on(device_id);
+        Ok(view(&device, settings, dsp.as_ref(), busy))
+    }
+
+    /// Saves a device's DSP chain. A track playing on the device restarts
+    /// at its position so the new chain is heard at once.
+    pub fn set_dsp(&self, device_id: &str, settings: DspSettings) -> Result<DeviceView, String> {
+        let settings = settings.normalized();
+        self.devices(false);
+        let busy = self
+            .session()
+            .as_ref()
+            .is_some_and(|session| session.device_id == device_id);
+        let mut state = self.state();
+        let Some(device) = state
+            .devices
+            .iter()
+            .find(|device| device.id == device_id)
+            .cloned()
+        else {
+            return Err("That output device is not connected.".into());
+        };
+        let mut next = state.dsp.clone();
+        next.insert(device_id.to_string(), settings.clone());
+        Self::save_json(self.dsp_path(), &next)
+            .map_err(|error| format!("Could not save the DSP settings: {error}"))?;
+        state.dsp = next;
+        let output = state.settings.get(device_id).cloned().unwrap_or_default();
+        drop(state);
+        self.restart_on(device_id);
+        Ok(view(&device, output, Some(&settings), busy))
+    }
+
+    /// Replays the session's track at its position, keeping pause, so new
+    /// settings apply to what is playing.
+    fn restart_on(&self, device_id: &str) {
+        let restart = self
+            .session()
+            .as_ref()
+            .filter(|session| session.device_id == device_id)
+            .map(|session| {
+                (
+                    session.user_id,
+                    session.song.clone(),
+                    session.player.status(),
+                    session.leveling.clone(),
+                )
+            });
+        let Some((user_id, song, status, leveling)) = restart else {
+            return;
+        };
+        if !matches!(
+            status.state,
+            PlayerState::Starting | PlayerState::Playing | PlayerState::Paused
+        ) {
+            return;
+        }
+        if self
+            .play(user_id, device_id, &song, status.position_ms, leveling)
+            .is_ok()
+            && status.state == PlayerState::Paused
+        {
+            let _ = self.pause();
+        }
     }
 
     fn device(
         &self,
         device_id: &str,
-    ) -> Result<(DeviceInfo, OutputSettings, Arc<dyn Backend>), NativeError> {
+    ) -> Result<(DeviceInfo, OutputSettings, DspSettings, Arc<dyn Backend>), NativeError> {
         self.devices(false);
         let state = self.state();
         let device = state
@@ -375,7 +520,8 @@ impl NativeOutputs {
             .cloned()
             .ok_or(NativeError::UnknownDevice)?;
         let settings = state.settings.get(device_id).cloned().unwrap_or_default();
-        Ok((device, settings, backend))
+        let dsp = state.dsp.get(device_id).cloned().unwrap_or_default();
+        Ok((device, settings, dsp, backend))
     }
 
     /// How `song` would play on `device_id`, without playing it.
@@ -384,24 +530,34 @@ impl NativeOutputs {
         device_id: &str,
         song: &Song,
     ) -> Result<(OutputPlan, ServerSignalPath), NativeError> {
-        let (device, settings, _) = self.device(device_id)?;
-        self.plan_and_path(&device, &settings, song, None)
+        let (device, settings, dsp, _) = self.device(device_id)?;
+        self.plan_and_path(&device, &settings, &dsp, song, None)
+            .map(|(plan, _, path)| (plan, path))
     }
 
     fn plan_and_path(
         &self,
         device: &DeviceInfo,
         settings: &OutputSettings,
+        dsp: &DspSettings,
         song: &Song,
         leveling: Option<&LevelingRequest>,
-    ) -> Result<(OutputPlan, ServerSignalPath), NativeError> {
+    ) -> Result<(OutputPlan, Option<ProcessingPlan>, ServerSignalPath), NativeError> {
         let source = source_format(song.audio.as_ref()).ok_or(NativeError::UnknownFormat)?;
         let mut plan =
             plan_output(source, device.caps.as_ref(), settings).map_err(NativeError::Plan)?;
-        // Processing the listener asked for changes the samples on purpose.
-        if leveling.is_some() {
-            plan.bit_perfect = false;
-        }
+        // Processing the listener asked for changes the samples on purpose;
+        // it then runs in the server's own chain, before the device.
+        let processing = device.caps.as_ref().and_then(|caps| {
+            plan_processing(
+                &mut plan,
+                &source,
+                dsp,
+                leveling.map(|leveling| leveling.gain_db),
+                caps,
+                settings,
+            )
+        });
         let extension = Path::new(&song.path)
             .extension()
             .and_then(|extension| extension.to_str());
@@ -420,9 +576,10 @@ impl NativeOutputs {
                     gain_db: leveling.gain_db,
                     source: &leveling.source,
                 }),
+                processing: processing.as_ref(),
             },
         );
-        Ok((plan, path))
+        Ok((plan, processing, path))
     }
 
     /// Plays `song` on `device_id` from `position_ms`, replacing any
@@ -435,9 +592,9 @@ impl NativeOutputs {
         position_ms: u64,
         leveling: Option<LevelingRequest>,
     ) -> Result<SessionView, NativeError> {
-        let (device, settings, backend) = self.device(device_id)?;
-        let (plan, signal_path) =
-            self.plan_and_path(&device, &settings, song, leveling.as_ref())?;
+        let (device, settings, dsp, backend) = self.device(device_id)?;
+        let (plan, processing, signal_path) =
+            self.plan_and_path(&device, &settings, &dsp, song, leveling.as_ref())?;
         let source = source_format(song.audio.as_ref()).ok_or(NativeError::UnknownFormat)?;
         let mut session = self.session();
         // Release the device (and any other) before opening it again.
@@ -451,12 +608,34 @@ impl NativeOutputs {
         };
         let exclusive = settings.exclusive;
         let open_id = device.id.clone();
-        let decoder = Arc::clone(&self.decoder);
         let song_path = PathBuf::from(&song.path);
-        let decode_plan = plan.clone();
-        let gain_db = leveling.as_ref().map(|leveling| leveling.gain_db);
-        let opener: PcmOpener =
-            Box::new(move |position| decoder(&song_path, &decode_plan, &source, gain_db, position));
+        let stats = Arc::new(DspStats::default());
+        let opener: PcmOpener = match processing.clone() {
+            None => {
+                let decoder = Arc::clone(&self.decoder);
+                let decode_plan = plan.clone();
+                Box::new(move |position| decoder(&song_path, &decode_plan, &source, None, position))
+            }
+            Some(processing) => {
+                let decoder = Arc::clone(&self.float_decoder);
+                let resample_to = (processing.resampler == Some(ResamplerKind::Decoder))
+                    .then_some(processing.output_rate);
+                let spec = FloatDecode {
+                    channels: plan.channels,
+                    sample_rate: source.sample_rate,
+                    resample_to,
+                };
+                let input_rate = resample_to.unwrap_or(source.sample_rate);
+                let output = InputFormat::for_container(plan.sample_format);
+                let chain_stats = Arc::clone(&stats);
+                Box::new(move |position| {
+                    let decoded = decoder(&song_path, &spec, position)?;
+                    let chain =
+                        DspChain::new(&processing, input_rate, output, Arc::clone(&chain_stats));
+                    Ok(Box::new(DspPcm::new(decoded, chain)) as PcmSource)
+                })
+            }
+        };
         let player = Player::start(
             Box::new(move || backend.open(&open_id, stream, exclusive)),
             opener,
@@ -468,11 +647,13 @@ impl NativeOutputs {
         let started = Session {
             device_id: device.id.clone(),
             device_name: device.name.clone(),
-            song_id: song.id.clone(),
+            song: song.clone(),
             user_id,
             duration_ms: (song.duration.max(0.0) * 1000.0) as u64,
             plan,
             leveling,
+            processing,
+            stats,
             signal_path,
             player,
         };
@@ -512,8 +693,50 @@ impl NativeOutputs {
     }
 }
 
-fn view(device: &DeviceInfo, settings: OutputSettings, in_use: bool) -> DeviceView {
+fn dsp_support(device: &DeviceInfo, settings: &OutputSettings) -> DspSupport {
+    let Some(caps) = device.caps.as_ref() else {
+        return DspSupport {
+            available: false,
+            reason: Some(match &device.probe_error {
+                Some(error) => format!(
+                    "Parson could not read the formats {} accepts ({error}), so it cannot run the DSP engine for it.",
+                    device.name
+                ),
+                None => format!(
+                    "Parson could not read the formats {} accepts, so it cannot run the DSP engine for it.",
+                    device.name
+                ),
+            }),
+            engine: crate::signal_path::SERVER_DSP_ENGINE,
+            crossfeed: false,
+            sample_rates: Vec::new(),
+            output_bits: None,
+        };
+    };
+    DspSupport {
+        available: true,
+        reason: None,
+        engine: crate::signal_path::SERVER_DSP_ENGINE,
+        crossfeed: caps.min_channels <= 2 && caps.max_channels >= 2,
+        sample_rates: selectable_rates(caps, settings),
+        output_bits: caps
+            .bit_depths()
+            .into_iter()
+            .filter(|bits| settings.max_bit_depth.is_none_or(|max| *bits <= max))
+            .max(),
+    }
+}
+
+fn view(
+    device: &DeviceInfo,
+    settings: OutputSettings,
+    dsp: Option<&DspSettings>,
+    in_use: bool,
+) -> DeviceView {
     DeviceView {
+        dsp: dsp.cloned().unwrap_or_default(),
+        dsp_customized: dsp.is_some(),
+        dsp_support: dsp_support(device, &settings),
         id: device.id.clone(),
         name: device.name.clone(),
         detail: device.detail.clone(),
@@ -641,6 +864,74 @@ pub fn decode_args(
     args
 }
 
+/// ffmpeg arguments that decode `path` from `start_ms` to interleaved
+/// 64-bit float for the DSP chain.
+pub fn float_decode_args(
+    path: &Path,
+    spec: &FloatDecode,
+    start_ms: u64,
+    soxr: bool,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-hide_banner", "-nostdin", "-v", "error"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    if start_ms > 0 {
+        args.push("-ss".into());
+        args.push(format!("{}.{:03}", start_ms / 1000, start_ms % 1000).into());
+    }
+    args.push("-i".into());
+    args.push(path.as_os_str().to_owned());
+    for arg in ["-map", "0:a:0", "-vn", "-sn", "-dn"] {
+        args.push(arg.into());
+    }
+    let rate = spec.resample_to.unwrap_or(spec.sample_rate);
+    if let Some(to) = spec.resample_to {
+        args.push("-af".into());
+        args.push(
+            if soxr {
+                format!("aresample=osr={to}:resampler=soxr:precision=28")
+            } else {
+                format!("aresample=osr={to}:filter_size=64:phase_shift=10:cutoff=0.97")
+            }
+            .into(),
+        );
+    }
+    for arg in [
+        "-ac".to_string(),
+        spec.channels.to_string(),
+        "-ar".to_string(),
+        rate.to_string(),
+        "-c:a".to_string(),
+        "pcm_f64le".to_string(),
+        "-f".to_string(),
+        "f64le".to_string(),
+        "pipe:1".to_string(),
+    ] {
+        args.push(arg.into());
+    }
+    args
+}
+
+fn ffmpeg_float_decoder(path: &Path, spec: &FloatDecode, start_ms: u64) -> io::Result<PcmSource> {
+    spawn_ffmpeg(float_decode_args(path, spec, start_ms, ffmpeg_has_soxr()))
+}
+
+fn spawn_ffmpeg(args: Vec<OsString>) -> io::Result<PcmSource> {
+    let mut child = Command::new("ffmpeg")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| io::Error::other(format!("could not start ffmpeg: {error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("ffmpeg has no output"))?;
+    Ok(Box::new(ChildPcm { child, stdout }))
+}
+
 /// ffmpeg's stdout; the process is killed when this is dropped.
 struct ChildPcm {
     child: Child,
@@ -667,24 +958,13 @@ fn ffmpeg_decoder(
     gain_db: Option<f64>,
     start_ms: u64,
 ) -> io::Result<PcmSource> {
-    let mut child = Command::new("ffmpeg")
-        .args(decode_args(
-            path,
-            plan,
-            gain_db,
-            start_ms,
-            ffmpeg_has_soxr(),
-        ))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| io::Error::other(format!("could not start ffmpeg: {error}")))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("ffmpeg has no output"))?;
-    Ok(Box::new(ChildPcm { child, stdout }))
+    spawn_ffmpeg(decode_args(
+        path,
+        plan,
+        gain_db,
+        start_ms,
+        ffmpeg_has_soxr(),
+    ))
 }
 
 /// Whether ffmpeg was built with the SoX resampler.
@@ -734,6 +1014,47 @@ mod tests {
             Arc::new(|_, _, _, _, _| Ok(Box::new(io::repeat(0)) as PcmSource)),
             "test resampler",
         )
+        .with_float_decoder(Arc::new(|_, spec, _| {
+            Ok(Box::new(SineDecoder::new(spec.channels, spec.sample_rate)) as PcmSource)
+        }))
+    }
+
+    /// An endless full-scale-ish sine in `f64le`, standing in for ffmpeg.
+    struct SineDecoder {
+        channels: u8,
+        rate: u32,
+        frame: u64,
+        pending: Vec<u8>,
+    }
+
+    impl SineDecoder {
+        fn new(channels: u8, rate: u32) -> Self {
+            Self {
+                channels,
+                rate,
+                frame: 0,
+                pending: Vec::new(),
+            }
+        }
+    }
+
+    impl Read for SineDecoder {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.pending.is_empty() {
+                for _ in 0..1_024 {
+                    let t = self.frame as f64 / f64::from(self.rate);
+                    let value = 0.9 * (2.0 * std::f64::consts::PI * 1_000.0 * t).sin();
+                    for _ in 0..self.channels {
+                        self.pending.extend_from_slice(&value.to_le_bytes());
+                    }
+                    self.frame += 1;
+                }
+            }
+            let count = buffer.len().min(self.pending.len());
+            buffer[..count].copy_from_slice(&self.pending[..count]);
+            self.pending.drain(..count);
+            Ok(count)
+        }
     }
 
     #[test]
@@ -965,5 +1286,176 @@ mod tests {
         let flac = source_format(song(88_200, 24, true).audio.as_ref()).unwrap();
         assert_eq!(flac.bit_depth, Some(24));
         assert_eq!(flac.sample_rate, 88_200);
+    }
+
+    fn boosted(gain_db: f64, headroom: Option<f64>) -> DspSettings {
+        let mut dsp = DspSettings::default();
+        dsp.eq.enabled = true;
+        dsp.eq.preset = "custom".into();
+        dsp.eq.bands[2].gain_db = gain_db;
+        if let Some(headroom) = headroom {
+            dsp.headroom.enabled = true;
+            dsp.headroom.gain_db = headroom;
+        }
+        dsp
+    }
+
+    fn wait_for_status(
+        outputs: &NativeOutputs,
+        done: impl Fn(&parson_output::dsp::DspStatus) -> bool,
+    ) -> parson_output::dsp::DspStatus {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = outputs
+                .current()
+                .and_then(|session| session.signal_path.processing)
+                .and_then(|processing| processing.status)
+                .expect("a processing session");
+            if done(&status) || Instant::now() > deadline {
+                return status;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn the_server_runs_the_dsp_chain_and_flags_clipping() {
+        let dir = std::env::temp_dir().join(format!("parson-native-dsp-{}", uuid::Uuid::new_v4()));
+        let outputs = outputs(Some(dir.join("native-outputs.json")));
+        // +12 dB at 1 kHz on a 0.9 full-scale 1 kHz tone clips.
+        let view = outputs
+            .set_dsp(SIMULATED_DEVICE_ID, boosted(12.0, None))
+            .unwrap();
+        assert!(view.dsp_customized && view.dsp_support.available);
+        let started = outputs
+            .play(1, SIMULATED_DEVICE_ID, &song(44_100, 16, true), 0, None)
+            .unwrap();
+        assert!(!started.plan.bit_perfect);
+        // The chain dithers to the device's widest word.
+        assert_eq!(started.plan.bit_depth, 32);
+        assert_eq!(
+            started.signal_path.quality,
+            crate::signal_path::SignalQuality::Enhanced
+        );
+        let status = wait_for_status(&outputs, |status| status.clipping);
+        assert!(status.clipping && status.clipped_samples > 0);
+        assert!(status.realtime_factor.unwrap() > 1.0);
+
+        // Saving a chain with headroom restarts the track with it.
+        outputs
+            .set_dsp(SIMULATED_DEVICE_ID, boosted(12.0, Some(-12.0)))
+            .unwrap();
+        let session = outputs.current().unwrap();
+        assert!(session.processing.unwrap().headroom_db.is_some());
+        let status = wait_for_status(&outputs, |status| {
+            status.realtime_factor.is_some() && status.peak_dbfs.is_some()
+        });
+        assert!(!status.clipping, "{status:?}");
+
+        // The chain is saved per device and read back.
+        let reloaded = outputs_with_path(dir.join("native-outputs.json"));
+        let device = reloaded.devices(false).devices.remove(0);
+        assert_eq!(device.dsp.headroom.gain_db, -12.0);
+        // Bypassing the whole chain gives the bit-perfect path back.
+        let mut bypassed = boosted(12.0, Some(-12.0));
+        bypassed.enabled = false;
+        outputs.set_dsp(SIMULATED_DEVICE_ID, bypassed).unwrap();
+        let session = outputs.current().unwrap();
+        assert!(session.plan.bit_perfect && session.processing.is_none());
+        assert!(session.signal_path.processing.is_none());
+        outputs.stop().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn float_decode_arguments_feed_the_chain() {
+        let spec = FloatDecode {
+            channels: 2,
+            sample_rate: 44_100,
+            resample_to: None,
+        };
+        let joined = float_decode_args(Path::new("/m/a.flac"), &spec, 1_500, true)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("-ss 1.500 -i /m/a.flac"));
+        assert!(!joined.contains("-af"));
+        assert!(joined.ends_with("-ac 2 -ar 44100 -c:a pcm_f64le -f f64le pipe:1"));
+        let joined = float_decode_args(
+            Path::new("/m/a.flac"),
+            &FloatDecode {
+                resample_to: Some(768_000),
+                ..spec
+            },
+            0,
+            true,
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+        assert!(joined.contains("-af aresample=osr=768000:resampler=soxr"));
+        assert!(joined.contains("-ar 768000"));
+    }
+
+    #[test]
+    fn ffmpeg_decodes_a_real_flac_into_the_chain() {
+        // Exercises the production decoder end to end when ffmpeg exists.
+        let dir = std::env::temp_dir().join(format!("parson-flac-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let flac = dir.join("tone.flac");
+        let made = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("sine=frequency=1000:sample_rate=44100:duration=0.5")
+            .args(["-ac", "2", "-sample_fmt", "s16", "-y"])
+            .arg(&flac)
+            .status()
+            .is_ok_and(|status| status.success());
+        if !made {
+            let _ = std::fs::remove_dir_all(dir);
+            return;
+        }
+        let spec = FloatDecode {
+            channels: 2,
+            sample_rate: 44_100,
+            resample_to: None,
+        };
+        let processing = ProcessingPlan {
+            leveling_db: None,
+            headroom_db: Some(-3.0),
+            bands: boosted(3.0, None).active_bands(),
+            crossfeed: Some(parson_output::dsp::CrossfeedStrength::Medium),
+            crossfeed_skipped: false,
+            channels: 2,
+            input_rate: 44_100,
+            output_rate: 48_000,
+            rate_requested: true,
+            requested_rate_unavailable: None,
+            resampler: Some(ResamplerKind::Parson),
+            output_bits: 24,
+        };
+        let stats = Arc::new(DspStats::default());
+        let decoded = ffmpeg_float_decoder(&flac, &spec, 0).unwrap();
+        let mut pcm = DspPcm::new(
+            decoded,
+            DspChain::new(&processing, 44_100, InputFormat::S32, Arc::clone(&stats)),
+        );
+        let mut out = Vec::new();
+        pcm.read_to_end(&mut out).unwrap();
+        // 0.5 s at 48 kHz, stereo, 4-byte samples.
+        assert_eq!(out.len(), 24_000 * 2 * 4);
+        let status = stats.snapshot();
+        assert!(!status.clipping);
+        assert!(status.peak_dbfs.unwrap() < 0.0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
