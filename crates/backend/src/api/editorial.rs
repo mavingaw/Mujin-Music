@@ -27,7 +27,7 @@ use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_
 use crate::persistence::connection::DbPool;
 
 const MAX_CREDITED_SONGS: usize = 500;
-pub(crate) const EXTERNAL_PREFIX: &str = "mb:";
+pub(crate) const EXTERNAL_PREFIX: &str = crate::enrichment::worker::EXTERNAL_PERSON_PREFIX;
 
 /// A credit on an album page, merged across tags and external sources.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -697,7 +697,6 @@ pub async fn album_about(
     let ids = credits
         .iter()
         .filter_map(|credit| credit.artist_id.clone())
-        .filter(|id| !id.starts_with(EXTERNAL_PREFIX))
         .collect::<Vec<_>>();
     let genre_index = crate::api::genre_pages::genre_index(image_pool.clone(), &cache).await;
     let images = credited_images(image_pool, ids).await;
