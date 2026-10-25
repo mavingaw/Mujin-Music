@@ -116,6 +116,15 @@ test("the player line names the delivered format", () => {
       matches_announced: false,
     }).warning,
   ).toBe("Announced 24/192 FLAC");
+  expect(deliveryText({ ...delivery, sandbox: true, tone: false })).toEqual({
+    label: "24/192 FLAC",
+    detail: "sandbox, synthesized audio · stereo · frame verified",
+    warning: null,
+  });
+  expect(
+    deliveryText({ ...delivery, sandbox: true, matches_announced: false })
+      .detail,
+  ).toBe("sandbox preview · stereo · frame verified");
   expect(deliveryText({ ...delivery, delivered: null }).label).toBe(
     "Format unknown",
   );

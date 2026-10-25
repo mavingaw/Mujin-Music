@@ -347,6 +347,12 @@ export interface StreamingDelivery {
   frame_verified: boolean;
   matches_announced: boolean;
   sandbox: boolean;
+  /**
+   * The sandbox's 16/44.1 placeholder tone (server without ffmpeg). Other
+   * sandbox streams are rendered in the announced format and checked like
+   * live ones.
+   */
+  tone?: boolean;
   at: number;
 }
 
@@ -502,6 +508,79 @@ export function describeDelivery(delivery: StreamingDelivery): string {
 export async function startTidalSignIn(): Promise<StreamingPendingSignIn> {
   return (await api.post<StreamingPendingSignIn>("/providers/tidal/sign-in"))
     .data;
+}
+
+/** A TIDAL browser sign-in (authorization code with PKCE). */
+export interface StreamingBrowserSignIn {
+  /** Where the listener approves; TIDAL then returns to `redirect_uri`. */
+  authorize_url: string;
+  redirect_uri: string;
+  expires_at: number;
+  /** Sandbox sign-ins skip TIDAL's page and come straight back. */
+  sandbox: boolean;
+}
+
+/** The web app page TIDAL sends a browser sign-in back to. */
+export const TIDAL_CALLBACK_PATH = "/settings/services/tidal-callback";
+
+/** The redirect URI to register with TIDAL for a Parson server address. */
+export function tidalRedirectUri(origin: string): string {
+  return `${origin.replace(/\/+$/, "")}${TIDAL_CALLBACK_PATH}`;
+}
+
+/**
+ * Starts a browser sign-in, the flow TIDAL gives clients registered on its
+ * developer dashboard. Send the listener to `authorize_url`.
+ */
+export async function startTidalBrowserSignIn(
+  redirectUri: string,
+): Promise<StreamingBrowserSignIn> {
+  return (
+    await api.post<StreamingBrowserSignIn>("/providers/tidal/sign-in/browser", {
+      redirect_uri: redirectUri,
+    })
+  ).data;
+}
+
+/** Finishes a browser sign-in with what TIDAL put in the callback URL. */
+export async function finishTidalBrowserSignIn(
+  state: string,
+  code: string,
+): Promise<StreamingProviderStatus> {
+  return (
+    await api.post<StreamingProviderStatus>(
+      "/providers/tidal/sign-in/browser/finish",
+      { state, code },
+      { timeout: 30_000 },
+    )
+  ).data;
+}
+
+/**
+ * Reads TIDAL's answer from a callback URL's query string: the code and
+ * state on approval, or TIDAL's error.
+ */
+export function readTidalCallback(
+  search: string,
+): { ok: true; code: string; state: string } | { ok: false; error: string } {
+  const params = new URLSearchParams(search);
+  const error = params.get("error");
+  if (error) {
+    const description = params.get("error_description");
+    return {
+      ok: false,
+      error:
+        error === "access_denied"
+          ? "Sign-in was declined on TIDAL."
+          : description || `TIDAL answered ${error}.`,
+    };
+  }
+  const code = params.get("code");
+  const state = params.get("state");
+  if (!code || !state) {
+    return { ok: false, error: "TIDAL sent back no sign-in code." };
+  }
+  return { ok: true, code, state };
 }
 
 export async function pollTidalSignIn(): Promise<StreamingSignInPoll> {
@@ -868,6 +947,9 @@ export interface CatalogAlbumPage {
   local_ready: boolean;
 }
 
+/** Album order: artist (default), title, newest, oldest or best quality first. */
+export type CatalogSort = "artist" | "title" | "newest" | "oldest" | "quality";
+
 export interface CatalogFilter {
   source?: CatalogSource;
   genre?: string;
@@ -875,6 +957,7 @@ export interface CatalogFilter {
   decade?: number;
   quality?: CatalogQuality;
   q?: string;
+  sort?: CatalogSort;
 }
 
 /**

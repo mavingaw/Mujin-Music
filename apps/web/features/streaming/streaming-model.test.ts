@@ -227,6 +227,12 @@ test("the player shows what the stream actually delivered", () => {
   expect(sandbox.warning).toBeNull();
   expect(sandbox.lines.at(-1)).toBe("Sandbox preview tone, not a real stream");
 
+  // Rendered sandbox streams are checked like live ones.
+  const rendered = deliverySummary(delivery({ sandbox: true, tone: false }));
+  expect(rendered.badge).toBe("24/192 FLAC");
+  expect(rendered.warning).toBeNull();
+  expect(rendered.lines.at(-1)).toContain("Sandbox: recorded service reply");
+
   expect(deliverySummary(delivery({ delivered: null })).badge).toBe(
     "Format unknown",
   );

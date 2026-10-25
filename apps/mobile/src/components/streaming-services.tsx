@@ -69,8 +69,10 @@ export function StreamingServicesSettings() {
       </Text>
       {providers.data.sandbox ? (
         <Text style={styles.sandbox}>
-          Sandbox mode: recorded TIDAL and Qobuz responses, 30-second preview
-          tones, any credentials work. No real account is used.
+          Sandbox mode: recorded TIDAL and Qobuz responses, and 30-second
+          synthesized tones rendered in each announced format (24/192 FLAC,
+          TIDAL Max DASH, CD, AAC). Any credentials work. No real account is
+          used.
         </Text>
       ) : null}
       {providers.data.providers.map((provider) => (
@@ -81,16 +83,20 @@ export function StreamingServicesSettings() {
             onPress={() => setOpen(open === provider.id ? null : provider.id)}
             style={styles.cardHeader}
           >
-            <SourceTag large provider={provider.id} />
-            <Text numberOfLines={1} style={styles.status}>
-              {provider.status === "signed_in"
-                ? (provider.account_name ?? "Signed in")
-                : provider.status === "expired"
-                  ? "Session expired"
-                  : needsOwnCredentials(provider)
-                    ? "Not configured"
-                    : "Not signed in"}
-            </Text>
+            {/* Name above status, so the status gets the row's full width
+                on narrow phones instead of a squeezed middle column. */}
+            <View style={styles.cardTitle}>
+              <SourceTag large provider={provider.id} />
+              <Text numberOfLines={2} style={styles.status}>
+                {provider.status === "signed_in"
+                  ? `${provider.account_name ?? "Signed in"} · ${provider.library.albums} album${provider.library.albums === 1 ? "" : "s"}`
+                  : provider.status === "expired"
+                    ? "Session expired"
+                    : needsOwnCredentials(provider)
+                      ? "Not configured"
+                      : "Not signed in"}
+              </Text>
+            </View>
             <Text style={styles.link}>{serviceAction(provider)}</Text>
           </Pressable>
           {open === provider.id ? <ServicePanel provider={provider} /> : null}
@@ -103,9 +109,11 @@ export function StreamingServicesSettings() {
         in. Tokens are encrypted on your server and never stored on this phone.
       </Text>
       <Text style={styles.fine}>
-        Built and tested against recorded TIDAL and Qobuz responses and media,
-        not live accounts. Check connection after signing in is the first test
-        against your real account.
+        Built and tested against recorded TIDAL and Qobuz responses and media
+        rendered to match them, not live accounts. TIDAL clients are free to
+        register at developer.tidal.com; Qobuz issues app IDs on request. See
+        How to get credentials in the web app&apos;s Settings, Services. Check
+        connection after signing in is the first test against your real account.
       </Text>
     </View>
   );
@@ -500,13 +508,15 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   cardHeader: {
-    minHeight: 60,
+    minHeight: 64,
     paddingHorizontal: 16,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
-  status: { flex: 1, color: palette.secondary, fontSize: 13 },
+  cardTitle: { flex: 1, minWidth: 0, gap: 4 },
+  status: { color: palette.secondary, fontSize: 13, lineHeight: 18 },
   link: { color: "#7dd3fc", fontWeight: "700" },
   panel: { padding: 16, paddingTop: 4, gap: 10 },
   input: {

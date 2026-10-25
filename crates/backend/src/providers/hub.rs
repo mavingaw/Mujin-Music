@@ -15,7 +15,7 @@ use super::store::{
     self, AccountRow, AccountStatus, ItemOrigin, LibraryCounts, LibraryItemRow, LibraryQuery,
     NewLibraryItem,
 };
-use super::tidal::{DeviceAuthorization, DevicePoll, TidalClient};
+use super::tidal::{BrowserAuthorization, DeviceAuthorization, DevicePoll, TidalClient};
 use super::transport::{ReqwestTransport, Transport};
 use super::vault::{SealPurpose, TokenVault};
 use super::{
@@ -23,7 +23,7 @@ use super::{
     ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderGenre, ProviderId,
     ProviderPlaylist, ProviderSession, ProviderTrack, QualityOption, RADIO_TRACKS, Radio,
     RadioSeed, ResolvedStream, SearchResults, SourcePreference, StreamQuality, StreamSource,
-    StreamingProvider, sandbox, unix_now,
+    StreamingProvider, sandbox, sandbox_media, unix_now,
 };
 use crate::persistence::connection::DbPool;
 
@@ -82,6 +82,45 @@ pub struct CredentialSummary {
     pub client_id_hint: Option<String>,
     pub has_secret: bool,
     pub uses_server_credentials: bool,
+}
+
+/// A browser sign-in to finish on TIDAL's login page.
+#[derive(Clone, Debug, Serialize)]
+pub struct BrowserSignIn {
+    pub authorize_url: String,
+    pub redirect_uri: String,
+    pub expires_at: i64,
+    /// Sandbox sign-ins skip TIDAL's page and come straight back.
+    pub sandbox: bool,
+}
+
+/// The path TIDAL sends a browser sign-in back to. The web app finishes the
+/// sign-in there, so this is the redirect URI to register with TIDAL.
+pub const TIDAL_CALLBACK_PATH: &str = "/settings/services/tidal-callback";
+const MAX_BROWSER_SIGN_INS: usize = 512;
+
+fn validated_redirect_uri(value: &str) -> HubResult<String> {
+    let value = value.trim();
+    let invalid = HubError::Invalid(
+        "The redirect URI must be this server's address followed by /settings/services/tidal-callback.",
+    );
+    let Some(rest) = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return Err(invalid);
+    };
+    let well_formed = value.len() <= 512
+        && !rest.is_empty()
+        && !rest.starts_with('/')
+        && !value.contains(['?', '#', '\\'])
+        && value.chars().all(|character| character.is_ascii_graphic())
+        && value.ends_with(TIDAL_CALLBACK_PATH);
+    if well_formed {
+        Ok(value.to_string())
+    } else {
+        Err(invalid)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -224,6 +263,10 @@ pub struct DeliveredStream {
     /// Whether the delivered format agrees with the announced one.
     pub matches_announced: bool,
     pub sandbox: bool,
+    /// The sandbox's 16/44.1 placeholder tone, which announces no real
+    /// format. Rendered sandbox streams are `false` and are checked like
+    /// live ones.
+    pub tone: bool,
     pub at: i64,
 }
 
@@ -323,6 +366,9 @@ pub struct StreamingHub {
     tidal: TidalClient,
     qobuz: QobuzClient,
     sandbox: bool,
+    /// In sandbox mode, whether streams are the 16/44.1 WAV placeholder
+    /// tone (no ffmpeg) rather than rendered in each announced format.
+    sandbox_tone: bool,
     server_credentials: RwLock<HashMap<ProviderId, ServerCredential>>,
     media: Arc<dyn MediaTransport>,
     deliveries: Mutex<HashMap<(i32, String), DeliveredStream>>,
@@ -334,6 +380,8 @@ pub struct StreamingHub {
     /// genre, so an album found under TIDAL's "Jazz" is filed as Jazz when
     /// it is added to the library.
     genre_hints: Mutex<HashMap<String, String>>,
+    /// Browser sign-ins waiting for the listener to come back, by state.
+    browser_sign_ins: Mutex<HashMap<String, (i32, BrowserAuthorization)>>,
 }
 
 /// Genre lists by listener and service, with when each was read.
@@ -427,22 +475,39 @@ impl StreamingHub {
         let key = crate::settings::streaming_token_key()
             .map_err(|error| format!("streaming token key: {error}"))?;
         let sandbox = sandbox::enabled_from_env();
-        let transport: Arc<dyn Transport> = if sandbox {
-            tracing::warn!("streaming services run in sandbox mode with recorded responses");
+        let rendered = sandbox && sandbox_media::ffmpeg_available();
+        let streams = Arc::new(sandbox_media::SandboxStreams::for_sandbox());
+        let transport: Arc<dyn Transport> = if rendered {
+            tracing::warn!(
+                "streaming services run in sandbox mode: recorded responses, synthesized audio"
+            );
+            Arc::new(sandbox_media::SandboxTransport::new(
+                sandbox::transport(),
+                streams.clone(),
+            ))
+        } else if sandbox {
+            tracing::warn!(
+                "streaming services run in sandbox mode with recorded responses; \
+                 ffmpeg is missing, so streams are a 16/44.1 placeholder tone"
+            );
             Arc::new(sandbox::transport())
         } else {
             Arc::new(ReqwestTransport::new().map_err(|error| error.to_string())?)
         };
-        let media: Arc<dyn MediaTransport> =
-            Arc::new(ReqwestMedia::new().map_err(|error| error.to_string())?);
         let hub = Self::new(
             pool,
             TokenVault::new(key),
             transport,
             sandbox,
             server_credentials_from_env(),
-        )
-        .with_media(media);
+        );
+        let hub = if rendered {
+            hub.with_rendered_sandbox(Arc::new(sandbox_media::SandboxMedia::new(streams)))
+        } else {
+            hub.with_media(Arc::new(
+                ReqwestMedia::new().map_err(|error| error.to_string())?,
+            ))
+        };
         hub.load_server_credentials()?;
         Ok(hub)
     }
@@ -478,18 +543,29 @@ impl StreamingHub {
             tidal: TidalClient::new(transport.clone(), artwork),
             qobuz: QobuzClient::new(transport, artwork),
             sandbox,
+            sandbox_tone: sandbox,
             server_credentials: RwLock::new(server_credentials),
             media: Arc::new(media::FixtureMedia::new()),
             deliveries: Mutex::new(HashMap::new()),
             segment_indexes: Mutex::new(HashMap::new()),
             genre_lists: Mutex::new(HashMap::new()),
             genre_hints: Mutex::new(HashMap::new()),
+            browser_sign_ins: Mutex::new(HashMap::new()),
         }
     }
 
     /// Replaces how stream bytes are fetched (live HTTP in the server,
     /// recorded media files in tests).
     pub fn with_media(mut self, media: Arc<dyn MediaTransport>) -> Self {
+        self.media = media;
+        self
+    }
+
+    /// Sandbox streams go through the services' clients and this media
+    /// transport, rendered in each announced format, instead of the
+    /// placeholder tone.
+    pub fn with_rendered_sandbox(mut self, media: Arc<dyn MediaTransport>) -> Self {
+        self.sandbox_tone = false;
         self.media = media;
         self
     }
@@ -929,6 +1005,95 @@ impl StreamingHub {
         })
         .await?;
         Ok(PendingSignIn::from(&pending))
+    }
+
+    /// Starts a TIDAL browser sign-in (authorization code with PKCE), the
+    /// flow for clients registered on TIDAL's developer dashboard.
+    pub async fn start_tidal_browser_sign_in(
+        &self,
+        user_id: i32,
+        redirect_uri: &str,
+    ) -> HubResult<BrowserSignIn> {
+        let redirect_uri = validated_redirect_uri(redirect_uri)?;
+        let row = self.account_for_sign_in(user_id, ProviderId::Tidal).await?;
+        let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
+        let (pending, mut authorize_url) =
+            TidalClient::browser_authorization(&credentials, &redirect_uri);
+        if self.sandbox {
+            // There is no TIDAL login page to visit in the sandbox, so the
+            // listener comes straight back as if they had approved.
+            authorize_url = format!(
+                "{redirect_uri}?code=sandbox-authorization-code&state={}",
+                pending.state
+            );
+        }
+        let sign_in = BrowserSignIn {
+            authorize_url,
+            redirect_uri,
+            expires_at: pending.expires_at,
+            sandbox: self.sandbox,
+        };
+        let mut pending_sign_ins = self
+            .browser_sign_ins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = unix_now();
+        pending_sign_ins.retain(|_, (owner, other)| other.expires_at > now && *owner != user_id);
+        if pending_sign_ins.len() >= MAX_BROWSER_SIGN_INS
+            && let Some(oldest) = pending_sign_ins
+                .iter()
+                .min_by_key(|(_, (_, other))| other.expires_at)
+                .map(|(state, _)| state.clone())
+        {
+            pending_sign_ins.remove(&oldest);
+        }
+        pending_sign_ins.insert(pending.state.clone(), (user_id, pending));
+        Ok(sign_in)
+    }
+
+    /// Finishes a browser sign-in with the code and state TIDAL sent back.
+    /// Each state works once, for the listener who started it.
+    pub async fn finish_tidal_browser_sign_in(
+        &self,
+        user_id: i32,
+        state: &str,
+        code: &str,
+    ) -> HubResult<ProviderStatus> {
+        let code = code.trim();
+        if code.is_empty()
+            || code.len() > 2048
+            || !code.chars().all(|character| character.is_ascii_graphic())
+        {
+            return Err(HubError::Invalid("TIDAL sent back no usable sign-in code."));
+        }
+        let pending = {
+            let mut pending_sign_ins = self
+                .browser_sign_ins
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match pending_sign_ins.get(state) {
+                Some((owner, _)) if *owner == user_id => {
+                    pending_sign_ins.remove(state).map(|(_, pending)| pending)
+                }
+                _ => None,
+            }
+        }
+        .filter(|pending| pending.expires_at > unix_now())
+        .ok_or(HubError::Invalid(
+            "This TIDAL sign-in expired or was already used. Start it again.",
+        ))?;
+        let row = self
+            .row(user_id, ProviderId::Tidal)
+            .await?
+            .ok_or(HubError::Provider(ProviderError::NotConnected))?;
+        let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
+        let session = self
+            .tidal
+            .exchange_authorization_code(&credentials, &pending, code)
+            .await?;
+        self.store_session(user_id, ProviderId::Tidal, &session)
+            .await?;
+        self.provider_status(user_id, ProviderId::Tidal).await
     }
 
     pub async fn poll_tidal_sign_in(&self, user_id: i32) -> HubResult<PollOutcome> {
@@ -1624,10 +1789,8 @@ impl StreamingHub {
         } else {
             chosen
         };
-        if self.sandbox {
-            let seed = raw_id.bytes().fold(1469598103934665603_u64, |hash, byte| {
-                (hash ^ u64::from(byte)).wrapping_mul(1099511628211)
-            });
+        if self.sandbox && self.sandbox_tone {
+            let seed = sandbox::seed(&raw_id);
             let mut format = AudioFormat::lossless("pcm", Some(16), Some(44_100));
             format.label = "Sandbox preview".to_string();
             return Ok(ResolvedStream {
@@ -2270,6 +2433,7 @@ fn delivered_stream(
     probed: Option<ProbedFormat>,
     sandbox: bool,
 ) -> DeliveredStream {
+    let tone = matches!(stream.source, StreamSource::SandboxTone { .. });
     let announced = stream.format.clone();
     let (delivered, container, frame_verified) = match probed {
         Some(probed) => (
@@ -2280,8 +2444,8 @@ fn delivered_stream(
         None => (None, None, false),
     };
     let matches_announced = delivered.as_ref().is_some_and(|delivered| {
-        // Sandbox previews announce no real format.
-        !sandbox
+        // The placeholder tone announces no real format.
+        !tone
             && delivered.lossless == announced.lossless
             && (!announced.lossless
                 || (delivered.codec == announced.codec
@@ -2301,6 +2465,7 @@ fn delivered_stream(
         frame_verified,
         matches_announced,
         sandbox,
+        tone,
         at: unix_now(),
     }
 }
@@ -2324,13 +2489,19 @@ fn describe_delivery(delivery: &DeliveredStream) -> String {
     if delivery.frame_verified {
         detail.push_str("; first audio frame verified");
     }
-    if delivery.sandbox {
+    if delivery.tone {
         detail.push_str(". Sandbox preview tone, not a real stream.");
     } else if delivery.matches_announced {
         detail.push_str(&format!(
             ", as the service announced ({}).",
             delivery.announced.label
         ));
+        if delivery.sandbox {
+            detail.push_str(
+                " Sandbox: the reply is recorded and the audio synthesized, \
+                 delivered through the real stream path.",
+            );
+        }
     } else {
         detail.push_str(&format!(
             ". The service announced {}.",

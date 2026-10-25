@@ -90,8 +90,14 @@ export function deliveryText(delivery: StreamingDelivery): {
   }
   const channels =
     format.channels === 1 ? "mono" : format.channels === 2 ? "stereo" : null;
+  // Servers before `tone` existed only had the placeholder tone.
+  const placeholder = delivery.tone ?? delivery.sandbox;
   const detail = [
-    delivery.sandbox ? "sandbox preview" : "delivered",
+    placeholder
+      ? "sandbox preview"
+      : delivery.sandbox
+        ? "sandbox, synthesized audio"
+        : "delivered",
     channels,
     delivery.frame_verified ? "frame verified" : null,
   ]
@@ -101,7 +107,7 @@ export function deliveryText(delivery: StreamingDelivery): {
     label: format.label,
     detail,
     warning:
-      !delivery.sandbox && !delivery.matches_announced
+      !placeholder && !delivery.matches_announced
         ? `Announced ${delivery.announced.label}`
         : null,
   };

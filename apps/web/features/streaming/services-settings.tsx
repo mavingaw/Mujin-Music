@@ -10,8 +10,10 @@ import {
   setStreamingQuality,
   signInToQobuz,
   signOutOfStreamingProvider,
+  startTidalBrowserSignIn,
   startTidalSignIn,
   syncStreamingLibrary,
+  tidalRedirectUri,
   type StreamQuality,
   type StreamingConnectionCheck,
   type StreamingPendingSignIn,
@@ -48,6 +50,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSession } from "@/features/account/session-provider";
+import { CredentialsGuide } from "./credentials-guide";
 import { ServerCredentialsPanel } from "./server-credentials";
 import { FormatBadge, ProviderMark } from "./source-badge";
 import {
@@ -84,7 +87,7 @@ const credentialLabels: Record<
       "Use the OAuth client ID (and secret, if your client has one) from your own TIDAL developer access.",
     server: "this server's TIDAL client",
     source:
-      "TIDAL issues client IDs through its developer program at developer.tidal.com. Parson signs in with TIDAL's device-code flow, so the client must be allowed to use it.",
+      "Anyone with a TIDAL account can register a client at developer.tidal.com; see How to get credentials on the Services page. Device-code sign-in needs a client TIDAL allows to use it; a self-registered client signs in on tidal.com.",
     account: "approve the sign-in on TIDAL",
   },
   qobuz: {
@@ -95,7 +98,7 @@ const credentialLabels: Record<
       "Use the app ID and app secret Qobuz issued to you. Both are needed to stream.",
     server: "this server's Qobuz app",
     source:
-      "Qobuz issues app IDs and secrets to partners through its API program; ask Qobuz for one.",
+      "Qobuz issues app IDs and secrets on request; see How to get credentials on the Services page.",
     account: "enter their Qobuz email and password",
   },
 };
@@ -142,19 +145,19 @@ export default function ServicesSettings() {
       <div className="divide-y divide-white/8 rounded-xl border border-white/8">
         {providers.map((provider) => (
           <div
-            className="flex flex-wrap items-center gap-x-5 gap-y-3 px-5 py-4"
+            className="flex items-center gap-3.5 px-4 py-4 sm:gap-4 sm:px-5"
             key={provider.id}
           >
-            <div className="flex min-w-36 items-center gap-3">
-              <ProviderMark
-                className="h-8 w-8 rounded-lg text-base"
-                provider={provider.id}
-              />
-              <span className="text-[17px] font-semibold tracking-wide text-white">
-                {provider.name}
-              </span>
-            </div>
+            <ProviderMark
+              className="h-9 w-9 shrink-0 rounded-lg text-base"
+              provider={provider.id}
+            />
+            {/* Name above status: the status gets the full width on a phone
+                instead of a squeezed middle column. */}
             <div className="min-w-0 flex-1">
+              <p className="text-[17px] font-semibold tracking-wide text-white">
+                {provider.name}
+              </p>
               <p
                 className={`text-sm font-medium ${provider.status === "signed_in" ? "text-zinc-100" : provider.status === "expired" ? "text-amber-200" : "text-zinc-400"}`}
               >
@@ -168,7 +171,7 @@ export default function ServicesSettings() {
               )}
             </div>
             <Button
-              className="rounded-full px-6"
+              className="shrink-0 rounded-full px-5 sm:px-6"
               onClick={() => setOpen(provider.id)}
               variant={
                 provider.status === "signed_in" ? "secondary" : "default"
@@ -197,12 +200,15 @@ export default function ServicesSettings() {
         </p>
       </div>
 
+      <CredentialsGuide />
+
       <SourcePreferenceSetting />
 
       <p className="text-xs leading-5 text-zinc-500">
         Parson&apos;s TIDAL and Qobuz support was built and tested against
-        recorded service responses and recorded hi-res media, not live accounts.
-        Run &quot;Check connection&quot; after signing in: it is the first test
+        recorded service responses and hi-res media rendered to match them
+        (24/192 FLAC, TIDAL Max DASH, CD FLAC, AAC, MP3), not live accounts. Run
+        &quot;Check connection&quot; after signing in: it is the first test
         against your real account, and it reports what the stream actually
         delivered.
       </p>
@@ -252,8 +258,8 @@ export function SandboxNotice({ compact = false }: { compact?: boolean }) {
       <p>
         <span className="font-semibold">Sandbox mode.</span>{" "}
         {compact
-          ? "Recorded TIDAL and Qobuz responses; tracks play a 30-second preview tone."
-          : "This server answers with recorded TIDAL and Qobuz responses instead of contacting the services, and tracks play a 30-second synthesized preview. Any credentials work here; no real account is used."}
+          ? "Recorded TIDAL and Qobuz responses; tracks play a 30-second synthesized tone in the format each reply announces."
+          : "This server answers with recorded TIDAL and Qobuz responses instead of contacting the services. Tracks play a 30-second synthesized tone, rendered in the format each recorded reply announces (24/192 FLAC, TIDAL Max as DASH, CD FLAC, AAC, MP3) and streamed through the same proxy and format check as a real account. Any credentials work here; no real account is used. Sandbox mode is off unless the server is started with PARSON_STREAMING_SANDBOX=1."}
       </p>
     </div>
   );
@@ -632,6 +638,20 @@ function TidalSignIn({
     };
   }, [pending]);
 
+  async function startInBrowser() {
+    setStarting(true);
+    setMessage(null);
+    try {
+      const next = await startTidalBrowserSignIn(
+        tidalRedirectUri(window.location.origin),
+      );
+      window.location.assign(next.authorize_url);
+    } catch (error) {
+      setMessage(streamingErrorMessage(error, "Could not start sign-in."));
+      setStarting(false);
+    }
+  }
+
   async function start() {
     setStarting(true);
     setMessage(null);
@@ -701,7 +721,26 @@ function TidalSignIn({
         >
           {starting ? "Starting…" : "Sign in with TIDAL"}
         </Button>
+        <Button
+          className="rounded-full"
+          disabled={starting}
+          onClick={() => void startInBrowser()}
+          variant="secondary"
+        >
+          Sign in on tidal.com instead
+        </Button>
       </div>
+      <p className="text-xs leading-5 text-zinc-500">
+        The code works with clients TIDAL allows to use device sign-in. A client
+        you register yourself at developer.tidal.com signs in on tidal.com
+        instead; register{" "}
+        <code className="break-all rounded bg-white/6 px-1 py-0.5 text-zinc-300">
+          {typeof window === "undefined"
+            ? "/settings/services/tidal-callback"
+            : tidalRedirectUri(window.location.origin)}
+        </code>{" "}
+        as its redirect URI.
+      </p>
       <CredentialSummary onChange={onChangeCredentials} provider={provider} />
     </div>
   );

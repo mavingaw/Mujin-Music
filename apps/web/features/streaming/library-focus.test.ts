@@ -6,6 +6,8 @@ import {
   decadeLabel,
   describeFocus,
   emptyFocus,
+  parseCatalogSort,
+  writeCatalogSort,
   parseLibraryFocus,
   splitFacets,
   toCatalogFilter,
@@ -115,5 +117,21 @@ describe("library focus", () => {
     expect(
       catalogAlbumEntry({ ...album, source: "local", year: null }),
     ).toMatchObject({ source: null, year: "" });
+  });
+});
+
+describe("album sort", () => {
+  test("round-trips through the URL and defaults to artist", () => {
+    expect(parseCatalogSort(new URLSearchParams(""))).toBe("artist");
+    expect(parseCatalogSort(new URLSearchParams("sort=shuffle"))).toBe(
+      "artist",
+    );
+    const params = writeCatalogSort(
+      new URLSearchParams("view=albums"),
+      "newest",
+    );
+    expect(params.toString()).toBe("view=albums&sort=newest");
+    expect(parseCatalogSort(params)).toBe("newest");
+    expect(writeCatalogSort(params, "artist").toString()).toBe("view=albums");
   });
 });

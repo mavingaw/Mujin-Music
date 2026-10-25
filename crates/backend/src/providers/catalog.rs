@@ -243,6 +243,33 @@ pub fn fill_missing_genres(albums: &mut [CatalogAlbum]) {
     }
 }
 
+/// How the album catalog is ordered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogSort {
+    /// Artist, then year, then title.
+    #[default]
+    Artist,
+    Title,
+    Newest,
+    Oldest,
+    /// Hi-Res first, then CD quality, then lossy, each by artist.
+    Quality,
+}
+
+impl CatalogSort {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "artist" => Some(Self::Artist),
+            "title" => Some(Self::Title),
+            "newest" => Some(Self::Newest),
+            "oldest" => Some(Self::Oldest),
+            "quality" => Some(Self::Quality),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CatalogFilter {
     pub source: Option<CatalogSource>,
@@ -250,6 +277,7 @@ pub struct CatalogFilter {
     pub decade: Option<u16>,
     pub quality: Option<QualityTier>,
     pub text: Option<String>,
+    pub sort: CatalogSort,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -302,6 +330,34 @@ pub struct CatalogPage {
     pub albums: Vec<CatalogAlbum>,
     pub total: usize,
     pub facets: CatalogFacets,
+}
+
+fn sorted_by(sort: CatalogSort, left: &CatalogAlbum, right: &CatalogAlbum) -> Ordering {
+    let title = |album: &CatalogAlbum| album.name.to_lowercase();
+    match sort {
+        CatalogSort::Artist => compare(left, right),
+        CatalogSort::Title => title(left)
+            .cmp(&title(right))
+            .then_with(|| compare(left, right)),
+        // Albums without a year go last either way.
+        CatalogSort::Newest => right
+            .year
+            .cmp(&left.year)
+            .then_with(|| compare(left, right)),
+        CatalogSort::Oldest => left
+            .year
+            .is_none()
+            .cmp(&right.year.is_none())
+            .then_with(|| left.year.cmp(&right.year))
+            .then_with(|| compare(left, right)),
+        CatalogSort::Quality => {
+            let tier = |album: &CatalogAlbum| album.quality.unwrap_or(QualityTier::Lossy);
+            tier(left)
+                .cmp(&tier(right))
+                .then_with(|| left.quality.is_none().cmp(&right.quality.is_none()))
+                .then_with(|| compare(left, right))
+        }
+    }
 }
 
 fn compare(left: &CatalogAlbum, right: &CatalogAlbum) -> Ordering {
@@ -381,7 +437,7 @@ pub fn query(
     };
 
     albums.retain(|album| filter.matches(album, tokens, None));
-    albums.sort_by(compare);
+    albums.sort_by(|left, right| sorted_by(filter.sort, left, right));
     let total = albums.len();
     let albums = albums
         .into_iter()
@@ -559,6 +615,58 @@ mod tests {
         assert_eq!(page.albums[4].genres, ["Jazz"], "genres are de-duplicated");
         assert_eq!(page.albums[3].id, "qobuz:q0harborhr04");
         assert_eq!(page.albums[3].format_label.as_deref(), Some("24/192 FLAC"));
+    }
+
+    #[test]
+    fn the_catalog_sorts_by_title_year_and_quality() {
+        use super::CatalogSort;
+        let sorted = |sort| {
+            query(
+                catalog(),
+                &CatalogFilter {
+                    sort,
+                    ..CatalogFilter::default()
+                },
+                0,
+                50,
+            )
+            .albums
+        };
+        let titles = sorted(CatalogSort::Title)
+            .iter()
+            .map(|album| album.name.to_lowercase())
+            .collect::<Vec<_>>();
+        let mut expected = titles.clone();
+        expected.sort();
+        assert_eq!(titles, expected);
+
+        let newest = sorted(CatalogSort::Newest)
+            .iter()
+            .map(|album| album.year)
+            .collect::<Vec<_>>();
+        assert!(newest.windows(2).all(|pair| pair[0] >= pair[1]));
+        let oldest = sorted(CatalogSort::Oldest)
+            .iter()
+            .map(|album| album.year)
+            .collect::<Vec<_>>();
+        let dated = oldest.iter().flatten().copied().collect::<Vec<_>>();
+        assert!(dated.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(
+            oldest
+                .iter()
+                .skip_while(|year| year.is_some())
+                .all(Option::is_none),
+            "albums without a year go last"
+        );
+
+        let tiers = sorted(CatalogSort::Quality)
+            .iter()
+            .map(|album| album.quality.unwrap_or(QualityTier::Lossy))
+            .collect::<Vec<_>>();
+        assert_eq!(tiers.first(), Some(&QualityTier::HiRes));
+        assert!(tiers.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(CatalogSort::parse("newest"), Some(CatalogSort::Newest));
+        assert_eq!(CatalogSort::parse("random"), None);
     }
 
     #[test]

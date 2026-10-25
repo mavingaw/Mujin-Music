@@ -239,15 +239,22 @@ export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
     `Delivered ${[format.label, channels, container].filter(Boolean).join(", ")}`,
   ];
   if (delivery.frame_verified) lines.push("First audio frame verified");
-  if (delivery.sandbox) {
+  // Servers before `tone` existed only had the placeholder tone.
+  const placeholder = delivery.tone ?? delivery.sandbox;
+  if (placeholder) {
     lines.push("Sandbox preview tone, not a real stream");
   }
+  if (delivery.sandbox && !placeholder) {
+    lines.push(
+      "Sandbox: recorded service reply and synthesized audio, rendered in this format and read back through the real stream proxy",
+    );
+  }
   const warning =
-    !delivery.sandbox && !delivery.matches_announced
+    !placeholder && !delivery.matches_announced
       ? `The service announced ${delivery.announced.label}`
       : null;
   return {
-    badge: delivery.sandbox ? `Preview ${format.label}` : format.label,
+    badge: placeholder ? `Preview ${format.label}` : format.label,
     tone: formatTone(format),
     lines,
     warning,

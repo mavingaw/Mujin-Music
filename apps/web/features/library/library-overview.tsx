@@ -26,6 +26,8 @@ import {
   getLibraryCatalog,
   getLibraryCatalogArtists,
   getPlaylists,
+  type CatalogFilter,
+  type CatalogSort,
   type LibraryCatalogArtist,
   type LibraryCatalogSong,
 } from "@parson/music-sdk";
@@ -62,8 +64,10 @@ import {
   activeFocusCount,
   catalogAlbumEntry,
   emptyFocus,
+  parseCatalogSort,
   parseLibraryFocus,
   toCatalogFilter,
+  writeCatalogSort,
   writeLibraryFocus,
   type LibraryFocus,
 } from "@/features/streaming/library-focus";
@@ -93,7 +97,15 @@ export default function LibraryOverview() {
       ? emptyFocus
       : parseLibraryFocus(new URLSearchParams(window.location.search)),
   );
-  const catalogFilter = toCatalogFilter(focus);
+  const [sort, setSortState] = useState<CatalogSort>(() =>
+    typeof window === "undefined"
+      ? "artist"
+      : parseCatalogSort(new URLSearchParams(window.location.search)),
+  );
+  const catalogFilter: CatalogFilter = {
+    ...toCatalogFilter(focus),
+    ...(sort === "artist" ? {} : { sort }),
+  };
 
   const catalog = useInfiniteQuery({
     queryKey: ["library", "catalog", "songs"],
@@ -163,6 +175,19 @@ export default function LibraryOverview() {
     setFocusState(next);
     sources.setSource(next.source);
     const params = writeLibraryFocus(
+      new URLSearchParams(window.location.search),
+      next,
+    );
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `/library${params.size ? `?${params}` : ""}`,
+    );
+  };
+
+  const setSort = (next: CatalogSort) => {
+    setSortState(next);
+    const params = writeCatalogSort(
       new URLSearchParams(window.location.search),
       next,
     );
@@ -265,6 +290,8 @@ export default function LibraryOverview() {
           facets={albumFacets}
           focus={focus}
           onChange={setFocus}
+          onSortChange={setSort}
+          sort={sort}
           total={albumTotal}
         />
       )}

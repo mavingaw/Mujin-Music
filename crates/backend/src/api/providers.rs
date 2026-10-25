@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::api::auth::{Claims, authenticated_user_id};
 use crate::api::error::{forbidden, json_error};
 use crate::library::state::LibraryLifecycle;
-use crate::providers::catalog::{self, CatalogFilter, CatalogPage, CatalogSource, QualityTier};
+use crate::providers::catalog::{
+    self, CatalogFilter, CatalogPage, CatalogSort, CatalogSource, QualityTier,
+};
 use crate::providers::hub::{HubError, LibraryRequest, StreamingHub, user_message};
 pub(crate) use crate::providers::media::byte_range;
 use crate::providers::media::{self, MediaError};
@@ -185,6 +187,51 @@ async fn start_tidal_sign_in(request: HttpRequest, hub: web::Data<StreamingHub>)
         Err(response) => return response,
     };
     respond(hub.start_tidal_sign_in(user_id).await)
+}
+
+#[derive(Deserialize)]
+struct BrowserSignInStart {
+    redirect_uri: String,
+}
+
+/// Starts a TIDAL browser sign-in. The answer's `authorize_url` is where the
+/// listener approves; TIDAL then sends them to `redirect_uri`.
+#[post("/tidal/sign-in/browser")]
+async fn start_tidal_browser_sign_in(
+    request: HttpRequest,
+    body: web::Json<BrowserSignInStart>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    respond(
+        hub.start_tidal_browser_sign_in(user_id, &body.redirect_uri)
+            .await,
+    )
+}
+
+#[derive(Deserialize)]
+struct BrowserSignInFinish {
+    state: String,
+    code: String,
+}
+
+#[post("/tidal/sign-in/browser/finish")]
+async fn finish_tidal_browser_sign_in(
+    request: HttpRequest,
+    body: web::Json<BrowserSignInFinish>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    respond(
+        hub.finish_tidal_browser_sign_in(user_id, &body.state, &body.code)
+            .await,
+    )
 }
 
 #[post("/tidal/sign-in/poll")]
@@ -566,6 +613,7 @@ struct CatalogParameters {
     decade: Option<u16>,
     quality: Option<String>,
     q: Option<String>,
+    sort: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
 }
@@ -599,11 +647,16 @@ fn catalog_filter(query: &CatalogParameters) -> Result<CatalogFilter, &'static s
     {
         return Err("A decade is a year ending in 0, such as 1990.");
     }
+    let sort = match query.sort.as_deref() {
+        None | Some("") => CatalogSort::default(),
+        Some(value) => CatalogSort::parse(value).ok_or("Unknown sort.")?,
+    };
     Ok(CatalogFilter {
         source,
         genre,
         decade: query.decade,
         quality,
+        sort,
         text: query
             .q
             .as_deref()
@@ -1090,6 +1143,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(library)
             .service(start_tidal_sign_in)
             .service(poll_tidal_sign_in)
+            .service(start_tidal_browser_sign_in)
+            .service(finish_tidal_browser_sign_in)
             .service(qobuz_sign_in)
             .service(save_credentials)
             .service(sync_library)
@@ -2906,6 +2961,339 @@ mod tests {
             Some("16/44.1 PCM".to_string())
         );
         assert!(check.steps[2].detail.contains("Sandbox preview tone"));
+    }
+
+    /// A sandbox hub whose streams are rendered in each announced format
+    /// (as `PARSON_STREAMING_SANDBOX=1` runs when ffmpeg is installed).
+    fn sandbox_root(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("parson-sandbox-test-{name}-{}", std::process::id()))
+    }
+
+    /// Removes a test's rendered streams when the test ends, pass or fail.
+    struct RemoveOnDrop(std::path::PathBuf);
+
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn rendered_sandbox(pool: &DbPool, name: &str) -> StreamingHub {
+        use crate::providers::sandbox_media::{SandboxMedia, SandboxStreams, SandboxTransport};
+        let root = sandbox_root(name);
+        let _ = std::fs::remove_dir_all(&root);
+        let streams = Arc::new(SandboxStreams::for_sandbox_in(root));
+        let transport = Arc::new(SandboxTransport::new(
+            crate::providers::sandbox::transport(),
+            streams.clone(),
+        ));
+        let hub = StreamingHub::new(
+            pool.clone(),
+            TokenVault::new([5; 32]),
+            transport,
+            true,
+            HashMap::new(),
+        )
+        .with_rendered_sandbox(Arc::new(SandboxMedia::new(streams)));
+        hub.save_credentials(1, ProviderId::Tidal, Some("sandbox".into()), None, false)
+            .await
+            .expect("tidal credentials");
+        hub.start_tidal_sign_in(1).await.expect("start");
+        hub.poll_tidal_sign_in(1).await.expect("pending");
+        hub.poll_tidal_sign_in(1).await.expect("approved");
+        hub.save_credentials(
+            1,
+            ProviderId::Qobuz,
+            Some("sandbox".into()),
+            Some("sandbox".into()),
+            false,
+        )
+        .await
+        .expect("qobuz credentials");
+        hub.qobuz_sign_in(1, "sandbox", "sandbox")
+            .await
+            .expect("qobuz sign-in");
+        hub
+    }
+
+    #[actix_web::test]
+    async fn rendered_sandbox_streams_deliver_every_tier_as_announced() {
+        if !crate::providers::sandbox_media::ffmpeg_available() {
+            eprintln!("ffmpeg is not installed; rendered sandbox streams cannot be checked");
+            return;
+        }
+        let _cleanup = RemoveOnDrop(sandbox_root("tiers"));
+        let pool = pool();
+        let hub = web::Data::new(rendered_sandbox(&pool, "tiers").await);
+        let app = app_as!(hub, 1, "user");
+        // (service, quality, track, delivered label, container, lossless)
+        let cases = [
+            (
+                "qobuz",
+                "hi_res_max",
+                "7700001",
+                "24/192 FLAC",
+                "flac",
+                true,
+            ),
+            ("qobuz", "hi_res_max", "7700201", "24/96 FLAC", "flac", true),
+            ("qobuz", "hi_res_96", "7700001", "24/96 FLAC", "flac", true),
+            (
+                "qobuz",
+                "hi_res_max",
+                "7700101",
+                "16/44.1 FLAC",
+                "flac",
+                true,
+            ),
+            ("qobuz", "lossless", "7700001", "16/44.1 FLAC", "flac", true),
+            ("qobuz", "high", "7700001", "", "mp3", false),
+            ("tidal", "hi_res_max", "300101", "24/192 FLAC", "mp4", true),
+            (
+                "tidal",
+                "hi_res_max",
+                "300201",
+                "16/44.1 FLAC",
+                "flac",
+                true,
+            ),
+            ("tidal", "lossless", "300101", "16/44.1 FLAC", "flac", true),
+            ("tidal", "high", "300101", "", "mp4", false),
+            ("tidal", "low", "300101", "", "mp4", false),
+        ];
+        for (service, quality, track, label, container, lossless) in cases {
+            let provider = ProviderId::parse(service).expect("service");
+            hub.set_quality(
+                1,
+                provider,
+                crate::providers::StreamQuality::parse(quality).expect("quality"),
+            )
+            .await
+            .expect("quality");
+            let response = test::call_service(
+                &app,
+                test::TestRequest::get()
+                    .uri(&format!("/media/songs/{service}:{track}/stream"))
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{service} {quality}");
+            let length = response
+                .headers()
+                .get("content-length")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<usize>().ok());
+            let body = test::read_body(response).await;
+            assert!(body.len() > 100_000, "{service} {quality}: a whole stream");
+            if let Some(length) = length {
+                assert_eq!(length, body.len(), "{service} {quality}");
+            }
+            let (status, delivery) = call!(
+                &app,
+                test::TestRequest::get()
+                    .uri(&format!("/providers/{service}/tracks/{track}/delivery")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let context = format!("{service} {quality} {track}: {delivery}");
+            assert_eq!(delivery["sandbox"], true, "{context}");
+            assert_eq!(delivery["tone"], false, "{context}");
+            assert_eq!(delivery["matches_announced"], true, "{context}");
+            assert_eq!(delivery["container"], container, "{context}");
+            assert_eq!(delivery["delivered"]["lossless"], lossless, "{context}");
+            assert_eq!(delivery["delivered"]["channels"], 2, "{context}");
+            if lossless {
+                assert_eq!(delivery["delivered"]["label"], label, "{context}");
+                assert_eq!(delivery["announced"]["label"], label, "{context}");
+                assert_eq!(delivery["frame_verified"], true, "{context}");
+            }
+        }
+
+        // TIDAL Max DASH seeks across segment boundaries like a file.
+        hub.set_quality(
+            1,
+            ProviderId::Tidal,
+            crate::providers::StreamQuality::parse("hi_res_max").expect("quality"),
+        )
+        .await
+        .expect("quality");
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .insert_header(("range", "bytes=0-"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        let whole = test::read_body(response).await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .insert_header(("range", "bytes=900000-900099"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            &test::read_body(response).await[..],
+            &whole[900_000..900_100]
+        );
+        let (_, delivery) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/tracks/300101/delivery"),
+        )
+        .await;
+        assert_eq!(delivery["delivered"]["label"], "24/192 FLAC");
+
+        let check = hub
+            .check_connection(1, ProviderId::Qobuz, None)
+            .await
+            .expect("check");
+        let delivery = check.delivery.expect("delivery");
+        assert!(delivery.matches_announced && !delivery.tone);
+        assert!(
+            check.steps[2]
+                .detail
+                .contains("Sandbox: the reply is recorded")
+        );
+    }
+
+    #[actix_web::test]
+    async fn tidal_browser_sign_in_uses_pkce_and_each_state_once() {
+        let pool = pool();
+        let (hub, transport) = hub(pool, false);
+        hub.save_credentials(
+            1,
+            ProviderId::Tidal,
+            Some("dashboard-client".into()),
+            None,
+            false,
+        )
+        .await
+        .expect("credentials");
+        let data = web::Data::new(hub);
+        let app = app_as!(data, 1, "user");
+        let callback = "https://music.example.test/settings/services/tidal-callback";
+
+        for redirect_uri in [
+            "javascript:alert(1)",
+            "https://music.example.test/elsewhere",
+            "https://music.example.test/settings/services/tidal-callback?next=x",
+            "https:///settings/services/tidal-callback",
+        ] {
+            let (status, _) = call!(
+                &app,
+                test::TestRequest::post()
+                    .uri("/providers/tidal/sign-in/browser")
+                    .set_json(json!({ "redirect_uri": redirect_uri })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{redirect_uri}");
+        }
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser")
+                .set_json(json!({ "redirect_uri": callback })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["sandbox"], false);
+        let url = body["authorize_url"].as_str().expect("url");
+        assert!(url.starts_with("https://login.tidal.com/authorize?response_type=code&"));
+        assert!(url.contains("client_id=dashboard%2Dclient"));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains(
+            "redirect_uri=https%3A%2F%2Fmusic%2Eexample%2Etest%2Fsettings%2Fservices%2Ftidal%2Dcallback"
+        ));
+        let state = url
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("state="))
+            .expect("state")
+            .replace("%2D", "-")
+            .replace("%5F", "_");
+        let challenge = url
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("code_challenge="))
+            .expect("challenge")
+            .replace("%2D", "-")
+            .replace("%5F", "_");
+
+        // Another listener cannot finish this sign-in.
+        let other = app_as!(data, 2, "user");
+        let (status, _) = call!(
+            &other,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser/finish")
+                .set_json(json!({ "state": state, "code": "abc" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser/finish")
+                .set_json(json!({ "state": state, "code": "returned-code" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "signed_in");
+        assert_eq!(body["account_name"], "recorded.listener");
+
+        let exchange = transport
+            .requests()
+            .into_iter()
+            .rev()
+            .find(|request| request.form_value("grant_type") == Some("authorization_code"))
+            .expect("token exchange");
+        assert_eq!(exchange.form_value("code"), Some("returned-code"));
+        assert_eq!(exchange.form_value("redirect_uri"), Some(callback));
+        assert_eq!(exchange.form_value("client_id"), Some("dashboard-client"));
+        let verifier = exchange.form_value("code_verifier").expect("verifier");
+        assert!(verifier.len() >= 43, "RFC 7636 verifier length");
+        assert_eq!(crate::providers::tidal::code_challenge(verifier), challenge);
+
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser/finish")
+                .set_json(json!({ "state": state, "code": "returned-code" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "a state works once");
+    }
+
+    #[actix_web::test]
+    async fn sandbox_browser_sign_in_comes_straight_back() {
+        let pool = pool();
+        let (hub, _) = hub(pool, true);
+        hub.save_credentials(1, ProviderId::Tidal, Some("sandbox".into()), None, false)
+            .await
+            .expect("credentials");
+        let callback = "http://127.0.0.1:1993/settings/services/tidal-callback";
+        let sign_in = hub
+            .start_tidal_browser_sign_in(1, callback)
+            .await
+            .expect("start");
+        assert!(sign_in.sandbox);
+        let (path, query) = sign_in.authorize_url.split_once('?').expect("query");
+        assert_eq!(path, callback);
+        let state = query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("state="))
+            .expect("state");
+        let status = hub
+            .finish_tidal_browser_sign_in(1, state, "sandbox-authorization-code")
+            .await
+            .expect("finish");
+        assert_eq!(
+            serde_json::to_value(&status).expect("status")["status"],
+            "signed_in"
+        );
     }
 
     #[actix_web::test]

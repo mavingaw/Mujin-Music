@@ -13,6 +13,7 @@ pub mod media;
 pub mod probe;
 pub mod qobuz;
 pub mod sandbox;
+pub mod sandbox_media;
 pub mod store;
 pub mod tidal;
 pub mod transport;
