@@ -190,6 +190,7 @@ export default function LibraryScreen() {
   const artistItems: LibraryCatalogArtist[] = focusActive
     ? focusPages.flatMap((page) => page.artists)
     : (artists.data?.pages.flat() ?? []);
+  const composerItems = focusPages.flatMap((page) => page.composers ?? []);
   const lastFocusPage = focusPages.at(-1);
   const lastCatalogPage = catalogPages.at(-1);
   const focusCount = focusActive
@@ -228,6 +229,7 @@ export default function LibraryScreen() {
     (section === "albums" && albumItems.length === 0) ||
     (section === "songs" && songItems.length === 0) ||
     (section === "artists" && artistItems.length === 0) ||
+    (section === "composers" && composerItems.length === 0) ||
     (section === "liked" && likedSongs.length === 0);
   const retry = () => {
     if (focusActive) void focused.refetch();
@@ -286,6 +288,7 @@ export default function LibraryScreen() {
                   "downloads",
                   "liked",
                   "artists",
+                  "composers",
                   "playlists",
                 ]) as readonly Section[]
           ).map((value) => (
@@ -465,6 +468,32 @@ export default function LibraryScreen() {
                     </Text>
                     <Text style={styles.meta}>
                       Artist • {artist.albumCount} albums
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            {section === "composers" &&
+              composerItems.map((composer) => (
+                <Pressable
+                  accessibilityLabel={`${composer.name}, composer`}
+                  accessibilityRole="button"
+                  key={composer.id}
+                  style={styles.row}
+                  onPress={() =>
+                    router.push(`/composer/${encodeURIComponent(composer.id)}`)
+                  }
+                >
+                  <View style={styles.labels}>
+                    <Text numberOfLines={1} style={styles.name}>
+                      {composer.name}
+                    </Text>
+                    <Text style={styles.meta}>
+                      Composer • {composer.workCount}{" "}
+                      {composer.workCount === 1
+                        ? "composition"
+                        : "compositions"}{" "}
+                      • {composer.albumCount}{" "}
+                      {composer.albumCount === 1 ? "album" : "albums"}
                     </Text>
                   </View>
                 </Pressable>

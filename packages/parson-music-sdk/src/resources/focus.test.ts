@@ -2,14 +2,23 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api from "../core/http";
 import {
   createSmartPlaylist,
+  getFocusCompositions,
   getFocusFacets,
+  getFocusPerson,
   getFocusPage,
   reorderSavedFocuses,
   tagItems,
   type FocusQuery,
 } from "./focus";
 import {
+  albumScope,
+  clearedFocus,
+  composerScope,
   criterionLabel,
+  entityNoun,
+  focusCountLabel,
+  scopedFocus,
+  usesFocusEndpoint,
   cycleFilter,
   decadeCriterion,
   decadesFromYears,
@@ -257,5 +266,94 @@ describe("focus resources", () => {
     expect(await tagItems(7, "track", [...ids, "t0", ""])).toBe(501);
     expect(post).toHaveBeenCalledTimes(2);
     expect(post.mock.calls[0]?.[0]).toBe("/library/tags/7/items");
+  });
+});
+
+describe("scoped focus", () => {
+  test("composer and album scopes are fixed criteria, not chips", () => {
+    const scope = [composerScope("c1", "Anna Hamilton")];
+    let query = scopedFocus("albums", scope);
+    expect(usesFocusEndpoint(query)).toBe(true);
+    query = cycleFilter(query, pop);
+    expect(query.scope).toEqual(scope);
+    expect(query.filters).toHaveLength(1);
+    // Switching browsers and clearing filters keep the scope.
+    expect(withEntity(query, "songs").scope).toEqual(scope);
+    const cleared = clearedFocus({ ...query, text: "allegro" });
+    expect(cleared.filters).toEqual([]);
+    expect(cleared.text).toBeNull();
+    expect(cleared.scope).toEqual(scope);
+    expect(facetBaseQuery({ ...query, match: "any" }).scope).toEqual(scope);
+    expect(focusCountLabel(query, 2, 9)).toBe("2 of 9 albums");
+    // URLs carry filters only; the page supplies its scope.
+    expect(encodeFocus(query)).not.toContain("c1");
+    expect(filterKey(albumScope("al-1"))).toBe("album:al-1");
+    expect(criterionLabel(albumScope("al-1", "Box Set"))).toBe("Box Set");
+  });
+
+  test("credit groups and composers have Roon labels and sorts", () => {
+    expect(facetTitle({ key: "credit", role: "conductor_ensemble" })).toBe(
+      "Conductor / Ensemble",
+    );
+    expect(facetTitle({ key: "credit", role: "production" })).toBe(
+      "Production",
+    );
+    expect(facetTitle({ key: "credit", role: "performer" })).toBe("Performers");
+    expect(
+      criterionLabel({
+        facet: "credit",
+        role: "conductor_ensemble",
+        artist_id: "a",
+        name: "Claudio Abbado",
+      }),
+    ).toBe("Claudio Abbado · Conductor / Ensemble");
+    const composers = emptyFocus("composers");
+    expect(effectiveSort(composers)).toBe("title");
+    expect(usesFocusEndpoint(composers)).toBe(true);
+    expect(entityNoun("composers", 2)).toBe("composers");
+    expect(
+      withEntity({ ...composers, sort: "track_count" }, "albums").sort,
+    ).toBe("track_count");
+    expect(withEntity({ ...composers, sort: "title" }, "songs").sort).toBe(
+      "title",
+    );
+    const facets = visibleFacets(
+      [
+        {
+          key: "credit",
+          role: "composer",
+          total: 1,
+          values: [{ value: "c1", label: "Anna", count: 1 }],
+        },
+        {
+          key: "credit",
+          role: "conductor_ensemble",
+          total: 1,
+          values: [{ value: "c2", label: "Abbado", count: 1 }],
+        },
+      ],
+      "composers",
+    );
+    expect(facets.map((facet) => facet.role)).toEqual(["conductor_ensemble"]);
+    expect(
+      decodeFocus(JSON.stringify({ filters: [albumScope("x")] }), "songs")
+        .filters,
+    ).toHaveLength(1);
+  });
+
+  test("compositions and people use the focus routes", async () => {
+    const post = spyOn(api, "post").mockResolvedValue({
+      data: { total: 0, trackTotal: 0, truncated: false, compositions: [] },
+    } as never);
+    const get = spyOn(api, "get").mockResolvedValue({
+      data: { id: "a b", name: "A", roles: [], composer: null },
+    } as never);
+    const query = scopedFocus("songs", [composerScope("c1")]);
+    await getFocusCompositions(query);
+    expect(post).toHaveBeenCalledWith("/library/focus/compositions", {
+      query,
+    });
+    await getFocusPerson("a b");
+    expect(get).toHaveBeenCalledWith("/library/focus/people/a%20b");
   });
 });

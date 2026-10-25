@@ -23,6 +23,35 @@ export function emptyFocus(entity: FocusEntity = "albums"): FocusQuery {
   return { entity, filters: [] };
 }
 
+/** A focus over a fixed subset, e.g. a composer's works or an album. */
+export function scopedFocus(
+  entity: FocusEntity,
+  scope: FocusCriterion[],
+): FocusQuery {
+  return { entity, filters: [], scope };
+}
+
+/** The scope criterion for one composer's works. */
+export function composerScope(
+  artistId: string,
+  name?: string | null,
+): FocusCriterion {
+  return { facet: "credit", role: "composer", artist_id: artistId, name };
+}
+
+/** The scope criterion for one album's tracks. */
+export function albumScope(
+  albumId: string,
+  name?: string | null,
+): FocusCriterion {
+  return { facet: "album", album_id: albumId, name };
+}
+
+/** Clears filters and text while keeping the browser, sort and scope. */
+export function clearedFocus(query: FocusQuery): FocusQuery {
+  return { ...query, filters: [], text: null, match: undefined };
+}
+
 export function normalizedKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -45,6 +74,8 @@ export function filterKey(criterion: FocusCriterion): string {
       return `credit:${criterion.role}:${criterion.artist_id}`;
     case "artist":
       return `artist:${criterion.artist_id}`;
+    case "album":
+      return `album:${criterion.album_id}`;
     case "tag":
       return `tag:${criterion.tag_id}`;
     case "source":
@@ -220,6 +251,8 @@ export function titleCase(value: string): string {
 
 export const CREDIT_ROLE_LABELS: Record<string, [string, string]> = {
   any: ["Credit", "Credits"],
+  conductor_ensemble: ["Conductor / Ensemble", "Conductor / Ensemble"],
+  production: ["Production", "Production"],
   composer: ["Composer", "Composers"],
   lyricist: ["Lyricist", "Lyricists"],
   arranger: ["Arranger", "Arrangers"],
@@ -264,6 +297,8 @@ export function criterionLabel(filter: FocusFilter): string {
     }
     case "artist":
       return filter.name || "Artist";
+    case "album":
+      return filter.name || "Album";
     case "tag":
       return `#${filter.name || filter.tag_id}`;
     case "source":
@@ -483,6 +518,14 @@ export const SORT_OPTIONS: Record<FocusEntity, SortOption[]> = {
     { value: "last_played", label: "Recently played" },
     { value: "random", label: "Random" },
   ],
+  composers: [
+    { value: "title", label: "Name" },
+    { value: "track_count", label: "Tracks composed" },
+    { value: "date_added", label: "Date added" },
+    { value: "most_played", label: "Most played" },
+    { value: "last_played", label: "Recently played" },
+    { value: "random", label: "Random" },
+  ],
 };
 
 const DESCENDING_BY_DEFAULT = new Set<FocusSort>([
@@ -545,6 +588,7 @@ function isCriterion(value: unknown): value is FocusFilter {
     (FACETS.includes(facet as FacetKey) ||
       facet === "liked" ||
       facet === "played" ||
+      facet === "album" ||
       facet === "added_within")
   );
 }
@@ -617,6 +661,10 @@ export function visibleFacets(facets: Facet[], entity: FocusEntity): Facet[] {
         return false;
       }
       if (entity === "artists" && facet.key === "artist") return false;
+      // Inside a composer's works the composer column only repeats them.
+      if (entity === "composers" && facet.key === "credit") {
+        return facet.role !== "composer";
+      }
       return true;
     });
 }
@@ -638,6 +686,7 @@ const NOUNS: Record<FocusEntity, [string, string]> = {
   albums: ["album", "albums"],
   songs: ["song", "songs"],
   artists: ["artist", "artists"],
+  composers: ["composer", "composers"],
 };
 
 export function entityNoun(entity: FocusEntity, count: number): string {
@@ -670,6 +719,8 @@ export function focusCountLabel(
 export function usesFocusEndpoint(query: FocusQuery): boolean {
   return (
     isFocused(query) ||
+    query.entity === "composers" ||
+    Boolean(query.scope?.length) ||
     Boolean(query.sort && query.sort !== defaultSortFor(query.entity)) ||
     Boolean(query.direction)
   );
@@ -677,4 +728,24 @@ export function usesFocusEndpoint(query: FocusQuery): boolean {
 
 function defaultSortFor(entity: FocusEntity) {
   return SORT_OPTIONS[entity][0]!.value;
+}
+
+/**
+ * Keeps an album's own track order while showing only the tracks a focus
+ * matched; an explicit sort uses the focus order instead.
+ */
+export function focusedAlbumTracks<T extends { id: string }>(
+  tracks: T[],
+  focusedIds: string[] | undefined,
+  sorted: boolean,
+): T[] {
+  if (!focusedIds) return tracks;
+  if (sorted) {
+    const byId = new Map(tracks.map((track) => [track.id, track]));
+    return focusedIds
+      .map((id) => byId.get(id))
+      .filter((track): track is T => Boolean(track));
+  }
+  const keep = new Set(focusedIds);
+  return tracks.filter((track) => keep.has(track.id));
 }

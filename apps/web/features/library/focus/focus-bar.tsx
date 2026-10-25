@@ -42,6 +42,7 @@ import { useEffect, useRef, useState } from "react";
 import SavedFocusMenu from "./saved-focus-menu";
 
 export default function FocusBar({
+  bookmarks = true,
   canPlay,
   onCreateSmartPlaylist,
   onPlay,
@@ -50,6 +51,8 @@ export default function FocusBar({
   query,
   setQuery,
 }: {
+  /** Scoped browsers (a composer, an album) have no bookmarks. */
+  bookmarks?: boolean;
   canPlay: boolean;
   onCreateSmartPlaylist: () => void;
   onPlay: (shuffle: boolean) => void;
@@ -168,7 +171,7 @@ export default function FocusBar({
             value={query.text ?? ""}
           />
           <SortMenu query={query} setQuery={setQuery} />
-          <SavedFocusMenu query={query} setQuery={setQuery} />
+          {bookmarks && <SavedFocusMenu query={query} setQuery={setQuery} />}
         </div>
       </div>
       {visibleFilters.length > 0 && (

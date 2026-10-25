@@ -3,12 +3,15 @@ import {
   chipTone,
   facetChipAccessibilityLabel,
   focusEntityForSection,
+  recordingCaption,
+  recordingSongs,
   smartPlaylistName,
 } from "./library-focus";
 
 test("only catalog browsers have a Focus", () => {
   expect(focusEntityForSection("albums")).toBe("albums");
   expect(focusEntityForSection("artists")).toBe("artists");
+  expect(focusEntityForSection("composers")).toBe("composers");
   expect(focusEntityForSection("downloads")).toBeNull();
   expect(focusEntityForSection("liked")).toBeNull();
 });
@@ -41,4 +44,43 @@ test("facet chips describe their state for screen readers", () => {
   expect(facetChipAccessibilityLabel("MP3", 1, "exclude")).toBe(
     "MP3, excluded. Double tap to clear.",
   );
+});
+
+test("a composition recording plays in movement order with album context", () => {
+  const recording = {
+    albumId: "al",
+    albumName: "Symphonies",
+    artistId: "ar",
+    artistName: "Berliner Philharmoniker",
+    coverPath: "cover.jpg",
+    releaseYear: "1978",
+    performers: ["Claudio Abbado", "Berliner Philharmoniker"],
+    durationSeconds: 30,
+    tracks: [
+      {
+        id: "t1",
+        title: "I. Allegro",
+        movement: "Allegro",
+        movementNumber: 1,
+        durationSeconds: 10,
+      },
+      {
+        id: "t2",
+        title: "II. Adagio",
+        movement: "Adagio",
+        movementNumber: 2,
+        durationSeconds: 20,
+      },
+    ],
+  };
+  const songs = recordingSongs(recording);
+  expect(songs.map((song) => song.id)).toEqual(["t1", "t2"]);
+  expect(songs[0]?.album_object.cover_url).toBe("cover.jpg");
+  expect(songs[1]?.duration).toBe(20);
+  expect(recordingCaption(recording)).toBe(
+    "Claudio Abbado, Berliner Philharmoniker · 1978",
+  );
+  expect(
+    recordingCaption({ ...recording, performers: [], releaseYear: null }),
+  ).toBe("Berliner Philharmoniker");
 });

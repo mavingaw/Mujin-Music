@@ -45,6 +45,8 @@ pub enum FocusEntity {
     Albums,
     Songs,
     Artists,
+    /// People credited as composer on at least one track.
+    Composers,
 }
 
 impl FocusEntity {
@@ -53,9 +55,62 @@ impl FocusEntity {
             Self::Albums => "albums",
             Self::Songs => "songs",
             Self::Artists => "artists",
+            Self::Composers => "composers",
         }
     }
 }
+
+/// Credit facet columns that merge several stored roles, as Roon's
+/// "Conductor / Ensemble" and "Production" columns do.
+pub const CREDIT_GROUPS: [(&str, &[&str]); 2] = [
+    ("conductor_ensemble", &["conductor", "ensemble"]),
+    ("production", &["producer", "engineer", "mixer", "remixer"]),
+];
+
+/// Stored roles a credit criterion's role matches (`None` for `any`).
+pub fn credit_role_members(role: &str) -> Option<Vec<&str>> {
+    if role == "any" {
+        return None;
+    }
+    Some(
+        CREDIT_GROUPS
+            .iter()
+            .find(|(group, _)| *group == role)
+            .map(|(_, members)| members.to_vec())
+            .unwrap_or_else(|| vec![role]),
+    )
+}
+
+fn valid_credit_role(role: &str) -> bool {
+    role == "any"
+        || CREDIT_ROLES.contains(&role)
+        || CREDIT_GROUPS.iter().any(|(group, _)| *group == role)
+}
+
+/// The facet column a stored credit role is counted in.
+const CREDIT_COLUMN_SQL: &str = "CASE \
+    WHEN base_role IN ('conductor', 'ensemble') THEN 'conductor_ensemble' \
+    WHEN base_role IN ('producer', 'engineer', 'mixer', 'remixer') THEN 'production' \
+    ELSE base_role END";
+
+/// Display order of credit facet columns.
+pub fn credit_column_rank(column: &str) -> usize {
+    const ORDER: [&str; 6] = [
+        "performer",
+        "conductor_ensemble",
+        "composer",
+        "lyricist",
+        "arranger",
+        "production",
+    ];
+    ORDER
+        .iter()
+        .position(|candidate| *candidate == column)
+        .unwrap_or(ORDER.len())
+}
+
+/// Largest number of scope criteria a focus may carry.
+pub const MAX_SCOPE: usize = 4;
 
 /// How included filters combine. Exclusions always apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +176,13 @@ pub enum Criterion {
     },
     Artist {
         artist_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// The tracks of one album, used to scope a focus to an album's
+    /// track list.
+    Album {
+        album_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
@@ -194,6 +256,11 @@ pub struct FocusQuery {
     pub direction: Option<SortDirection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u32>,
+    /// Criteria that fix the subset a focus browses (a composer's works, an
+    /// album's tracks). They always apply, are never shown as chips and
+    /// also bound the "of N" library total.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<Criterion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,8 +308,18 @@ impl FocusQuery {
         {
             return Err(invalid("The focus text filter is too long."));
         }
-        for filter in &self.filters {
-            let valid = match &filter.criterion {
+        if self.scope.len() > MAX_SCOPE {
+            return Err(invalid(format!(
+                "A focus can be scoped by at most {MAX_SCOPE} criteria."
+            )));
+        }
+        let criteria = self
+            .filters
+            .iter()
+            .map(|filter| &filter.criterion)
+            .chain(self.scope.iter());
+        for criterion in criteria {
+            let valid = match criterion {
                 Criterion::Genre { value }
                 | Criterion::Format { value }
                 | Criterion::Label { value } => valid_text(value, MAX_TEXT_CHARS),
@@ -252,11 +329,9 @@ impl FocusQuery {
                 Criterion::BitDepth { min, max } => valid_range(*min, *max, 64),
                 Criterion::Credit {
                     role, artist_id, ..
-                } => {
-                    (role == "any" || CREDIT_ROLES.contains(&role.as_str()))
-                        && valid_text(artist_id, 256)
-                }
+                } => valid_credit_role(role) && valid_text(artist_id, 256),
                 Criterion::Artist { artist_id, .. } => valid_text(artist_id, 256),
+                Criterion::Album { album_id, .. } => valid_text(album_id, 256),
                 Criterion::Tag { tag_id, .. } => *tag_id > 0,
                 Criterion::Source { root_id, .. } => *root_id > 0,
                 Criterion::AddedWithin { days } => (1..=MAX_ADDED_WITHIN_DAYS).contains(days),
@@ -273,12 +348,12 @@ impl FocusQuery {
     pub fn effective_sort(&self) -> FocusSort {
         let requested = self.sort.unwrap_or(match self.entity {
             FocusEntity::Albums | FocusEntity::Songs => FocusSort::Artist,
-            FocusEntity::Artists => FocusSort::Title,
+            FocusEntity::Artists | FocusEntity::Composers => FocusSort::Title,
         });
         let supported = match self.entity {
             FocusEntity::Albums => !matches!(requested, FocusSort::Album),
             FocusEntity::Songs => !matches!(requested, FocusSort::TrackCount),
-            FocusEntity::Artists => !matches!(
+            FocusEntity::Artists | FocusEntity::Composers => !matches!(
                 requested,
                 FocusSort::Album
                     | FocusSort::ReleaseDate
@@ -288,7 +363,7 @@ impl FocusQuery {
         };
         if supported {
             requested
-        } else if self.entity == FocusEntity::Artists {
+        } else if matches!(self.entity, FocusEntity::Artists | FocusEntity::Composers) {
             FocusSort::Title
         } else {
             FocusSort::Artist
@@ -483,10 +558,14 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
             albums.append(range_condition(RELEASE_YEAR, *from, *to));
             album_level(albums)
         }
-        Criterion::ReleaseType { value } => album_level(
-            Fragment::new("SELECT id FROM album_entity WHERE lower(primary_type) = lower(?)")
-                .text(value.trim()),
-        ),
+        // Release types come only from RELEASETYPE / MusicBrainz Album Type
+        // tags; untagged albums have no release type rather than a guess.
+        Criterion::ReleaseType { value } => tracks_only(primary_file_tracks(
+            Fragment::new("pm.release_type = lower(?)").text(value.trim()),
+        )),
+        Criterion::Album { album_id, .. } => {
+            album_level(Fragment::new("SELECT ?").text(album_id.clone()))
+        }
         Criterion::Format { value } => tracks_only(primary_file_tracks(
             Fragment::new(format!("({FORMAT_EXPR}) = lower(?)")).text(value.trim()),
         )),
@@ -520,17 +599,27 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
         Criterion::Credit {
             role, artist_id, ..
         } => {
-            let tracks = if role == "any" {
-                Fragment::new("SELECT track_id FROM track_artist WHERE artist_id = ?")
-                    .text(artist_id.clone())
-            } else {
-                Fragment::new(
-                    "SELECT track_id FROM track_artist \
-                     WHERE artist_id = ? AND (role = ? OR role LIKE ?)",
-                )
-                .text(artist_id.clone())
-                .text(role.clone())
-                .text(format!("{role}:%"))
+            let tracks = match credit_role_members(role) {
+                None => Fragment::new("SELECT track_id FROM track_artist WHERE artist_id = ?")
+                    .text(artist_id.clone()),
+                Some(members) => {
+                    let mut tracks = Fragment::new(
+                        "SELECT track_id FROM track_artist WHERE artist_id = ? AND (",
+                    )
+                    .text(artist_id.clone());
+                    for (index, member) in members.iter().enumerate() {
+                        if index > 0 {
+                            tracks.push(" OR ");
+                        }
+                        tracks.append(
+                            Fragment::new("role = ? OR role LIKE ?")
+                                .text(*member)
+                                .text(format!("{member}:%")),
+                        );
+                    }
+                    tracks.push(")");
+                    tracks
+                }
             };
             tracks_only(tracks)
         }
@@ -626,6 +715,17 @@ fn entity_set(entity: FocusEntity, sets: CriterionSets) -> Fragment {
             }
             artists
         }
+        FocusEntity::Composers => {
+            let mut composers = Fragment::new(
+                "SELECT artist_id FROM track_artist WHERE role = 'composer' AND track_id IN (",
+            );
+            composers.append(sets.tracks).push(")");
+            if let Some(direct) = sets.artists {
+                composers.push(" UNION ");
+                composers.append(direct);
+            }
+            composers
+        }
     }
 }
 
@@ -633,7 +733,7 @@ fn entity_table(entity: FocusEntity) -> &'static str {
     match entity {
         FocusEntity::Albums => "album_entity",
         FocusEntity::Songs => "track_entity",
-        FocusEntity::Artists => "artist_entity",
+        FocusEntity::Artists | FocusEntity::Composers => "artist_entity",
     }
 }
 
@@ -647,6 +747,9 @@ fn universe(entity: FocusEntity) -> &'static str {
         FocusEntity::Artists => {
             "e.id IN (SELECT artist_id FROM track_artist WHERE role IN ('primary', 'featured') \
              UNION SELECT artist_id FROM album_artist WHERE role = 'primary')"
+        }
+        FocusEntity::Composers => {
+            "e.id IN (SELECT artist_id FROM track_artist WHERE role = 'composer')"
         }
     }
 }
@@ -685,7 +788,9 @@ fn text_condition(entity: FocusEntity, text: &str) -> Fragment {
         )
         .text(pattern.clone())
         .text(pattern),
-        FocusEntity::Artists => Fragment::new("e.name LIKE ? ESCAPE '\\'").text(pattern),
+        FocusEntity::Artists | FocusEntity::Composers => {
+            Fragment::new("e.name LIKE ? ESCAPE '\\'").text(pattern)
+        }
     }
 }
 
@@ -693,6 +798,12 @@ fn text_condition(entity: FocusEntity, text: &str) -> Fragment {
 pub fn where_condition(query: &FocusQuery, user_id: i32) -> Fragment {
     let entity = query.entity;
     let mut condition = Fragment::new(universe(entity));
+    for criterion in &query.scope {
+        condition.push(" AND e.id IN (");
+        condition
+            .append(entity_set(entity, criterion_sets(criterion, user_id)))
+            .push(")");
+    }
     if let Some(text) = query.text.as_deref().filter(|text| !text.trim().is_empty()) {
         condition.push(" AND ");
         condition.append(text_condition(entity, text));
@@ -847,9 +958,35 @@ fn sort_plan(query: &FocusQuery, user_id: i32) -> SortPlan {
             };
             Fragment::new(format!("{column} {dir}"))
         }
-        (FocusEntity::Artists, FocusSort::Title | FocusSort::Artist) => Fragment::new(format!(
-            "COALESCE(e.sort_name, e.name) COLLATE NOCASE {dir}"
+        (FocusEntity::Artists | FocusEntity::Composers, FocusSort::Title | FocusSort::Artist) => {
+            Fragment::new(format!(
+                "COALESCE(e.sort_name, e.name) COLLATE NOCASE {dir}"
+            ))
+        }
+        (FocusEntity::Composers, FocusSort::TrackCount) => Fragment::new(format!(
+            "(SELECT COUNT(DISTINCT track_id) FROM track_artist \
+               WHERE artist_id = e.id AND role = 'composer') {dir}"
         )),
+        (FocusEntity::Composers, FocusSort::DateAdded) => Fragment::new(format!(
+            "(SELECT MAX(ct.created_at) FROM track_artist ca \
+               JOIN track_entity ct ON ct.id = ca.track_id \
+               WHERE ca.artist_id = e.id AND ca.role = 'composer') {dir}"
+        )),
+        (FocusEntity::Composers, FocusSort::MostPlayed | FocusSort::LastPlayed) => {
+            joins = Fragment::new(
+                " LEFT JOIN (SELECT ta.artist_id AS id, COUNT(*) AS plays, MAX(h.listened_at) AS last \
+                   FROM listen_history_item h JOIN track_artist ta \
+                     ON ta.track_id = h.song_id AND ta.role = 'composer' \
+                   WHERE h.user_id = ? GROUP BY ta.artist_id) sp ON sp.id = e.id",
+            )
+            .int(user);
+            let column = if sort == FocusSort::MostPlayed {
+                "COALESCE(sp.plays, 0)"
+            } else {
+                "COALESCE(sp.last, '')"
+            };
+            Fragment::new(format!("{column} {dir}"))
+        }
         (FocusEntity::Artists, FocusSort::TrackCount) => Fragment::new(format!(
             "(SELECT COUNT(DISTINCT track_id) FROM track_artist \
                WHERE artist_id = e.id AND role IN ('primary', 'featured')) {dir}"
@@ -873,7 +1010,7 @@ fn sort_plan(query: &FocusQuery, user_id: i32) -> SortPlan {
         (FocusEntity::Albums, FocusSort::Album)
         | (FocusEntity::Songs, FocusSort::TrackCount)
         | (
-            FocusEntity::Artists,
+            FocusEntity::Artists | FocusEntity::Composers,
             FocusSort::Album | FocusSort::ReleaseDate | FocusSort::Duration | FocusSort::Quality,
         ) => Fragment::new("1"),
     };
@@ -951,13 +1088,15 @@ pub fn focus_ids(
     Ok(FocusIds { ids, total })
 }
 
-/// Number of entities in the catalog before any focus is applied.
+/// Number of entities a focus browses before its filters apply: the whole
+/// catalog, or the scoped subset (a composer's works, an album's tracks).
 pub fn library_total(
     connection: &mut SqliteConnection,
-    entity: FocusEntity,
+    focus: &FocusQuery,
 ) -> Result<i64, diesel::result::Error> {
     let query = FocusQuery {
-        entity,
+        entity: focus.entity,
+        scope: focus.scope.clone(),
         ..FocusQuery::default()
     };
     count_sql(&query, 0)
@@ -1051,6 +1190,10 @@ fn scope_pairs(entity: FocusEntity) -> &'static str {
              UNION SELECT aa.artist_id, t.id FROM album_artist aa \
              JOIN track_entity t ON t.album_id = aa.album_id \
              WHERE aa.role = 'primary' AND aa.artist_id IN (SELECT id FROM focused)"
+        }
+        FocusEntity::Composers => {
+            "SELECT artist_id AS entity_id, track_id FROM track_artist \
+             WHERE role = 'composer' AND artist_id IN (SELECT id FROM focused)"
         }
     }
 }
@@ -1202,11 +1345,9 @@ fn facet_branch(
         ),
         "release_type" => grouped_branch(
             key,
-            Fragment::new(
-                "SELECT ft.entity_id AS entity_id, lower(ra.primary_type) AS value, \
-                 lower(ra.primary_type) AS label FROM ft \
-                 JOIN track_entity rt ON rt.id = ft.track_id \
-                 JOIN album_entity ra ON ra.id = rt.album_id WHERE ra.primary_type IS NOT NULL",
+            primary_file_pairs(
+                "pm.release_type AS value, pm.release_type AS label",
+                "pm.release_type IS NOT NULL",
             ),
             None,
             limit,
@@ -1257,21 +1398,22 @@ fn facet_branch(
         .int(user)
         .int(user),
         "credit" => {
-            let mut branch = Fragment::new(
+            let mut branch = Fragment::new(format!(
                 "SELECT facet, role, value, label, count, total FROM ( \
                    SELECT 'credit' AS facet, role, value, label, \
                      COUNT(DISTINCT entity_id) AS count, \
                      COUNT(*) OVER (PARTITION BY role) AS total, \
                      ROW_NUMBER() OVER (PARTITION BY role \
                        ORDER BY COUNT(DISTINCT entity_id) DESC, label COLLATE NOCASE) AS rn \
-                   FROM (SELECT ft.entity_id AS entity_id, \
+                   FROM (SELECT entity_id, {CREDIT_COLUMN_SQL} AS role, value, label FROM ( \
+                     SELECT ft.entity_id AS entity_id, \
                      CASE WHEN instr(ta.role, ':') > 0 \
-                       THEN substr(ta.role, 1, instr(ta.role, ':') - 1) ELSE ta.role END AS role, \
+                       THEN substr(ta.role, 1, instr(ta.role, ':') - 1) ELSE ta.role END AS base_role, \
                      ar.id AS value, ar.name AS label FROM ft \
                      JOIN track_artist ta ON ta.track_id = ft.track_id \
                        AND ta.role NOT IN ('primary', 'featured') \
-                     JOIN artist_entity ar ON ar.id = ta.artist_id)",
-            );
+                     JOIN artist_entity ar ON ar.id = ta.artist_id))"
+            ));
             if let Some(search) = search {
                 branch.push(" WHERE label LIKE ? ESCAPE '\\'");
                 branch.binds.push(Bind::Text(like_pattern(search)));
@@ -1359,6 +1501,29 @@ fn title_case(value: &str) -> String {
     }
 }
 
+/// Display name of a canonical MusicBrainz release type.
+pub fn release_type_label(value: &str) -> String {
+    match value {
+        "album" => "Album".into(),
+        "single" => "Single".into(),
+        "ep" => "EP".into(),
+        "broadcast" => "Broadcast".into(),
+        "other" => "Other".into(),
+        "compilation" => "Compilation".into(),
+        "soundtrack" => "Soundtrack".into(),
+        "live" => "Live".into(),
+        "remix" => "Remix".into(),
+        "spokenword" => "Spoken word".into(),
+        "interview" => "Interview".into(),
+        "audiobook" => "Audiobook".into(),
+        "audio drama" => "Audio drama".into(),
+        "demo" => "Demo".into(),
+        "dj-mix" => "DJ-mix".into(),
+        "mixtape/street" => "Mixtape/Street".into(),
+        other => title_case(other),
+    }
+}
+
 fn source_label(value: &str) -> String {
     std::path::Path::new(value)
         .file_name()
@@ -1380,7 +1545,7 @@ pub fn display_label(key: &str, value: &str, label: &str) -> String {
         },
         "sample_rate" => sample_rate_label(value),
         "bit_depth" => format!("{value}-bit"),
-        "release_type" => title_case(value),
+        "release_type" => release_type_label(value),
         "source" => source_label(label),
         "status" => match value {
             "liked" => "Liked".into(),
@@ -1421,11 +1586,7 @@ pub fn focus_facets(
             .iter()
             .position(|key| *key == row.facet)
             .unwrap_or(FACET_KEYS.len());
-        let role_order = row
-            .role
-            .as_deref()
-            .map(crate::library::credits::role_rank)
-            .unwrap_or(0);
+        let role_order = row.role.as_deref().map(credit_column_rank).unwrap_or(0);
         let facet = facets
             .entry((
                 order * 100 + role_order,
@@ -1458,6 +1619,522 @@ pub fn focus_facets(
         status.total = 3;
     }
     Ok(FocusFacets { total, facets })
+}
+
+/// A person shown in the Composers browser.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusComposer {
+    pub id: String,
+    pub name: String,
+    /// Tracks the person is credited as composer on.
+    pub track_count: i64,
+    /// Distinct compositions (tagged works, or track titles without one).
+    pub work_count: i64,
+    /// Albums with at least one of their compositions.
+    pub album_count: i64,
+}
+
+#[derive(QueryableByName)]
+struct ComposerRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    name: String,
+    #[diesel(sql_type = BigInt)]
+    track_count: i64,
+    #[diesel(sql_type = BigInt)]
+    work_count: i64,
+    #[diesel(sql_type = BigInt)]
+    album_count: i64,
+}
+
+const COMPOSER_STATS: &str = "SELECT ar.id AS id, ar.name AS name, \
+     COUNT(DISTINCT ta.track_id) AS track_count, \
+     COUNT(DISTINCT COALESCE(lower(replace(replace(trim(pm.work), '.', ''), ',', '')), 'track:' || t.normalized_title)) AS work_count, \
+     COUNT(DISTINCT t.album_id) AS album_count \
+     FROM artist_entity ar \
+     JOIN track_artist ta ON ta.artist_id = ar.id AND ta.role = 'composer' \
+     JOIN track_entity t ON t.id = ta.track_id \
+     LEFT JOIN track_file pf ON pf.track_id = t.id AND pf.is_primary = 1 \
+     LEFT JOIN raw_file_metadata pm ON pm.file_id = pf.file_id";
+
+/// Composer rows for focused composer ids, in the given order.
+pub fn composer_rows(
+    connection: &mut SqliteConnection,
+    ids: &[String],
+) -> Result<Vec<FocusComposer>, diesel::result::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = Fragment::new(format!("{COMPOSER_STATS} WHERE ar.id IN ("));
+    for (index, id) in ids.iter().enumerate() {
+        if index > 0 {
+            sql.push(", ");
+        }
+        sql.push("?");
+        sql.binds.push(Bind::Text(id.clone()));
+    }
+    sql.push(") GROUP BY ar.id");
+    let mut rows = sql
+        .into_query()
+        .load::<ComposerRow>(connection)?
+        .into_iter()
+        .map(|row| {
+            (
+                row.id.clone(),
+                FocusComposer {
+                    id: row.id,
+                    name: row.name,
+                    track_count: row.track_count,
+                    work_count: row.work_count,
+                    album_count: row.album_count,
+                },
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(ids.iter().filter_map(|id| rows.remove(id)).collect())
+}
+
+/// How many tracks a person is credited on, per credit facet column.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PersonRole {
+    pub role: String,
+    pub track_count: i64,
+}
+
+/// A credited person, for the header of a composer or performer page.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FocusPerson {
+    pub id: String,
+    pub name: String,
+    /// Roles in display order; `primary` covers main and featured artists.
+    pub roles: Vec<PersonRole>,
+    pub composer: Option<FocusComposer>,
+}
+
+#[derive(QueryableByName)]
+struct PersonRoleRow {
+    #[diesel(sql_type = Text)]
+    role: String,
+    #[diesel(sql_type = BigInt)]
+    track_count: i64,
+}
+
+#[derive(QueryableByName)]
+struct NameRow {
+    #[diesel(sql_type = Text)]
+    name: String,
+}
+
+/// Looks up a person by artist id with their credit roles.
+pub fn focus_person(
+    connection: &mut SqliteConnection,
+    id: &str,
+) -> Result<Option<FocusPerson>, diesel::result::Error> {
+    let name = Fragment::new("SELECT name FROM artist_entity WHERE id = ?")
+        .text(id)
+        .into_query()
+        .get_result::<NameRow>(connection)
+        .optional()?;
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let mut roles = Fragment::new(format!(
+        "SELECT role, COUNT(DISTINCT track_id) AS track_count FROM ( \
+           SELECT track_id, CASE WHEN base_role IN ('primary', 'featured') THEN 'primary' \
+             ELSE {CREDIT_COLUMN_SQL} END AS role FROM ( \
+             SELECT track_id, CASE WHEN instr(role, ':') > 0 \
+               THEN substr(role, 1, instr(role, ':') - 1) ELSE role END AS base_role \
+             FROM track_artist WHERE artist_id = ?)) GROUP BY role"
+    ))
+    .text(id)
+    .into_query()
+    .load::<PersonRoleRow>(connection)?
+    .into_iter()
+    .map(|row| PersonRole {
+        role: row.role,
+        track_count: row.track_count,
+    })
+    .collect::<Vec<_>>();
+    roles.sort_by_key(|role| {
+        if role.role == "primary" {
+            0
+        } else {
+            credit_column_rank(&role.role) + 1
+        }
+    });
+    let composer = if roles.iter().any(|role| role.role == "composer") {
+        composer_rows(connection, &[id.to_string()])?.pop()
+    } else {
+        None
+    };
+    Ok(Some(FocusPerson {
+        id: id.to_string(),
+        name: name.name,
+        roles,
+        composer,
+    }))
+}
+
+/// Largest number of focused tracks grouped into compositions at once.
+pub const MAX_COMPOSITION_TRACKS: usize = 5_000;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// One track of a recording, labelled with its movement.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionTrack {
+    pub id: String,
+    pub title: String,
+    /// Movement name, from the MOVEMENTNAME tag or the title after the work.
+    pub movement: Option<String>,
+    pub movement_number: Option<i64>,
+    pub duration_seconds: f64,
+}
+
+/// One album's performance of a composition.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionRecording {
+    pub album_id: Option<String>,
+    pub album_name: Option<String>,
+    pub artist_id: Option<String>,
+    pub artist_name: Option<String>,
+    /// Album artwork path, filled in from the library cache.
+    pub cover_path: Option<String>,
+    pub release_year: Option<String>,
+    /// Conductors, ensembles and soloists credited on the recording.
+    pub performers: Vec<String>,
+    pub duration_seconds: f64,
+    pub tracks: Vec<CompositionTrack>,
+}
+
+/// A composition with every recording of it in the focused set.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Composition {
+    pub key: String,
+    pub title: String,
+    /// Whether the title comes from a WORK tag (otherwise it is derived).
+    pub tagged: bool,
+    pub composers: Vec<NamedRef>,
+    pub movement_count: usize,
+    pub recordings: Vec<CompositionRecording>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusCompositions {
+    /// Compositions in the focused set.
+    pub total: usize,
+    /// Focused tracks the compositions were built from.
+    pub track_total: i64,
+    /// Whether more tracks matched than were grouped.
+    pub truncated: bool,
+    pub compositions: Vec<Composition>,
+}
+
+#[derive(QueryableByName, Debug, Clone)]
+struct CompositionRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    album_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    album_name: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    release_date: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    artist_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    artist_name: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Double)]
+    duration_seconds: f64,
+    #[diesel(sql_type = Nullable<Text>)]
+    work: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    movement: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    movement_number: Option<i64>,
+}
+
+#[derive(QueryableByName)]
+struct TrackCreditRow {
+    #[diesel(sql_type = Text)]
+    track_id: String,
+    #[diesel(sql_type = Text)]
+    role: String,
+    #[diesel(sql_type = Text)]
+    artist_id: String,
+    #[diesel(sql_type = Text)]
+    name: String,
+}
+
+/// Case- and punctuation-insensitive key for grouping titles.
+pub fn work_key(title: &str) -> String {
+    title
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Splits `Work: Movement` titles, e.g. "Symphony No. 5: I. Allegro".
+fn split_work_title(title: &str) -> Option<(&str, &str)> {
+    let (work, movement) = title.split_once(": ")?;
+    let (work, movement) = (work.trim(), movement.trim());
+    (work.chars().count() >= 3 && !movement.is_empty()).then_some((work, movement))
+}
+
+/// The movement label once the work title is known.
+fn movement_label(title: &str, work: &str, tagged: Option<&str>) -> Option<String> {
+    if let Some(tagged) = tagged.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(tagged.to_string());
+    }
+    let (prefix, rest) = split_work_title(title)?;
+    (work_key(prefix) == work_key(work)).then(|| rest.to_string())
+}
+
+/// Groups focused tracks into compositions, Roon style: tracks that share
+/// a WORK tag are one composition and each album holding them is one
+/// recording of it, with MOVEMENTNAME / MOVEMENT ordering its tracks.
+/// Untagged tracks titled `Work: Movement` are grouped when at least two
+/// tracks of the same album share the work; any other track is a
+/// composition of its own.
+pub fn focus_compositions(
+    connection: &mut SqliteConnection,
+    query: &FocusQuery,
+    user_id: i32,
+) -> Result<FocusCompositions, Box<dyn std::error::Error + Send + Sync>> {
+    let mut songs = query.as_songs();
+    songs.sort = None;
+    songs.direction = None;
+    songs.validate()?;
+    let mut focused =
+        Fragment::new("WITH focused AS (SELECT e.id AS id FROM track_entity e WHERE ");
+    focused.append(where_condition(&songs, user_id));
+    focused.push(&format!(" LIMIT {MAX_COMPOSITION_TRACKS}) "));
+
+    let mut rows_sql = focused.clone();
+    rows_sql.push(
+        "SELECT t.id AS id, t.title AS title, t.album_id AS album_id, a.title AS album_name, \
+           a.first_release_date AS release_date, aa.artist_id AS artist_id, aar.name AS artist_name, \
+           CAST(COALESCE(t.duration_seconds, 0) AS REAL) AS duration_seconds, \
+           NULLIF(trim(pm.work), '') AS work, NULLIF(trim(pm.movement), '') AS movement, \
+           CAST(pm.movement_number AS BIGINT) AS movement_number \
+         FROM focused f JOIN track_entity t ON t.id = f.id \
+         LEFT JOIN album_entity a ON a.id = t.album_id \
+         LEFT JOIN album_artist aa ON aa.album_id = t.album_id AND aa.role = 'primary' \
+           AND aa.artist_id = (SELECT artist_id FROM album_artist WHERE album_id = t.album_id \
+             AND role = 'primary' ORDER BY position LIMIT 1) \
+         LEFT JOIN artist_entity aar ON aar.id = aa.artist_id \
+         LEFT JOIN track_file pf ON pf.track_id = t.id AND pf.is_primary = 1 \
+         LEFT JOIN raw_file_metadata pm ON pm.file_id = pf.file_id \
+         ORDER BY t.album_id, t.disc_number, t.track_number, t.id",
+    );
+    let rows = rows_sql.into_query().load::<CompositionRow>(connection)?;
+
+    let mut credits_sql = focused;
+    credits_sql.push(
+        "SELECT ta.track_id AS track_id, \
+           CASE WHEN instr(ta.role, ':') > 0 THEN substr(ta.role, 1, instr(ta.role, ':') - 1) \
+             ELSE ta.role END AS role, ar.id AS artist_id, ar.name AS name \
+         FROM track_artist ta JOIN artist_entity ar ON ar.id = ta.artist_id \
+         WHERE ta.track_id IN (SELECT id FROM focused) \
+           AND (ta.role IN ('composer', 'conductor', 'ensemble') OR ta.role = 'performer' \
+             OR ta.role LIKE 'performer:%') \
+         ORDER BY ta.position, ar.name",
+    );
+    let mut composers_by_track = std::collections::HashMap::<String, Vec<NamedRef>>::new();
+    let mut performers_by_track = std::collections::HashMap::<String, Vec<(usize, String)>>::new();
+    for row in credits_sql
+        .into_query()
+        .load::<TrackCreditRow>(connection)?
+    {
+        if row.role == "composer" {
+            composers_by_track
+                .entry(row.track_id)
+                .or_default()
+                .push(NamedRef {
+                    id: row.artist_id,
+                    name: row.name,
+                });
+        } else {
+            let rank = match row.role.as_str() {
+                "conductor" => 0,
+                "ensemble" => 1,
+                _ => 2,
+            };
+            performers_by_track
+                .entry(row.track_id)
+                .or_default()
+                .push((rank, row.name));
+        }
+    }
+
+    let track_total = count_sql(&songs, user_id)
+        .into_query()
+        .get_result::<CountRow>(connection)?
+        .count;
+
+    // Untagged `Work: Movement` prefixes shared by two tracks of one album.
+    let mut prefix_counts = std::collections::HashMap::<(Option<String>, String), usize>::new();
+    for row in rows.iter().filter(|row| row.work.is_none()) {
+        if let Some((prefix, _)) = split_work_title(&row.title) {
+            *prefix_counts
+                .entry((row.album_id.clone(), work_key(prefix)))
+                .or_default() += 1;
+        }
+    }
+
+    struct Building {
+        title: String,
+        tagged: bool,
+        composers: Vec<NamedRef>,
+        recordings: Vec<CompositionRecording>,
+    }
+    let mut order = Vec::<String>::new();
+    let mut compositions = std::collections::HashMap::<String, Building>::new();
+    for row in rows {
+        let (title, tagged) = match row.work.as_deref() {
+            Some(work) => (work.to_string(), true),
+            None => match split_work_title(&row.title) {
+                Some((prefix, _))
+                    if prefix_counts
+                        .get(&(row.album_id.clone(), work_key(prefix)))
+                        .is_some_and(|count| *count >= 2) =>
+                {
+                    (prefix.to_string(), false)
+                }
+                _ => (row.title.clone(), false),
+            },
+        };
+        let key = work_key(&title);
+        let key = if key.is_empty() {
+            format!("track:{}", row.id)
+        } else {
+            key
+        };
+        let movement = movement_label(&row.title, &title, row.movement.as_deref())
+            .filter(|movement| work_key(movement) != key);
+        let building = compositions.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            Building {
+                title: title.clone(),
+                tagged,
+                composers: Vec::new(),
+                recordings: Vec::new(),
+            }
+        });
+        building.tagged |= tagged;
+        for composer in composers_by_track.remove(&row.id).unwrap_or_default() {
+            if !building
+                .composers
+                .iter()
+                .any(|known| known.id == composer.id)
+            {
+                building.composers.push(composer);
+            }
+        }
+        let recording = match building
+            .recordings
+            .iter_mut()
+            .position(|recording| recording.album_id == row.album_id && row.album_id.is_some())
+        {
+            Some(index) => &mut building.recordings[index],
+            None => {
+                building.recordings.push(CompositionRecording {
+                    album_id: row.album_id.clone(),
+                    album_name: row.album_name.clone(),
+                    artist_id: row.artist_id.clone(),
+                    artist_name: row.artist_name.clone(),
+                    cover_path: None,
+                    release_year: row
+                        .release_date
+                        .as_deref()
+                        .map(|date| date.chars().take(4).collect::<String>())
+                        .filter(|year| year.len() == 4),
+                    performers: Vec::new(),
+                    duration_seconds: 0.0,
+                    tracks: Vec::new(),
+                });
+                building
+                    .recordings
+                    .last_mut()
+                    .expect("recording just added")
+            }
+        };
+        let mut performers = performers_by_track.remove(&row.id).unwrap_or_default();
+        performers.sort_by_key(|(rank, _)| *rank);
+        for (_, name) in performers {
+            if recording.performers.len() < 4 && !recording.performers.contains(&name) {
+                recording.performers.push(name);
+            }
+        }
+        recording.duration_seconds += row.duration_seconds.max(0.0);
+        recording.tracks.push(CompositionTrack {
+            id: row.id,
+            title: row.title,
+            movement,
+            movement_number: row.movement_number.filter(|number| *number > 0),
+            duration_seconds: row.duration_seconds,
+        });
+    }
+
+    let mut compositions = order
+        .into_iter()
+        .filter_map(|key| {
+            let mut building = compositions.remove(&key)?;
+            for recording in &mut building.recordings {
+                // Tagged movement numbers order a recording; disc and track
+                // order (already applied) breaks ties.
+                recording
+                    .tracks
+                    .sort_by_key(|track| track.movement_number.unwrap_or(i64::MAX));
+            }
+            building.recordings.sort_by(|left, right| {
+                left.release_year
+                    .cmp(&right.release_year)
+                    .then_with(|| left.album_name.cmp(&right.album_name))
+            });
+            let movement_count = building
+                .recordings
+                .iter()
+                .map(|recording| recording.tracks.len())
+                .max()
+                .unwrap_or(0);
+            Some(Composition {
+                key,
+                title: building.title,
+                tagged: building.tagged,
+                composers: building.composers,
+                movement_count,
+                recordings: building.recordings,
+            })
+        })
+        .collect::<Vec<_>>();
+    compositions.sort_by(|left, right| {
+        left.title
+            .to_lowercase()
+            .cmp(&right.title.to_lowercase())
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    Ok(FocusCompositions {
+        total: compositions.len(),
+        track_total,
+        truncated: track_total > MAX_COMPOSITION_TRACKS as i64,
+        compositions,
+    })
 }
 
 #[cfg(test)]
@@ -1525,15 +2202,15 @@ mod tests {
                    (8, 1, '/music/Main/8.ogg', '/music/Main', '8.ogg', 'ogg', 1, 1);
                  INSERT INTO track_file(track_id, file_id) VALUES
                    ('t1', 1), ('t2', 2), ('t3', 3), ('t4', 4), ('t5', 5), ('t6', 6), ('t7', 7), ('t8', 8);
-                 INSERT INTO raw_file_metadata(file_id, codec, container, sample_rate, bit_depth, bitrate, label) VALUES
-                   (1, 'flac', 'flac', 44100, 16, 900, 'Sunset Records'),
-                   (2, 'mp3', 'mp3', 44100, NULL, 320, 'Sunset Records'),
-                   (3, 'flac', 'flac', 48000, 16, 1000, 'Blue Note'),
-                   (4, 'aac', 'mp4', 44100, NULL, 256, 'Blue Note'),
-                   (5, 'mp3', 'mp3', 48000, NULL, 192, NULL),
-                   (6, 'flac', 'flac', 96000, 24, 3000, 'Masters'),
-                   (7, 'pcm', 'wav', 192000, 24, 9000, 'Masters'),
-                   (8, 'vorbis', 'ogg', 44100, NULL, 160, NULL);
+                 INSERT INTO raw_file_metadata(file_id, codec, container, sample_rate, bit_depth, bitrate, label, release_type) VALUES
+                   (1, 'flac', 'flac', 44100, 16, 900, 'Sunset Records', 'album'),
+                   (2, 'mp3', 'mp3', 44100, NULL, 320, 'Sunset Records', 'album'),
+                   (3, 'flac', 'flac', 48000, 16, 1000, 'Blue Note', NULL),
+                   (4, 'aac', 'mp4', 44100, NULL, 256, 'Blue Note', NULL),
+                   (5, 'mp3', 'mp3', 48000, NULL, 192, NULL, 'single'),
+                   (6, 'flac', 'flac', 96000, 24, 3000, 'Masters', 'album'),
+                   (7, 'pcm', 'wav', 192000, 24, 9000, 'Masters', 'album'),
+                   (8, 'vorbis', 'ogg', 44100, NULL, 160, NULL, NULL);
                  INSERT INTO favorite_song(user_id, song_id) VALUES (1, 't3'), (1, 't6'), (2, 't1');
                  INSERT INTO listen_history_item(user_id, song_id, listened_at) VALUES
                    (1, 't3', '2026-05-01 00:00:00'), (1, 't3', '2026-05-02 00:00:00'),
@@ -1982,7 +2659,7 @@ mod tests {
         assert_eq!(first.len(), 8);
 
         assert_eq!(
-            library_total(&mut connection, FocusEntity::Songs).expect("total"),
+            library_total(&mut connection, &query(FocusEntity::Songs, Vec::new())).expect("total"),
             8
         );
     }
@@ -2117,14 +2794,413 @@ mod tests {
         let producers = facets
             .facets
             .iter()
-            .find(|facet| facet.role.as_deref() == Some("producer"))
-            .expect("producer facet");
+            .find(|facet| facet.role.as_deref() == Some("production"))
+            .expect("production facet");
         assert_eq!(producers.values[0].label, "Abe Rounds");
         assert!(
             facets
                 .facets
                 .iter()
                 .all(|facet| facet.role.as_deref() != Some("composer"))
+        );
+    }
+
+    /// Adds conductor, ensemble and soloist credits plus WORK / MOVEMENT
+    /// tags to the shared fixture.
+    fn classical(connection: &mut SqliteConnection) {
+        connection
+            .batch_execute(
+                "INSERT INTO artist_entity(id, name, normalized_name) VALUES
+                   ('a-cond', 'Claudio Abbado', 'claudio abbado'),
+                   ('a-ens', 'Berliner Philharmoniker', 'berliner philharmoniker'),
+                   ('a-sol', 'Martha Argerich', 'martha argerich');
+                 INSERT INTO track_artist(track_id, artist_id, role) VALUES
+                   ('t6', 'a-cond', 'conductor'), ('t7', 'a-cond', 'conductor'),
+                   ('t6', 'a-ens', 'ensemble'), ('t7', 'a-ens', 'ensemble'),
+                   ('t6', 'a-sol', 'performer:piano'), ('t7', 'a-comp', 'composer');
+                 UPDATE raw_file_metadata SET work = 'Symphony No. 1', movement = 'Allegro', movement_number = 2 WHERE file_id = 6;
+                 UPDATE raw_file_metadata SET work = 'symphony no 1', movement = 'Adagio', movement_number = 1 WHERE file_id = 7;
+                 UPDATE track_entity SET title = 'Suite: I. Blue' WHERE id = 't3';
+                 UPDATE track_entity SET title = 'Suite: II. Late' WHERE id = 't4';
+                 INSERT INTO track_artist(track_id, artist_id, role) VALUES ('t4', 'a-comp', 'composer');",
+            )
+            .expect("classical fixture");
+    }
+
+    fn scoped(entity: FocusEntity, scope: Vec<Criterion>, filters: Vec<FocusFilter>) -> FocusQuery {
+        FocusQuery {
+            entity,
+            filters,
+            scope,
+            ..FocusQuery::default()
+        }
+    }
+
+    fn composer(artist_id: &str) -> Criterion {
+        Criterion::Credit {
+            role: "composer".into(),
+            artist_id: artist_id.into(),
+            name: None,
+        }
+    }
+
+    #[test]
+    fn composers_browser_lists_credited_composers_with_focus_filters() {
+        let mut connection = catalog();
+        classical(&mut connection);
+        assert_eq!(
+            ids(&mut connection, &query(FocusEntity::Composers, Vec::new())),
+            ["a-comp"]
+        );
+        // Composers of hi-res tracks, and composers with no MP3 tracks.
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Composers,
+                    vec![include(Criterion::Quality {
+                        value: QualityTier::Hires
+                    })]
+                )
+            ),
+            ["a-comp"]
+        );
+        assert!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Composers,
+                    vec![exclude(Criterion::Format {
+                        value: "aac".into()
+                    })]
+                )
+            )
+            .is_empty()
+        );
+        let rows = composer_rows(&mut connection, &["a-comp".into(), "missing".into()])
+            .expect("composer rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Anna Hamilton");
+        assert_eq!(rows[0].track_count, 4);
+        assert_eq!(rows[0].album_count, 2);
+        // t6/t7 share a work; t3 and t4 are their own titles.
+        assert_eq!(rows[0].work_count, 3);
+
+        let facets = focus_facets(
+            &mut connection,
+            &query(FocusEntity::Composers, Vec::new()),
+            1,
+            &FacetRequest {
+                only: vec!["credit".into()],
+                ..FacetRequest::default()
+            },
+        )
+        .expect("composer facets");
+        assert_eq!(facets.total, 1);
+        assert!(
+            facets
+                .facets
+                .iter()
+                .any(|facet| facet.role.as_deref() == Some("conductor_ensemble"))
+        );
+    }
+
+    #[test]
+    fn performer_and_conductor_ensemble_columns_count_and_filter() {
+        let mut connection = catalog();
+        classical(&mut connection);
+        let facets = focus_facets(
+            &mut connection,
+            &query(FocusEntity::Songs, Vec::new()),
+            1,
+            &FacetRequest {
+                only: vec!["credit".into()],
+                ..FacetRequest::default()
+            },
+        )
+        .expect("credit facets");
+        let roles = facets
+            .facets
+            .iter()
+            .map(|facet| facet.role.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            ["performer", "conductor_ensemble", "composer", "production"],
+            "credit columns in Roon order"
+        );
+        let column = |role: &str| {
+            facets
+                .facets
+                .iter()
+                .find(|facet| facet.role.as_deref() == Some(role))
+                .expect("credit column")
+        };
+        let conducting = column("conductor_ensemble");
+        assert_eq!(conducting.total, 2);
+        assert!(conducting.values.iter().all(|value| value.count == 2));
+        let performers = column("performer")
+            .values
+            .iter()
+            .map(|value| value.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(performers, ["Cimafunk", "Martha Argerich"]);
+
+        let group = |artist_id: &str| Criterion::Credit {
+            role: "conductor_ensemble".into(),
+            artist_id: artist_id.into(),
+            name: None,
+        };
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(FocusEntity::Songs, vec![include(group("a-ens"))])
+            ),
+            ["t6", "t7"]
+        );
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(FocusEntity::Albums, vec![exclude(group("a-cond"))])
+            ),
+            ["al-jazz", "al-pop", "al-single"]
+        );
+        // A single stored role still works, and a group is not a free-form role.
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Songs,
+                    vec![include(Criterion::Credit {
+                        role: "performer".into(),
+                        artist_id: "a-sol".into(),
+                        name: None,
+                    })]
+                )
+            ),
+            ["t6"]
+        );
+        let mut invalid = query(FocusEntity::Songs, vec![include(group("a-ens"))]);
+        if let Criterion::Credit { role, .. } = &mut invalid.filters[0].criterion {
+            *role = "conductor_ensemble_x".into();
+        }
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn scope_bounds_results_totals_and_facets() {
+        let mut connection = catalog();
+        classical(&mut connection);
+        let discography = scoped(FocusEntity::Albums, vec![composer("a-comp")], Vec::new());
+        assert_eq!(ids(&mut connection, &discography), ["al-hires", "al-jazz"]);
+        assert_eq!(
+            library_total(&mut connection, &discography).expect("total"),
+            2
+        );
+        let hires = scoped(
+            FocusEntity::Albums,
+            vec![composer("a-comp")],
+            vec![include(Criterion::Quality {
+                value: QualityTier::Hires,
+            })],
+        );
+        assert_eq!(ids(&mut connection, &hires), ["al-hires"]);
+        assert_eq!(
+            library_total(&mut connection, &hires).expect("scoped total"),
+            2
+        );
+
+        // An album's track list, focused on one conductor.
+        let tracks = scoped(
+            FocusEntity::Songs,
+            vec![Criterion::Album {
+                album_id: "al-hires".into(),
+                name: None,
+            }],
+            vec![include(Criterion::Credit {
+                role: "performer".into(),
+                artist_id: "a-sol".into(),
+                name: None,
+            })],
+        );
+        assert_eq!(ids(&mut connection, &tracks), ["t6"]);
+        assert_eq!(
+            library_total(&mut connection, &tracks).expect("album total"),
+            2
+        );
+        let facets = focus_facets(
+            &mut connection,
+            &scoped(
+                FocusEntity::Songs,
+                vec![Criterion::Album {
+                    album_id: "al-hires".into(),
+                    name: None,
+                }],
+                Vec::new(),
+            ),
+            1,
+            &FacetRequest {
+                only: vec!["format".into()],
+                ..FacetRequest::default()
+            },
+        )
+        .expect("scoped facets");
+        assert_eq!(facets.total, 2);
+        let formats = facets.facets[0]
+            .values
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(formats, ["flac", "wav"]);
+        // Match any never widens past the scope.
+        let mut any = scoped(
+            FocusEntity::Songs,
+            vec![composer("a-comp")],
+            vec![include(genre("Latin")), include(genre("Jazz"))],
+        );
+        any.match_mode = MatchMode::Any;
+        assert_eq!(ids(&mut connection, &any), ["t3", "t4", "t6", "t7"]);
+        let too_many = scoped(
+            FocusEntity::Songs,
+            vec![composer("a-comp"); MAX_SCOPE + 1],
+            Vec::new(),
+        );
+        assert!(too_many.validate().is_err());
+    }
+
+    #[test]
+    fn release_types_come_from_tags_and_untagged_albums_stay_unknown() {
+        let mut connection = catalog();
+        let facets = focus_facets(
+            &mut connection,
+            &query(FocusEntity::Albums, Vec::new()),
+            1,
+            &FacetRequest {
+                only: vec!["release_type".into()],
+                ..FacetRequest::default()
+            },
+        )
+        .expect("release type facet");
+        let values = facets.facets[0]
+            .values
+            .iter()
+            .map(|value| (value.label.as_str(), value.count))
+            .collect::<Vec<_>>();
+        // al-jazz has no RELEASETYPE tag and is not guessed.
+        assert_eq!(values, [("Album", 2), ("Single", 1)]);
+        assert_eq!(release_type_label("ep"), "EP");
+        assert_eq!(
+            ids(
+                &mut connection,
+                &query(
+                    FocusEntity::Albums,
+                    vec![include(Criterion::ReleaseType {
+                        value: "Album".into()
+                    })]
+                )
+            ),
+            ["al-hires", "al-pop"]
+        );
+    }
+
+    #[test]
+    fn compositions_group_works_movements_and_recordings() {
+        let mut connection = catalog();
+        classical(&mut connection);
+        let compositions = focus_compositions(
+            &mut connection,
+            &scoped(FocusEntity::Albums, vec![composer("a-comp")], Vec::new()),
+            1,
+        )
+        .expect("compositions");
+        assert_eq!(compositions.track_total, 4);
+        assert!(!compositions.truncated);
+        let titles = compositions
+            .compositions
+            .iter()
+            .map(|composition| composition.title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(titles, ["Suite", "Symphony No. 1"]);
+        let suite = &compositions.compositions[0];
+        assert!(!suite.tagged, "derived from shared Work: Movement titles");
+        assert_eq!(suite.movement_count, 2);
+        let movements = suite.recordings[0]
+            .tracks
+            .iter()
+            .map(|track| track.movement.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(movements, [Some("I. Blue"), Some("II. Late")]);
+
+        let symphony = &compositions.compositions[1];
+        assert!(symphony.tagged);
+        assert_eq!(symphony.composers[0].name, "Anna Hamilton");
+        assert_eq!(symphony.recordings.len(), 1);
+        let recording = &symphony.recordings[0];
+        assert_eq!(recording.album_id.as_deref(), Some("al-hires"));
+        assert_eq!(recording.release_year.as_deref(), Some("1978"));
+        assert_eq!(
+            recording.performers,
+            [
+                "Claudio Abbado",
+                "Berliner Philharmoniker",
+                "Martha Argerich"
+            ]
+        );
+        // MOVEMENT numbers order the tracks, not disc/track order.
+        let order = recording
+            .tracks
+            .iter()
+            .map(|track| (track.id.as_str(), track.movement.as_deref()))
+            .collect::<Vec<_>>();
+        assert_eq!(order, [("t7", Some("Adagio")), ("t6", Some("Allegro"))]);
+        assert_eq!(recording.duration_seconds, 810.0);
+
+        // Focus filters narrow the compositions too.
+        let lossy = focus_compositions(
+            &mut connection,
+            &scoped(
+                FocusEntity::Songs,
+                vec![composer("a-comp")],
+                vec![include(Criterion::Format {
+                    value: "aac".into(),
+                })],
+            ),
+            1,
+        )
+        .expect("focused compositions");
+        assert_eq!(lossy.total, 1);
+        assert_eq!(lossy.compositions[0].title, "Suite: II. Late");
+    }
+
+    #[test]
+    fn people_report_their_credit_roles() {
+        let mut connection = catalog();
+        classical(&mut connection);
+        let person = focus_person(&mut connection, "a-cond")
+            .expect("person")
+            .expect("conductor exists");
+        assert_eq!(person.name, "Claudio Abbado");
+        assert_eq!(
+            person.roles,
+            [PersonRole {
+                role: "conductor_ensemble".into(),
+                track_count: 2
+            }]
+        );
+        assert!(person.composer.is_none());
+        let composer = focus_person(&mut connection, "a-comp")
+            .expect("person")
+            .expect("composer exists");
+        assert_eq!(composer.composer.expect("composer stats").track_count, 4);
+        let cimafunk = focus_person(&mut connection, "a-cima")
+            .expect("person")
+            .expect("artist exists");
+        assert_eq!(cimafunk.roles[0].role, "primary");
+        assert_eq!(cimafunk.roles[1].role, "performer");
+        assert!(
+            focus_person(&mut connection, "nobody")
+                .expect("lookup")
+                .is_none()
         );
     }
 
