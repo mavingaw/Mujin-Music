@@ -1,7 +1,11 @@
 import {
   checkStreamingConnection,
   formatLastSync,
+  getSourcePreference,
   getStreamingProviders,
+  SOURCE_PREFERENCE_LABELS,
+  SOURCE_PREFERENCES,
+  setSourcePreference,
   pollTidalSignIn,
   saveStreamingCredentials,
   setStreamingQuality,
@@ -12,7 +16,7 @@ import {
   type StreamingPendingSignIn,
   type StreamingProviderStatus,
 } from "@parson/music-sdk";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -91,11 +95,57 @@ export function StreamingServicesSettings() {
           {open === provider.id ? <ServicePanel provider={provider} /> : null}
         </View>
       ))}
+      <SourcePreferencePicker />
       <Text style={styles.fine}>
         No API key ships with Parson: neither service issues one, and Parson
         never extracts one. Your server owner adds them once, then you only sign
         in. Tokens are encrypted on your server and never stored on this phone.
       </Text>
+      <Text style={styles.fine}>
+        Built and tested against recorded TIDAL and Qobuz responses and media,
+        not live accounts. Check connection after signing in is the first test
+        against your real account.
+      </Text>
+    </View>
+  );
+}
+
+/** Which copy plays when an album is in your files and on a service. */
+function SourcePreferencePicker() {
+  const client = useQueryClient();
+  const preference = useQuery({
+    queryKey: ["streaming", "source-preference"],
+    queryFn: getSourcePreference,
+  });
+  const save = useMutation({
+    mutationFn: setSourcePreference,
+    onSuccess: (source) =>
+      client.setQueryData(["streaming", "source-preference"], source),
+  });
+  const current = preference.data ?? "highest_quality";
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={styles.subheading}>
+        When an album is in more than one place
+      </Text>
+      {SOURCE_PREFERENCES.map((source) => (
+        <Pressable
+          accessibilityRole="radio"
+          accessibilityState={{ selected: current === source }}
+          disabled={save.isPending}
+          key={source}
+          onPress={() => save.mutate(source)}
+          style={[styles.option, current === source && styles.selected]}
+        >
+          <Text style={styles.optionText}>
+            {current === source ? "✓  " : ""}
+            {SOURCE_PREFERENCE_LABELS[source]}
+          </Text>
+        </Pressable>
+      ))}
+      {save.isError ? (
+        <Text style={styles.warning}>Could not save. Try again.</Text>
+      ) : null}
     </View>
   );
 }

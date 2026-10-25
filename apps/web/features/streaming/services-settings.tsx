@@ -1,5 +1,6 @@
 "use client";
 
+import { SourcePreferenceSetting } from "./album-versions";
 import {
   checkStreamingConnection,
   formatLastSync,
@@ -185,6 +186,16 @@ export default function ServicesSettings() {
           server, used only for your account, and never sent to your devices.
         </p>
       </div>
+
+      <SourcePreferenceSetting />
+
+      <p className="text-xs leading-5 text-zinc-500">
+        Parson&apos;s TIDAL and Qobuz support was built and tested against
+        recorded service responses and recorded hi-res media, not live accounts.
+        Run &quot;Check connection&quot; after signing in: it is the first test
+        against your real account, and it reports what the stream actually
+        delivered.
+      </p>
 
       {isAdmin && <ServerCredentialsPanel />}
 

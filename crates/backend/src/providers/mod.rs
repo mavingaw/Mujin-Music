@@ -361,6 +361,40 @@ impl ItemKind {
     }
 }
 
+/// Which copy of an album plays when it is in more than one place: the
+/// local library, TIDAL or Qobuz.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourcePreference {
+    /// The highest bit depth and sample rate wins; local files win ties.
+    #[default]
+    HighestQuality,
+    Local,
+    Tidal,
+    Qobuz,
+}
+
+impl SourcePreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HighestQuality => "highest_quality",
+            Self::Local => "local",
+            Self::Tidal => "tidal",
+            Self::Qobuz => "qobuz",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "highest_quality" => Some(Self::HighestQuality),
+            "local" => Some(Self::Local),
+            "tidal" => Some(Self::Tidal),
+            "qobuz" => Some(Self::Qobuz),
+            _ => None,
+        }
+    }
+}
+
 /// Where the audio for a resolved stream comes from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StreamSource {

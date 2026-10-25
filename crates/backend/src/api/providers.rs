@@ -12,8 +12,8 @@ pub(crate) use crate::providers::media::byte_range;
 use crate::providers::media::{self, MediaError};
 use crate::providers::store::{LibraryItemRow, LibrarySort};
 use crate::providers::{
-    BrowseSection, ItemKind, ProviderError, ProviderId, ResolvedStream, StreamQuality,
-    StreamSource, entity_id, probe, sandbox, valid_raw_id,
+    BrowseSection, ItemKind, ProviderError, ProviderId, ResolvedStream, SourcePreference,
+    StreamQuality, StreamSource, entity_id, probe, sandbox, valid_raw_id,
 };
 
 const MAX_SEARCH_QUERY_CHARACTERS: usize = 200;
@@ -99,6 +99,51 @@ async fn list_providers(request: HttpRequest, hub: web::Data<StreamingHub>) -> H
         }),
         Err(error) => hub_error_response(error),
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SourcePreferenceBody {
+    source: String,
+}
+
+/// Which copy plays when an album is in the library and on a service.
+#[get("/preferences/source")]
+async fn get_source_preference(request: HttpRequest, hub: web::Data<StreamingHub>) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    respond(
+        hub.source_preference(user_id)
+            .await
+            .map(|preference| SourcePreferenceBody {
+                source: preference.as_str().to_string(),
+            }),
+    )
+}
+
+#[put("/preferences/source")]
+async fn set_source_preference(
+    request: HttpRequest,
+    body: web::Json<SourcePreferenceBody>,
+    hub: web::Data<StreamingHub>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some(preference) = SourcePreference::parse(&body.source) else {
+        return hub_error_response(HubError::Invalid(
+            "Choose highest_quality, local, tidal or qobuz.",
+        ));
+    };
+    respond(
+        hub.set_source_preference(user_id, preference)
+            .await
+            .map(|preference| SourcePreferenceBody {
+                source: preference.as_str().to_string(),
+            }),
+    )
 }
 
 #[derive(Deserialize)]
@@ -763,6 +808,8 @@ async fn stream_delivery(
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/providers")
+            .service(get_source_preference)
+            .service(set_source_preference)
             .service(list_server_credentials)
             .service(save_server_credentials)
             .service(remove_server_credentials)
@@ -936,15 +983,63 @@ pub async fn stream_provider_track(
                 .cloned()
                 .chain(segment_urls.iter().cloned())
                 .collect::<Vec<_>>();
-            let mut builder = format_headers(HttpResponse::Ok(), &stream);
+            let key = format!("{track_id}@{}", stream.requested.as_str());
+            let index = match hub.segment_index(key, &urls).await {
+                Ok(index) => Some(index),
+                Err(error) => {
+                    // Still playable from the start, just not seekable.
+                    tracing::warn!(%error, "could not measure DASH segments");
+                    None
+                }
+            };
+            let Some(index) = index else {
+                if range.is_some() && !probe_this {
+                    return HttpResponse::RangeNotSatisfiable().finish();
+                }
+                let mut builder = format_headers(HttpResponse::Ok(), &stream);
+                builder.insert_header((header::CONTENT_TYPE, mime.clone()));
+                let body = recorded(
+                    hub.clone(),
+                    user_id,
+                    track_id,
+                    stream.clone(),
+                    media::segmented(hub.media(), urls),
+                );
+                return builder.streaming(body.map(|chunk| chunk.map_err(proxy_error)));
+            };
+            let total = index.total();
+            let (start, end, content_range) = match range.as_deref() {
+                None => (0, total.saturating_sub(1), None),
+                Some(header_value) => match byte_range(Some(header_value), total) {
+                    Some((start, end)) => {
+                        (start, end, Some(format!("bytes {start}-{end}/{total}")))
+                    }
+                    None => {
+                        return HttpResponse::RangeNotSatisfiable()
+                            .insert_header((header::CONTENT_RANGE, format!("bytes */{total}")))
+                            .finish();
+                    }
+                },
+            };
+            let status = if content_range.is_some() {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            };
+            let mut builder = format_headers(HttpResponse::build(status), &stream);
+            if let Some(content_range) = content_range {
+                builder.insert_header((header::CONTENT_RANGE, content_range));
+            }
             builder.insert_header((header::CONTENT_TYPE, mime.clone()));
-            let body = recorded(
-                hub.clone(),
-                user_id,
-                track_id,
-                stream.clone(),
-                media::segmented(hub.media(), urls),
-            );
+            builder.insert_header((header::ACCEPT_RANGES, "bytes"));
+            let length = if total == 0 { 0 } else { end - start + 1 };
+            builder.no_chunking(length);
+            let body = media::pieces(hub.media(), index.plan(&urls, start, end));
+            let body = if probe_this {
+                recorded(hub.clone(), user_id, track_id, stream.clone(), body)
+            } else {
+                body
+            };
             builder.streaming(body.map(|chunk| chunk.map_err(proxy_error)))
         }
     }
@@ -1546,13 +1641,171 @@ mod tests {
     fn tidal_dash_media() -> Arc<FixtureMedia> {
         let (init, fragments) = split_init_segment(HIRES_96_DASH);
         let base = "https://sp-recorded.audio.tidal.test/hr/300101";
-        let mut media = FixtureMedia::new()
-            .with(&format!("{base}/0.mp4?token=a&sig=b"), init)
-            .with(&format!("{base}/1.mp4?token=a&sig=b"), fragments);
-        for number in 2..=4 {
-            media = media.with(&format!("{base}/{number}.mp4?token=a&sig=b"), Vec::new());
+        // The manifest lists four media segments; cut the fragments into
+        // four so ranges cross real segment boundaries.
+        let mut media = FixtureMedia::new().with(&format!("{base}/0.mp4?token=a&sig=b"), init);
+        let quarter = fragments.len().div_ceil(4);
+        for (number, piece) in fragments.chunks(quarter).enumerate() {
+            media = media.with(
+                &format!("{base}/{}.mp4?token=a&sig=b", number + 1),
+                piece.to_vec(),
+            );
         }
         Arc::new(media)
+    }
+
+    #[actix_web::test]
+    async fn source_preference_defaults_to_highest_quality_and_is_per_listener() {
+        let pool = pool();
+        let (hub, _) = hub(pool, false);
+        let data = web::Data::new(hub);
+        let ada = app_as!(data, 1, "user");
+        let grace = app_as!(data, 2, "user");
+        let (status, body) = call!(
+            &ada,
+            test::TestRequest::get().uri("/providers/preferences/source"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["source"], "highest_quality");
+        let (status, body) = call!(
+            &ada,
+            test::TestRequest::put()
+                .uri("/providers/preferences/source")
+                .set_json(json!({"source": "qobuz"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["source"], "qobuz");
+        let (_, body) = call!(
+            &ada,
+            test::TestRequest::get().uri("/providers/preferences/source"),
+        )
+        .await;
+        assert_eq!(body["source"], "qobuz");
+        let (_, body) = call!(
+            &grace,
+            test::TestRequest::get().uri("/providers/preferences/source"),
+        )
+        .await;
+        assert_eq!(
+            body["source"], "highest_quality",
+            "other listeners unchanged"
+        );
+        let (status, _) = call!(
+            &ada,
+            test::TestRequest::put()
+                .uri("/providers/preferences/source")
+                .set_json(json!({"source": "spotify"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn tidal_dash_streams_seek_with_byte_ranges_across_segments() {
+        let pool = pool();
+        let media = tidal_dash_media();
+        let hub = signed_in_app_state(&pool).await.with_media(media.clone());
+        let app = app!(hub, 1);
+        let total = HIRES_96_DASH.len();
+        let header = |response: &actix_web::dev::ServiceResponse, name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+
+        // A player's first request: the whole track, with its length, so
+        // the browser knows it can seek.
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .insert_header(("range", "bytes=0-"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(header(&response, "accept-ranges").as_deref(), Some("bytes"));
+        assert_eq!(
+            header(&response, "content-range"),
+            Some(format!("bytes 0-{}/{total}", total - 1))
+        );
+        assert_eq!(header(&response, "content-length"), Some(total.to_string()));
+        assert_eq!(&test::read_body(response).await[..], HIRES_96_DASH);
+        let measured = media
+            .requests()
+            .iter()
+            .filter(|(_, range)| range.as_deref() == Some("bytes=0-0"))
+            .count();
+        assert_eq!(measured, 5, "init and four media segments measured once");
+
+        // Seeking into the middle, across two segment boundaries.
+        let (start, end) = (600, total - 700);
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .insert_header(("range", format!("bytes={start}-{end}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            header(&response, "content-range"),
+            Some(format!("bytes {start}-{end}/{total}"))
+        );
+        assert_eq!(
+            &test::read_body(response).await[..],
+            &HIRES_96_DASH[start..=end]
+        );
+
+        // The last bytes, as a demuxer reads an index at the end.
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .insert_header(("range", "bytes=-67"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            &test::read_body(response).await[..],
+            &HIRES_96_DASH[total - 67..]
+        );
+        let measured_again = media
+            .requests()
+            .iter()
+            .filter(|(_, range)| range.as_deref() == Some("bytes=0-0"))
+            .count();
+        assert_eq!(measured_again, measured, "seeks reuse the segment index");
+
+        // Past the end is refused with the real length.
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/tidal:300101/stream")
+                .insert_header(("range", format!("bytes={total}-")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            header(&response, "content-range"),
+            Some(format!("bytes */{total}"))
+        );
+
+        // A seek does not overwrite what the first bytes proved.
+        let (_, delivery) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/tracks/300101/delivery"),
+        )
+        .await;
+        assert_eq!(delivery["delivered"]["label"], "24/96 FLAC");
+        assert_eq!(delivery["frame_verified"], true);
     }
 
     #[actix_web::test]

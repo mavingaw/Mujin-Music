@@ -1,7 +1,13 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api, { ApiError } from "../core/http";
 import {
   addToStreamingLibrary,
+  formatScore,
+  getSourcePreference,
+  localAlbumFormat,
+  rankAlbumVersions,
+  setSourcePreference,
+  type AlbumVersion,
   checkStreamingConnection,
   describeDelivery,
   getStreamDelivery,
@@ -297,4 +303,138 @@ test("playlists are read and copied through provider-scoped routes", async () =>
   expect(get.mock.calls[2][0]).toBe("/providers/playlist-copies");
   expect(put.mock.calls[0][0]).toBe("/providers/qobuz/playlists/9100001/copy");
   expect(del).toHaveBeenCalledWith("/providers/qobuz/playlists/9100001/copy");
+});
+
+describe("album versions", () => {
+  const hiRes: AlbumVersion = {
+    id: "qobuz:q1",
+    title: "Glass Orchard",
+    source: "qobuz",
+    format: {
+      lossless: true,
+      bit_depth: 24,
+      sample_rate: 192_000,
+      bitrate_kbps: null,
+      label: "24/192 FLAC",
+    },
+  };
+  const max96: AlbumVersion = {
+    id: "tidal:t1",
+    title: "Glass Orchard",
+    source: "tidal",
+    format: {
+      lossless: true,
+      bit_depth: 24,
+      sample_rate: 96_000,
+      bitrate_kbps: null,
+      label: "24/96 FLAC",
+    },
+  };
+  const cd: AlbumVersion = {
+    id: "local-1",
+    title: "Glass Orchard",
+    source: "local",
+    format: {
+      lossless: true,
+      bit_depth: 16,
+      sample_rate: 44_100,
+      bitrate_kbps: null,
+      label: "16/44.1 FLAC",
+    },
+  };
+
+  test("highest quality plays the best-sounding copy", () => {
+    const ranked = rankAlbumVersions([cd, max96, hiRes], "highest_quality");
+    expect(ranked.map((version) => version.id)).toEqual([
+      "qobuz:q1",
+      "tidal:t1",
+      "local-1",
+    ]);
+    expect(ranked[0]?.preferred).toBe(true);
+    expect(ranked[0]?.reason).toBe("Highest quality: 24/192 FLAC");
+    expect(ranked.slice(1).every((version) => !version.preferred)).toBe(true);
+  });
+
+  test("a favored source wins even at lower quality", () => {
+    const ranked = rankAlbumVersions([hiRes, cd, max96], "local");
+    expect(ranked[0]?.id).toBe("local-1");
+    expect(ranked[0]?.reason).toBe("My files first in your settings");
+    expect(ranked[1]?.id).toBe("qobuz:q1");
+    const missing = rankAlbumVersions([cd, max96], "qobuz");
+    expect(missing[0]?.id).toBe("tidal:t1");
+    expect(missing[0]?.reason).toBe("Not in Qobuz; best of the rest");
+  });
+
+  test("ties go to local files, then Qobuz", () => {
+    const tidalCd = { ...cd, id: "tidal:t2", source: "tidal" as const };
+    const qobuzCd = { ...cd, id: "qobuz:q2", source: "qobuz" as const };
+    const ranked = rankAlbumVersions([tidalCd, qobuzCd, cd], "highest_quality");
+    expect(ranked.map((version) => version.id)).toEqual([
+      "local-1",
+      "qobuz:q2",
+      "tidal:t2",
+    ]);
+    expect(ranked[0]?.reason).toBe(
+      "Same quality; local files and Qobuz win ties",
+    );
+  });
+
+  test("lossless beats any lossy bitrate and unknown formats sort last", () => {
+    expect(
+      formatScore({
+        lossless: false,
+        bit_depth: null,
+        sample_rate: null,
+        bitrate_kbps: 320,
+        label: "AAC 320",
+      }),
+    ).toBeLessThan(formatScore(cd.format));
+    expect(formatScore(null)).toBeLessThan(0);
+  });
+
+  test("local album format is the best file's technical properties", () => {
+    expect(
+      localAlbumFormat([
+        { audio: null },
+        {
+          audio: {
+            codec: "flac",
+            container: "flac",
+            sample_rate: 44_100,
+            bit_depth: 16,
+            channels: 2,
+            bitrate_kbps: 900,
+            lossless: true,
+          },
+        },
+        {
+          audio: {
+            codec: "flac",
+            container: "flac",
+            sample_rate: 88_200,
+            bit_depth: 24,
+            channels: 2,
+            bitrate_kbps: 3000,
+            lossless: true,
+          },
+        },
+      ])?.label,
+    ).toBe("24/88.2 FLAC");
+    expect(localAlbumFormat([])).toBeNull();
+  });
+
+  test("source preference reads and writes the server setting", async () => {
+    const get = spyOn(api, "get").mockResolvedValue({
+      data: { source: "tidal" },
+    } as never);
+    expect(await getSourcePreference()).toBe("tidal");
+    expect(get).toHaveBeenCalledWith("/providers/preferences/source");
+    const put = spyOn(api, "put").mockResolvedValue({
+      data: { source: "local" },
+    } as never);
+    expect(await setSourcePreference("local")).toBe("local");
+    expect(put).toHaveBeenCalledWith("/providers/preferences/source", {
+      source: "local",
+    });
+  });
 });

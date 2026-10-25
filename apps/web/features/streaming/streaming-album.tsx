@@ -4,8 +4,6 @@ import {
   STREAMING_PROVIDER_NAMES,
   getStreamingAlbum,
   parseStreamingId,
-  searchLibrary,
-  searchStreaming,
   type StreamingAlbum,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
@@ -15,126 +13,13 @@ import Link from "next/link";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
 import { AlbumArtFallback } from "@/lib/images/image-url";
-import { FormatBadge, LocalSourceBadge, SourceBadge } from "./source-badge";
+import { AlbumVersions, BetterVersionNotice } from "./album-versions";
+import { FormatBadge, SourceBadge } from "./source-badge";
 import { LibraryButton } from "./library-button";
 import { formatTone, totalDurationLabel } from "./streaming-model";
 import { StreamingTrackRow } from "./streaming-track-row";
 import { SandboxNotice } from "./services-settings";
 import { useStreamingPlayback, useStreamingProviders } from "./use-streaming";
-
-const comparable = (value: string) =>
-  value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/\(.*?\)|\[.*?\]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-
-/** Other places the same album lives: the other service and local files. */
-function AlbumVersions({ album }: { album: StreamingAlbum }) {
-  const { connected } = useStreamingProviders();
-  const others = connected
-    .map((provider) => provider.id)
-    .filter((provider) => provider !== album.provider);
-  const query = `${album.artist.name} ${album.title}`;
-  const versions = useQuery({
-    queryKey: ["streaming", "versions", album.id, others.join(",")],
-    queryFn: async () => {
-      const [remote, local] = await Promise.all([
-        others.length
-          ? searchStreaming(query, { providers: others, limit: 10 })
-          : Promise.resolve({ query, services: [] }),
-        searchLibrary(album.title).catch(() => []),
-      ]);
-      const title = comparable(album.title);
-      const artist = comparable(album.artist.name);
-      return {
-        streaming: remote.services.flatMap((service) =>
-          (service.results?.albums ?? []).filter(
-            (candidate) =>
-              comparable(candidate.title) === title &&
-              comparable(candidate.artist.name) === artist,
-          ),
-        ),
-        local: local.filter(
-          (item) =>
-            item.item_type === "album" &&
-            comparable(item.name) === title &&
-            comparable(item.artist_object?.name ?? "") === artist,
-        ),
-      };
-    },
-    staleTime: 5 * 60_000,
-  });
-  const count =
-    (versions.data?.streaming.length ?? 0) + (versions.data?.local.length ?? 0);
-  if (!count) return null;
-  return (
-    <section className="mt-10">
-      <h2 className="mb-3 text-lg font-semibold text-white">Versions</h2>
-      <div className="divide-y divide-white/6 rounded-xl border border-white/8">
-        <VersionRow
-          current
-          formatLabel={album.format?.label ?? null}
-          href={`/album?id=${encodeURIComponent(album.id)}`}
-          source={<SourceBadge provider={album.provider} />}
-          title={album.title}
-          tone={formatTone(album.format)}
-        />
-        {versions.data?.streaming.map((version) => (
-          <VersionRow
-            formatLabel={version.format?.label ?? null}
-            href={`/album?id=${encodeURIComponent(version.id)}`}
-            key={version.id}
-            source={<SourceBadge provider={version.provider} />}
-            title={version.title}
-            tone={formatTone(version.format)}
-          />
-        ))}
-        {versions.data?.local.map((version) => (
-          <VersionRow
-            formatLabel={null}
-            href={`/album?id=${encodeURIComponent(version.id)}`}
-            key={version.id}
-            source={<LocalSourceBadge />}
-            title={version.name}
-            tone={null}
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function VersionRow({
-  title,
-  source,
-  formatLabel,
-  tone,
-  href,
-  current = false,
-}: {
-  title: string;
-  source: React.ReactNode;
-  formatLabel: string | null;
-  tone: ReturnType<typeof formatTone>;
-  href: string;
-  current?: boolean;
-}) {
-  return (
-    <Link
-      aria-current={current ? "page" : undefined}
-      className="flex items-center gap-4 px-4 py-3 text-sm transition-colors hover:bg-white/3"
-      href={href}
-    >
-      <span className="w-28 shrink-0">{source}</span>
-      <span className="min-w-0 flex-1 truncate text-zinc-200">{title}</span>
-      {formatLabel && <FormatBadge label={formatLabel} tone={tone} />}
-      {current && <span className="text-xs text-zinc-500">Viewing</span>}
-    </Link>
-  );
-}
 
 export default function StreamingAlbumDetails({ id }: { id: string }) {
   const parsed = parseStreamingId(id);
@@ -304,6 +189,8 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
             </a>
           )}
         </div>
+
+        <BetterVersionNotice album={data} />
 
         <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_auto_3rem] gap-3 border-b border-white/10 px-3 py-2 text-sm font-medium text-zinc-500 sm:gap-4 sm:px-4">
           <div className="text-center">#</div>
