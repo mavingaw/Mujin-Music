@@ -61,6 +61,32 @@ export interface SignalFormat {
 
 export type SignalStreamTarget = "direct" | "cast" | "native";
 
+/** Live measurements of the server's DSP chain while it plays. */
+export interface ServerDspStatus {
+  /**
+   * Seconds of audio processed per second of processing time (Roon's
+   * "processing speed"); `null` until there is enough to measure.
+   */
+  realtime_factor: number | null;
+  /** Highest level after the chain, before dither, in dBFS. */
+  peak_dbfs: number | null;
+  /** Samples that went past full scale and were limited. */
+  clipped_samples: number;
+  clipping: boolean;
+}
+
+/** The server's own DSP chain on a server output. */
+export interface ServerSignalProcessing {
+  /** e.g. `Parson DSP, 64-bit float`. */
+  engine: string;
+  /** Stage ids the chain runs, in order. */
+  stages: string[];
+  /** What the chain could not do as asked. */
+  notes: string[];
+  /** `null` when the path is only described, not playing. */
+  status: ServerDspStatus | null;
+}
+
 /** Server leg returned by `GET /media/songs/{id}/signal-path`. */
 export interface ServerSignalPath {
   song_id: string;
@@ -73,6 +99,8 @@ export interface ServerSignalPath {
   requested_bitrate_kbps: number;
   effect: string | null;
   stages: SignalStage[];
+  /** Present when a server output runs the DSP chain itself. */
+  processing?: ServerSignalProcessing | null;
 }
 
 export type SignalPlatform = "web" | "desktop" | "ios" | "android";
@@ -161,6 +189,16 @@ export interface SignalPath {
    */
   bitPerfect: boolean;
   /**
+   * Processing ran on the server and its result reaches a server output
+   * in exclusive mode with nothing after it: the DAC receives exactly
+   * the samples Parson computed.
+   */
+  exactAfterProcessing: boolean;
+  /** The server's DSP chain, when it runs one. */
+  processing: ServerSignalProcessing | null;
+  /** The chain measured samples past full scale: the light turns red. */
+  clipping: boolean;
+  /**
    * One sentence naming what decided the light, built from the stages
    * present: what you asked for, what you did not, what was lossy.
    */
@@ -188,6 +226,32 @@ export const signalQualityColors: Record<SignalQuality, string> = {
   high_quality: "#3ddc97",
   low_quality: "#f5c542",
 };
+
+/** The light's colour when the DSP chain clips. */
+export const SIGNAL_CLIPPING_COLOR = "#ff4d5e";
+
+/** Colour of a path's light: red while clipping, else its quality. */
+export function signalLightColor(
+  path: Pick<SignalPath, "quality" | "clipping">,
+) {
+  return path.clipping
+    ? SIGNAL_CLIPPING_COLOR
+    : signalQualityColors[path.quality];
+}
+
+/** Label of a path's light, e.g. `Enhanced` or `Enhanced, clipping`. */
+export function signalLightLabel(
+  path: Pick<SignalPath, "quality" | "clipping">,
+) {
+  const label = signalQualityLabels[path.quality];
+  return path.clipping ? `${label}, clipping` : label;
+}
+
+/** `38.2x`, Roon's processing speed figure. */
+export function formatRealtimeFactor(factor: number) {
+  if (!Number.isFinite(factor) || factor <= 0) return "—";
+  return factor >= 100 ? `${Math.round(factor)}x` : `${factor.toFixed(1)}x`;
+}
 
 export const signalQualityDescriptions: Record<SignalQuality, string> = {
   lossless:
@@ -724,7 +788,10 @@ export function describeSignalPath(
         ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, in exclusive mode at ${outputStage.detail.split(", ").at(-1)}.`
         : `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
     case "enhanced":
-      return `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
+      return outputStage?.id === "native-output" &&
+        outputStage.quality === "lossless"
+        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output} bit-exact, in exclusive mode at ${outputStage.detail.split(", ").at(-1)}.`
+        : `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
     case "high_quality": {
       const unknown = stages.some(
         (stage) => stage.kind === "source" && !stage.quality,
@@ -792,12 +859,28 @@ export function buildSignalPath(
   // A transcoded MP3 is not hi-res, whatever the file it came from.
   const highRes = Boolean(source?.high_res) && quality !== "low_quality";
   const outputStage = stages.find((stage) => stage.kind === "output");
-  const description = describeSignalPath(stages, {
+  const processing =
+    server && !client.localFile ? (server.processing ?? null) : null;
+  const clipping = processing?.status?.clipping === true;
+  const clipped = processing?.status?.clipped_samples ?? 0;
+  const description = `${describeSignalPath(stages, {
     highRes,
     output: outputStage?.title,
-  });
+  })}${
+    clipping
+      ? ` Clipping detected: ${clipped} ${clipped === 1 ? "sample" : "samples"} went past full scale and were limited. Lower the headroom adjustment in the DSP engine.`
+      : ""
+  }`;
   const beforeOutput = rated.filter((stage) => stage.kind !== "output");
+  const ratedOutput = rated.find((stage) => stage.kind === "output");
   return {
+    exactAfterProcessing:
+      quality === "enhanced" &&
+      Boolean(processing) &&
+      ratedOutput?.id === "native-output" &&
+      ratedOutput.quality === "lossless",
+    processing,
+    clipping,
     bitPerfectToOutput:
       beforeOutput.length > 0 &&
       beforeOutput.every((stage) => stage.quality === "lossless"),

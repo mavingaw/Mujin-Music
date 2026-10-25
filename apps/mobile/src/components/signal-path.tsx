@@ -3,6 +3,9 @@ import {
   dspMayClip,
   eqPresets,
   recommendedHeadroomDb,
+  SIGNAL_CLIPPING_COLOR,
+  signalLightColor,
+  signalLightLabel,
   signalPathSummary,
   signalQualityColors,
   signalQualityLabels,
@@ -61,11 +64,18 @@ const LEGEND: SignalQuality[] = [
 export function QualityGlyph({
   quality,
   size = 14,
+  clipping = false,
 }: {
   quality: SignalQuality | null;
   size?: number;
+  /** The DSP chain is clipping: the light turns red. */
+  clipping?: boolean;
 }) {
-  const color = quality ? signalQualityColors[quality] : palette.muted;
+  const color = clipping
+    ? SIGNAL_CLIPPING_COLOR
+    : quality
+      ? signalQualityColors[quality]
+      : palette.muted;
   const sparkle = quality === "lossless" || quality === "enhanced";
   return (
     <Svg height={size} viewBox="0 0 16 16" width={size}>
@@ -91,7 +101,7 @@ export function SignalPathBadge({
 }) {
   const quality = path?.quality ?? null;
   const label = path
-    ? `Signal path: ${signalQualityLabels[path.quality]}${path.highRes ? ", high resolution" : ""}`
+    ? `Signal path: ${signalLightLabel(path)}${path.highRes ? ", high resolution" : ""}`
     : "Signal path";
   return (
     <Pressable
@@ -103,16 +113,13 @@ export function SignalPathBadge({
       onPress={onPress}
       style={styles.badge}
     >
-      <QualityGlyph quality={quality} size={13} />
+      <QualityGlyph clipping={path?.clipping} quality={quality} size={13} />
       {path ? (
         <>
           <Text
-            style={[
-              styles.badgeQuality,
-              { color: signalQualityColors[path.quality] },
-            ]}
+            style={[styles.badgeQuality, { color: signalLightColor(path) }]}
           >
-            {signalQualityLabels[path.quality]}
+            {signalLightLabel(path)}
           </Text>
           {path.highRes ? <HiRes /> : null}
           <Text numberOfLines={1} style={styles.badgeFormat}>
@@ -160,14 +167,10 @@ export function SignalPathContent({
         Signal path:{" "}
         <Text
           style={{
-            color: path ? signalQualityColors[path.quality] : palette.secondary,
+            color: path ? signalLightColor(path) : palette.secondary,
           }}
         >
-          {path
-            ? signalQualityLabels[path.quality]
-            : loading
-              ? "Checking"
-              : "Unknown"}
+          {path ? signalLightLabel(path) : loading ? "Checking" : "Unknown"}
         </Text>
       </Text>
       {path ? (
@@ -258,14 +261,37 @@ const MOBILE_EQ_PRESETS = eqPresets.filter((preset) =>
   ["flat", "bass", "treble", "vocal", "loudness"].includes(preset.id),
 );
 
-/** The DSP engine on the phone: headroom and parametric EQ presets. */
-function DspControls({
+/**
+ * DSP engine controls: headroom and parametric EQ presets, plus crossfeed
+ * where the chain can run it. Used for the phone's own chain and for a
+ * server output's (which the server runs in 64-bit float).
+ */
+export function DspControls({
   onChange,
   settings,
+  title = "DSP engine",
+  unavailable = null,
+  crossfeed = null,
 }: {
   onChange: (settings: DspSettings) => void;
   settings: DspSettings;
+  title?: string;
+  /** Why the chain cannot run here; every control is greyed. */
+  unavailable?: string | null;
+  /** `true`/`false` shows a crossfeed switch; `null` hides it. */
+  crossfeed?: boolean | null;
 }) {
+  if (unavailable) {
+    return (
+      <View style={[styles.dsp, styles.dspOff]}>
+        <View style={styles.dspRow}>
+          <Text style={styles.levelingLabel}>{title}</Text>
+          <Switch accessibilityLabel={title} disabled value={false} />
+        </View>
+        <Text style={styles.dspLabel}>{unavailable}</Text>
+      </View>
+    );
+  }
   const clipping = dspMayClip(settings);
   const needed = recommendedHeadroomDb(settings);
   const bands = activeEqBands({
@@ -276,9 +302,9 @@ function DspControls({
   return (
     <View style={styles.dsp}>
       <View style={styles.dspRow}>
-        <Text style={styles.levelingLabel}>DSP engine</Text>
+        <Text style={styles.levelingLabel}>{title}</Text>
         <Switch
-          accessibilityLabel="DSP engine"
+          accessibilityLabel={title}
           onValueChange={(enabled) => onChange({ ...settings, enabled })}
           trackColor={{ true: signalQualityColors.enhanced }}
           value={settings.enabled}
@@ -356,6 +382,32 @@ function DspControls({
           );
         })}
       </View>
+      {crossfeed !== null ? (
+        <View
+          style={[
+            styles.dspRow,
+            (!settings.enabled || !crossfeed) && styles.dspOff,
+          ]}
+        >
+          <Text style={styles.dspLabel}>
+            {crossfeed
+              ? `Crossfeed, ${settings.crossfeed.strength}`
+              : "Crossfeed needs a stereo device"}
+          </Text>
+          <Switch
+            accessibilityLabel="Crossfeed"
+            disabled={!settings.enabled || !crossfeed}
+            onValueChange={(enabled) =>
+              onChange({
+                ...settings,
+                crossfeed: { ...settings.crossfeed, enabled },
+              })
+            }
+            trackColor={{ true: signalQualityColors.enhanced }}
+            value={crossfeed && settings.crossfeed.enabled}
+          />
+        </View>
+      ) : null}
     </View>
   );
 }

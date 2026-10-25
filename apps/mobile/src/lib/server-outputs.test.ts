@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
-import type {
-  NativeOutputDevice,
-  NativeOutputSession,
+import {
+  defaultDspSettings,
+  type NativeOutputDevice,
+  type NativeOutputSession,
 } from "@parson/music-sdk";
 import {
+  serverDspStatusLine,
+  serverDspSummary,
   serverOutputSummary,
   serverSessionLine,
   unsupportedRates,
@@ -57,4 +60,34 @@ test("the session line shows state and position", () => {
       duration_ms: 0,
     } as NativeOutputSession),
   ).toBe("device busy · 0:00 / 0:00");
+});
+
+test("the server's DSP chain is summarised per device", () => {
+  expect(serverDspSummary(device)).toBeNull();
+  const dsp = defaultDspSettings();
+  expect(serverDspSummary({ ...device, dsp })).toBeNull();
+  dsp.headroom = { enabled: true, gainDb: -3 };
+  dsp.eq.enabled = true;
+  dsp.eq.bands[0]!.gainDb = 4;
+  dsp.eq.bands[3]!.gainDb = -2;
+  dsp.crossfeed.enabled = true;
+  dsp.sampleRate = { enabled: true, mode: 96_000 };
+  expect(serverDspSummary({ ...device, dsp })).toBe(
+    "Headroom −3.0 dB · EQ 2 bands · Crossfeed Medium · 96kHz",
+  );
+  expect(
+    serverDspSummary({ ...device, dsp: { ...dsp, enabled: false } }),
+  ).toBeNull();
+});
+
+test("the live DSP status reads like Roon's processing speed", () => {
+  expect(serverDspStatusLine(null)).toBeNull();
+  expect(
+    serverDspStatusLine({
+      realtime_factor: 41.27,
+      peak_dbfs: 1.4,
+      clipped_samples: 12,
+      clipping: true,
+    }),
+  ).toBe("Processing speed 41.3x · Peak +1.4 dBFS · Clipping (12)");
 });

@@ -6,6 +6,10 @@
 //! - `POST /outputs/native/admin/refresh` re-probes the devices (admin).
 //! - `PUT  /outputs/native/admin/settings` changes one device's Exclusive
 //!   Mode, max sample rate and max bit depth (admin).
+//! - `PUT  /outputs/native/dsp` saves one device's DSP chain (headroom,
+//!   parametric EQ, crossfeed, sample rate), which the server runs in
+//!   64-bit float before the device. A track playing there restarts at its
+//!   position with the new chain.
 //! - `GET  /outputs/native/session` returns what is playing, or `null`.
 //! - `POST /outputs/native/session` plays a song on a device.
 //! - `POST /outputs/native/session/commands` pauses, resumes, seeks or
@@ -22,6 +26,7 @@ use crate::api::error::{bad_request, internal_server_error, not_found, service_u
 use crate::library::state::LibraryLifecycle;
 use crate::native_output::{LevelingRequest, NativeError, NativeOutputs};
 use parson_output::OutputSettings;
+use parson_output::dsp::DspSettings;
 
 /// Longest accepted device id (WASAPI endpoint ids are about 55 chars).
 const MAX_DEVICE_ID: usize = 512;
@@ -92,6 +97,29 @@ async fn update_settings(
     match blocking(move || outputs.set_settings(&body.device_id, body.settings)).await {
         Ok(Ok(view)) => HttpResponse::Ok().json(view),
         Ok(Err(message)) => bad_request(message, "invalid_output_settings"),
+        Err(response) => response,
+    }
+}
+
+#[derive(Deserialize)]
+struct DspRequest {
+    device_id: String,
+    settings: DspSettings,
+}
+
+#[put("/dsp")]
+async fn update_dsp(
+    body: web::Json<DspRequest>,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let body = body.into_inner();
+    if !valid_device_id(&body.device_id) {
+        return bad_request("Invalid device id.", "invalid_device_id");
+    }
+    let outputs = outputs(data);
+    match blocking(move || outputs.set_dsp(&body.device_id, body.settings)).await {
+        Ok(Ok(view)) => HttpResponse::Ok().json(view),
+        Ok(Err(message)) => not_found(message, "native_output_device_not_found"),
         Err(response) => response,
     }
 }
@@ -213,6 +241,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                     .service(update_settings),
             )
             .service(list_devices)
+            .service(update_dsp)
             .service(current_session)
             .service(play)
             .service(command),
@@ -279,6 +308,9 @@ mod tests {
             Arc::new(|_, _, _, _, _| Ok(Box::new(std::io::repeat(0)) as PcmSource)),
             "test resampler",
         )
+        .with_float_decoder(Arc::new(|_, _, _| {
+            Ok(Box::new(std::io::repeat(0)) as PcmSource)
+        }))
     }
 
     #[actix_web::test]
@@ -461,5 +493,126 @@ mod tests {
         )
         .await;
         assert_eq!(bad.status(), 400);
+    }
+
+    #[actix_web::test]
+    async fn dsp_route_saves_the_chain_and_the_server_runs_it() {
+        let lifecycle = LibraryLifecycle::new();
+        lifecycle.set_ready(cache()).await;
+        let outputs = web::Data::new(native());
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(lifecycle))
+                .app_data(outputs.clone())
+                .wrap_fn(|request, service| {
+                    request.extensions_mut().insert(crate::api::auth::Claims {
+                        sub: "3".into(),
+                        exp: usize::MAX,
+                        username: "listener".into(),
+                        bitrate: 0,
+                        token_type: "access".into(),
+                        role: "user".into(),
+                        token_version: 0,
+                        session_id: None,
+                    });
+                    actix_web::dev::Service::call(service, request)
+                })
+                .configure(configure),
+        )
+        .await;
+        let saved: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::put()
+                .uri("/outputs/native/dsp")
+                .set_json(serde_json::json!({
+                    "device_id": SIMULATED_DEVICE_ID,
+                    "settings": {
+                        "enabled": true,
+                        "headroom": {"enabled": true, "gainDb": -3},
+                        "eq": {"enabled": true, "preset": "bass", "bands": [
+                            {"id": "band-1", "enabled": true, "type": "lowshelf", "frequency": 80, "gainDb": 5, "q": 0.71}
+                        ]},
+                        "crossfeed": {"enabled": true, "strength": "light"},
+                        "sampleRate": {"enabled": true, "mode": 96000}
+                    },
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(saved["dsp_customized"], true);
+        assert_eq!(saved["dsp"]["eq"]["bands"][0]["gainDb"], 5.0);
+        assert_eq!(saved["dsp_support"]["available"], true);
+        assert_eq!(saved["dsp_support"]["crossfeed"], true);
+
+        let started: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::post()
+                .uri("/outputs/native/session")
+                .set_json(serde_json::json!({
+                    "device_id": SIMULATED_DEVICE_ID,
+                    "song_id": "song-1",
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(started["plan"]["sample_rate"], 96_000);
+        assert_eq!(started["plan"]["bit_perfect"], false);
+        let path = &started["signal_path"];
+        assert_eq!(path["quality"], "enhanced");
+        let ids: Vec<&str> = path["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stage| stage["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "source",
+                "native-decode",
+                "native-float-in",
+                "native-headroom",
+                "native-eq",
+                "native-crossfeed",
+                "native-resample",
+                "native-depth",
+                "native-output",
+            ]
+        );
+        assert_eq!(path["stages"][6]["quality"], "enhanced");
+        assert_eq!(path["stages"][8]["quality"], "lossless");
+        assert_eq!(path["processing"]["engine"], "Parson DSP, 64-bit float");
+
+        // The live session reports processing speed and clipping.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let live = loop {
+            let live: serde_json::Value = test::call_and_read_body_json(
+                &app,
+                test::TestRequest::get()
+                    .uri("/outputs/native/session")
+                    .to_request(),
+            )
+            .await;
+            if live["signal_path"]["processing"]["status"]["realtime_factor"].is_number()
+                || std::time::Instant::now() > deadline
+            {
+                break live;
+            }
+            actix_web::rt::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        let status = &live["signal_path"]["processing"]["status"];
+        assert!(status["realtime_factor"].as_f64().unwrap() > 1.0);
+        assert_eq!(status["clipping"], false);
+
+        let missing = test::call_service(
+            &app,
+            test::TestRequest::put()
+                .uri("/outputs/native/dsp")
+                .set_json(serde_json::json!({"device_id": "nope:0", "settings": {}}))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(missing.status(), 404);
+        outputs.stop().unwrap();
     }
 }

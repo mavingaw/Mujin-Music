@@ -636,3 +636,120 @@ export function createDspChain(
     },
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Where the chain runs, and what it can do there                      */
+/* ------------------------------------------------------------------ */
+
+/** What the server reports a server output's chain can do. */
+export interface ServerDspCapabilities {
+  available: boolean;
+  reason: string | null;
+  engine: string;
+  crossfeed: boolean;
+  sample_rates: number[];
+  output_bits: number | null;
+}
+
+export type DspTarget =
+  /** This browser or phone's Web Audio graph (shared-mode output). */
+  | { kind: "client"; webAudio: boolean; channelSplitting?: boolean }
+  /** A server output: the server runs the chain before the device. */
+  | {
+      kind: "server";
+      deviceName: string;
+      support: ServerDspCapabilities | null | undefined;
+    }
+  /** A Cast receiver decodes the stream itself. */
+  | { kind: "cast" };
+
+export interface DspAvailability {
+  /** The chain can run at all; when `false`, every control is greyed. */
+  available: boolean;
+  reason: string | null;
+  /** Where and in what precision it runs, for the panel's header. */
+  engine: string;
+  /** e.g. `64-bit float` or `32-bit float`. */
+  precision: string;
+  crossfeed: { available: boolean; reason: string | null };
+  /** Fixed rates that can be chosen; `null` when any listed rate can. */
+  sampleRates: readonly number[] | null;
+  /** `device` means the server output's own (track's) rate. */
+  deviceRateLabel: string;
+}
+
+/**
+ * Whether, where and how the DSP chain applies for an output, so the
+ * panel can grey out what truly cannot run instead of pretending.
+ */
+export function dspAvailability(target: DspTarget): DspAvailability {
+  if (target.kind === "cast") {
+    return {
+      available: false,
+      reason:
+        "A Cast receiver fetches and decodes the stream itself, so Parson cannot process it.",
+      engine: "Not available while casting",
+      precision: "",
+      crossfeed: { available: false, reason: null },
+      sampleRates: [],
+      deviceRateLabel: "Output device rate",
+    };
+  }
+  if (target.kind === "server") {
+    const support = target.support;
+    if (!support) {
+      return {
+        available: false,
+        reason: `This server does not run a DSP engine for ${target.deviceName}. Update Parson on the server.`,
+        engine: "Server output",
+        precision: "",
+        crossfeed: { available: false, reason: null },
+        sampleRates: [],
+        deviceRateLabel: "Device rate",
+      };
+    }
+    return {
+      available: support.available,
+      reason: support.available ? null : support.reason,
+      engine: `${support.engine}, on the server before ${target.deviceName}`,
+      precision: "64-bit float",
+      crossfeed: support.crossfeed
+        ? { available: true, reason: null }
+        : {
+            available: false,
+            reason: `${target.deviceName} does not open in stereo, which crossfeed needs.`,
+          },
+      sampleRates: DSP_SAMPLE_RATES.filter((rate) =>
+        support.sample_rates.includes(rate),
+      ),
+      deviceRateLabel: "Track's rate (as the device allows)",
+    };
+  }
+  if (!target.webAudio) {
+    return {
+      available: false,
+      reason:
+        "This browser has no Web Audio engine, so the DSP chain cannot run here. Play on a server output to process on the server.",
+      engine: "Not available in this browser",
+      precision: "",
+      crossfeed: { available: false, reason: null },
+      sampleRates: [],
+      deviceRateLabel: "Output device rate",
+    };
+  }
+  return {
+    available: true,
+    reason: null,
+    engine: "Web Audio graph in this browser, 32-bit float",
+    precision: "32-bit float",
+    crossfeed:
+      target.channelSplitting === false
+        ? {
+            available: false,
+            reason: "This audio engine cannot split channels.",
+          }
+        : { available: true, reason: null },
+    sampleRates: null,
+    deviceRateLabel: "Output device rate",
+  };
+}

@@ -1,6 +1,10 @@
 "use client";
 
-import { createPlaybackQueue, volumeLevelingGain } from "@parson/music-sdk";
+import {
+  createPlaybackQueue,
+  defaultDspSettings,
+  volumeLevelingGain,
+} from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/features/account/session-provider";
@@ -42,6 +46,7 @@ import {
 } from "./dsp-store";
 import { usePlaybackTelemetry } from "./player-telemetry";
 import { serverOutputId, useNativeOutputs } from "./use-native-outputs";
+import { useServerDsp } from "./use-server-dsp";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
 import { useQueueRestore } from "./use-queue-restore";
 import {
@@ -111,13 +116,22 @@ export function usePlayerController() {
   const [volumeLevelingMode, setVolumeLevelingMode] = useVolumeLevelingMode();
   const [outputDeviceId, setOutputDeviceId] = useOutputDeviceChoice();
   const outputs = useAudioOutputs();
-  const nativeOutputs = useNativeOutputs();
   const nativeDeviceId = serverOutputId(outputDeviceId);
+  const nativeOutputs = useNativeOutputs({ live: Boolean(nativeDeviceId) });
   const nativeDevice =
     nativeOutputs.data?.devices.find(
       (device) => device.id === nativeDeviceId,
     ) ?? null;
-  const [dsp, setDsp] = useDspSettings(outputDeviceId);
+  const [localDsp, setLocalDsp] = useDspSettings(outputDeviceId);
+  // A server output runs the chain itself; the server keeps its settings.
+  const serverDsp = useServerDsp(
+    nativeDeviceId,
+    nativeDevice,
+    localDsp,
+    setLocalDsp,
+  );
+  const dsp = nativeDeviceId ? serverDsp.settings : localDsp;
+  const setDsp = nativeDeviceId ? serverDsp.setSettings : setLocalDsp;
   useEffect(() => {
     setNativeOutput(nativeDeviceId);
     void setOutputDevice(nativeDeviceId ? "" : outputDeviceId);
@@ -129,8 +143,9 @@ export function usePlayerController() {
     setOutputDevice,
   ]);
   useEffect(() => {
-    setDspSettings(dsp);
-  }, [dsp, setDspSettings]);
+    // The browser graph only runs the chain for this browser's outputs.
+    setDspSettings(nativeDeviceId ? defaultDspSettings() : dsp);
+  }, [dsp, nativeDeviceId, setDspSettings]);
   const outputName = nativeDeviceId
     ? (nativeSession?.device_name ?? nativeDevice?.name ?? "Server output")
     : outputDeviceLabel(outputs.devices, activeSinkId);
@@ -639,6 +654,7 @@ export function usePlayerController() {
         requestLabels: outputs.requestLabels,
         serverDevices: nativeOutputs.data?.devices ?? [],
         serverOutputId: nativeDeviceId,
+        serverDspError: nativeDeviceId ? serverDsp.error : null,
       },
       setSongCallback,
       setQueue,
@@ -696,6 +712,7 @@ export function usePlayerController() {
       nativeDeviceId,
       nativeOutputs.data,
       nativeSession,
+      serverDsp.error,
       outputs.devices,
       outputs.labelsHidden,
       outputs.requestLabels,

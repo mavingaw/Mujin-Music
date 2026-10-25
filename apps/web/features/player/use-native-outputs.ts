@@ -16,14 +16,19 @@ export function serverOutputId(choice: string): string | null {
     : null;
 }
 
-/** The server's own audio devices (bit-perfect outputs). */
-export function useNativeOutputs() {
+/**
+ * The server's own audio devices (bit-perfect outputs). While one is in
+ * use the list is refreshed, so a DSP chain changed from another client
+ * (a phone acting as remote) shows here too.
+ */
+export function useNativeOutputs(options: { live?: boolean } = {}) {
   const { session } = useSession();
   return useQuery<NativeOutputs>({
     queryKey: nativeOutputsKey,
     queryFn: getNativeOutputs,
     enabled: Boolean(session?.sub),
     staleTime: 30_000,
+    refetchInterval: options.live ? 5_000 : false,
     retry: 1,
   });
 }

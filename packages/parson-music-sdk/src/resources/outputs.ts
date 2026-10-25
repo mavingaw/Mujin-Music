@@ -1,4 +1,5 @@
 import api from "../core/http";
+import type { DspSettings } from "../player/dsp";
 import type { ServerSignalPath } from "../player/signal-path";
 
 /** How the server drives a device. */
@@ -48,6 +49,29 @@ export interface NativeOutputDevice {
   channels: [number, number] | null;
   /** Parson is playing on it now. */
   in_use: boolean;
+  /**
+   * The device's DSP chain, which the server runs in 64-bit float before
+   * the device (older servers omit it).
+   */
+  dsp?: DspSettings;
+  /** The chain was saved for this device rather than left at defaults. */
+  dsp_customized?: boolean;
+  dsp_support?: NativeDspSupport;
+}
+
+/** What the server's DSP chain can do on one device. */
+export interface NativeDspSupport {
+  available: boolean;
+  /** Why it cannot run, when it cannot. */
+  reason: string | null;
+  /** e.g. `Parson DSP, 64-bit float`. */
+  engine: string;
+  /** The device opens in stereo, which crossfeed needs. */
+  crossfeed: boolean;
+  /** Fixed DSP rates the device accepts as configured. */
+  sample_rates: number[];
+  /** Depth the chain dithers to. */
+  output_bits: number | null;
 }
 
 export interface NativeOutputs {
@@ -92,6 +116,22 @@ export interface NativeOutputSession {
   plan: NativeOutputPlan;
   leveling: NativeOutputLeveling | null;
   signal_path: ServerSignalPath;
+}
+
+/**
+ * Saves a server output's DSP chain. The server runs it before the
+ * device; a track playing there restarts at its position with it.
+ */
+export async function updateNativeOutputDsp(
+  deviceId: string,
+  settings: DspSettings,
+): Promise<NativeOutputDevice> {
+  return (
+    await api.put<NativeOutputDevice>("/outputs/native/dsp", {
+      device_id: deviceId,
+      settings,
+    })
+  ).data;
 }
 
 /** Volume leveling the server applies (ReplayGain), in dB. */

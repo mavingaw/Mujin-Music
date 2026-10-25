@@ -6,7 +6,11 @@ import {
   describeAudioFormat,
   describeCollectionFormat,
   formatDecibels,
+  formatRealtimeFactor,
   overallSignalQuality,
+  SIGNAL_CLIPPING_COLOR,
+  signalLightColor,
+  signalLightLabel,
   signalPathSummary,
   sourceQuality,
   volumeLevelingGain,
@@ -277,6 +281,133 @@ describe("signal path classification", () => {
     expect(converted.description).toBe(
       "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 192kHz to 96kHz (soxr, very high quality).",
     );
+  });
+
+  test("server DSP on an exclusive output is enhanced and reaches the DAC exactly", () => {
+    const stage = (
+      id: string,
+      kind: "dsp" | "conversion",
+      title: string,
+      detail: string,
+      quality: "lossless" | "enhanced",
+    ) => ({ id, kind, title, detail, quality, explanation: "" });
+    const server: ServerSignalPath = {
+      ...originalServer(),
+      target: "native",
+      mode: "native",
+      quality: "enhanced",
+      stages: [
+        originalServer().stages[0]!,
+        {
+          id: "native-decode",
+          kind: "decode",
+          title: "Parson server",
+          detail: "FLAC decoded to PCM",
+          quality: "lossless",
+          explanation: "",
+        },
+        stage(
+          "native-float-in",
+          "conversion",
+          "Bit depth conversion",
+          "24bit to 64bit float",
+          "lossless",
+        ),
+        stage(
+          "native-headroom",
+          "dsp",
+          "Headroom adjustment",
+          "−3.0 dB",
+          "enhanced",
+        ),
+        stage(
+          "native-eq",
+          "dsp",
+          "Parametric EQ",
+          "1 band: 80 Hz low shelf +5.0 dB",
+          "enhanced",
+        ),
+        stage(
+          "native-depth",
+          "conversion",
+          "Bit depth conversion",
+          "64bit float to 32bit, TPDF dither",
+          "enhanced",
+        ),
+        {
+          id: "native-output",
+          kind: "output",
+          title: "USB DAC",
+          detail: "ALSA hw: exclusive, 96kHz 32bit 2ch",
+          quality: "lossless",
+          explanation: "",
+        },
+      ],
+      processing: {
+        engine: "Parson DSP, 64-bit float",
+        stages: ["native-headroom", "native-eq", "native-depth"],
+        notes: [],
+        status: {
+          realtime_factor: 41.27,
+          peak_dbfs: -1.2,
+          clipped_samples: 0,
+          clipping: false,
+        },
+      },
+    };
+    const path = buildSignalPath(server, {
+      ...plainBrowser,
+      output: { kind: "native", name: "USB DAC" },
+    });
+    expect(path.quality).toBe("enhanced");
+    expect(path.bitPerfect).toBeFalse();
+    expect(path.exactAfterProcessing).toBeTrue();
+    expect(path.clipping).toBeFalse();
+    expect(path.processing?.status?.realtime_factor).toBe(41.27);
+    expect(path.description).toBe(
+      "Parson's server is processing the audio because you asked it to: Headroom adjustment (−3.0 dB) and Parametric EQ (1 band: 80 Hz low shelf +5.0 dB). The result reaches USB DAC bit-exact, in exclusive mode at 96kHz 32bit 2ch.",
+    );
+    expect(signalLightColor(path)).toBe("#38b6ff");
+    expect(signalLightLabel(path)).toBe("Enhanced");
+    expect(formatRealtimeFactor(41.27)).toBe("41.3x");
+    expect(formatRealtimeFactor(250.4)).toBe("250x");
+
+    const clipping = buildSignalPath(
+      {
+        ...server,
+        processing: {
+          ...server.processing!,
+          status: {
+            realtime_factor: 40,
+            peak_dbfs: 3.4,
+            clipped_samples: 812,
+            clipping: true,
+          },
+        },
+      },
+      { ...plainBrowser, output: { kind: "native", name: "USB DAC" } },
+    );
+    expect(clipping.clipping).toBeTrue();
+    expect(signalLightColor(clipping)).toBe(SIGNAL_CLIPPING_COLOR);
+    expect(signalLightLabel(clipping)).toBe("Enhanced, clipping");
+    expect(clipping.description).toContain(
+      "Clipping detected: 812 samples went past full scale",
+    );
+
+    // A shared-mode server output is still processed, but not exact.
+    const shared = buildSignalPath(
+      {
+        ...server,
+        stages: server.stages.map((item) =>
+          item.id === "native-output"
+            ? { ...item, quality: "high_quality" as const }
+            : item,
+        ),
+      },
+      { ...plainBrowser, output: { kind: "native" } },
+    );
+    expect(shared.quality).toBe("high_quality");
+    expect(shared.exactAfterProcessing).toBeFalse();
   });
 
   test("a hi-res source transcoded to a lossy format is not badged hi-res", () => {
