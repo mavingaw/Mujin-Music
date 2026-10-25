@@ -37,6 +37,14 @@ Composer, lyricist, arranger, conductor, performer (with instrument), ensemble, 
 
 With online metadata on, Parson also learns which **work** each track performs from MusicBrainz: the piece, its composer, form, key, catalogue number (Op. 125, BWV 1007, K. 550 …) and when it was composed, and which movement of the piece the track is. Movements of one piece are grouped under a heading in the album's track list. **Go to work** in a track's menu opens the work page, which lists every recording of it in your library with its conductor, orchestra and soloists, grouped by album, conductor or performer, and marks recordings that only include some movements. A composer's page has a **Compositions** tab grouped by form, with filter chips for form, period and key.
 
+### Genres
+
+Parson reads genres from your files' tags (`GENRE` in FLAC and Ogg, `TCON` in MP3, `©gen` in MP4/M4A) and, with online metadata on, the genres MusicBrainz lists for the album's release group and for each artist. Every name is matched to a small genre tree with aliases, so "Bop" becomes Jazz › Bebop and "Hip-Hop", "hiphop" and "Rap" all mean Hip Hop; genres the tree does not know are kept as they are. Albums and artists show their genres as chips. Each chip opens a genre page with a description from Wikipedia (found through Wikidata, with its CC BY-SA attribution), its sub-genres and related genres, and the artists, composers and albums in your library in that genre or any genre below it. **Genres** in the sidebar lists the whole tree.
+
+In **Settings → Online metadata**, **Genres from** chooses between online genres and file tags; each falls back to the other when an album has none. An administrator can choose an album's genres by hand with **Edit** next to its genre chips; that choice wins until it is reset.
+
+Artists whose Wikidata item has no photo can still get one: when MusicBrainz links a freely licensed image on Wikimedia Commons, Parson uses that instead.
+
 ### Identify album
 
 Albums whose tags do not name a MusicBrainz release are matched by title and album artist; classical titles such as "Beethoven: Symphony No. 9" also match without the composer, and the year in your tags picks between several recordings. When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.

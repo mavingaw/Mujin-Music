@@ -29,6 +29,15 @@ pub fn wikidata_entity_url(id: &str) -> String {
     format!("https://www.wikidata.org/wiki/Special:EntityData/{id}.json")
 }
 
+/// The Wikidata item behind an English Wikipedia article, used for genres,
+/// which are known by their article rather than by a MusicBrainz link.
+pub fn wikidata_by_article_url(title: &str) -> String {
+    format!(
+        "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&sites=enwiki&props=sitelinks&titles={}",
+        encode(title)
+    )
+}
+
 pub fn wikipedia_extract_url(language: &str, title: &str) -> String {
     format!(
         "https://{language}.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=extracts%7Cinfo&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&titles={}",

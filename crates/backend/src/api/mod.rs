@@ -6,6 +6,7 @@ pub mod data;
 pub mod editorial;
 pub mod error;
 pub mod filesystem;
+pub mod genre_pages;
 pub mod genres;
 pub mod home;
 pub mod image;

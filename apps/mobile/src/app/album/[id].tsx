@@ -31,6 +31,7 @@ import {
 } from "@/components/credits";
 import { joinMeta } from "@/lib/credit-links";
 import { WorkHeading } from "@/components/works";
+import { GenreChips } from "@/components/genres";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { formatCollectionDuration } from "@/lib/format";
@@ -163,6 +164,7 @@ export default function AlbumScreen() {
             {albumFormat(data.songs) ? (
               <Text style={styles.format}>{albumFormat(data.songs)}</Text>
             ) : null}
+            <GenreChips genres={about.data?.genres} />
             <View style={styles.actions}>
               <Pressable
                 {...immediatePressFeedback}

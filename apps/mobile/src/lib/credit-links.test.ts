@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { artistRoute, joinMeta, workRoute } from "./credit-links";
+import { artistRoute, genreRoute, joinMeta, workRoute } from "./credit-links";
 
 test("contributor ids are safe in artist routes", () => {
   expect(artistRoute("mb:561d854a")).toBe("/artist/mb%3A561d854a");
@@ -17,4 +17,11 @@ test("work routes encode MusicBrainz ids", () => {
     "/work/22222222-2222-4222-8222-222222222222",
   );
   expect(workRoute("a b")).toBe("/work/a%20b");
+});
+
+test("genre routes encode slugs", () => {
+  expect(genreRoute("hard-bop")).toBe("/genre/hard-bop");
+  expect(genreRoute("neue-deutsche-härte")).toBe(
+    "/genre/neue-deutsche-h%C3%A4rte",
+  );
 });

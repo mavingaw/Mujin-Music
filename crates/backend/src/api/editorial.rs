@@ -15,6 +15,7 @@ use crate::api::auth::authenticated_user_id;
 use crate::api::error::{bad_request, internal_server_error, not_found};
 use crate::api::song::{ResponseSong, response_song};
 use crate::domain::{Album, Artist};
+use crate::enrichment::genres::GenreRef;
 use crate::enrichment::musicbrainz::is_placeholder_artist;
 use crate::enrichment::store::{
     self, CreditRow, EditorialText, ImageRow, MAX_NOTE_CHARS, NoteRow, TaskState,
@@ -74,6 +75,10 @@ pub struct AlbumAbout {
     pub works: Vec<crate::api::works::TrackWork>,
     /// The MusicBrainz release an administrator chose with "Identify album".
     pub identification: Option<store::Identification>,
+    /// Canonical genres, from tags, MusicBrainz or an edit.
+    pub genres: Vec<GenreRef>,
+    /// Whether an administrator chose the genres by hand.
+    pub genres_edited: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +110,8 @@ pub struct ArtistAbout {
     pub roles: Vec<RoleSummary>,
     pub note: Option<NoteRow>,
     pub enrichment: EnrichmentStatus,
+    /// The artist's genres, or those of the albums they are credited on.
+    pub genres: Vec<GenreRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -563,6 +570,7 @@ fn parse_facts(profile: Option<&store::ProfileRow>) -> Option<Value> {
             // What Wikidata linked to is bookkeeping for later stages.
             if let Some(object) = value.as_object_mut() {
                 object.remove(crate::enrichment::worker::WIKIDATA_KEY);
+                object.remove(crate::enrichment::worker::COMMONS_IMAGE_KEY);
             }
             value
         })
@@ -575,7 +583,10 @@ pub(crate) fn artist_image_url(artist_id: &str) -> String {
 }
 
 /// Looks up which credited people have a stored photo.
-async fn credited_images(pool: DbPool, ids: Vec<String>) -> std::collections::HashSet<String> {
+pub(crate) async fn credited_images(
+    pool: DbPool,
+    ids: Vec<String>,
+) -> std::collections::HashSet<String> {
     web::block(move || {
         let mut connection = pool.get().map_err(|error| error.to_string())?;
         store::artists_with_images(&mut connection, &ids).map_err(|error| error.to_string())
@@ -658,7 +669,18 @@ pub async fn album_about(
         .filter_map(|credit| credit.artist_id.clone())
         .filter(|id| !id.starts_with(EXTERNAL_PREFIX))
         .collect::<Vec<_>>();
+    let genre_index = crate::api::genre_pages::genre_index(image_pool.clone(), &cache).await;
     let images = credited_images(image_pool, ids).await;
+    let (genres, genres_edited) = match &genre_index {
+        Ok(index) => (
+            index.album(&album.id).to_vec(),
+            index.edited.contains(&album.id),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "could not load album genres");
+            (Vec::new(), false)
+        }
+    };
     for credit in &mut credits {
         credit.image_url = credit
             .artist_id
@@ -669,6 +691,8 @@ pub async fn album_about(
     HttpResponse::Ok().json(AlbumAbout {
         works: crate::api::works::album_track_works(&work_links, &work_rows, &people),
         identification,
+        genres,
+        genres_edited,
         album_id,
         credits,
         background: texts.remove("background"),
@@ -784,7 +808,27 @@ pub async fn artist_about(
         stored.image = None;
     }
     let mut texts = stored.texts;
+    let album_ids = match cache.artist(&artist_id) {
+        Some(artist) if !artist.albums.is_empty() => artist
+            .albums
+            .iter()
+            .map(|album| album.id.clone())
+            .collect::<Vec<_>>(),
+        _ => credits
+            .albums
+            .iter()
+            .map(|credited| credited.album.id.clone())
+            .collect(),
+    };
+    let genres = match crate::api::genre_pages::genre_index(pool.get_ref().clone(), &cache).await {
+        Ok(index) => index.artist(&artist_id, &album_ids),
+        Err(error) => {
+            tracing::warn!(%error, "could not load artist genres");
+            Vec::new()
+        }
+    };
     HttpResponse::Ok().json(ArtistAbout {
+        genres,
         image: stored.image.map(|image| EditorialImage {
             url: artist_image_url(&artist_id),
             author: image.author,
@@ -975,6 +1019,7 @@ pub struct EnrichmentPatch {
     pub enabled: Option<bool>,
     pub language: Option<String>,
     pub artist_images: Option<bool>,
+    pub genre_source: Option<crate::enrichment::genres::GenreSource>,
 }
 
 #[put("/enrichment")]
@@ -1011,13 +1056,17 @@ pub async fn put_enrichment(
         if let Some(artist_images) = patch.artist_images {
             settings.artist_images = artist_images;
         }
+        if let Some(genre_source) = patch.genre_source {
+            settings.genre_source = genre_source;
+        }
         store::save_settings(&mut connection, &settings).map_err(|error| error.to_string())?;
         if language_changed {
             // Texts are per language; look everything up again.
             diesel::RunQueryDsl::execute(
                 diesel::sql_query(
                     "UPDATE metadata_task SET status = 'pending', attempts = 0, not_before = NULL
-                     WHERE provider = 'musicbrainz' AND entity_type IN ('album', 'artist')",
+                     WHERE (provider = 'musicbrainz' AND entity_type IN ('album', 'artist'))
+                        OR (provider = 'wikidata' AND entity_type = 'genre')",
                 ),
                 &mut connection,
             )

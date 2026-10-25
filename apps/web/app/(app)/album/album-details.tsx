@@ -28,6 +28,8 @@ import {
   UserRound,
 } from "lucide-react";
 import { IdentifyAlbumDialog } from "@/features/library/works/identify-album-dialog";
+import { GenreChips } from "@/features/library/genres/genre-chips";
+import { AlbumGenresDialog } from "@/features/library/genres/album-genres-dialog";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { usePlayer } from "@/features/player/player-context";
 import { useSession } from "@/features/account/session-provider";
@@ -108,6 +110,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const [actionsOpen, setActionsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [identifyOpen, setIdentifyOpen] = useState(false);
+  const [genresOpen, setGenresOpen] = useState(false);
   const playlists = useQuery({
     queryKey: ["playlists"],
     queryFn: getPlaylists,
@@ -333,6 +336,15 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
                 {album.songs.length} songs, {formatTotalDuration(totalDuration)}
               </span>
             </div>
+            <GenreChips
+              className="mt-3"
+              genres={aboutQuery.data?.genres}
+              onEdit={
+                session?.role === "admin" && aboutQuery.data
+                  ? () => setGenresOpen(true)
+                  : undefined
+              }
+            />
           </div>
         </div>
 
@@ -454,6 +466,16 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
             onOpenChange={setCreateOpen}
             open={createOpen}
           />
+          {session?.role === "admin" && aboutQuery.data && (
+            <AlbumGenresDialog
+              albumId={album.id}
+              albumName={album.name}
+              edited={Boolean(aboutQuery.data.genres_edited)}
+              genres={aboutQuery.data.genres ?? []}
+              onOpenChange={setGenresOpen}
+              open={genresOpen}
+            />
+          )}
           {session?.role === "admin" && (
             <IdentifyAlbumDialog
               albumId={album.id}

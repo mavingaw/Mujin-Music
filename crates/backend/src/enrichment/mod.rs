@@ -9,6 +9,7 @@
 //! MusicBrainz relationship credits next to the credits read from tags.
 
 pub mod fetch;
+pub mod genres;
 pub mod musicbrainz;
 pub mod store;
 pub mod wikimedia;
