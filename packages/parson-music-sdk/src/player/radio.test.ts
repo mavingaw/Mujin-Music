@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   radioComingUpIn,
+  radioQueueHistory,
   radioSectionStart,
   radioSeedKey,
   radioSkipReasonEvent,
@@ -83,4 +84,14 @@ test("station labels name the seed", () => {
   );
   expect(radioSeedKey({ kind: "genre", id: "Jazz" })).toBe("genre:Jazz");
   expect(radioSeedKey(null)).toBe("");
+});
+
+test("the queue becomes Radio's play history, most recent position wins", () => {
+  expect(radioQueueHistory(["a", "b", "a", "", null, "c"])).toEqual([
+    "b",
+    "a",
+    "c",
+  ]);
+  expect(radioQueueHistory(["a", "b", "c", "d"], 2)).toEqual(["c", "d"]);
+  expect(radioQueueHistory([])).toEqual([]);
 });

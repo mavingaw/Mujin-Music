@@ -11,7 +11,7 @@ use crate::api::auth::authenticated_user_id;
 use crate::library::state::LibraryCache;
 use crate::library::state::{LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
-use crate::recommendation::{RadioSeed, RankedCandidate, catalog_genre, recommend_radio_widening};
+use crate::recommendation::{RadioSeed, RankedCandidate, catalog_genre, recommend_radio_endless};
 
 const DEFAULT_GENERATED_ITEMS: usize = 20;
 const MAX_QUEUE_ITEMS: usize = 100;
@@ -22,6 +22,9 @@ const MAX_SEED_GENRE_CHARACTERS: usize = 128;
 const DEFAULT_RADIO_PICKS: usize = 5;
 const MAX_RADIO_PICKS: usize = 20;
 const MAX_RADIO_PICK_EXCLUSIONS: usize = 500;
+const RADIO_EXHAUSTED: &str = "radio_exhausted";
+const RADIO_EXHAUSTED_MESSAGE: &str =
+    "Radio has nothing left to play: every track in your library is banned or thumbed down.";
 
 /// One of these may name what a Radio station is built around.
 #[derive(Default, Deserialize)]
@@ -106,8 +109,13 @@ struct CreateQueueRequest {
     seed: SeedFields,
     #[serde(default)]
     explicit_song_ids: Vec<String>,
+    /// Songs already queued or played, oldest first. Radio avoids them while
+    /// fresh songs remain and then lets them back in, least recent first.
     #[serde(default)]
     exclude_song_ids: Vec<String>,
+    /// Songs Radio must never pick (this session's thumbs down).
+    #[serde(default)]
+    reject_song_ids: Vec<String>,
     generated_items: Option<usize>,
     source: Option<String>,
 }
@@ -351,11 +359,13 @@ async fn create_queue(
     };
     if form.explicit_song_ids.len() > MAX_QUEUE_ITEMS
         || form.exclude_song_ids.len() > MAX_QUEUE_ITEMS
+        || form.reject_song_ids.len() > MAX_RADIO_PICK_EXCLUSIONS
         || form.seed.parse().is_err()
         || form
             .explicit_song_ids
             .iter()
             .chain(&form.exclude_song_ids)
+            .chain(&form.reject_song_ids)
             .any(|value| !valid_song_id(value))
         || form.source.as_deref().is_some_and(|source| {
             source.trim().is_empty() || source.chars().count() > MAX_QUEUE_SOURCE_CHARACTERS
@@ -378,17 +388,19 @@ async fn create_queue(
     let ranked = if generated_limit == 0 {
         Vec::new()
     } else {
-        let exclude = form
+        // The explicit songs play next, so they count as the most recent.
+        let queued = form
             .exclude_song_ids
             .iter()
             .chain(&form.explicit_song_ids)
             .take(MAX_QUEUE_ITEMS * 2)
             .cloned()
-            .collect::<HashSet<_>>();
+            .collect::<Vec<_>>();
         match radio_candidates(
             user_id,
             seed.clone(),
-            exclude,
+            queued,
+            form.reject_song_ids.iter().cloned().collect(),
             cache.clone(),
             pool.get_ref().clone(),
             generated_limit,
@@ -402,13 +414,9 @@ async fn create_queue(
 
     let queue_id = Uuid::new_v4().to_string();
     let mut rows = Vec::<QueueItemRow>::new();
-    let mut seen = form
-        .exclude_song_ids
-        .iter()
-        .take(MAX_QUEUE_ITEMS)
-        .filter(|song_id| cache.song(song_id).is_some())
-        .cloned()
-        .collect::<HashSet<_>>();
+    // Generated songs never repeat an explicit one. Radio itself decides
+    // when an earlier queued song may come back.
+    let mut seen = HashSet::new();
     let mut explicit_seen = HashSet::new();
     for song_id in form.explicit_song_ids.iter().take(MAX_QUEUE_ITEMS) {
         if cache.song(song_id).is_some() && explicit_seen.insert(song_id.clone()) {
@@ -437,8 +445,11 @@ async fn create_queue(
         }
     }
     if rows.is_empty() {
+        // Radio recycles played songs, so this only happens when nothing in
+        // the library is left for Radio: every song is banned or disliked.
         return HttpResponse::UnprocessableEntity().json(serde_json::json!({
-            "error": "queue_empty"
+            "error": RADIO_EXHAUSTED,
+            "message": RADIO_EXHAUSTED_MESSAGE,
         }));
     }
 
@@ -669,19 +680,21 @@ async fn update_queue(
 async fn radio_candidates(
     user_id: i32,
     seed: Option<RadioSeed>,
-    exclude: HashSet<String>,
+    queued: Vec<String>,
+    reject: HashSet<String>,
     cache: std::sync::Arc<LibraryCache>,
     pool: DbPool,
     limit: usize,
 ) -> Option<Vec<RankedCandidate>> {
     match web::block(move || {
-        recommend_radio_widening(
+        recommend_radio_endless(
             user_id,
             seed.as_ref(),
             cache.as_ref(),
             &pool,
             limit,
-            &exclude,
+            &queued,
+            &reject,
         )
         .map_err(|error| error.to_string())
     })
@@ -703,8 +716,12 @@ async fn radio_candidates(
 struct RadioPicksRequest {
     #[serde(flatten)]
     seed: SeedFields,
+    /// The client's queue, oldest first (see [`CreateQueueRequest`]).
     #[serde(default)]
     exclude_song_ids: Vec<String>,
+    /// Songs Radio must never pick.
+    #[serde(default)]
+    reject_song_ids: Vec<String>,
     limit: Option<usize>,
 }
 
@@ -721,6 +738,12 @@ struct RadioPicksResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     seed: Option<QueueSeed>,
     items: Vec<RadioPick>,
+    /// True when Radio has nothing left to play: every song in the library
+    /// is banned or disliked. Clients tell the listener instead of stopping
+    /// silently.
+    exhausted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'static str>,
 }
 
 /// Fresh Radio picks without creating a queue: used to extend the Radio
@@ -743,9 +766,11 @@ async fn radio_picks(
     let limit = form.limit.unwrap_or(DEFAULT_RADIO_PICKS);
     if !(1..=MAX_RADIO_PICKS).contains(&limit)
         || form.exclude_song_ids.len() > MAX_RADIO_PICK_EXCLUSIONS
+        || form.reject_song_ids.len() > MAX_RADIO_PICK_EXCLUSIONS
         || form
             .exclude_song_ids
             .iter()
+            .chain(&form.reject_song_ids)
             .any(|value| !valid_song_id(value))
         || form.seed.parse().is_err()
     {
@@ -758,18 +783,16 @@ async fn radio_picks(
             "error": "invalid_queue_seed"
         }));
     };
-    let mut exclude = form
-        .exclude_song_ids
-        .iter()
-        .cloned()
-        .collect::<HashSet<_>>();
+    let mut queued = Vec::with_capacity(form.exclude_song_ids.len() + 1);
     if let Some(RadioSeed::Song(id)) = &seed {
-        exclude.insert(id.clone());
+        queued.push(id.clone());
     }
+    queued.extend(form.exclude_song_ids.iter().cloned());
     let Some(ranked) = radio_candidates(
         user_id,
         seed.clone(),
-        exclude,
+        queued,
+        form.reject_song_ids.iter().cloned().collect(),
         cache.clone(),
         pool.get_ref().clone(),
         limit,
@@ -778,9 +801,13 @@ async fn radio_picks(
     else {
         return HttpResponse::InternalServerError().finish();
     };
+    let items = radio_pick_items(ranked, cache.as_ref());
+    let exhausted = items.is_empty();
     HttpResponse::Ok().json(RadioPicksResponse {
         seed: seed.and_then(|seed| queue_seed(&seed, cache.as_ref())),
-        items: radio_pick_items(ranked, cache.as_ref()),
+        items,
+        exhausted,
+        message: exhausted.then_some(RADIO_EXHAUSTED_MESSAGE),
     })
 }
 
@@ -1238,5 +1265,142 @@ mod tests {
             load_radio_settings(&mut connection, 2).expect("other listener"),
             RadioSettings::default()
         );
+    }
+
+    fn claims(user: &str) -> crate::api::auth::Claims {
+        crate::api::auth::Claims {
+            sub: user.to_string(),
+            exp: usize::MAX,
+            username: "listener".to_string(),
+            bitrate: 0,
+            token_type: "access".to_string(),
+            role: "user".to_string(),
+            token_version: 0,
+            session_id: None,
+        }
+    }
+
+    /// The round-3 regression: a 43-track library driven like the web
+    /// client (top up the Radio section, then continue with a new Radio
+    /// queue) never answers 422 and never runs dry.
+    #[actix_web::test]
+    async fn radio_never_runs_dry_on_a_43_track_library_over_http() {
+        use actix_web::http::StatusCode;
+        use actix_web::{App, HttpMessage, test as actix_test, web};
+
+        use crate::library::state::LibraryLifecycle;
+        use crate::recommendation::test_support::endless_test_library;
+
+        let pool = crate::recommendation::test_support::radio_pool();
+        let lifecycle = LibraryLifecycle::new();
+        lifecycle.set_ready(endless_test_library()).await;
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .app_data(web::Data::new(lifecycle))
+                .configure(super::configure),
+        )
+        .await;
+        let call = |request: actix_test::TestRequest| {
+            let request = request.to_request();
+            request.extensions_mut().insert(claims("1"));
+            request
+        };
+
+        let mut queue = Vec::<String>::new();
+        let mut request = 0;
+        while queue.len() < 210 {
+            request += 1;
+            // Every fifth request continues with a fresh Radio queue, the
+            // way the client does once the queue ends.
+            let (uri, body) = if request % 5 == 0 {
+                let start = queue.len().saturating_sub(100);
+                (
+                    "/playback/queues",
+                    serde_json::json!({
+                        "seed_genre": "Rock",
+                        "exclude_song_ids": &queue[start..],
+                        "reject_song_ids": ["d1-1"],
+                        "generated_items": 20,
+                        "source": "radio",
+                    }),
+                )
+            } else {
+                let start = queue.len().saturating_sub(500);
+                (
+                    "/playback/radio/picks",
+                    serde_json::json!({
+                        "seed_genre": "Rock",
+                        "exclude_song_ids": &queue[start..],
+                        "reject_song_ids": ["d1-1"],
+                        "limit": 6,
+                    }),
+                )
+            };
+            let response = actix_test::call_service(
+                &app,
+                call(actix_test::TestRequest::post().uri(uri).set_json(body)),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{uri} failed after {} picks",
+                queue.len()
+            );
+            let body: serde_json::Value = actix_test::read_body_json(response).await;
+            let items = body["items"].as_array().expect("items");
+            assert!(
+                !items.is_empty(),
+                "{uri} ran dry after {} picks",
+                queue.len()
+            );
+            assert_ne!(body["exhausted"], true);
+            for item in items {
+                let id = item["id"].as_str().unwrap().to_owned();
+                assert_ne!(id, "d1-1", "a rejected song came back");
+                queue.push(id);
+            }
+        }
+
+        // Ban everything: only now does Radio say it has nothing to play,
+        // and it says so instead of failing silently.
+        let mut connection = pool.get().unwrap();
+        for artist in [
+            "artist-a", "artist-b", "artist-c", "artist-d", "artist-e", "artist-f",
+        ] {
+            crate::radio_bans::add_ban(
+                &mut connection,
+                1,
+                crate::radio_bans::BanKind::Artist,
+                artist,
+            )
+            .unwrap();
+        }
+        drop(connection);
+        let response = actix_test::call_service(
+            &app,
+            call(
+                actix_test::TestRequest::post()
+                    .uri("/playback/radio/picks")
+                    .set_json(serde_json::json!({ "seed_genre": "Rock" })),
+            ),
+        )
+        .await;
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["exhausted"], true);
+        assert!(body["message"].as_str().unwrap().contains("banned"));
+        let response = actix_test::call_service(
+            &app,
+            call(
+                actix_test::TestRequest::post()
+                    .uri("/playback/queues")
+                    .set_json(serde_json::json!({ "seed_genre": "Rock", "source": "radio" })),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["error"], "radio_exhausted");
     }
 }

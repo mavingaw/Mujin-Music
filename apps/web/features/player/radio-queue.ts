@@ -1,12 +1,19 @@
 import { isSongExcludedByBans, type RadioBanIndex } from "@parson/music-sdk";
 import type { QueueItem } from "./player-model";
 
-/** Appends Radio picks, skipping songs already in the queue. */
+/**
+ * Appends Radio picks, skipping songs already queued from `fromIndex` on.
+ * Pass the index after the current item to let a song that already played
+ * come back (endless Radio recycles the library once it is used up).
+ */
 export function appendRadioPicks(
   items: readonly QueueItem[],
   picks: readonly QueueItem[],
+  fromIndex = 0,
 ): QueueItem[] {
-  const seen = new Set(items.map((item) => item.song.id));
+  const seen = new Set(
+    items.slice(Math.max(0, fromIndex)).map((item) => item.song.id),
+  );
   const additions = picks.filter((pick) => {
     if (!pick.song.id || seen.has(pick.song.id)) return false;
     seen.add(pick.song.id);

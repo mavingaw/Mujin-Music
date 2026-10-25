@@ -91,7 +91,13 @@ export function getPlaybackQueueRevisionConflict(
 export async function createPlaybackQueue(
   options: RadioSeedParams & {
     explicit_song_ids?: string[];
+    /**
+     * The queue so far, oldest first. Radio avoids these while fresh songs
+     * remain, then lets them back in, least recently played first.
+     */
     exclude_song_ids?: string[];
+    /** Songs Radio must never pick (thumbs down this session). */
+    reject_song_ids?: string[];
     generated_items?: number;
     source?: string;
   },
@@ -131,6 +137,34 @@ export interface RadioPick extends Omit<PlaybackQueueSong, "origin"> {
 export interface RadioPicks {
   seed?: ResolvedRadioSeed;
   items: RadioPick[];
+  /**
+   * True when Radio has nothing left to play: every song in the library is
+   * banned or thumbed down. Radio recycles played songs, so this is the only
+   * way it runs out.
+   */
+  exhausted?: boolean;
+  message?: string;
+}
+
+export const radioExhaustedMessage =
+  "Radio has nothing left to play: every track in your library is banned or thumbed down.";
+
+/** The listener-facing message when Radio cannot continue, otherwise null. */
+export function radioExhaustedNotice(error: unknown): string | null {
+  if (!isApiError(error) || error.response?.status !== 422) return null;
+  const data = error.response.data as
+    { error?: string; message?: string } | undefined;
+  if (data?.error !== "radio_exhausted") return null;
+  return data.message || radioExhaustedMessage;
+}
+
+/** The message for a picks response that came back exhausted, else null. */
+export function radioPicksExhaustedNotice(
+  picks: Pick<RadioPicks, "exhausted" | "message" | "items">,
+): string | null {
+  return picks.exhausted && !picks.items.length
+    ? picks.message || radioExhaustedMessage
+    : null;
 }
 
 /**
@@ -139,12 +173,18 @@ export interface RadioPicks {
  */
 export async function getRadioPicks(options: {
   seed?: RadioSeed | null;
+  /** The queue so far, oldest first (see {@link createPlaybackQueue}). */
   exclude_song_ids?: string[];
+  /** Songs Radio must never pick. */
+  reject_song_ids?: string[];
   limit?: number;
 }): Promise<RadioPicks> {
   const response = await api.post<RadioPicks>("/playback/radio/picks", {
     ...radioSeedParams(options.seed),
     exclude_song_ids: (options.exclude_song_ids ?? []).slice(-500),
+    ...(options.reject_song_ids?.length
+      ? { reject_song_ids: options.reject_song_ids.slice(-500) }
+      : {}),
     limit: options.limit,
   });
   return response.data;

@@ -5,7 +5,10 @@ import {
   defaultRadioSettings,
   getRadioPicks,
   getRadioSettings,
+  radioExhaustedNotice,
   radioMinimumUpcomingPicks,
+  radioPicksExhaustedNotice,
+  radioQueueHistory,
   radioSectionStart,
   radioSeedParams,
   radioSkipReasonEvent,
@@ -62,7 +65,6 @@ import {
 import {
   appendRadioPicks,
   markRadioPickLiked,
-  radioExclusions,
   withoutBannedRadioPicks,
   removeUpcomingItem,
   withoutRadioSection,
@@ -480,10 +482,13 @@ export function usePlayerController() {
         : { kind: "song", id: endingSongId };
     void createPlaybackQueue({
       ...radioSeedParams(seed),
-      exclude_song_ids: radioExclusions(
-        queueRef.current,
-        rejectedSongs.current,
-      ).slice(-100),
+      // The queue so far: Radio prefers fresh songs and, once the library
+      // is used up, brings back the ones heard longest ago.
+      exclude_song_ids: radioQueueHistory(
+        queueRef.current.map((item) => item.song.id),
+        100,
+      ),
+      reject_song_ids: [...rejectedSongs.current],
       generated_items: radioContinuationItems,
       source: "radio",
     })
@@ -514,8 +519,13 @@ export function usePlayerController() {
         setQueueState(items);
         playItem(0);
       })
-      .catch(() => {});
-  }, [playItem, session?.sub, setRadioSeed]);
+      .catch((error: unknown) => {
+        // Radio only runs out when everything left is banned or thumbed
+        // down: say so rather than stopping silently.
+        const notice = radioExhaustedNotice(error);
+        if (notice && radioRequest.current === request) setError(notice);
+      });
+  }, [playItem, session?.sub, setError, setRadioSeed]);
   const handleEnded = useCallback(() => {
     if (loopingRef.current && audio.current) {
       audio.current.currentTime = 0;
@@ -589,7 +599,8 @@ export function usePlayerController() {
       topUp.inFlight = true;
       void getRadioPicks({
         seed,
-        exclude_song_ids: radioExclusions(base, rejectedSongs.current),
+        exclude_song_ids: radioQueueHistory(base.map((item) => item.song.id)),
+        reject_song_ids: [...rejectedSongs.current],
         limit,
       })
         .then((result) => {
@@ -597,9 +608,17 @@ export function usePlayerController() {
           if (!current.length || current[0]?.song.id !== base[0]?.song.id) {
             return;
           }
-          const next = appendRadioPicks(current, radioPickItems(result.items));
+          // Played songs may come back once the library is used up; only
+          // what is still to come must not be queued twice.
+          const next = appendRadioPicks(
+            current,
+            radioPickItems(result.items),
+            index.current + 1,
+          );
           if (next.length === current.length) {
             topUp.exhaustedKey = key;
+            const notice = radioPicksExhaustedNotice(result);
+            if (notice) setError(notice);
             return;
           }
           if (!radioSeedRef.current && result.seed) {
@@ -612,7 +631,7 @@ export function usePlayerController() {
           topUp.inFlight = false;
         });
     },
-    [replaceQueueLocally, setRadioSeed],
+    [replaceQueueLocally, setError, setRadioSeed],
   );
 
   // Keep a few Radio picks visible at the end of the queue while Radio is on.
@@ -691,13 +710,25 @@ export function usePlayerController() {
   const startRadio = useCallback(
     async (seed: RadioSeed) => {
       const generation = ++playbackGeneration.current;
-      const created = await createPlaybackQueue({
-        ...radioSeedParams(seed),
-        explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
-        exclude_song_ids: [...rejectedSongs.current].slice(-100),
-        generated_items: radioContinuationItems,
-        source: "radio",
-      });
+      let created: Awaited<ReturnType<typeof createPlaybackQueue>>;
+      try {
+        created = await createPlaybackQueue({
+          ...radioSeedParams(seed),
+          explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
+          exclude_song_ids: radioQueueHistory(
+            queueRef.current.map((item) => item.song.id),
+            100,
+          ),
+          reject_song_ids: [...rejectedSongs.current],
+          generated_items: radioContinuationItems,
+          source: "radio",
+        });
+      } catch (error) {
+        const notice = radioExhaustedNotice(error);
+        if (!notice) throw error;
+        setError(notice);
+        return null;
+      }
       if (generation !== playbackGeneration.current) {
         return null;
       }

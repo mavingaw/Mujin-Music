@@ -4,6 +4,9 @@ import {
   getPlaybackQueueRevisionConflict,
   getRadioPicks,
   getRadioSettings,
+  radioExhaustedMessage,
+  radioExhaustedNotice,
+  radioPicksExhaustedNotice,
   radioSeedParams,
   updateRadioSettings,
 } from "./playback";
@@ -100,4 +103,64 @@ test("queue revision conflicts expose a validated reconciliation state", () => {
       ),
     ),
   ).toBeNull();
+});
+
+test("radio picks send rejections apart from the recyclable queue", async () => {
+  const post = spyOn(api, "post").mockResolvedValue({
+    data: { items: [] },
+    status: 200,
+    headers: new Headers(),
+  } as never);
+  await getRadioPicks({
+    seed: { kind: "song", id: "s1" },
+    exclude_song_ids: ["s1", "s2"],
+    reject_song_ids: ["s3"],
+    limit: 6,
+  });
+  expect(post).toHaveBeenCalledWith("/playback/radio/picks", {
+    seed_song_id: "s1",
+    exclude_song_ids: ["s1", "s2"],
+    reject_song_ids: ["s3"],
+    limit: 6,
+  });
+});
+
+test("an exhausted Radio is reported, not silently stopped", () => {
+  const exhausted = new ApiError(
+    "unprocessable",
+    {},
+    {
+      status: 422,
+      headers: new Headers(),
+      data: { error: "radio_exhausted", message: "Nothing left." },
+    },
+  );
+  expect(radioExhaustedNotice(exhausted)).toBe("Nothing left.");
+  expect(
+    radioExhaustedNotice(
+      new ApiError(
+        "unprocessable",
+        {},
+        {
+          status: 422,
+          headers: new Headers(),
+          data: { error: "radio_exhausted" },
+        },
+      ),
+    ),
+  ).toBe(radioExhaustedMessage);
+  expect(
+    radioExhaustedNotice(
+      new ApiError(
+        "bad",
+        {},
+        { status: 400, headers: new Headers(), data: { error: "invalid" } },
+      ),
+    ),
+  ).toBeNull();
+  expect(radioExhaustedNotice(new Error("offline"))).toBeNull();
+  expect(radioPicksExhaustedNotice({ items: [], exhausted: true })).toBe(
+    radioExhaustedMessage,
+  );
+  expect(radioPicksExhaustedNotice({ items: [] })).toBeNull();
 });
