@@ -51,6 +51,7 @@ import {
   StreamingTrackList,
   useLibrarySources,
 } from "@/features/streaming/library-sources";
+import { SavedPlaylistCopyCards } from "@/features/streaming/streaming-playlists";
 import {
   localAlbumEntry,
   mergeLibraryAlbums,
@@ -580,6 +581,7 @@ function PlaylistsView({
                 {playlists?.map((playlist) => (
                   <PlaylistCard key={playlist.id} playlist={playlist} />
                 ))}
+                <SavedPlaylistCopyCards />
               </div>
             )}
           </div>

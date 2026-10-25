@@ -14,9 +14,10 @@ use super::md5::hex_digest;
 use super::transport::{ApiRequest, Transport};
 use super::{
     AlbumRef, ArtistRef, ArtistSummary, AudioFormat, BrowsePage, BrowseSection, ClientCredentials,
-    ItemKind, ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderId,
-    ProviderResult, ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults,
-    StreamQuality, StreamSource, StreamingProvider, decode_json, entity_id, status_error, unix_now,
+    ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist, ProviderContext,
+    ProviderError, ProviderId, ProviderPlaylist, ProviderResult, ProviderSession, ProviderTrack,
+    QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource, StreamingProvider,
+    decode_json, entity_id, status_error, unix_now,
 };
 
 pub const API_BASE: &str = "https://www.qobuz.com/api.json/0.2";
@@ -148,6 +149,36 @@ struct QSearch {
     albums: QPage<QAlbum>,
     tracks: QPage<QTrack>,
     artists: QPage<QArtist>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QOwner {
+    #[serde(deserialize_with = "de_id")]
+    id: String,
+    name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QPlaylist {
+    #[serde(deserialize_with = "de_id")]
+    id: String,
+    name: String,
+    description: Option<String>,
+    owner: Option<QOwner>,
+    tracks_count: u32,
+    duration: f64,
+    updated_at: Option<i64>,
+    images300: Vec<String>,
+    image_rectangle: Vec<String>,
+    tracks: Option<QPage<QTrack>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct QPlaylists {
+    playlists: QPage<QPlaylist>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -458,6 +489,38 @@ impl QobuzClient {
         })
     }
 
+    fn normalize_playlist(&self, raw: QPlaylist, user_id: &str) -> ProviderPlaylist {
+        let owner = raw.owner.unwrap_or_default();
+        let cover = raw
+            .image_rectangle
+            .first()
+            .or_else(|| raw.images300.first())
+            .map(String::as_str);
+        let tracks = raw
+            .tracks
+            .map(|page| {
+                page.items
+                    .into_iter()
+                    .map(|track| self.normalize_track(track, None, None))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ProviderPlaylist {
+            id: entity_id(ProviderId::Qobuz, &raw.id),
+            provider: ProviderId::Qobuz,
+            title: raw.name,
+            description: non_empty(raw.description),
+            own: !owner.id.is_empty() && owner.id == user_id,
+            owner: non_empty(owner.name),
+            track_count: raw.tracks_count.max(tracks.len() as u32),
+            duration: raw.duration,
+            cover_url: self.artwork.qobuz(cover),
+            updated_at: raw.updated_at.filter(|at| *at > 0),
+            web_url: Some(format!("https://open.qobuz.com/playlist/{}", raw.id)),
+            tracks,
+        }
+    }
+
     async fn favorites(
         &self,
         context: &ProviderContext,
@@ -756,6 +819,71 @@ impl StreamingProvider for QobuzClient {
                 format: delivered,
                 requested: quality,
             })
+        })
+    }
+
+    fn playlists<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        offset: u32,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<PlaylistPage>> {
+        Box::pin(async move {
+            let body = self
+                .get(
+                    context,
+                    "playlist/getUserPlaylists",
+                    &[("offset", offset.to_string()), ("limit", limit.to_string())],
+                )
+                .await?;
+            let page: QPlaylists = decode_json(&body)?;
+            Ok(PlaylistPage {
+                total: page.playlists.total,
+                playlists: page
+                    .playlists
+                    .items
+                    .into_iter()
+                    .map(|playlist| self.normalize_playlist(playlist, &context.session.user_id))
+                    .collect(),
+            })
+        })
+    }
+
+    fn playlist<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        raw_id: &'a str,
+    ) -> BoxFuture<'a, ProviderResult<ProviderPlaylist>> {
+        Box::pin(async move {
+            let mut playlist: Option<ProviderPlaylist> = None;
+            let mut offset = 0;
+            while offset < MAX_PLAYLIST_TRACKS {
+                let body = self
+                    .get(
+                        context,
+                        "playlist/get",
+                        &[
+                            ("playlist_id", raw_id.to_string()),
+                            ("extra", "tracks".to_string()),
+                            ("offset", offset.to_string()),
+                            ("limit", "500".to_string()),
+                        ],
+                    )
+                    .await?;
+                let raw: QPlaylist = decode_json(&body)?;
+                let total = raw.tracks.as_ref().and_then(|page| page.total);
+                let page = self.normalize_playlist(raw, &context.session.user_id);
+                let received = page.tracks.len() as u32;
+                match playlist.as_mut() {
+                    Some(playlist) => playlist.tracks.extend(page.tracks),
+                    None => playlist = Some(page),
+                }
+                offset += received;
+                if received < 500 || total.is_some_and(|total| offset >= total) {
+                    break;
+                }
+            }
+            playlist.ok_or(ProviderError::NotFound)
         })
     }
 

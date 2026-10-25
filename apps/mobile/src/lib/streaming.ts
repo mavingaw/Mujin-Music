@@ -1,5 +1,6 @@
 import type {
   StreamingAlbum,
+  StreamingDelivery,
   StreamingArtistSummary,
   StreamingProviderId,
   StreamingProviderStatus,
@@ -65,9 +66,45 @@ export function streamingSearchRows(
   return rows;
 }
 
+/** With server credentials, listeners skip straight to signing in. */
+export function needsOwnCredentials(provider: StreamingProviderStatus) {
+  return (
+    !provider.credentials.configured && !provider.server_credentials_available
+  );
+}
+
 export function serviceAction(provider: StreamingProviderStatus) {
   if (provider.status === "signed_in") return "Manage";
-  return provider.credentials.configured ? "Sign in" : "Set up";
+  return needsOwnCredentials(provider) ? "Set up" : "Sign in";
+}
+
+/** The player's signal line: what the stream actually delivered. */
+export function deliveryText(delivery: StreamingDelivery): {
+  label: string;
+  detail: string;
+  warning: string | null;
+} {
+  const format = delivery.delivered;
+  if (!format) {
+    return { label: "Format unknown", detail: "", warning: null };
+  }
+  const channels =
+    format.channels === 1 ? "mono" : format.channels === 2 ? "stereo" : null;
+  const detail = [
+    delivery.sandbox ? "sandbox preview" : "delivered",
+    channels,
+    delivery.frame_verified ? "frame verified" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return {
+    label: format.label,
+    detail,
+    warning:
+      !delivery.sandbox && !delivery.matches_announced
+        ? `Announced ${delivery.announced.label}`
+        : null,
+  };
 }
 
 /** Seconds until a TIDAL device code expires, never negative. */

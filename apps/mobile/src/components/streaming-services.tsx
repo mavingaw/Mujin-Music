@@ -1,4 +1,5 @@
 import {
+  checkStreamingConnection,
   formatLastSync,
   getStreamingProviders,
   pollTidalSignIn,
@@ -25,7 +26,11 @@ import {
 
 import { SourceTag } from "@/components/streaming-ui";
 import { palette } from "@/constants/colors";
-import { codeSecondsLeft, serviceAction } from "@/lib/streaming";
+import {
+  codeSecondsLeft,
+  needsOwnCredentials,
+  serviceAction,
+} from "@/lib/streaming";
 
 const errorText = (error: unknown, fallback: string) =>
   (error as { response?: { data?: { message?: string } } })?.response?.data
@@ -77,9 +82,9 @@ export function StreamingServicesSettings() {
                 ? (provider.account_name ?? "Signed in")
                 : provider.status === "expired"
                   ? "Session expired"
-                  : provider.credentials.configured
-                    ? "Not signed in"
-                    : "Not configured"}
+                  : needsOwnCredentials(provider)
+                    ? "Not configured"
+                    : "Not signed in"}
             </Text>
             <Text style={styles.link}>{serviceAction(provider)}</Text>
           </Pressable>
@@ -87,9 +92,9 @@ export function StreamingServicesSettings() {
         </View>
       ))}
       <Text style={styles.fine}>
-        Bring your own credentials: neither service issues Parson an API key, so
-        Parson ships none and never extracts one. Credentials and tokens are
-        encrypted on your server and never stored on this phone.
+        No API key ships with Parson: neither service issues one, and Parson
+        never extracts one. Your server owner adds them once, then you only sign
+        in. Tokens are encrypted on your server and never stored on this phone.
       </Text>
     </View>
   );
@@ -97,7 +102,7 @@ export function StreamingServicesSettings() {
 
 function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
   const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(!provider.credentials.configured);
+  const [editing, setEditing] = useState(needsOwnCredentials(provider));
   const [clientId, setClientId] = useState("");
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
@@ -107,6 +112,7 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
   );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(provider.status_message ?? "");
+  const [check, setCheck] = useState("");
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ["streaming"] });
   const run = async (task: () => Promise<unknown>, fallback: string) => {
@@ -285,6 +291,28 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
               <Text style={styles.secondaryText}>Log out</Text>
             </Pressable>
           </View>
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            onPress={() =>
+              void run(async () => {
+                const result = await checkStreamingConnection(provider.id);
+                setCheck(
+                  result.steps
+                    .map((step) => `${step.ok ? "✓" : "✕"} ${step.detail}`)
+                    .join("\n"),
+                );
+              }, "Could not run the check.")
+            }
+            style={styles.secondary}
+          >
+            <Text style={styles.secondaryText}>Check connection</Text>
+          </Pressable>
+          {check ? (
+            <Text accessibilityLiveRegion="polite" style={styles.body}>
+              {check}
+            </Text>
+          ) : null}
         </>
       ) : provider.id === "tidal" ? (
         pending ? (
@@ -366,13 +394,13 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
           </Pressable>
         </>
       )}
-      {!editing && provider.credentials.configured ? (
+      {!editing ? (
         <Pressable accessibilityRole="button" onPress={() => setEditing(true)}>
           <Text style={styles.fine}>
-            {provider.credentials.uses_server_credentials
-              ? "Using this server's credentials"
-              : `Credentials ${provider.credentials.client_id_hint ?? ""}`}{" "}
-            · Change
+            {provider.credentials.configured &&
+            !provider.credentials.uses_server_credentials
+              ? `Your credentials ${provider.credentials.client_id_hint ?? ""} · Change`
+              : "Signs in through this server's credentials · Use your own"}
           </Text>
         </Pressable>
       ) : null}

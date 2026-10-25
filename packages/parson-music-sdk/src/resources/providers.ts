@@ -37,6 +37,8 @@ export interface StreamingAudioFormat {
   bit_depth: number | null;
   sample_rate: number | null;
   bitrate_kbps: number | null;
+  /** Present when the format was read from the stream's own bytes. */
+  channels?: number | null;
   /** Badge text such as `24/96 FLAC`, `16/44.1 FLAC` or `AAC 320`. */
   label: string;
 }
@@ -212,6 +214,90 @@ export interface StreamingStreamInfo {
   sandbox: boolean;
 }
 
+/** A service playlist, read-only in Parson. */
+export interface StreamingPlaylist {
+  id: string;
+  provider: StreamingProviderId;
+  title: string;
+  description: string | null;
+  owner: string | null;
+  /** The listener made it, rather than following it. */
+  own: boolean;
+  track_count: number;
+  duration: number;
+  cover_url: string | null;
+  updated_at: number | null;
+  web_url: string | null;
+  /** Present on a single playlist; empty in lists. */
+  tracks: StreamingTrack[];
+  /** When the listener last saved a copy into Parson. */
+  saved_copy_at: number | null;
+}
+
+/** A read-only copy of a service playlist kept in Parson. */
+export interface StreamingPlaylistCopy {
+  id: string;
+  provider: StreamingProviderId;
+  title: string;
+  owner: string | null;
+  cover_url: string | null;
+  track_count: number;
+  duration: number;
+  saved_at: number;
+  /** The saved tracks, on a single copy. */
+  playlist?: Omit<StreamingPlaylist, "saved_copy_at">;
+}
+
+/** Where the server-wide credentials came from. */
+export type StreamingCredentialSource = "environment" | "settings";
+
+/** Server-wide credentials as admins see them: never the values. */
+export interface StreamingServerCredential {
+  provider: StreamingProviderId;
+  name: string;
+  configured: boolean;
+  source: StreamingCredentialSource | null;
+  client_id_hint: string | null;
+  has_secret: boolean;
+  updated_at: number | null;
+}
+
+/** What a stream actually delivered, read from its bytes by the server. */
+export interface StreamingDelivery {
+  track_id: string;
+  requested: StreamQuality;
+  /** What the service said it would send. */
+  announced: StreamingAudioFormat;
+  /** What arrived; `null` if the bytes were not a known format. */
+  delivered: StreamingAudioFormat | null;
+  container: "flac" | "mp4" | "wav" | "mp3" | "adts" | null;
+  /** The first audio frame was parsed and agrees with the header. */
+  frame_verified: boolean;
+  matches_announced: boolean;
+  sandbox: boolean;
+  at: number;
+}
+
+export interface StreamingCheckStep {
+  id: "session" | "favorites" | "stream";
+  ok: boolean;
+  detail: string;
+}
+
+/** "Check connection": sign-in, favorites sync and a real stream read. */
+export interface StreamingConnectionCheck {
+  provider: StreamingProviderId;
+  ok: boolean;
+  sandbox: boolean;
+  account_name: string | null;
+  plan: string | null;
+  steps: StreamingCheckStep[];
+  sync: StreamingSyncReport | null;
+  track: StreamingTrack | null;
+  delivery: StreamingDelivery | null;
+  checked_at: number;
+}
+
 const PROVIDER_ID_PATTERN = /^(tidal|qobuz):([A-Za-z0-9_-]{1,64})$/;
 
 /** Splits a provider-scoped id; `null` for library ids. */
@@ -227,7 +313,10 @@ export function parseStreamingId(
 export const isStreamingId = (id: string | null | undefined) =>
   parseStreamingId(id) !== null;
 
-const entityPath = (kind: "albums" | "artists" | "tracks", id: string) => {
+const entityPath = (
+  kind: "albums" | "artists" | "tracks" | "playlists",
+  id: string,
+) => {
   const parsed = parseStreamingId(id);
   if (!parsed) throw new Error(`Not a streaming id: ${id}`);
   return `/providers/${parsed.provider}/${kind}/${encodeURIComponent(parsed.rawId)}`;
@@ -249,6 +338,93 @@ export async function saveStreamingCredentials(
       credentials,
     )
   ).data;
+}
+
+/** Admins only. */
+export async function getStreamingServerCredentials(): Promise<
+  StreamingServerCredential[]
+> {
+  return (
+    await api.get<{ providers: StreamingServerCredential[] }>(
+      "/providers/server-credentials",
+    )
+  ).data.providers;
+}
+
+/**
+ * Admins only: the TIDAL client or Qobuz app every listener on this server
+ * signs in through, so listeners never need credentials of their own.
+ */
+export async function saveStreamingServerCredentials(
+  provider: StreamingProviderId,
+  credentials: { client_id: string; client_secret?: string | null },
+): Promise<StreamingServerCredential[]> {
+  return (
+    await api.put<{ providers: StreamingServerCredential[] }>(
+      `/providers/${provider}/server-credentials`,
+      credentials,
+    )
+  ).data.providers;
+}
+
+export async function removeStreamingServerCredentials(
+  provider: StreamingProviderId,
+): Promise<StreamingServerCredential[]> {
+  return (
+    await api.delete<{ providers: StreamingServerCredential[] }>(
+      `/providers/${provider}/server-credentials`,
+    )
+  ).data.providers;
+}
+
+/** Signs in, syncs favorites and reads a real stream's delivered format. */
+export async function checkStreamingConnection(
+  provider: StreamingProviderId,
+  trackId?: string,
+): Promise<StreamingConnectionCheck> {
+  return (
+    await api.post<StreamingConnectionCheck>(
+      `/providers/${provider}/check`,
+      trackId ? { track_id: trackId } : {},
+      { timeout: 120_000 },
+    )
+  ).data;
+}
+
+/**
+ * The format the latest stream of this track delivered, or `null` before
+ * its first bytes reached the player.
+ */
+export async function getStreamDelivery(
+  trackId: string,
+): Promise<StreamingDelivery | null> {
+  try {
+    return (
+      await api.get<StreamingDelivery>(
+        `${entityPath("tracks", trackId)}/delivery`,
+      )
+    ).data;
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response
+      ?.status;
+    if (status === 404) return null;
+    throw error;
+  }
+}
+
+/** "24/192 FLAC, stereo" style text for a delivered format. */
+export function describeDelivery(delivery: StreamingDelivery): string {
+  const format = delivery.delivered;
+  if (!format) return "Format not readable";
+  const channels =
+    format.channels === 1
+      ? ", mono"
+      : format.channels === 2
+        ? ", stereo"
+        : format.channels
+          ? `, ${format.channels} channels`
+          : "";
+  return `${format.label}${channels}`;
 }
 
 export async function startTidalSignIn(): Promise<StreamingPendingSignIn> {
@@ -367,6 +543,63 @@ export async function getStreamInfo(
       `${entityPath("tracks", trackId)}/stream-info`,
     )
   ).data;
+}
+
+export async function getStreamingPlaylists(
+  provider: StreamingProviderId,
+  options: { offset?: number; limit?: number } = {},
+): Promise<{ playlists: StreamingPlaylist[]; total: number | null }> {
+  return (
+    await api.get<{ playlists: StreamingPlaylist[]; total: number | null }>(
+      `/providers/${provider}/playlists`,
+      { params: options },
+    )
+  ).data;
+}
+
+export async function getStreamingPlaylist(
+  id: string,
+): Promise<StreamingPlaylist> {
+  return (
+    await api.get<StreamingPlaylist>(entityPath("playlists", id), {
+      timeout: 30_000,
+    })
+  ).data;
+}
+
+export async function getStreamingPlaylistCopies(): Promise<
+  StreamingPlaylistCopy[]
+> {
+  return (
+    await api.get<{ copies: StreamingPlaylistCopy[] }>(
+      "/providers/playlist-copies",
+    )
+  ).data.copies;
+}
+
+export async function getStreamingPlaylistCopy(
+  id: string,
+): Promise<StreamingPlaylistCopy> {
+  return (
+    await api.get<StreamingPlaylistCopy>(`${entityPath("playlists", id)}/copy`)
+  ).data;
+}
+
+/** Saves (or refreshes) a copy in Parson; the service playlist is unchanged. */
+export async function saveStreamingPlaylistCopy(
+  id: string,
+): Promise<StreamingPlaylistCopy> {
+  return (
+    await api.put<StreamingPlaylistCopy>(
+      `${entityPath("playlists", id)}/copy`,
+      undefined,
+      { timeout: 30_000 },
+    )
+  ).data;
+}
+
+export async function removeStreamingPlaylistCopy(id: string): Promise<void> {
+  await api.delete(`${entityPath("playlists", id)}/copy`);
 }
 
 export async function browseStreaming(

@@ -3096,5 +3096,420 @@
       }
     ],
     "query": [["audioquality", "HI_RES_LOSSLESS"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/users/5550101/playlistsAndFavoritePlaylists",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "type": "USER_CREATED",
+              "created": "2026-10-20T21:14:03.000+0000",
+              "playlist": {
+                "uuid": "7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d",
+                "title": "Late Night Hi-Res",
+                "description": "Quiet records in their best resolution.",
+                "type": "USER",
+                "creator": {
+                  "id": 5550101,
+                  "name": "recorded-tidal"
+                },
+                "numberOfTracks": 4,
+                "duration": 1026,
+                "squareImage": "5d1f0a3e-8c2b-4f6a-9e1d-7b3c2a1f0e9d",
+                "image": "5d1f0a3e-8c2b-4f6a-9e1d-7b3c2a1f0e9d",
+                "lastUpdated": "2026-10-20T21:14:03.000+0000",
+                "url": "http://www.tidal.com/playlist/7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d",
+                "publicPlaylist": false
+              }
+            },
+            {
+              "type": "USER_FAVORITE",
+              "created": "2026-09-02T08:00:00.000+0000",
+              "playlist": {
+                "uuid": "c0ffee00-1234-4abc-8def-001122334455",
+                "title": "Harbor Sessions",
+                "description": "Live takes from the harbor studio.",
+                "type": "EDITORIAL",
+                "creator": {
+                  "id": 0,
+                  "name": "TIDAL"
+                },
+                "numberOfTracks": 3,
+                "duration": 666,
+                "squareImage": "8e2a4c6b-1d3f-4a5e-9b7c-2d4f6a8c0e1b",
+                "image": "8e2a4c6b-1d3f-4a5e-9b7c-2d4f6a8c0e1b",
+                "lastUpdated": "2026-09-02T08:00:00.000+0000",
+                "url": "http://www.tidal.com/playlist/c0ffee00-1234-4abc-8def-001122334455",
+                "publicPlaylist": true
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/playlists/7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d/items",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 100,
+          "offset": 0,
+          "totalNumberOfItems": 4,
+          "items": [
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300101,
+                "title": "Harbor Lights",
+                "duration": 241,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              }
+            },
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300201,
+                "title": "Paper Moons",
+                "duration": 222,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0020001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300200,
+                  "title": "Paper Moons",
+                  "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+                }
+              }
+            },
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300301,
+                "title": "Low Tide Hymn",
+                "duration": 287,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0030001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                },
+                "artists": [
+                  {
+                    "id": 400200,
+                    "name": "The Lantern Choir",
+                    "type": "MAIN",
+                    "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                  }
+                ],
+                "album": {
+                  "id": 300300,
+                  "title": "Low Tide Hymns",
+                  "cover": "9081faae-4cbe-6b51-b401-8718ed213f85"
+                }
+              }
+            },
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300401,
+                "title": "Blue Hour Shuffle",
+                "duration": 276,
+                "trackNumber": 1,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0040001",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                },
+                "artists": [
+                  {
+                    "id": 400300,
+                    "name": "Okonkwo Quartet",
+                    "type": "MAIN",
+                    "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                  }
+                ],
+                "album": {
+                  "id": 300400,
+                  "title": "Night Shift Standards",
+                  "cover": "984b27db-e60f-8005-4fac-234600f0e1ee"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/playlists/7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "uuid": "7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d",
+          "title": "Late Night Hi-Res",
+          "description": "Quiet records in their best resolution.",
+          "type": "USER",
+          "creator": {
+            "id": 5550101,
+            "name": "recorded-tidal"
+          },
+          "numberOfTracks": 4,
+          "duration": 1026,
+          "squareImage": "5d1f0a3e-8c2b-4f6a-9e1d-7b3c2a1f0e9d",
+          "image": "5d1f0a3e-8c2b-4f6a-9e1d-7b3c2a1f0e9d",
+          "lastUpdated": "2026-10-20T21:14:03.000+0000",
+          "url": "http://www.tidal.com/playlist/7a3f2c10-5b4e-4d1a-9c2b-0e1f2a3b4c5d",
+          "publicPlaylist": false
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/playlists/c0ffee00-1234-4abc-8def-001122334455/items",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 100,
+          "offset": 0,
+          "totalNumberOfItems": 3,
+          "items": [
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300102,
+                "title": "Salt in the Wiring",
+                "duration": 198,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              }
+            },
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300103,
+                "title": "Kept the Porch Light On",
+                "duration": 263,
+                "trackNumber": 3,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0010003",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300100,
+                  "title": "Harbor Lights",
+                  "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb"
+                }
+              }
+            },
+            {
+              "type": "track",
+              "cut": null,
+              "item": {
+                "id": 300202,
+                "title": "Atlas of Small Rooms",
+                "duration": 205,
+                "trackNumber": 2,
+                "volumeNumber": 1,
+                "explicit": false,
+                "isrc": "GBPRS0020002",
+                "audioQuality": "LOSSLESS",
+                "mediaMetadata": {
+                  "tags": ["LOSSLESS"]
+                },
+                "allowStreaming": true,
+                "streamReady": true,
+                "version": null,
+                "artist": {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                },
+                "artists": [
+                  {
+                    "id": 400100,
+                    "name": "Mara Vell",
+                    "type": "MAIN",
+                    "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                  }
+                ],
+                "album": {
+                  "id": 300200,
+                  "title": "Paper Moons",
+                  "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/playlists/c0ffee00-1234-4abc-8def-001122334455",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "uuid": "c0ffee00-1234-4abc-8def-001122334455",
+          "title": "Harbor Sessions",
+          "description": "Live takes from the harbor studio.",
+          "type": "EDITORIAL",
+          "creator": {
+            "id": 0,
+            "name": "TIDAL"
+          },
+          "numberOfTracks": 3,
+          "duration": 666,
+          "squareImage": "8e2a4c6b-1d3f-4a5e-9b7c-2d4f6a8c0e1b",
+          "image": "8e2a4c6b-1d3f-4a5e-9b7c-2d4f6a8c0e1b",
+          "lastUpdated": "2026-09-02T08:00:00.000+0000",
+          "url": "http://www.tidal.com/playlist/c0ffee00-1234-4abc-8def-001122334455",
+          "publicPlaylist": true
+        }
+      }
+    ]
   }
 ]

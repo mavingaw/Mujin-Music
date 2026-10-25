@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
+import { StreamDeliveryLine } from "@/components/streaming-ui";
 import {
   ChevronDown,
   ChevronLeft,
@@ -202,6 +203,7 @@ function NowPlayingPanel({
           >
             {song.artist}
           </Text>
+          <StreamDeliveryLine songId={song.id} />
         </View>
         <Pressable
           {...immediateBorderlessPressFeedback}

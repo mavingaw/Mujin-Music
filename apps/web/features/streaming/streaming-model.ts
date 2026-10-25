@@ -2,6 +2,7 @@ import type {
   LibraryCatalogAlbum,
   StreamingAlbum,
   StreamingAudioFormat,
+  StreamingDelivery,
   StreamingLibraryItem,
   StreamingProviderId,
   StreamingProviderStatus,
@@ -156,10 +157,101 @@ export function providerStatusLine(provider: StreamingProviderStatus): string {
     case "error":
       return provider.status_message ?? "Something went wrong";
     default:
-      return provider.credentials.configured
-        ? "Credentials saved. Not signed in."
+      if (provider.credentials.configured) {
+        return provider.credentials.uses_server_credentials
+          ? "Not signed in"
+          : "Credentials saved. Not signed in.";
+      }
+      return provider.server_credentials_available
+        ? "Not signed in"
         : "Not configured";
   }
+}
+
+/**
+ * Whether the listener must enter API credentials before signing in. With
+ * server credentials available they never do: sign-in uses those.
+ */
+export function needsOwnCredentials(provider: StreamingProviderStatus) {
+  return (
+    !provider.credentials.configured && !provider.server_credentials_available
+  );
+}
+
+/** The service row's main action. */
+export function serviceAction(
+  provider: StreamingProviderStatus,
+): "Edit" | "Sign in" | "Set up" {
+  if (provider.status === "signed_in") return "Edit";
+  return needsOwnCredentials(provider) ? "Set up" : "Sign in";
+}
+
+const qualityNames: Record<string, string> = {
+  hi_res_max: "Max",
+  hi_res_96: "Hi-Res 96",
+  lossless: "CD quality",
+  high: "High",
+  low: "Low",
+};
+
+export type DeliverySummary = {
+  /** Short badge text: what actually arrived. */
+  badge: string;
+  tone: FormatTone | null;
+  /** Detail lines for the signal-path popover. */
+  lines: string[];
+  /** Set when what arrived differs from what the service announced. */
+  warning: string | null;
+};
+
+/** Describes a stream's delivered format for the player. */
+export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
+  const format = delivery.delivered;
+  const requested = qualityNames[delivery.requested] ?? delivery.requested;
+  if (!format) {
+    return {
+      badge: "Format unknown",
+      tone: null,
+      lines: [
+        `Requested ${requested}`,
+        `Service announced ${delivery.announced.label}`,
+        "The stream's format could not be read",
+      ],
+      warning: null,
+    };
+  }
+  const channels =
+    format.channels === 1
+      ? "mono"
+      : format.channels === 2
+        ? "stereo"
+        : format.channels
+          ? `${format.channels} channels`
+          : null;
+  const container =
+    delivery.container === "mp4"
+      ? "in MP4 segments"
+      : delivery.container === "flac"
+        ? "as a FLAC file"
+        : null;
+  const lines = [
+    `Requested ${requested}`,
+    `Delivered ${[format.label, channels, container].filter(Boolean).join(", ")}`,
+  ];
+  if (delivery.frame_verified) lines.push("First audio frame verified");
+  if (delivery.sandbox) {
+    lines.push("Sandbox preview tone, not a real stream");
+  }
+  const warning =
+    !delivery.sandbox && !delivery.matches_announced
+      ? `The service announced ${delivery.announced.label}`
+      : null;
+  return {
+    badge: delivery.sandbox ? `Preview ${format.label}` : format.label,
+    tone: formatTone(format),
+    lines,
+    warning,
+  };
 }
 
 export function totalDurationLabel(seconds: number) {

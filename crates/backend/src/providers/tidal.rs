@@ -15,9 +15,10 @@ use super::artwork::ArtworkMode;
 use super::transport::{ApiRequest, Transport};
 use super::{
     AlbumRef, ArtistRef, ArtistSummary, AudioFormat, BrowsePage, BrowseSection, ClientCredentials,
-    ItemKind, ProviderAlbum, ProviderArtist, ProviderContext, ProviderError, ProviderId,
-    ProviderResult, ProviderSession, ProviderTrack, QualityOption, ResolvedStream, SearchResults,
-    StreamQuality, StreamSource, StreamingProvider, decode_json, entity_id, status_error, unix_now,
+    ItemKind, MAX_PLAYLIST_TRACKS, PlaylistPage, ProviderAlbum, ProviderArtist, ProviderContext,
+    ProviderError, ProviderId, ProviderPlaylist, ProviderResult, ProviderSession, ProviderTrack,
+    QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource, StreamingProvider,
+    decode_json, entity_id, status_error, unix_now,
 };
 
 pub const AUTH_BASE: &str = "https://auth.tidal.com/v1/oauth2";
@@ -189,6 +190,58 @@ impl<T> MaybeWrapped<T> {
             Self::Wrapped { item } | Self::Bare(item) => item,
         }
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TCreator {
+    #[serde(deserialize_with = "de_opt_id")]
+    id: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct TPlaylist {
+    uuid: String,
+    title: String,
+    description: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    creator: Option<TCreator>,
+    number_of_tracks: u32,
+    duration: f64,
+    square_image: Option<String>,
+    image: Option<String>,
+    last_updated: Option<String>,
+}
+
+/// `playlistsAndFavoritePlaylists` wraps each playlist with how the
+/// listener relates to it.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TPlaylistEntry {
+    Wrapped {
+        #[serde(rename = "type", default)]
+        relation: Option<String>,
+        playlist: TPlaylist,
+    },
+    Bare(TPlaylist),
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TPlaylistItem {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    item: Option<serde_json::Value>,
+}
+
+/// TIDAL's `2026-10-20T21:14:03.000+0000` timestamps.
+fn tidal_time(value: Option<&str>) -> Option<i64> {
+    chrono::DateTime::parse_from_str(value?, "%Y-%m-%dT%H:%M:%S%.f%z")
+        .ok()
+        .map(|time| time.timestamp())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -494,6 +547,37 @@ impl TidalClient {
             Ok(reply.body)
         } else {
             Err(status_error(reply.status))
+        }
+    }
+
+    fn normalize_playlist(
+        &self,
+        raw: TPlaylist,
+        relation: Option<&str>,
+        user_id: &str,
+    ) -> ProviderPlaylist {
+        let creator = raw.creator.unwrap_or_default();
+        let own = relation == Some("USER_CREATED")
+            || creator.id.as_deref().is_some_and(|id| id == user_id);
+        let owner = non_empty(creator.name).or_else(|| match raw.kind.as_deref() {
+            Some("EDITORIAL") => Some("TIDAL".to_string()),
+            _ => None,
+        });
+        ProviderPlaylist {
+            id: entity_id(ProviderId::Tidal, &raw.uuid),
+            provider: ProviderId::Tidal,
+            title: raw.title,
+            description: non_empty(raw.description),
+            owner,
+            own,
+            track_count: raw.number_of_tracks,
+            duration: raw.duration,
+            cover_url: self
+                .artwork
+                .tidal(raw.square_image.as_deref().or(raw.image.as_deref()), 640),
+            updated_at: tidal_time(raw.last_updated.as_deref()),
+            web_url: Some(format!("https://tidal.com/browse/playlist/{}", raw.uuid)),
+            tracks: Vec::new(),
         }
     }
 
@@ -986,6 +1070,89 @@ impl StreamingProvider for TidalClient {
                     "unsupported TIDAL manifest type {other}"
                 ))),
             }
+        })
+    }
+
+    fn playlists<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        offset: u32,
+        limit: u32,
+    ) -> BoxFuture<'a, ProviderResult<PlaylistPage>> {
+        Box::pin(async move {
+            let user = &context.session.user_id;
+            let body = self
+                .get(
+                    context,
+                    &format!("/users/{user}/playlistsAndFavoritePlaylists"),
+                    &[
+                        ("offset", offset.to_string()),
+                        ("limit", limit.to_string()),
+                        ("order", "DATE".to_string()),
+                        ("orderDirection", "DESC".to_string()),
+                    ],
+                )
+                .await?;
+            let page: TPage<TPlaylistEntry> = decode_json(&body)?;
+            Ok(PlaylistPage {
+                playlists: page
+                    .items
+                    .into_iter()
+                    .map(|entry| match entry {
+                        TPlaylistEntry::Wrapped { relation, playlist } => {
+                            self.normalize_playlist(playlist, relation.as_deref(), user)
+                        }
+                        TPlaylistEntry::Bare(playlist) => {
+                            self.normalize_playlist(playlist, None, user)
+                        }
+                    })
+                    .collect(),
+                total: page.total_number_of_items,
+            })
+        })
+    }
+
+    fn playlist<'a>(
+        &'a self,
+        context: &'a ProviderContext,
+        raw_id: &'a str,
+    ) -> BoxFuture<'a, ProviderResult<ProviderPlaylist>> {
+        Box::pin(async move {
+            let body = self
+                .get(context, &format!("/playlists/{raw_id}"), &[])
+                .await?;
+            let mut playlist =
+                self.normalize_playlist(decode_json(&body)?, None, &context.session.user_id);
+            let mut offset = 0;
+            while offset < MAX_PLAYLIST_TRACKS {
+                let body = self
+                    .get(
+                        context,
+                        &format!("/playlists/{raw_id}/items"),
+                        &[("offset", offset.to_string()), ("limit", "100".to_string())],
+                    )
+                    .await?;
+                let page: TPage<TPlaylistItem> = decode_json(&body)?;
+                let received = page.items.len() as u32;
+                // Playlists can hold videos; Parson plays the tracks.
+                playlist.tracks.extend(
+                    page.items
+                        .into_iter()
+                        .filter(|entry| entry.kind.as_deref().is_none_or(|kind| kind == "track"))
+                        .filter_map(|entry| serde_json::from_value::<TTrack>(entry.item?).ok())
+                        .map(|track| self.normalize_track(track)),
+                );
+                offset += received;
+                if received < 100
+                    || page
+                        .total_number_of_items
+                        .is_some_and(|total| offset >= total)
+                {
+                    break;
+                }
+            }
+            playlist.track_count = playlist.track_count.max(playlist.tracks.len() as u32);
+            Ok(playlist)
         })
     }
 

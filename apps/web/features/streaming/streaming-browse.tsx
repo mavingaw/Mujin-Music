@@ -16,13 +16,20 @@ import AlbumCard from "@/features/library/album-card";
 import { ProviderMark } from "./source-badge";
 import { SandboxNotice } from "./services-settings";
 import { StreamingTrackList } from "./library-sources";
+import { StreamingPlaylistsSection } from "./streaming-playlists";
 import { useStreamingProviders } from "./use-streaming";
 
-const sections: { id: StreamingBrowseSection; label: string }[] = [
+type Section = StreamingBrowseSection | "playlists";
+
+const sections: { id: Section; label: string }[] = [
   { id: "new_releases", label: "New releases" },
   { id: "favorite_albums", label: "Favorite albums" },
   { id: "favorite_tracks", label: "Favorite tracks" },
+  { id: "playlists", label: "Playlists" },
 ];
+
+const isSection = (value: string | null): value is Section =>
+  sections.some((section) => section.id === value);
 
 function BrowseSectionView({
   provider,
@@ -93,8 +100,10 @@ export default function StreamingBrowse() {
   const [chosen, setChosen] = useState<StreamingProviderId | null>(
     requested === "tidal" || requested === "qobuz" ? requested : null,
   );
-  const [section, setSection] =
-    useState<StreamingBrowseSection>("new_releases");
+  const requestedSection = useSearchParams().get("section");
+  const [section, setSection] = useState<Section>(
+    isSection(requestedSection) ? requestedSection : "new_releases",
+  );
   const active =
     connected.find((provider) => provider.id === chosen) ?? connected[0];
 
@@ -135,8 +144,8 @@ export default function StreamingBrowse() {
             Connect TIDAL or Qobuz
           </p>
           <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-400">
-            Sign in with your own account and credentials to browse new releases
-            and favorites, and to add streaming albums to your library.
+            Sign in with your account to browse new releases, favorites and
+            playlists, and to add streaming albums to your library.
           </p>
           <Link
             className="mt-6 inline-flex h-10 items-center rounded-full bg-white px-6 text-sm font-semibold text-black"
@@ -172,11 +181,18 @@ export default function StreamingBrowse() {
               </button>
             ))}
           </nav>
-          <BrowseSectionView
-            key={`${active.id}-${section}`}
-            provider={active.id}
-            section={section}
-          />
+          {section === "playlists" ? (
+            <StreamingPlaylistsSection
+              key={`${active.id}-playlists`}
+              provider={active.id}
+            />
+          ) : (
+            <BrowseSectionView
+              key={`${active.id}-${section}`}
+              provider={active.id}
+              section={section}
+            />
+          )}
         </>
       )}
     </section>

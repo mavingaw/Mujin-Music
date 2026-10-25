@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
-import type { StreamingProviderStatus } from "@parson/music-sdk";
+import type {
+  StreamingDelivery,
+  StreamingProviderStatus,
+} from "@parson/music-sdk";
 import {
+  deliverySummary,
+  needsOwnCredentials,
+  serviceAction,
   formatTone,
   formatToneFromLabel,
   mergeLibraryAlbums,
@@ -114,4 +120,109 @@ test("service rows explain what to do next", () => {
   expect(
     providerStatusLine({ ...base, status: "signed_in", account_name: "ada" }),
   ).toBe("Signed in as ada");
+});
+
+const status = (
+  overrides: Partial<StreamingProviderStatus> = {},
+): StreamingProviderStatus => ({
+  id: "qobuz",
+  name: "Qobuz",
+  sign_in: "password",
+  status: "configured",
+  status_message: null,
+  account_name: null,
+  plan: null,
+  quality: "hi_res_max",
+  quality_options: [],
+  last_library_sync: null,
+  credentials: {
+    configured: false,
+    client_id_hint: null,
+    has_secret: false,
+    uses_server_credentials: false,
+  },
+  server_credentials_available: false,
+  pending: null,
+  library: { albums: 0, tracks: 0 },
+  sandbox: false,
+  ...overrides,
+});
+
+test("server credentials skip the credentials step", () => {
+  const bare = status();
+  expect(needsOwnCredentials(bare)).toBeTrue();
+  expect(serviceAction(bare)).toBe("Set up");
+  expect(providerStatusLine(bare)).toBe("Not configured");
+
+  const withServer = status({ server_credentials_available: true });
+  expect(needsOwnCredentials(withServer)).toBeFalse();
+  expect(serviceAction(withServer)).toBe("Sign in");
+  expect(providerStatusLine(withServer)).toBe("Not signed in");
+
+  expect(serviceAction(status({ status: "signed_in" }))).toBe("Edit");
+});
+
+const flac = (bitDepth: number, sampleRate: number, label: string) => ({
+  codec: "flac",
+  lossless: true,
+  bit_depth: bitDepth,
+  sample_rate: sampleRate,
+  bitrate_kbps: null,
+  channels: 2,
+  label,
+});
+
+const delivery = (
+  overrides: Partial<StreamingDelivery> = {},
+): StreamingDelivery => ({
+  track_id: "tidal:300101",
+  requested: "hi_res_max",
+  announced: flac(24, 192000, "24/192 FLAC"),
+  delivered: flac(24, 192000, "24/192 FLAC"),
+  container: "mp4",
+  frame_verified: true,
+  matches_announced: true,
+  sandbox: false,
+  at: 0,
+  ...overrides,
+});
+
+test("the player shows what the stream actually delivered", () => {
+  const summary = deliverySummary(delivery());
+  expect(summary.badge).toBe("24/192 FLAC");
+  expect(summary.tone).toBe("hi-res");
+  expect(summary.lines).toEqual([
+    "Requested Max",
+    "Delivered 24/192 FLAC, stereo, in MP4 segments",
+    "First audio frame verified",
+  ]);
+  expect(summary.warning).toBeNull();
+
+  const downgraded = deliverySummary(
+    delivery({
+      delivered: flac(16, 44100, "16/44.1 FLAC"),
+      matches_announced: false,
+      container: "flac",
+    }),
+  );
+  expect(downgraded.badge).toBe("16/44.1 FLAC");
+  expect(downgraded.tone).toBe("lossless");
+  expect(downgraded.warning).toBe("The service announced 24/192 FLAC");
+
+  const sandbox = deliverySummary(
+    delivery({
+      sandbox: true,
+      matches_announced: false,
+      delivered: { ...flac(16, 44100, "16/44.1 PCM"), codec: "pcm" },
+      container: "wav",
+      frame_verified: false,
+    }),
+  );
+  expect(sandbox.badge).toBe("Preview 16/44.1 PCM");
+  expect(sandbox.warning).toBeNull();
+  expect(sandbox.lines.at(-1)).toBe("Sandbox preview tone, not a real stream");
+
+  expect(deliverySummary(delivery({ delivered: null })).badge).toBe(
+    "Format unknown",
+  );
 });
