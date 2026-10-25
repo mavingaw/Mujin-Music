@@ -2,6 +2,8 @@
 
 import type {
   DspSettings,
+  NativeOutputDevice,
+  ServerSignalPath,
   VolumeLevelingMode,
   VolumeLevelingResult,
 } from "@parson/music-sdk";
@@ -73,6 +75,16 @@ export type PlayerSignalState = {
   /** Label of the device audio goes to, when the browser reveals it. */
   outputName: string | null;
   outputChosen: boolean;
+  /**
+   * A server output is playing instead of this browser; its path comes
+   * from the server, including the device and driver.
+   */
+  native: {
+    deviceId: string;
+    name: string | null;
+    /** The playing session's path, once the server has started. */
+    signalPath: ServerSignalPath | null;
+  } | null;
 };
 
 export type PlayerOutputState = {
@@ -87,6 +99,10 @@ export type PlayerOutputState = {
   selectable: boolean;
   select: (id: string) => void;
   requestLabels: () => Promise<void>;
+  /** The server's own devices; choosing one stores `server:<id>`. */
+  serverDevices: NativeOutputDevice[];
+  /** The server is playing (or will play) instead of this browser. */
+  serverOutputId: string | null;
 };
 
 export const PlayerContext = createContext<Omit<Player, "currentTime"> | null>(

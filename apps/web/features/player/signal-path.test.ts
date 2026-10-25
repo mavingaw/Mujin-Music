@@ -22,6 +22,7 @@ const base: WebSignalInput = {
     deviceSampleRate: null,
     outputName: null,
     outputChosen: false,
+    native: null,
   },
   volume: 1,
 };
@@ -68,9 +69,30 @@ describe("web client leg", () => {
       expect.objectContaining({
         title: "Schiit Modi+ (USB Audio)",
         detail: "Selected output, shared mode, 44.1kHz",
+        quality: "high_quality",
       }),
     );
-    expect(path.quality).toBe("lossless");
+    // Untouched up to the system mixer, but a shared-mode browser output
+    // is never rated lossless.
+    expect(path.bitPerfectToOutput).toBeTrue();
+    expect(path.quality).toBe("high_quality");
+  });
+
+  test("a server output hands the whole path to the server", () => {
+    const leg = webClientLeg({
+      ...base,
+      volume: 0.5,
+      signal: {
+        ...base.signal,
+        engine: "web-audio",
+        contextSampleRate: 48_000,
+        outputName: "USB DAC",
+        native: { deviceId: "alsa:USB:0", name: "USB DAC", signalPath: null },
+      },
+    });
+    expect(leg.output).toEqual({ kind: "native", name: "USB DAC" });
+    const path = buildSignalPath(null, leg, flac);
+    expect(path.stages.map((stage) => stage.id)).toEqual(["source"]);
   });
 
   test("processed presets carry their speed, pitch and reverb into the path", () => {

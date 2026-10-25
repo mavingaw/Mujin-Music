@@ -233,8 +233,13 @@ export type SongSignalPathOptions = {
   bitrate?: number;
   /** Server DSP, as accepted by the stream endpoint. */
   audioEffect?: string | null;
-  /** `cast` describes what a Cast receiver is sent. */
+  /**
+   * `cast` describes what a Cast receiver is sent; `native` describes the
+   * server playing to one of its own devices (`device`).
+   */
   target?: SignalStreamTarget;
+  /** Server output device id, for `target: "native"`. */
+  device?: string | null;
 };
 
 const signalPathCache = new Map<
@@ -254,11 +259,12 @@ export function getSongSignalPath(
 ): Promise<ServerSignalPath> {
   const bitrate = options.bitrate ?? 0;
   const target = options.target ?? "direct";
-  const key = `${songId}:${bitrate}:${options.audioEffect ?? ""}:${target}`;
+  const key = `${songId}:${bitrate}:${options.audioEffect ?? ""}:${target}:${options.device ?? ""}`;
   const cached = signalPathCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   const params: Record<string, string | number> = { bitrate, target };
   if (options.audioEffect) params.audio_effect = options.audioEffect;
+  if (target === "native" && options.device) params.device = options.device;
   const value = api
     .get<ServerSignalPath>(
       `/media/songs/${encodeURIComponent(songId)}/signal-path`,

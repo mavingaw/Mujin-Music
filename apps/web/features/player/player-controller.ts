@@ -1,6 +1,6 @@
 "use client";
 
-import { createPlaybackQueue } from "@parson/music-sdk";
+import { createPlaybackQueue, volumeLevelingGain } from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/features/account/session-provider";
@@ -41,6 +41,7 @@ import {
   useOutputDeviceChoice,
 } from "./dsp-store";
 import { usePlaybackTelemetry } from "./player-telemetry";
+import { serverOutputId, useNativeOutputs } from "./use-native-outputs";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
 import { useQueueRestore } from "./use-queue-restore";
 import {
@@ -70,12 +71,15 @@ export function usePlayerController() {
     graphSampleRate,
     isPlaying,
     muted,
+    nativeSession,
     playAudioSource,
     preloadAudioSource,
     reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
     setDspSettings,
+    setNativeLeveling,
+    setNativeOutput,
     setOutputDevice,
     setAudioSource,
     setAudioVolume,
@@ -107,14 +111,29 @@ export function usePlayerController() {
   const [volumeLevelingMode, setVolumeLevelingMode] = useVolumeLevelingMode();
   const [outputDeviceId, setOutputDeviceId] = useOutputDeviceChoice();
   const outputs = useAudioOutputs();
+  const nativeOutputs = useNativeOutputs();
+  const nativeDeviceId = serverOutputId(outputDeviceId);
+  const nativeDevice =
+    nativeOutputs.data?.devices.find(
+      (device) => device.id === nativeDeviceId,
+    ) ?? null;
   const [dsp, setDsp] = useDspSettings(outputDeviceId);
   useEffect(() => {
-    void setOutputDevice(outputDeviceId);
-  }, [outputDeviceId, outputs.devices, setOutputDevice]);
+    setNativeOutput(nativeDeviceId);
+    void setOutputDevice(nativeDeviceId ? "" : outputDeviceId);
+  }, [
+    nativeDeviceId,
+    outputDeviceId,
+    outputs.devices,
+    setNativeOutput,
+    setOutputDevice,
+  ]);
   useEffect(() => {
     setDspSettings(dsp);
   }, [dsp, setDspSettings]);
-  const outputName = outputDeviceLabel(outputs.devices, activeSinkId);
+  const outputName = nativeDeviceId
+    ? (nativeSession?.device_name ?? nativeDevice?.name ?? "Server output")
+    : outputDeviceLabel(outputs.devices, activeSinkId);
   const queuePositionSync = useRef<Promise<void>>(Promise.resolve());
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -509,6 +528,22 @@ export function usePlayerController() {
   useEffect(() => {
     setLevelingGain(leveling.gain);
   }, [leveling.gain, setLevelingGain]);
+  // A server output levels on the server, in float, limited only by the
+  // track's peak (its volume is fixed, so there is no slider headroom).
+  const nativeLeveling = useMemo(() => {
+    const result = volumeLevelingGain(song.loudness, volumeLevelingMode, {
+      albumContext: playsInAlbumContext(
+        queue.map((item) => item.album.id || item.song.album_object.id),
+        queue[index.current]?.song.id === song.id ? index.current : -1,
+      ),
+    });
+    return result && Math.abs(result.appliedDb) >= 0.05
+      ? { gain_db: result.appliedDb, source: result.source }
+      : null;
+  }, [queue, song.id, song.loudness, volumeLevelingMode]);
+  useEffect(() => {
+    setNativeLeveling(nativeLeveling);
+  }, [nativeLeveling, setNativeLeveling]);
 
   useTransientPlayerError(error, setError);
   useAudioEvents({
@@ -578,6 +613,16 @@ export function usePlayerController() {
         deviceSampleRate,
         outputName,
         outputChosen: Boolean(activeSinkId),
+        native: nativeDeviceId
+          ? {
+              deviceId: nativeDeviceId,
+              name: outputName,
+              signalPath:
+                nativeSession && nativeSession.song_id === song.id
+                  ? nativeSession.signal_path
+                  : null,
+            }
+          : null,
       },
       volumeLevelingMode,
       setVolumeLevelingMode,
@@ -592,6 +637,8 @@ export function usePlayerController() {
         selectable: supportsOutputSelection(),
         select: setOutputDeviceId,
         requestLabels: outputs.requestLabels,
+        serverDevices: nativeOutputs.data?.devices ?? [],
+        serverOutputId: nativeDeviceId,
       },
       setSongCallback,
       setQueue,
@@ -646,6 +693,9 @@ export function usePlayerController() {
       dsp,
       outputDeviceId,
       outputName,
+      nativeDeviceId,
+      nativeOutputs.data,
+      nativeSession,
       outputs.devices,
       outputs.labelsHidden,
       outputs.requestLabels,

@@ -73,7 +73,7 @@ const plainBrowser: ClientSignalLeg = {
 const ids = (stages: { id: string }[]) => stages.map((stage) => stage.id);
 
 describe("signal path classification", () => {
-  test("an untouched lossless stream at the device rate is lossless", () => {
+  test("an untouched stream through a shared-mode output is high quality, not lossless", () => {
     const path = buildSignalPath(originalServer(), {
       ...plainBrowser,
       deviceSampleRate: 96_000,
@@ -85,19 +85,24 @@ describe("signal path classification", () => {
       "client-decode",
       "client-output",
     ]);
-    expect(path.quality).toBe("lossless");
+    // Roon rates an OS mixer output high quality: the browser cannot open
+    // the device exclusively, so the system may resample or mix.
+    expect(path.quality).toBe("high_quality");
     expect(path.bitPerfectToOutput).toBeTrue();
+    expect(path.bitPerfect).toBeFalse();
     expect(path.highRes).toBeTrue();
     expect(path.stages[3]).toEqual(
       expect.objectContaining({
         title: "USB DAC",
         detail: "Selected output, shared mode, 96kHz",
-        quality: "lossless",
+        quality: "high_quality",
       }),
     );
+    expect(path.stages[3]!.explanation).toContain("server output");
     expect(path.description).toBe(
-      "A high-resolution lossless stream reaches USB DAC without being modified.",
+      "USB DAC is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.",
     );
+    expect(path.description).not.toContain("without being modified");
     expect(signalPathSummary(path)).toBe("FLAC 96kHz 24bit 2ch");
   });
 
@@ -117,7 +122,7 @@ describe("signal path classification", () => {
     expect(path.stages[4]!.title).toBe("System default output");
     expect(path.quality).toBe("high_quality");
     expect(path.description).toBe(
-      "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 96kHz to 48kHz.",
+      "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 96kHz to 48kHz. System default output is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.",
     );
   });
 
@@ -183,9 +188,15 @@ describe("signal path classification", () => {
       reverbWet: 0.18,
       presetLabel: "Slow",
     });
-    expect(matched.quality).toBe("enhanced");
-    expect(matched.description).toStartWith(
-      "Parson is processing the audio because you asked it to: Slow: speed",
+    // Processing you asked for is enhanced, but the shared-mode output
+    // still decides the light.
+    expect(
+      matched.stages.find((stage) => stage.id === "client-speed")?.quality,
+    ).toBe("enhanced");
+    expect(matched.quality).toBe("high_quality");
+    expect(matched.description).toContain("reached in shared mode");
+    expect(matched.description).toContain(
+      "It also applies processing you asked for: Slow: speed",
     );
     expect(matched.description).not.toContain("did not ask");
 
@@ -196,6 +207,93 @@ describe("signal path classification", () => {
     expect(quiet.stages.find((stage) => stage.id === "client-volume")).toEqual(
       expect.objectContaining({ detail: "−6.0 dB", quality: "high_quality" }),
     );
+  });
+
+  test("a server output in exclusive mode is bit-perfect and the client adds nothing", () => {
+    const server: ServerSignalPath = {
+      ...originalServer(),
+      target: "native",
+      mode: "native",
+      stages: [
+        originalServer().stages[0]!,
+        {
+          id: "native-decode",
+          kind: "decode",
+          title: "Parson server",
+          detail: "FLAC decoded to PCM",
+          quality: "lossless",
+          explanation: "",
+        },
+        {
+          id: "native-output",
+          kind: "output",
+          title: "USB DAC",
+          detail: "WASAPI Exclusive Mode, 96kHz 24bit 2ch",
+          quality: "lossless",
+          explanation: "",
+        },
+      ],
+    };
+    const path = buildSignalPath(server, {
+      ...plainBrowser,
+      volume: 0.3,
+      engine: "web-audio",
+      contextSampleRate: 48_000,
+      deviceSampleRate: 44_100,
+      output: { kind: "native", name: "USB DAC" },
+    });
+    expect(ids(path.stages)).toEqual([
+      "source",
+      "native-decode",
+      "native-output",
+    ]);
+    expect(path.quality).toBe("lossless");
+    expect(path.bitPerfect).toBeTrue();
+    expect(path.highRes).toBeTrue();
+    expect(path.description).toBe(
+      "A high-resolution lossless stream reaches USB DAC bit-perfect, in exclusive mode at 96kHz 24bit 2ch.",
+    );
+    // A forced conversion on the server output is high quality.
+    const converted = buildSignalPath(
+      {
+        ...server,
+        stages: [
+          ...server.stages.slice(0, 2),
+          {
+            id: "native-resample",
+            kind: "conversion",
+            title: "Sample rate conversion",
+            detail: "192kHz to 96kHz (soxr, very high quality)",
+            quality: "high_quality",
+            explanation: "",
+          },
+          server.stages[2]!,
+        ],
+      },
+      { ...plainBrowser, output: { kind: "native" } },
+    );
+    expect(converted.quality).toBe("high_quality");
+    expect(converted.bitPerfect).toBeFalse();
+    expect(converted.description).toBe(
+      "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 192kHz to 96kHz (soxr, very high quality).",
+    );
+  });
+
+  test("a hi-res source transcoded to a lossy format is not badged hi-res", () => {
+    const server = originalServer();
+    server.mode = "transcode";
+    server.stages.splice(1, 0, {
+      id: "encode",
+      kind: "encode",
+      title: "Transcode",
+      detail: "MP3 320kbps (LAME)",
+      quality: "low_quality",
+      explanation: "",
+    });
+    const path = buildSignalPath(server, plainBrowser);
+    expect(path.source?.high_res).toBeTrue();
+    expect(path.quality).toBe("low_quality");
+    expect(path.highRes).toBeFalse();
   });
 
   test("a lossy delivery is low quality whatever the client does", () => {
@@ -459,11 +557,15 @@ describe("volume leveling", () => {
     expect(
       untagged.stages.find((item) => item.id === "client-leveling")?.quality,
     ).toBeNull();
-    // Leveling that cannot run leaves the samples alone.
-    expect(untagged.quality).toBe("lossless");
-    expect(leveled.quality).toBe("enhanced");
-    expect(leveled.description).toStartWith(
-      "Parson is processing the audio because you asked it to: Volume leveling",
+    // Leveling that cannot run leaves the samples alone; the shared-mode
+    // output is what keeps both paths at high quality.
+    expect(
+      untagged.stages.filter((item) => item.quality === "high_quality"),
+    ).toEqual([expect.objectContaining({ id: "client-output" })]);
+    expect(untagged.quality).toBe("high_quality");
+    expect(leveled.quality).toBe("high_quality");
+    expect(leveled.description).toContain(
+      "It also applies processing you asked for: Volume leveling",
     );
   });
 });

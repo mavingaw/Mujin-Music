@@ -102,7 +102,16 @@ describe("mobile signal path", () => {
         quality: null,
       }),
     );
-    expect(path.quality).toBe("enhanced");
+    // The chain itself is enhanced; the iOS audio session is a shared
+    // mixer, which keeps the whole path at high quality.
+    expect(
+      path.stages
+        .filter((item) => item.kind !== "output" && item.quality)
+        .every((item) => item.quality !== "high_quality"),
+    ).toBeTrue();
+    expect(stage("dsp-eq")?.quality).toBe("enhanced");
+    expect(stage("client-output")?.quality).toBe("high_quality");
+    expect(path.quality).toBe("high_quality");
 
     const android = mobileClientLeg(
       { ...state, dsp },

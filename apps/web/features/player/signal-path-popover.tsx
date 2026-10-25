@@ -283,6 +283,8 @@ function SignalPathPanel({
 
   if (typeof document === "undefined") return null;
   const quality = path?.quality ?? null;
+  const serverOutput =
+    path?.stages.find((stage) => stage.id === "native-output") ?? null;
 
   return createPortal(
     <div
@@ -318,13 +320,29 @@ function SignalPathPanel({
               ? `${signalPathSummary(path)}. Select a stage to learn more.`
               : "Select a stage to learn more."}
           </p>
-          {path?.bitPerfectToOutput && path.quality !== "lossless" ? (
+          {path?.bitPerfect && serverOutput ? (
+            <p
+              className="mt-1.5 flex items-center gap-1.5 text-xs font-medium"
+              data-bit-perfect
+              style={{ color: signalQualityColors.lossless }}
+            >
+              <QualityGlyph quality="lossless" size={10} />
+              Bit-perfect to {serverOutput.title}
+            </p>
+          ) : path?.bitPerfectToOutput && path.quality !== "lossless" ? (
             <p
               className="mt-1.5 flex items-center gap-1.5 text-xs font-medium"
               style={{ color: signalQualityColors.lossless }}
             >
               <QualityGlyph quality="lossless" size={10} />
               Bit-perfect up to the {casting ? "Cast device" : "system mixer"}
+            </p>
+          ) : null}
+          {path && !serverOutput && !casting ? (
+            <p className="mt-1 text-[11px] leading-4 text-zinc-500">
+              Browsers only reach the device in shared mode. For exclusive,
+              bit-perfect playback, play on a server output (Settings → Audio
+              outputs).
             </p>
           ) : null}
         </div>
@@ -390,9 +408,11 @@ function SignalPathPanel({
             <span className="text-zinc-300">
               {casting
                 ? "Cast compatible"
-                : streamBitrate > 0
-                  ? `MP3 ${streamBitrate} kbps`
-                  : "Original file"}
+                : serverOutput
+                  ? "Played by the server"
+                  : streamBitrate > 0
+                    ? `MP3 ${streamBitrate} kbps`
+                    : "Original file"}
             </span>
           </span>
           <span className="flex items-center gap-1">
@@ -411,7 +431,7 @@ function SignalPathPanel({
             ) : null}
             <Link
               className="flex items-center gap-1 rounded-full px-2 py-1 text-zinc-400 hover:bg-white/6 hover:text-white"
-              href="/settings"
+              href={serverOutput ? "/settings?tab=outputs" : "/settings"}
               onClick={onClose}
             >
               <Settings2 className="h-3.5 w-3.5" />

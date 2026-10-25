@@ -14,6 +14,7 @@ export * from "./resources/home";
 export * from "./resources/images";
 export * from "./resources/library";
 export * from "./resources/lyrics";
+export * from "./resources/outputs";
 export * from "./resources/playlists";
 export * from "./resources/playback";
 export * from "./resources/search";

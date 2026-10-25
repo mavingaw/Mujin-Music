@@ -6,13 +6,15 @@ import AdvancedSettings from "@/features/settings/advanced-settings";
 import LibrarySettings from "@/features/settings/library-settings";
 import UserForm from "@/features/settings/user-form";
 import { useSession } from "@/features/account/session-provider";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import AudioOutputSettings from "@/features/settings/audio-output-settings";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
 
 const settingsTabs = [
   "account",
   "playback",
+  "outputs",
   "library",
   "data",
   "users",
@@ -23,6 +25,7 @@ type SettingsTab = (typeof settingsTabs)[number];
 const labels: Record<SettingsTab, string> = {
   account: "Account",
   playback: "Playback",
+  outputs: "Audio outputs",
   library: "Library",
   data: "Data",
   users: "Users",
@@ -33,9 +36,15 @@ export default function SettingsPage() {
   const { session } = useSession();
   const isAdmin = session?.role === "admin";
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
-  const availableTabs = isAdmin
+  const availableTabs: readonly SettingsTab[] = isAdmin
     ? settingsTabs
-    : (["account", "playback", "data"] as const);
+    : (["account", "playback", "outputs", "data"] as const);
+  useEffect(() => {
+    // Deep links such as /settings?tab=outputs from the signal path.
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    if (wanted && (settingsTabs as readonly string[]).includes(wanted))
+      setActiveTab(wanted as SettingsTab);
+  }, []);
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -72,6 +81,7 @@ export default function SettingsPage() {
           {activeTab === "playback" && (
             <BitrateForm initialBitrate={session?.bitrate ?? 0} />
           )}
+          {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && <LibrarySettings />}
           {isAdmin && activeTab === "users" && <UserForm />}

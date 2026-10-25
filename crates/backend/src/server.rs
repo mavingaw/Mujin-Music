@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, song_signal_path, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, outputs, playback,
+    playlist, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -81,6 +81,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(playlist::configure)
         .configure(playback::configure)
         .configure(cast::configure)
+        .configure(outputs::configure)
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
@@ -292,11 +293,13 @@ pub async fn build_server_with_shutdown_timeout(
         .unwrap_or(2);
     tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Parson server");
 
+    let native_outputs = web::Data::from(crate::native_output::global());
     let server = HttpServer::new(move || {
         App::new()
             .app_data(database.clone())
             .app_data(library.clone())
             .app_data(lyrics_service.clone())
+            .app_data(native_outputs.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())

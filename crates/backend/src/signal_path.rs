@@ -41,6 +41,8 @@ pub enum StageKind {
     Conversion,
     Encode,
     Transport,
+    Decode,
+    Output,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -80,6 +82,9 @@ pub enum StreamTarget {
     Direct,
     /// A Google Cast receiver fed by the server.
     Cast,
+    /// A device attached to the server, played by the server itself
+    /// through its native output (ALSA hw, WASAPI, CoreAudio).
+    Native,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +94,8 @@ pub enum DeliveryMode {
     Original,
     /// An ffmpeg MP3 encode.
     Transcode,
+    /// Decoded on the server and written to a local device as PCM.
+    Native,
 }
 
 /// A server-side DSP effect as the signal path presents it.
@@ -502,6 +509,248 @@ pub fn describe_server_leg(
     }
 }
 
+/// Volume leveling the server applies on a native output.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NativeLeveling<'a> {
+    pub gain_db: f64,
+    /// `track` or `album`.
+    pub source: &'a str,
+}
+
+/// `+1.5 dB`, `−6.4 dB` (with a real minus sign, as clients show it).
+pub fn format_decibels(db: f64) -> String {
+    let rounded = (db * 10.0).round() / 10.0;
+    if rounded == 0.0 {
+        return "0.0 dB".into();
+    }
+    format!(
+        "{}{:.1} dB",
+        if rounded > 0.0 { "+" } else { "\u{2212}" },
+        rounded.abs()
+    )
+}
+
+/// The device end of a native-output path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NativeOutputTarget<'a> {
+    pub device_name: &'a str,
+    /// e.g. `WASAPI Exclusive Mode`.
+    pub mode_label: &'a str,
+    /// Whether the driver is a simulated device without hardware.
+    pub simulated: bool,
+    /// e.g. `soxr, very high quality`.
+    pub resampler: &'a str,
+    /// Volume leveling the listener turned on, applied by the server.
+    pub leveling: Option<NativeLeveling<'a>>,
+}
+
+fn plan_format_summary(plan: &parson_output::OutputPlan) -> String {
+    format!(
+        "{} {}bit {}ch",
+        format_rate(plan.sample_rate),
+        plan.bit_depth,
+        plan.channels
+    )
+}
+
+/// Describes a track played by the server on one of its own devices.
+///
+/// The server decodes the file and writes PCM straight to the device; when
+/// the device takes the source's rate and depth (and is opened
+/// exclusively), nothing touches the samples and the path is lossless end
+/// to end. Only conversions the device forces appear as stages, rated
+/// high quality, the way Roon rates "conversions for compatibility".
+pub fn describe_native_leg(
+    song_id: &str,
+    audio: Option<&AudioProperties>,
+    extension: Option<&str>,
+    plan: &parson_output::OutputPlan,
+    target: &NativeOutputTarget<'_>,
+) -> ServerSignalPath {
+    use parson_output::DepthChange;
+    let indexed = audio.is_some_and(|audio| !audio.is_empty());
+    let source = source_format(audio, extension);
+    let codec = source
+        .codec
+        .as_deref()
+        .map(codec_label)
+        .unwrap_or_else(|| "The file".into());
+    let mut stages = vec![source_stage(&source, indexed)];
+    stages.push(SignalStage {
+        id: "native-decode",
+        kind: StageKind::Decode,
+        title: "Parson server".into(),
+        detail: format!("{codec} decoded to PCM"),
+        quality: Some(SignalQuality::Lossless),
+        explanation: format!(
+            "The server decodes {codec} itself and writes the samples to the device, so no browser, phone or system mixer handles them. Decoding is exact."
+        ),
+    });
+    if let Some(leveling) = target.leveling {
+        stages.push(SignalStage {
+            id: "native-float-in",
+            kind: StageKind::Conversion,
+            title: "Bit depth conversion".into(),
+            detail: match source.bit_depth.filter(|_| source.lossless == Some(true)) {
+                Some(bits) => format!("{bits}bit to 64bit float"),
+                None => "Decoded to 64bit float".into(),
+            },
+            quality: Some(SignalQuality::Lossless),
+            explanation: "64-bit float holds every integer sample exactly, so moving into it for processing loses nothing.".into(),
+        });
+        stages.push(SignalStage {
+            id: "native-leveling",
+            kind: StageKind::Dsp,
+            title: "Volume leveling".into(),
+            detail: format!(
+                "{}, {} ReplayGain",
+                format_decibels(leveling.gain_db),
+                leveling.source
+            ),
+            quality: Some(SignalQuality::Enhanced),
+            explanation: "Volume leveling, which you turned on, is applied by the server in 64-bit float using the track's ReplayGain tags, so tracks play at a similar loudness. The device's volume stays fixed.".into(),
+        });
+    }
+    if let Some((from, to)) = plan.resample {
+        stages.push(SignalStage {
+            id: "native-resample",
+            kind: StageKind::Conversion,
+            title: "Sample rate conversion".into(),
+            detail: format!("{} to {} ({})", format_rate(from), format_rate(to), target.resampler),
+            quality: Some(SignalQuality::HighQuality),
+            explanation: format!(
+                "{} cannot play {} as configured, so the server converts it to {}, the closest rate it accepts in the same family. High quality, not bit-perfect. Raise the device's max sample rate in Settings if it really supports {}.",
+                target.device_name,
+                format_rate(from),
+                format_rate(to),
+                format_rate(from)
+            ),
+        });
+    }
+    if target.leveling.is_some() {
+        stages.push(SignalStage {
+            id: "native-depth",
+            kind: StageKind::Conversion,
+            title: "Bit depth conversion".into(),
+            detail: format!("64bit float to {}bit, TPDF dither", plan.bit_depth),
+            quality: Some(SignalQuality::Enhanced),
+            explanation: "After processing, the samples are returned to the device's integer format with triangular dither. Part of the processing you asked for.".into(),
+        });
+    }
+    match plan.depth {
+        _ if target.leveling.is_some() => {}
+        DepthChange::None => {}
+        DepthChange::Pad { from, to } => stages.push(SignalStage {
+            id: "native-depth",
+            kind: StageKind::Conversion,
+            title: "Bit depth".into(),
+            detail: format!("{from}bit padded to {to}bit"),
+            quality: Some(SignalQuality::Lossless),
+            explanation: format!(
+                "The device takes {to}-bit words, so each {from}-bit sample is sent with zeros below it. The value of every sample is unchanged."
+            ),
+        }),
+        DepthChange::Reduce { from, to } => stages.push(SignalStage {
+            id: "native-depth",
+            kind: StageKind::Conversion,
+            title: "Bit depth reduction".into(),
+            detail: format!("{from}bit to {to}bit, TPDF dither"),
+            quality: Some(SignalQuality::HighQuality),
+            explanation: format!(
+                "The device accepts at most {to} bits as configured, so the server reduces the {from}-bit samples with triangular dither."
+            ),
+        }),
+        DepthChange::Quantize { to } => stages.push(SignalStage {
+            id: "native-depth",
+            kind: StageKind::Conversion,
+            title: "Bit depth".into(),
+            detail: format!("Decoded to {to}bit"),
+            quality: Some(SignalQuality::HighQuality),
+            explanation: "A lossy file has no fixed bit depth; the decoder's output is quantised to the device's integer format.".into(),
+        }),
+    }
+    if let Some((from, to)) = plan.channel_change {
+        let upmix = to > from;
+        stages.push(SignalStage {
+            id: "native-channels",
+            kind: StageKind::Conversion,
+            title: if upmix { "Channel mapping".into() } else { "Downmix".into() },
+            detail: format!("{from}ch to {to}ch"),
+            quality: Some(if upmix {
+                SignalQuality::Lossless
+            } else {
+                SignalQuality::HighQuality
+            }),
+            explanation: if upmix {
+                "The device only opens in stereo, so the mono channel is sent to both sides unchanged.".into()
+            } else {
+                "The device has fewer channels than the file, so the extra channels are folded in.".into()
+            },
+        });
+    }
+    let format = plan_format_summary(plan);
+    let (quality, explanation) = if plan.exclusive {
+        (
+            SignalQuality::Lossless,
+            format!(
+                "{} is open in exclusive mode ({}): no other program can play through it, there is no system mixer, and the device runs at {} because the server switched it to this track's format. Volume is fixed; use the device's or amplifier's volume control.",
+                target.device_name, target.mode_label, format
+            ),
+        )
+    } else {
+        (
+            SignalQuality::HighQuality,
+            format!(
+                "{} is open in shared mode ({}), so the system can still mix in other sounds or convert the format after this point. Turn on Exclusive Mode in the device's settings for a bit-perfect path.",
+                target.device_name, target.mode_label
+            ),
+        )
+    };
+    stages.push(SignalStage {
+        id: "native-output",
+        kind: StageKind::Output,
+        title: target.device_name.to_string(),
+        detail: format!("{}, {}", target.mode_label, format),
+        quality: Some(quality),
+        explanation: if target.simulated {
+            format!("{explanation} This is a simulated device: it consumes audio in real time without a sound card.")
+        } else {
+            explanation
+        },
+    });
+    let mut delivered = SignalFormat {
+        codec: Some("pcm".into()),
+        container: None,
+        sample_rate: Some(plan.sample_rate),
+        bit_depth: Some(plan.bit_depth),
+        channels: Some(plan.channels),
+        bitrate_kbps: None,
+        lossless: Some(source.lossless == Some(true)),
+        high_res: false,
+        summary: String::new(),
+    };
+    delivered.high_res = is_high_res(
+        delivered.lossless,
+        delivered.sample_rate,
+        delivered.bit_depth,
+    );
+    delivered.summary = summarize(&delivered);
+    carry_lossy_generation(&mut stages);
+    let quality = overall(&stages);
+    ServerSignalPath {
+        song_id: song_id.to_string(),
+        target: StreamTarget::Native,
+        mode: DeliveryMode::Native,
+        quality,
+        source,
+        delivered,
+        content_type: "audio/pcm".into(),
+        requested_bitrate_kbps: 0,
+        effect: None,
+        stages,
+    }
+}
+
 /// Once a lossy stage has run, every later stage carries lossy audio, so
 /// it can be no better than low quality: a byte-exact copy of an MP3 is
 /// still an MP3. Roon rates the rest of a path after a lossy file the same
@@ -765,5 +1014,151 @@ mod tests {
         );
         assert!(SignalQuality::LowQuality < SignalQuality::HighQuality);
         assert!(SignalQuality::Enhanced < SignalQuality::Lossless);
+    }
+
+    fn native_plan(
+        audio: &AudioProperties,
+        caps: &parson_output::DeviceCaps,
+        exclusive: bool,
+    ) -> parson_output::OutputPlan {
+        let lossless = audio.lossless == Some(true);
+        parson_output::plan_output(
+            parson_output::SourceFormat {
+                sample_rate: audio.sample_rate.unwrap(),
+                bit_depth: if lossless { audio.bit_depth } else { None },
+                channels: audio.channels.unwrap_or(2),
+                lossless,
+            },
+            Some(caps),
+            &parson_output::OutputSettings {
+                exclusive,
+                ..parson_output::OutputSettings::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn usb_dac() -> parson_output::DeviceCaps {
+        parson_output::DeviceCaps {
+            sample_rates: vec![44_100, 48_000, 88_200, 96_000],
+            sample_formats: vec![
+                parson_output::SampleFormat::S24Packed,
+                parson_output::SampleFormat::S32,
+            ],
+            min_channels: 2,
+            max_channels: 2,
+        }
+    }
+
+    const DAC: NativeOutputTarget<'static> = NativeOutputTarget {
+        device_name: "USB DAC",
+        mode_label: "WASAPI Exclusive Mode",
+        simulated: false,
+        resampler: "soxr, very high quality",
+        leveling: None,
+    };
+
+    #[test]
+    fn native_exclusive_output_of_a_supported_format_is_lossless() {
+        let audio = flac(96_000, 24, 2);
+        let plan = native_plan(&audio, &usb_dac(), true);
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &DAC);
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        assert_eq!(path.target, StreamTarget::Native);
+        let output = path.stages.last().unwrap();
+        assert_eq!(output.kind, StageKind::Output);
+        assert_eq!(output.title, "USB DAC");
+        assert_eq!(output.detail, "WASAPI Exclusive Mode, 96kHz 24bit 2ch");
+        assert!(
+            !path
+                .stages
+                .iter()
+                .any(|stage| stage.id == "native-resample")
+        );
+        assert!(path.delivered.high_res);
+    }
+
+    #[test]
+    fn native_padding_stays_lossless_but_forced_conversions_are_high_quality() {
+        let cd = flac(44_100, 16, 2);
+        let plan = native_plan(&cd, &usb_dac(), true);
+        let path = describe_native_leg("s", Some(&cd), Some("flac"), &plan, &DAC);
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        let depth = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-depth")
+            .unwrap();
+        assert_eq!(depth.detail, "16bit padded to 24bit");
+        assert_eq!(depth.quality, Some(SignalQuality::Lossless));
+
+        let high = flac(192_000, 24, 2);
+        let plan = native_plan(&high, &usb_dac(), true);
+        let path = describe_native_leg("s", Some(&high), Some("flac"), &plan, &DAC);
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+        let resample = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-resample")
+            .unwrap();
+        assert_eq!(resample.detail, "192kHz to 96kHz (soxr, very high quality)");
+        assert_eq!(resample.quality, Some(SignalQuality::HighQuality));
+    }
+
+    #[test]
+    fn native_shared_mode_and_lossy_sources_are_never_lossless() {
+        let audio = flac(44_100, 24, 2);
+        let plan = native_plan(&audio, &usb_dac(), false);
+        let shared = NativeOutputTarget {
+            mode_label: "WASAPI Shared Mode",
+            ..DAC
+        };
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &shared);
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+        assert_eq!(
+            path.stages.last().unwrap().quality,
+            Some(SignalQuality::HighQuality)
+        );
+
+        let lossy = mp3(320);
+        let plan = native_plan(&lossy, &usb_dac(), true);
+        let path = describe_native_leg("s", Some(&lossy), Some("mp3"), &plan, &DAC);
+        assert_eq!(path.quality, SignalQuality::LowQuality);
+        assert!(!path.delivered.high_res);
+        assert!(
+            path.stages
+                .iter()
+                .all(|stage| stage.quality == Some(SignalQuality::LowQuality))
+        );
+    }
+
+    #[test]
+    fn native_leveling_is_enhanced_processing_in_float() {
+        let audio = flac(96_000, 24, 2);
+        let plan = native_plan(&audio, &usb_dac(), true);
+        let target = NativeOutputTarget {
+            leveling: Some(NativeLeveling {
+                gain_db: -6.43,
+                source: "track",
+            }),
+            ..DAC
+        };
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &target);
+        assert_eq!(path.quality, SignalQuality::Enhanced);
+        let details: Vec<_> = path
+            .stages
+            .iter()
+            .map(|stage| (stage.id, stage.detail.as_str()))
+            .collect();
+        assert_eq!(
+            details[2..5],
+            [
+                ("native-float-in", "24bit to 64bit float"),
+                ("native-leveling", "\u{2212}6.4 dB, track ReplayGain"),
+                ("native-depth", "64bit float to 24bit, TPDF dither"),
+            ]
+        );
+        assert_eq!(format_decibels(1.25), "+1.3 dB");
+        assert_eq!(format_decibels(0.01), "0.0 dB");
     }
 }
