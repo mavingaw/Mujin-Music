@@ -18,6 +18,10 @@ const base: WebSignalInput = {
     leveling: null,
     levelingUnavailable: false,
     streamBitrate: 0,
+    dsp: null,
+    deviceSampleRate: null,
+    outputName: null,
+    outputChosen: false,
   },
   volume: 1,
 };
@@ -41,9 +45,32 @@ describe("web client leg", () => {
         playbackRate: 1,
         reverbWet: 0,
         presetLabel: null,
-        output: { kind: "system" },
+        output: { kind: "system", name: null, chosen: false },
       }),
     );
+  });
+
+  test("the named output device and its rate reach the output stage", () => {
+    const path = buildSignalPath(
+      null,
+      webClientLeg({
+        ...base,
+        signal: {
+          ...base.signal,
+          deviceSampleRate: 44_100,
+          outputName: "Schiit Modi+ (USB Audio)",
+          outputChosen: true,
+        },
+      }),
+      flac,
+    );
+    expect(path.stages.at(-1)).toEqual(
+      expect.objectContaining({
+        title: "Schiit Modi+ (USB Audio)",
+        detail: "Selected output, shared mode, 44.1kHz",
+      }),
+    );
+    expect(path.quality).toBe("lossless");
   });
 
   test("processed presets carry their speed, pitch and reverb into the path", () => {
@@ -65,9 +92,11 @@ describe("web client leg", () => {
     expect(path.stages.map((stage) => stage.id)).toEqual([
       "source",
       "client-decode",
-      "client-resample",
+      "client-depth-in",
       "client-speed",
+      "client-resample",
       "client-reverb",
+      "client-depth-out",
       "client-output",
     ]);
     expect(path.stages[1]!.title).toBe("Parson desktop");

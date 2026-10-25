@@ -1,6 +1,7 @@
 export * from "./core/http";
 export * from "./domain/types";
 export * from "./player/audio-presets";
+export * from "./player/dsp";
 export * from "./player/signal-path";
 export * from "./resources/albums";
 export * from "./resources/artists";

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { buildSignalPath, getPlayerAudioPreset } from "@parson/music-sdk";
 import {
+  buildSignalPath,
+  defaultDspSettings,
+  eqPresets,
+  getPlayerAudioPreset,
+} from "@parson/music-sdk";
+import {
+  dspAvailable,
   mobileClientLeg,
+  parseStoredDsp,
   nativeLeveling,
   parseVolumeLevelingMode,
   playsInAlbumContext,
@@ -18,6 +25,7 @@ const state: MobileSignalState = {
   levelingUnavailable: false,
   casting: false,
   castDeviceName: null,
+  dsp: null,
 };
 
 const flac = {
@@ -58,12 +66,60 @@ describe("mobile signal path", () => {
     expect(path.stages.map((stage) => stage.id)).toEqual([
       "source",
       "client-decode",
-      "client-resample",
+      "client-depth-in",
       "client-speed",
+      "client-resample",
       "client-reverb",
+      "client-depth-out",
       "client-output",
     ]);
     expect(path.stages[1]!.title).toBe("This iPhone");
+  });
+
+  test("the iOS DSP chain shows headroom and EQ, and skips crossfeed", () => {
+    const dsp = defaultDspSettings();
+    dsp.headroom = { enabled: true, gainDb: -5 };
+    dsp.eq = {
+      enabled: true,
+      preset: "bass",
+      bands: eqPresets.find((preset) => preset.id === "bass")!.bands,
+    };
+    dsp.crossfeed.enabled = true;
+    const path = buildSignalPath(
+      null,
+      mobileClientLeg(
+        { ...state, platform: "ios", contextSampleRate: 96_000, dsp },
+        getPlayerAudioPreset("original"),
+      ),
+      flac,
+    );
+    const stage = (id: string) => path.stages.find((item) => item.id === id);
+    expect(stage("dsp-headroom")?.detail).toBe("−5.0 dB");
+    expect(stage("dsp-eq")?.detail).toStartWith("2 bands");
+    expect(stage("dsp-crossfeed")).toEqual(
+      expect.objectContaining({
+        detail: "Not available on this device",
+        quality: null,
+      }),
+    );
+    expect(path.quality).toBe("enhanced");
+
+    const android = mobileClientLeg(
+      { ...state, dsp },
+      getPlayerAudioPreset("original"),
+    );
+    expect(android.dsp).toBeNull();
+    expect(dspAvailable("android")).toBeFalse();
+  });
+
+  test("stored DSP settings are parsed safely", () => {
+    expect(parseStoredDsp(null)).toEqual(defaultDspSettings());
+    expect(parseStoredDsp("{oops")).toEqual(defaultDspSettings());
+    expect(
+      parseStoredDsp(
+        JSON.stringify({ headroom: { enabled: true, gainDb: -2 } }),
+      ).headroom,
+    ).toEqual({ enabled: true, gainDb: -2 });
   });
 
   test("a downloaded copy is not reported while casting", () => {

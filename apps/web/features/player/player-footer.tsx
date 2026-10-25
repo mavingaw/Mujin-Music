@@ -12,12 +12,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { AudioLines, ListMusic, Maximize2, MicVocal } from "lucide-react";
+import {
+  AudioLines,
+  ListMusic,
+  Maximize2,
+  MicVocal,
+  SlidersHorizontal,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
+import { DSP_SHORTCUT_LABEL } from "./dsp-panel";
 import {
   ActionButton,
   PlaybackControls,
@@ -43,6 +50,7 @@ export function PlayerFooter({
   muted,
   onNext,
   onOpenFullscreen,
+  onOpenDsp,
   onOpenQueue,
   onPrevious,
   onSeek,
@@ -78,6 +86,8 @@ export function PlayerFooter({
   muted: boolean;
   onNext: () => void;
   onOpenFullscreen: () => void;
+  /** Opens the DSP engine; omitted while casting. */
+  onOpenDsp?: () => void;
   onOpenQueue: () => void;
   onPrevious: () => void;
   onSeek: (value: number) => void;
@@ -202,6 +212,15 @@ export function PlayerFooter({
                 ))}
               </DropdownMenuRadioGroup>
               <DropdownMenuSeparator />
+              {onOpenDsp ? (
+                <DropdownMenuItem onSelect={onOpenDsp}>
+                  <SlidersHorizontal className="h-4 w-4" />
+                  DSP engine
+                  <span className="ml-auto text-[11px] text-zinc-500">
+                    {DSP_SHORTCUT_LABEL}
+                  </span>
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem onSelect={onOpenFullscreen}>
                 <Maximize2 className="h-4 w-4" />
                 Fullscreen

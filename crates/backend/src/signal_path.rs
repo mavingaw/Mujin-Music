@@ -356,6 +356,7 @@ pub fn describe_server_leg(
             quality: Some(SignalQuality::Lossless),
             explanation: "The server sends the file exactly as it is on disk, with byte-range seeking. Nothing is decoded or re-encoded on the server.".into(),
         });
+        carry_lossy_generation(&mut stages);
         let quality = overall(&stages);
         return ServerSignalPath {
             song_id: song_id.to_string(),
@@ -485,6 +486,7 @@ pub fn describe_server_leg(
         summary: String::new(),
     };
     delivered.summary = summarize(&delivered);
+    carry_lossy_generation(&mut stages);
     let quality = overall(&stages);
     ServerSignalPath {
         song_id: song_id.to_string(),
@@ -497,6 +499,24 @@ pub fn describe_server_leg(
         requested_bitrate_kbps: request.bitrate_kbps,
         effect: effect.map(|effect| effect.id),
         stages,
+    }
+}
+
+/// Once a lossy stage has run, every later stage carries lossy audio, so
+/// it can be no better than low quality: a byte-exact copy of an MP3 is
+/// still an MP3. Roon rates the rest of a path after a lossy file the same
+/// way.
+pub fn carry_lossy_generation(stages: &mut [SignalStage]) {
+    let Some(first_lossy) = stages
+        .iter()
+        .position(|stage| stage.quality == Some(SignalQuality::LowQuality))
+    else {
+        return;
+    };
+    for stage in &mut stages[first_lossy + 1..] {
+        if stage.quality.is_some() {
+            stage.quality = Some(SignalQuality::LowQuality);
+        }
     }
 }
 
@@ -582,6 +602,26 @@ mod tests {
         let path = describe_server_leg("s", Some(&audio), Some("mp3"), "audio/mpeg", &direct(0));
         assert_eq!(path.quality, SignalQuality::LowQuality);
         assert_eq!(path.source.summary, "MP3 44.1kHz 2ch 320kbps");
+        assert!(
+            path.stages
+                .iter()
+                .all(|stage| stage.quality == Some(SignalQuality::LowQuality))
+        );
+    }
+
+    #[test]
+    fn stages_after_a_lossy_transcode_are_low_quality() {
+        let audio = flac(44_100, 16, 2);
+        let path = describe_server_leg("s", Some(&audio), Some("flac"), "audio/flac", &direct(320));
+        let qualities: Vec<_> = path.stages.iter().map(|stage| stage.quality).collect();
+        assert_eq!(
+            qualities,
+            [
+                Some(SignalQuality::Lossless),
+                Some(SignalQuality::LowQuality),
+                Some(SignalQuality::LowQuality)
+            ]
+        );
     }
 
     #[test]

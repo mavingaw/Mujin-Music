@@ -1,4 +1,16 @@
 import type { AudioProperties, Loudness } from "../domain/types";
+import {
+  activeEqBands,
+  crossfeedActive,
+  crossfeedParameters,
+  crossfeedStrengthLabels,
+  describeEqBand,
+  dspMayClip,
+  headroomActive,
+  recommendedHeadroomDb,
+  requestedContextSampleRate,
+  type DspSettings,
+} from "./dsp";
 
 /**
  * Roon-style quality classes, best first:
@@ -99,8 +111,23 @@ export interface ClientSignalLeg {
   leveling?: VolumeLevelingResult | null;
   /** Leveling is on but this track has no ReplayGain tags. */
   levelingUnavailable?: boolean;
+  /** The DSP chain in the Web Audio graph (`web-audio` engine only). */
+  dsp?: DspSettings | null;
+  /** The chain's crossfeed needs channel splitters this engine lacks. */
+  crossfeedUnsupported?: boolean;
+  /**
+   * Rate the output device runs at, when the client can read it. A
+   * difference from the stream's rate means the browser resamples.
+   */
+  deviceSampleRate?: number | null;
   output:
-    | { kind: "system"; name?: string | null }
+    | {
+        kind: "system";
+        /** Device label, e.g. from `enumerateDevices()`. */
+        name?: string | null;
+        /** The user picked this device rather than the system default. */
+        chosen?: boolean;
+      }
     | { kind: "cast"; name?: string | null };
 }
 
@@ -120,6 +147,11 @@ export interface SignalPath {
    * output (OS mixer or Cast device) exactly as they are in the file.
    */
   bitPerfectToOutput: boolean;
+  /**
+   * One sentence naming what decided the light, built from the stages
+   * present: what you asked for, what you did not, what was lossy.
+   */
+  description: string;
 }
 
 const QUALITY_RANK: Record<SignalQuality, number> = {
@@ -329,6 +361,55 @@ function sourceStageFromAudio(
   };
 }
 
+function dspStages(
+  dsp: DspSettings,
+  crossfeedUnsupported: boolean,
+): SignalStage[] {
+  const stages: SignalStage[] = [];
+  if (headroomActive(dsp)) {
+    stages.push({
+      id: "dsp-headroom",
+      kind: "dsp",
+      title: "Headroom adjustment",
+      detail: formatDecibels(dsp.headroom.gainDb),
+      quality: "enhanced",
+      explanation:
+        "Headroom management lowers the level before the EQ so its boosts cannot push loud passages past full scale and clip.",
+    });
+  }
+  const bands = activeEqBands(dsp);
+  if (bands.length) {
+    stages.push({
+      id: "dsp-eq",
+      kind: "dsp",
+      title: "Parametric EQ",
+      detail: `${bands.length} ${bands.length === 1 ? "band" : "bands"}: ${bands.map(describeEqBand).join(", ")}`,
+      quality: "enhanced",
+      explanation: `A parametric EQ you set up, built from ${bands.length} biquad filter${bands.length === 1 ? "" : "s"} running in 32-bit float.${
+        dspMayClip(dsp)
+          ? ` Its largest boost needs about ${formatDecibels(recommendedHeadroomDb(dsp))} of headroom to avoid clipping; turn on headroom adjustment.`
+          : ""
+      }`,
+    });
+  }
+  if (crossfeedActive(dsp)) {
+    const params = crossfeedParameters[dsp.crossfeed.strength];
+    stages.push({
+      id: "dsp-crossfeed",
+      kind: "dsp",
+      title: "Crossfeed",
+      detail: crossfeedUnsupported
+        ? "Not available on this device"
+        : `${crossfeedStrengthLabels[dsp.crossfeed.strength]}: ${params.cutoffHz} Hz, ${formatDecibels(params.feedDb)}, ${params.delayMs} ms`,
+      quality: crossfeedUnsupported ? null : "enhanced",
+      explanation: crossfeedUnsupported
+        ? "This audio engine cannot split channels, so crossfeed is skipped."
+        : "Crossfeed mixes a delayed, low-passed share of each channel into the other ear, so headphone listening sounds less like the music is inside your head.",
+    });
+  }
+  return stages;
+}
+
 function clientStages(
   client: ClientSignalLeg,
   delivered: SignalFormat | null,
@@ -341,6 +422,8 @@ function clientStages(
   const codec = delivered?.codec
     ? (CODEC_LABELS[delivered.codec] ?? delivered.codec.toUpperCase())
     : "The stream";
+  const webAudio = !casting && client.engine === "web-audio";
+  const dsp = webAudio && client.dsp?.enabled ? client.dsp : null;
 
   if (casting) {
     stages.push({
@@ -370,26 +453,23 @@ function clientStages(
       quality: "lossless",
       explanation:
         client.engine === "web-audio"
-          ? `${codec} is decoded to 32-bit float and passes through a Web Audio graph so effects can be applied. Decoding itself is exact.`
-          : `${codec} is decoded by the platform's own decoder. Decoding itself is exact.`,
+          ? `${codec} is decoded and passes through a Web Audio graph so processing can be applied. Decoding itself is exact.`
+          : `${codec} is decoded by the platform's own decoder and handed straight to the output. Decoding itself is exact.`,
     });
   }
 
-  if (
-    !casting &&
-    client.engine === "web-audio" &&
-    client.contextSampleRate &&
-    delivered?.sample_rate &&
-    client.contextSampleRate !== delivered.sample_rate
-  ) {
+  if (webAudio) {
+    const depth = delivered?.lossless ? delivered.bit_depth : null;
     stages.push({
-      id: "client-resample",
+      id: "client-depth-in",
       kind: "conversion",
-      title: "Sample rate conversion",
-      detail: `${formatSampleRate(delivered.sample_rate)} to ${formatSampleRate(client.contextSampleRate)}`,
-      quality: "high_quality",
+      title: "Bit depth conversion",
+      detail: depth ? `${depth}bit to 32bit float` : "Decoded to 32bit float",
+      quality: depth && depth > 24 ? "high_quality" : "lossless",
       explanation:
-        "The audio graph runs at the output device's rate, so the stream is resampled to match. High quality, but not bit-perfect.",
+        depth && depth > 24
+          ? `32-bit float keeps 24 bits of precision, so the lowest ${depth - 24} bits of this ${depth}-bit file are rounded.`
+          : "32-bit float holds every 16- and 24-bit sample exactly, so this conversion loses nothing.",
     });
   }
 
@@ -408,18 +488,6 @@ function clientStages(
     });
   }
 
-  if (!casting && client.reverbWet > 0) {
-    stages.push({
-      id: "client-reverb",
-      kind: "dsp",
-      title: client.presetLabel ? `${client.presetLabel}: reverb` : "Reverb",
-      detail: `Convolution, 1.8s room, ${Math.round(client.reverbWet * 100)}% wet`,
-      quality: "enhanced",
-      explanation:
-        "A convolution reverb mixed in by the sound preset you chose.",
-    });
-  }
-
   if (!casting && client.leveling) {
     const leveling = client.leveling;
     const limited =
@@ -428,17 +496,16 @@ function clientStages(
         : leveling.limitedBy === "full_volume"
           ? ` (${formatDecibels(leveling.requestedDb)} requested; lower the volume to leave room for it)`
           : "";
+    const unchanged =
+      Math.abs(leveling.appliedDb) < 0.05 && leveling.limitedBy === null;
     stages.push({
       id: "client-leveling",
       kind: "volume",
       title: "Volume leveling",
       detail: `${formatDecibels(leveling.appliedDb)}, ${leveling.source} ReplayGain${limited}`,
-      quality:
-        Math.abs(leveling.appliedDb) < 0.05 && leveling.limitedBy === null
-          ? "lossless"
-          : "enhanced",
+      quality: unchanged ? "lossless" : "enhanced",
       explanation:
-        "Volume leveling adjusts each track to the same loudness using its ReplayGain tags, so tracks from different albums play at a similar volume.",
+        "Volume leveling, which you turned on, adjusts each track to the same loudness using its ReplayGain tags, so tracks from different albums play at a similar volume.",
     });
   } else if (!casting && client.levelingUnavailable) {
     stages.push({
@@ -470,9 +537,69 @@ function clientStages(
         detail: formatDecibels(gainToDecibels(client.volume)),
         quality: "high_quality",
         explanation:
-          "Parson's volume slider scales the samples digitally. At full volume this stage disappears; use your system or amplifier volume for a bit-perfect path.",
+          "Parson's volume slider scales the samples digitally, like Roon's DSP volume. At full volume this stage disappears; use your system or amplifier volume for a bit-perfect path.",
       });
     }
+  }
+
+  const streamRate = delivered?.sample_rate ?? null;
+  const graphRate = webAudio ? (client.contextSampleRate ?? null) : null;
+  if (graphRate && streamRate && graphRate !== streamRate) {
+    const chosen =
+      requestedContextSampleRate(client.dsp, streamRate) === graphRate;
+    stages.push({
+      id: "client-resample",
+      kind: "conversion",
+      title: "Sample rate conversion",
+      detail: `${formatSampleRate(streamRate)} to ${formatSampleRate(graphRate)}`,
+      quality: chosen ? "enhanced" : "high_quality",
+      explanation: chosen
+        ? "You chose this processing rate in the DSP engine, so the stream is resampled to it."
+        : "The audio graph runs at the output device's rate, so the stream is resampled to match. High quality, but not bit-perfect. Choose 'Match source' in the DSP engine's sample rate section to avoid it.",
+    });
+  }
+
+  if (dsp) stages.push(...dspStages(dsp, Boolean(client.crossfeedUnsupported)));
+
+  if (!casting && client.reverbWet > 0) {
+    stages.push({
+      id: "client-reverb",
+      kind: "dsp",
+      title: client.presetLabel ? `${client.presetLabel}: reverb` : "Reverb",
+      detail: `Convolution, 1.8s room, ${Math.round(client.reverbWet * 100)}% wet`,
+      quality: "enhanced",
+      explanation:
+        "A convolution reverb mixed in by the sound preset you chose.",
+    });
+  }
+
+  if (webAudio) {
+    stages.push({
+      id: "client-depth-out",
+      kind: "conversion",
+      title: "Bit depth conversion",
+      detail: "32bit float to output format",
+      quality: "lossless",
+      explanation:
+        "The graph's 32-bit float output is handed to the system in its own format. Samples that were not processed convert back exactly.",
+    });
+  }
+
+  const outputRate = graphRate ?? streamRate;
+  if (
+    !casting &&
+    client.deviceSampleRate &&
+    outputRate &&
+    client.deviceSampleRate !== outputRate
+  ) {
+    stages.push({
+      id: "client-device-resample",
+      kind: "conversion",
+      title: "Sample rate conversion",
+      detail: `${formatSampleRate(outputRate)} to ${formatSampleRate(client.deviceSampleRate)}`,
+      quality: "high_quality",
+      explanation: `The output device runs at ${formatSampleRate(client.deviceSampleRate)}, so the ${client.platform === "desktop" ? "app" : "browser"} resamples the stream for it. Set the device to ${formatSampleRate(outputRate)} in your system's sound settings for a bit-perfect handoff.`,
+    });
   }
 
   if (casting) {
@@ -486,23 +613,111 @@ function clientStages(
         "The Cast device plays the stream and applies its own volume. Parson cannot see what the device does after that.",
     });
   } else {
+    const output = client.output.kind === "system" ? client.output : null;
     const mixer =
       client.platform === "ios"
         ? "iOS audio session"
         : client.platform === "android"
           ? "Android audio mixer"
-          : "System mixer";
+          : output?.chosen
+            ? "Selected output, shared mode"
+            : "System default output, shared mode";
+    const name =
+      output?.name ||
+      (client.platform === "ios" || client.platform === "android"
+        ? "System output"
+        : "System default output");
     stages.push({
       id: "client-output",
       kind: "output",
-      title: client.output.name || "System output",
-      detail: mixer,
-      quality: "high_quality",
-      explanation:
-        "The audio is handed to the operating system mixer, which may resample, mix other sounds in or apply its own volume. Parson cannot guarantee that this last step is bit-perfect, so it is labelled high quality, as Roon does for OS mixer outputs.",
+      title: name,
+      detail: client.deviceSampleRate
+        ? `${mixer}, ${formatSampleRate(client.deviceSampleRate)}`
+        : mixer,
+      quality: "lossless",
+      explanation: `Parson hands the samples to ${name} without changing them. ${
+        client.platform === "web" || client.platform === "desktop"
+          ? "Browsers open devices in shared mode, so other apps' sounds and the system volume can still be mixed in after this point; Parson cannot see past the handoff."
+          : "The system can still mix in other sounds after this point; Parson cannot see past the handoff."
+      }`,
     });
   }
   return stages;
+}
+
+/**
+ * Every classified stage after the first lossy one carries lossy audio, so
+ * it is rated low quality too: an exact copy of an MP3 is still an MP3.
+ */
+export function carryLossyGeneration(stages: SignalStage[]): SignalStage[] {
+  const first = stages.findIndex((stage) => stage.quality === "low_quality");
+  if (first < 0) return stages;
+  return stages.map((stage, index) =>
+    index > first && stage.quality
+      ? { ...stage, quality: "low_quality" }
+      : stage,
+  );
+}
+
+function listTitles(stages: SignalStage[]) {
+  const titles = [
+    ...new Set(
+      stages.map((stage) =>
+        stage.kind === "dsp" || stage.kind === "volume"
+          ? `${stage.title} (${stage.detail})`
+          : stage.kind === "conversion"
+            ? `${stage.title.toLowerCase()} ${stage.detail}`
+            : stage.title.toLowerCase(),
+      ),
+    ),
+  ];
+  if (titles.length <= 1) return titles.join("");
+  return `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)}`;
+}
+
+/**
+ * The sentence under the light. It names the stages that decided it, so a
+ * path you processed on purpose never reads as an accident.
+ */
+export function describeSignalPath(
+  stages: SignalStage[],
+  options: { highRes?: boolean; output?: string } = {},
+): string {
+  const quality = overallSignalQuality(stages);
+  const by = (wanted: SignalQuality) =>
+    stages.filter((stage) => stage.quality === wanted);
+  const enhanced = by("enhanced");
+  const high = by("high_quality");
+  const output = options.output ?? "the output";
+  const asked = enhanced.length
+    ? `processing you asked for: ${listTitles(enhanced)}`
+    : "";
+  switch (quality) {
+    case "lossless":
+      return `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
+    case "enhanced":
+      return `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
+    case "high_quality": {
+      const unknown = stages.some(
+        (stage) => stage.kind === "source" && !stage.quality,
+      );
+      const changed = high.length
+        ? `The audio is changed in ways you did not ask for, with very little loss: ${listTitles(high)}.`
+        : unknown
+          ? "Parson cannot tell whether the source is lossless, so the path is rated high quality at best."
+          : "The path is rated high quality.";
+      return asked ? `${changed} It also applies ${asked}.` : changed;
+    }
+    case "low_quality": {
+      const lossy = stages.find((stage) => stage.quality === "low_quality");
+      const what = lossy
+        ? lossy.kind === "source"
+          ? `the source is a lossy file (${lossy.detail})`
+          : `${lossy.title.toLowerCase()} to ${lossy.detail}`
+        : "a lossy format";
+      return `A lossy format is involved: ${what}.${asked ? ` Parson also applies ${asked}.` : ""}`;
+    }
+  }
 }
 
 /** Combines the server leg (when known) with this client's leg. */
@@ -538,17 +753,25 @@ export function buildSignalPath(
     }
   }
   stages.push(...clientStages(client, delivered));
-  const beforeOutput = stages.filter((stage) => stage.kind !== "output");
+  const highRes = Boolean(source?.high_res);
+  const outputStage = stages.find((stage) => stage.kind === "output");
+  const description = describeSignalPath(stages, {
+    highRes,
+    output: outputStage?.title,
+  });
+  const rated = carryLossyGeneration(stages);
+  const beforeOutput = rated.filter((stage) => stage.kind !== "output");
   return {
     bitPerfectToOutput:
       beforeOutput.length > 0 &&
       beforeOutput.every((stage) => stage.quality === "lossless"),
-    quality: overallSignalQuality(stages),
-    highRes: Boolean(source?.high_res),
+    quality: overallSignalQuality(rated),
+    highRes,
     source,
     delivered,
-    stages,
+    stages: rated,
     serverKnown: Boolean(server) || Boolean(client.localFile),
+    description,
   };
 }
 

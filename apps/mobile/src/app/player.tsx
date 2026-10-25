@@ -72,6 +72,7 @@ import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
 import { CastOutputButton } from "@/components/cast-output-button";
 import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
+import { dspAvailable } from "@/lib/signal-path";
 import { useSignalPath } from "@/hooks/use-signal-path";
 import type { SignalPath } from "@parson/music-sdk";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
@@ -901,6 +902,8 @@ export default function PlayerScreen() {
               loading={signalPath.loading}
               onLevelingModeChange={player.setVolumeLevelingMode}
               path={signalPath.path}
+              dsp={dspAvailable(player.signal.platform) ? player.dsp : null}
+              onDspChange={player.setDsp}
             />
           </ActionDrawer>
         </SafeAreaView>

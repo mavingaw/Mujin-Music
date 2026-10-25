@@ -23,6 +23,7 @@ import {
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
 import { useSignalPath } from "./signal-path";
 import { SignalPathLight } from "./signal-path-popover";
+import { DspPanel, isDspShortcut } from "./dsp-panel";
 
 export default function PlayerBar() {
   const {
@@ -55,6 +56,9 @@ export default function PlayerBar() {
     signal,
     volumeLevelingMode,
     setVolumeLevelingMode,
+    dsp,
+    setDsp,
+    output,
   } = usePlayer();
   const currentTime = usePlayerClock();
   const cast = useCastOutput();
@@ -151,8 +155,20 @@ export default function PlayerBar() {
     songId: signalSongId,
     volume: effectiveVolume,
   });
+  const [dspOpen, setDspOpen] = useState(false);
+  const openDsp = useCallback(() => setDspOpen(true), []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isDspShortcut(event) || event.defaultPrevented) return;
+      event.preventDefault();
+      setDspOpen((value) => !value);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const signalProps = {
     casting,
+    onOpenDsp: casting ? undefined : openDsp,
     levelingMode: volumeLevelingMode,
     loading: signalLoading,
     onLevelingModeChange: setVolumeLevelingMode,
@@ -325,7 +341,17 @@ export default function PlayerBar() {
         </div>
       ) : null}
 
+      <DspPanel
+        onChange={setDsp}
+        onOpenChange={setDspOpen}
+        open={dspOpen}
+        output={output}
+        path={signalPath}
+        settings={dsp}
+      />
+
       <PlayerFooter
+        onOpenDsp={casting ? undefined : openDsp}
         albumCover={effectiveSong.album_object.cover_url}
         albumId={effectiveSong.album_object.id || album.id}
         albumName={effectiveSong.album_object.name || album.name}

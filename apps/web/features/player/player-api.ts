@@ -1,9 +1,11 @@
 "use client";
 
 import type {
+  DspSettings,
   VolumeLevelingMode,
   VolumeLevelingResult,
 } from "@parson/music-sdk";
+import type { OutputDevice } from "./dsp-store";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { createContext, useContext } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
@@ -29,6 +31,10 @@ export type Player = {
   signal: PlayerSignalState;
   volumeLevelingMode: VolumeLevelingMode;
   setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
+  /** DSP chain for the current output device. */
+  dsp: DspSettings;
+  setDsp: (settings: DspSettings) => void;
+  output: PlayerOutputState;
   setSongCallback: (
     song: PlayerInput,
     artist?: Partial<Artist>,
@@ -61,6 +67,26 @@ export type PlayerSignalState = {
   contextSampleRate: number | null;
   leveling: VolumeLevelingResult | null;
   levelingUnavailable: boolean;
+  dsp: DspSettings | null;
+  /** The output device's own rate, probed with an AudioContext. */
+  deviceSampleRate: number | null;
+  /** Label of the device audio goes to, when the browser reveals it. */
+  outputName: string | null;
+  outputChosen: boolean;
+};
+
+export type PlayerOutputState = {
+  devices: OutputDevice[];
+  /** The device the user picked, `""` for the system default. */
+  selectedId: string;
+  /** The device audio actually goes to. */
+  activeId: string;
+  label: string | null;
+  labelsHidden: boolean;
+  /** The browser can route audio to a chosen device (`setSinkId`). */
+  selectable: boolean;
+  select: (id: string) => void;
+  requestLabels: () => Promise<void>;
 };
 
 export const PlayerContext = createContext<Omit<Player, "currentTime"> | null>(

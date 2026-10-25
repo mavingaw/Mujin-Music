@@ -33,6 +33,13 @@ import {
   useVolumeLevelingMode,
 } from "./volume-leveling";
 import type { Player } from "./player-api";
+import {
+  outputDeviceLabel,
+  supportsOutputSelection,
+  useAudioOutputs,
+  useDspSettings,
+  useOutputDeviceChoice,
+} from "./dsp-store";
 import { usePlaybackTelemetry } from "./player-telemetry";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
 import { useQueueRestore } from "./use-queue-restore";
@@ -52,19 +59,24 @@ const cover = (path?: string) =>
 
 export function usePlayerController() {
   const {
+    activeSinkId,
     audio,
     audioPreset,
     audioVersion,
     backgroundWasPlaying,
     error,
     graph,
+    deviceSampleRate,
     graphSampleRate,
     isPlaying,
     muted,
     playAudioSource,
     preloadAudioSource,
+    reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
+    setDspSettings,
+    setOutputDevice,
     setAudioSource,
     setAudioVolume,
     setError,
@@ -93,6 +105,16 @@ export function usePlayerController() {
   // Bitrate of the stream actually loaded (0 = original file).
   const [streamBitrate, setStreamBitrate] = useState(0);
   const [volumeLevelingMode, setVolumeLevelingMode] = useVolumeLevelingMode();
+  const [outputDeviceId, setOutputDeviceId] = useOutputDeviceChoice();
+  const outputs = useAudioOutputs();
+  const [dsp, setDsp] = useDspSettings(outputDeviceId);
+  useEffect(() => {
+    void setOutputDevice(outputDeviceId);
+  }, [outputDeviceId, outputs.devices, setOutputDevice]);
+  useEffect(() => {
+    setDspSettings(dsp);
+  }, [dsp, setDspSettings]);
+  const outputName = outputDeviceLabel(outputs.devices, activeSinkId);
   const queuePositionSync = useRef<Promise<void>>(Promise.resolve());
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -131,7 +153,10 @@ export function usePlayerController() {
       setAlbumState(normalized.album_object);
       setImageSrc(cover(normalized.album_object.cover_url));
       setStreamBitrate(session?.bitrate ?? 0);
-      setAudioSource(streamUrl(normalized.id, session?.bitrate ?? 0));
+      setAudioSource(
+        streamUrl(normalized.id, session?.bitrate ?? 0),
+        session?.bitrate ? null : (normalized.audio?.sample_rate ?? null),
+      );
       if (
         currentOrigin.current === "manual" &&
         !persistedQueue.current &&
@@ -505,6 +530,7 @@ export function usePlayerController() {
     backgroundWasPlaying,
     graph,
     play: playAudioSource,
+    reapplyOutputDevice,
     resumeOnReconnect,
     source,
   });
@@ -548,9 +574,25 @@ export function usePlayerController() {
         contextSampleRate: graphSampleRate,
         leveling: leveling.result,
         levelingUnavailable: leveling.unavailable,
+        dsp,
+        deviceSampleRate,
+        outputName,
+        outputChosen: Boolean(activeSinkId),
       },
       volumeLevelingMode,
       setVolumeLevelingMode,
+      dsp,
+      setDsp,
+      output: {
+        devices: outputs.devices,
+        selectedId: outputDeviceId,
+        activeId: activeSinkId,
+        label: outputName,
+        labelsHidden: outputs.labelsHidden,
+        selectable: supportsOutputSelection(),
+        select: setOutputDeviceId,
+        requestLabels: outputs.requestLabels,
+      },
       setSongCallback,
       setQueue,
       addNextToQueue,
@@ -599,6 +641,16 @@ export function usePlayerController() {
       graphSampleRate,
       leveling,
       looping,
+      activeSinkId,
+      deviceSampleRate,
+      dsp,
+      outputDeviceId,
+      outputName,
+      outputs.devices,
+      outputs.labelsHidden,
+      outputs.requestLabels,
+      setDsp,
+      setOutputDeviceId,
       muted,
       audioPreset,
       slowedReverb,
