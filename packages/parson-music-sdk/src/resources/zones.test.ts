@@ -6,7 +6,11 @@ import {
   formatSleepRemaining,
   getZoneEventsURL,
   groupingPlan,
+  isEditableQueueItem,
+  nextRepeatMode,
   orderZones,
+  previewQueueEdit,
+  sleepTimerLabel,
   reportClientZone,
   sendZoneCommand,
   transferZone,
@@ -27,6 +31,8 @@ const zone = (overrides: Partial<Zone>): Zone => ({
   source: "none",
   now_playing: null,
   queue: { song_ids: [], current_position: 0 },
+  repeat: "off",
+  shuffle: false,
   position_ms: 0,
   duration_ms: 0,
   volume: null,
@@ -38,6 +44,9 @@ const zone = (overrides: Partial<Zone>): Zone => ({
     volume: true,
     mute: true,
     queue: true,
+    queue_edit: true,
+    repeat: true,
+    shuffle: true,
     group: true,
     transfer_target: true,
     sleep_timer: true,
@@ -177,4 +186,82 @@ test("device ids are server-valid and sleep labels are readable", () => {
   expect(formatSleepRemaining(90 * 60_000, 0)).toBe("1 h 30 min");
   expect(formatSleepRemaining(60 * 60_000, 0)).toBe("1 h");
   expect(formatSleepRemaining(29_000, 0)).toBe("1 min");
+});
+
+test("queue edits preview like the server: upcoming items only, guarded", () => {
+  const ids = ["a", "b", "c", "d"];
+  expect(
+    previewQueueEdit(ids, 1, {
+      command: "move_queue_item",
+      from: 3,
+      to: 2,
+      song_id: "d",
+    }),
+  ).toEqual(["a", "b", "d", "c"]);
+  expect(
+    previewQueueEdit(ids, 1, { command: "move_queue_item", from: 1, to: 3 }),
+  ).toBeNull();
+  expect(
+    previewQueueEdit(ids, 1, {
+      command: "remove_queue_item",
+      queue_position: 2,
+      song_id: "x",
+    }),
+  ).toBeNull();
+  expect(
+    previewQueueEdit(ids, 1, {
+      command: "remove_queue_item",
+      queue_position: 2,
+    }),
+  ).toEqual(["a", "b", "d"]);
+  expect(previewQueueEdit(ids, 1, { command: "clear_upcoming" })).toEqual([
+    "a",
+    "b",
+  ]);
+  const remote = zone({
+    queue: { song_ids: ids, current_position: 1 },
+  });
+  expect(isEditableQueueItem(remote, 1)).toBe(false);
+  expect(isEditableQueueItem(remote, 2)).toBe(true);
+  expect(
+    isEditableQueueItem(
+      {
+        ...remote,
+        capabilities: { ...remote.capabilities, queue_edit: false },
+      },
+      2,
+    ),
+  ).toBe(false);
+  expect(nextRepeatMode("off")).toBe("all");
+  expect(nextRepeatMode("all")).toBe("one");
+  expect(nextRepeatMode("one")).toBe("off");
+});
+
+test("queue commands post through the zone command API", async () => {
+  const post = spyOn(api, "post").mockResolvedValue({ data: {} } as never);
+  await sendZoneCommand("sonos:RINCON_1", {
+    command: "remove_queue_item",
+    queue_position: 4,
+    song_id: "song-9",
+  });
+  expect(post).toHaveBeenCalledWith(
+    "/zones/sonos%3ARINCON_1/commands",
+    { command: "remove_queue_item", queue_position: 4, song_id: "song-9" },
+    { timeout: 8_000 },
+  );
+});
+
+test("sleep timer labels say what will happen", () => {
+  const timer = {
+    ends_at_ms: 10 * 60_000,
+    finishing_track: false,
+    fading: false,
+  };
+  expect(sleepTimerLabel(timer, 0)).toBe("Sleep in 10 min");
+  expect(sleepTimerLabel({ ...timer, finishing_track: true }, 0)).toBe(
+    "Sleep after this track",
+  );
+  expect(sleepTimerLabel({ ...timer, fading: true }, 0)).toBe(
+    "Fading out to sleep",
+  );
 });

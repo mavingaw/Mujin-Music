@@ -116,6 +116,8 @@ pub struct SonosGroup {
     pub polled_at_ms: i64,
     pub group_volume: u8,
     pub group_muted: bool,
+    /// AVTransport `PlayMode` (NORMAL, REPEAT_ALL, SHUFFLE, ...).
+    pub play_mode: String,
 }
 
 /// Transport actions on a group coordinator.
@@ -392,6 +394,16 @@ impl SonosController {
             .await
             .ok()
             .and_then(|output| output.get("CurrentMute").map(|value| value == "1"));
+        let play_mode = self
+            .call(
+                coordinator,
+                Service::AVTransport,
+                "GetTransportSettings",
+                &[("InstanceID", "0")],
+            )
+            .await
+            .ok()
+            .and_then(|output| output.get("PlayMode").cloned());
         let members = self
             .group_of(coordinator)
             .map(|group| group.members)
@@ -470,6 +482,9 @@ impl SonosController {
             group.polled_at_ms = unix_millis();
             group.group_volume = group_volume.unwrap_or(average);
             group.group_muted = group_muted.unwrap_or(false);
+            if let Some(play_mode) = play_mode {
+                group.play_mode = play_mode;
+            }
             let mut comparable = before.clone();
             comparable.polled_at_ms = group.polled_at_ms;
             // Position drift while playing is expected and not a change.
@@ -573,6 +588,112 @@ impl SonosController {
         if play {
             self.transport(coordinator, Transport::Play).await?;
         }
+        let _ = self.poll_group(coordinator).await;
+        Ok(())
+    }
+
+    /// Appends tracks to the end of the group's Sonos queue.
+    pub async fn append_tracks(
+        &self,
+        coordinator: &str,
+        tracks: &[(String, String)],
+    ) -> Result<(), SoapError> {
+        for (uri, metadata) in tracks {
+            self.call(
+                coordinator,
+                Service::AVTransport,
+                "AddURIToQueue",
+                &[
+                    ("InstanceID", "0"),
+                    ("EnqueuedURI", uri),
+                    ("EnqueuedURIMetaData", metadata),
+                    ("DesiredFirstTrackNumberEnqueued", "0"),
+                    ("EnqueueAsNext", "0"),
+                ],
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Removes the track at 0-based `index` from the Sonos queue.
+    pub async fn remove_track(&self, coordinator: &str, index: u32) -> Result<(), SoapError> {
+        let object = format!("Q:0/{}", index + 1);
+        self.call(
+            coordinator,
+            Service::AVTransport,
+            "RemoveTrackFromQueue",
+            &[
+                ("InstanceID", "0"),
+                ("ObjectID", &object),
+                ("UpdateID", "0"),
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Removes `count` tracks starting at 0-based `start`.
+    pub async fn remove_track_range(
+        &self,
+        coordinator: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<(), SoapError> {
+        if count == 0 {
+            return Ok(());
+        }
+        let start = (start + 1).to_string();
+        let count = count.to_string();
+        self.call(
+            coordinator,
+            Service::AVTransport,
+            "RemoveTrackRangeFromQueue",
+            &[
+                ("InstanceID", "0"),
+                ("UpdateID", "0"),
+                ("StartingIndex", &start),
+                ("NumberOfTracks", &count),
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Moves the track at 0-based `from` so it ends up at 0-based `to`.
+    pub async fn move_track(&self, coordinator: &str, from: u32, to: u32) -> Result<(), SoapError> {
+        if from == to {
+            return Ok(());
+        }
+        // Sonos inserts before a 1-based position counted before removal.
+        let insert_before = if to > from { to + 2 } else { to + 1 };
+        let starting = (from + 1).to_string();
+        let insert_before = insert_before.to_string();
+        self.call(
+            coordinator,
+            Service::AVTransport,
+            "ReorderTracksInQueue",
+            &[
+                ("InstanceID", "0"),
+                ("StartingIndex", &starting),
+                ("NumberOfTracks", "1"),
+                ("InsertBefore", &insert_before),
+                ("UpdateID", "0"),
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Sets the AVTransport play mode (repeat; Parson shuffles itself).
+    pub async fn set_play_mode(&self, coordinator: &str, mode: &str) -> Result<(), SoapError> {
+        self.call(
+            coordinator,
+            Service::AVTransport,
+            "SetPlayMode",
+            &[("InstanceID", "0"), ("NewPlayMode", mode)],
+        )
+        .await?;
         let _ = self.poll_group(coordinator).await;
         Ok(())
     }
@@ -906,6 +1027,7 @@ fn merge_groups(
                     polled_at_ms: 0,
                     group_volume: 0,
                     group_muted: false,
+                    play_mode: "NORMAL".to_string(),
                 });
             next.topology_id = group.id.clone();
             next.members = members;

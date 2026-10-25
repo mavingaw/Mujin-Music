@@ -1,4 +1,8 @@
-import type { ZoneCommand, ZoneStatus } from "@parson/music-sdk";
+import type {
+  ZoneCommand,
+  ZoneRepeatMode,
+  ZoneStatus,
+} from "@parson/music-sdk";
 
 /** What this device's player exposes to remote zone commands. */
 export interface LocalZoneControls {
@@ -20,6 +24,13 @@ export interface LocalZoneControls {
     positionMs: number,
     play: boolean,
   ) => Promise<void>;
+  /** Song id at a queue position, to refuse edits made on a stale queue. */
+  songIdAt: (index: number) => string | undefined;
+  moveQueueItem: (from: number, to: number) => void;
+  removeQueueItem: (index: number) => void;
+  clearUpcoming: () => void;
+  setRepeat: (mode: ZoneRepeatMode) => void;
+  setShuffle: (enabled: boolean) => void;
 }
 
 /** Applies one remote command to the local player. */
@@ -68,6 +79,31 @@ export async function applyZoneCommand(
         command.position_ms ?? 0,
         command.play ?? true,
       );
+      return;
+    case "move_queue_item":
+      if (
+        command.song_id === undefined ||
+        controls.songIdAt(command.from) === command.song_id
+      ) {
+        controls.moveQueueItem(command.from, command.to);
+      }
+      return;
+    case "remove_queue_item":
+      if (
+        command.song_id === undefined ||
+        controls.songIdAt(command.queue_position) === command.song_id
+      ) {
+        controls.removeQueueItem(command.queue_position);
+      }
+      return;
+    case "clear_upcoming":
+      controls.clearUpcoming();
+      return;
+    case "set_repeat":
+      controls.setRepeat(command.mode);
+      return;
+    case "set_shuffle":
+      controls.setShuffle(command.enabled);
       return;
   }
 }

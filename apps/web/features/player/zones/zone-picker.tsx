@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  formatSleepRemaining,
+  sleepTimerLabel,
   groupingPlan,
   orderZones,
   zoneKindLabel,
@@ -387,7 +387,7 @@ function ZoneRow({
             <span className="block truncate text-[11px] text-zinc-600">
               {device}
               {zone.sleep_timer
-                ? ` · Sleep in ${formatSleepRemaining(zone.sleep_timer.ends_at_ms, Date.now())}${zone.sleep_timer.finishing_track ? " (finishing track)" : ""}`
+                ? ` · ${sleepTimerLabel(zone.sleep_timer, Date.now())}`
                 : ""}
             </span>
           </span>

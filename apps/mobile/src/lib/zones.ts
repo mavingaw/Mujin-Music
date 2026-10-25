@@ -1,4 +1,19 @@
-import type { ZoneCommand, ZoneStatus } from "@parson/music-sdk";
+import type {
+  ZoneCommand,
+  ZoneRepeatMode,
+  ZoneStatus,
+} from "@parson/music-sdk";
+
+/** The phone player's repeat names ("none") vs the zone API's ("off"). */
+export type MobileRepeatMode = "none" | "one" | "all";
+
+export function zoneRepeatMode(mode: MobileRepeatMode): ZoneRepeatMode {
+  return mode === "none" ? "off" : mode;
+}
+
+export function mobileRepeatMode(mode: ZoneRepeatMode): MobileRepeatMode {
+  return mode === "off" ? "none" : mode;
+}
 
 export const ZONE_DEVICE_KEY = "parson.zones.device-id";
 export const ZONE_SELECTED_KEY = "parson.zones.selected";
@@ -40,6 +55,13 @@ export interface MobileZoneControls {
     positionMs: number,
     play: boolean,
   ) => Promise<void>;
+  /** Song id at a queue position, to refuse edits made on a stale queue. */
+  songIdAt: (index: number) => string | undefined;
+  move: (from: number, to: number) => void;
+  remove: (index: number) => void;
+  clearUpcoming: () => void;
+  setRepeat: (mode: MobileRepeatMode) => void;
+  setShuffle: (enabled: boolean) => void;
 }
 
 /**
@@ -80,6 +102,31 @@ export async function applyMobileZoneCommand(
         command.position_ms ?? 0,
         command.play ?? true,
       );
+      return true;
+    case "move_queue_item":
+      if (
+        command.song_id === undefined ||
+        controls.songIdAt(command.from) === command.song_id
+      ) {
+        controls.move(command.from, command.to);
+      }
+      return true;
+    case "remove_queue_item":
+      if (
+        command.song_id === undefined ||
+        controls.songIdAt(command.queue_position) === command.song_id
+      ) {
+        controls.remove(command.queue_position);
+      }
+      return true;
+    case "clear_upcoming":
+      controls.clearUpcoming();
+      return true;
+    case "set_repeat":
+      controls.setRepeat(mobileRepeatMode(command.mode));
+      return true;
+    case "set_shuffle":
+      controls.setShuffle(command.enabled);
       return true;
     default:
       return false;

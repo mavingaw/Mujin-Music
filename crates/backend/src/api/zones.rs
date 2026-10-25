@@ -12,9 +12,9 @@ use crate::library::state::{LibraryCache, LibraryLifecycle};
 use crate::persistence::connection::DbPool;
 use crate::zones::service::now_ms;
 use crate::zones::{
-    ClientRegistration, PlaybackSnapshot, Zone, ZoneCapabilities, ZoneCommand, ZoneError,
-    ZoneEvent, ZoneKind, ZoneNowPlaying, ZoneQueue, ZoneService, ZoneSettings, ZoneSource,
-    ZoneStatus, ZoneVolume,
+    ClientRegistration, PlaybackSnapshot, RepeatMode, Zone, ZoneCapabilities, ZoneCommand,
+    ZoneError, ZoneEvent, ZoneKind, ZoneNowPlaying, ZoneQueue, ZoneService, ZoneSettings,
+    ZoneSource, ZoneStatus, ZoneVolume,
 };
 
 #[derive(Deserialize)]
@@ -122,6 +122,8 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
             song_ids: snapshot.song_ids.clone(),
             current_position: snapshot.current_position,
         },
+        repeat: RepeatMode::Off,
+        shuffle: false,
         position_ms: snapshot.position_ms,
         duration_ms: snapshot.duration_ms,
         volume: Some(ZoneVolume::new(
@@ -137,6 +139,9 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
             volume: true,
             mute: true,
             queue: true,
+            queue_edit: false,
+            repeat: false,
+            shuffle: false,
             group: false,
             transfer_target: false,
             sleep_timer: false,
@@ -196,6 +201,14 @@ fn cast_command(
         ZoneCommand::SetMute { muted, .. } => ("set_mute", None, None, Some(*muted), None),
         ZoneCommand::Load { .. } => {
             return Err(ZoneError::Unsupported("zone_cannot_receive_transfer"));
+        }
+        ZoneCommand::MoveQueueItem { .. }
+        | ZoneCommand::RemoveQueueItem { .. }
+        | ZoneCommand::ClearUpcoming
+        | ZoneCommand::SetRepeat { .. }
+        | ZoneCommand::SetShuffle { .. } => {
+            // The phone that started the cast owns the Chromecast queue.
+            return Err(ZoneError::Unsupported("edit_the_cast_queue_on_the_phone"));
         }
     };
     let mut connection = pool
@@ -547,6 +560,10 @@ async fn send_command(
                 | ZoneCommand::Jump { .. }
                 | ZoneCommand::Next
                 | ZoneCommand::Previous
+                | ZoneCommand::MoveQueueItem { .. }
+                | ZoneCommand::RemoveQueueItem { .. }
+                | ZoneCommand::ClearUpcoming
+                | ZoneCommand::SetShuffle { .. }
         ) {
             library_cache(&lifecycle).await
         } else {

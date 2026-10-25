@@ -157,6 +157,12 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
         }
         if (play) current.playAudioSource();
       },
+      songIdAt: (index) => playerRef.current.queue[index]?.song.id,
+      moveQueueItem: (from, to) => playerRef.current.reorderQueue(from, to),
+      removeQueueItem: (index) => playerRef.current.removeQueueItem(index),
+      clearUpcoming: () => playerRef.current.clearUpcoming(),
+      setRepeat: (mode) => playerRef.current.setRepeatMode(mode),
+      setShuffle: (enabled) => playerRef.current.setShuffle(enabled),
     }),
     [],
   );
@@ -226,6 +232,8 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
           ),
           volume: Math.round(current.volume * 100),
           muted: current.muted,
+          repeat: current.repeatMode,
+          shuffle: current.shuffle,
           acknowledged_seq: lastAppliedSeq.current ?? 0,
         });
         if (includeQueue) lastQueueKey.current = key;
@@ -263,6 +271,8 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
     scheduleReport(350);
   }, [
     currentQueueKey,
+    player.repeatMode,
+    player.shuffle,
     player.muted,
     player.song.id,
     player.volume,

@@ -67,6 +67,10 @@ pub struct ClientRegistration {
     /// Highest command sequence number already applied.
     #[serde(default)]
     pub acknowledged_seq: u64,
+    #[serde(default)]
+    pub repeat: RepeatMode,
+    #[serde(default)]
+    pub shuffle: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +112,8 @@ struct ClientZone {
     last_seen: Instant,
     commands: VecDeque<PendingCommand>,
     next_seq: u64,
+    repeat: RepeatMode,
+    shuffle: bool,
 }
 
 struct SonosQueue {
@@ -117,6 +123,10 @@ struct SonosQueue {
     /// Index into `song_ids` of the first track in the Sonos queue.
     window_start: usize,
     window_len: usize,
+    /// Parson shuffles the queue itself so both sides agree on the order.
+    shuffle: bool,
+    /// Unshuffled order while `shuffle` is on.
+    original: Option<Vec<String>>,
 }
 
 struct LinkedGroup {
@@ -125,8 +135,14 @@ struct LinkedGroup {
 }
 
 struct SleepTimer {
+    /// Who set the timer. Sonos rooms are shared by every account on the
+    /// server, so the owner cannot be derived from the zone.
+    user_id: i32,
     ends_at_ms: i64,
     finishing_track: bool,
+    /// Queue position of the track being allowed to finish.
+    finishing_position: Option<usize>,
+    fading: bool,
 }
 
 #[derive(Default)]
@@ -148,7 +164,13 @@ pub struct ZoneService {
     sonos: Option<Arc<SonosController>>,
     pool: Option<DbPool>,
     port: AtomicU16,
+    /// How long a sleep timer fades out before pausing.
+    sleep_fade: Mutex<Duration>,
 }
+
+/// Fade-out length when a sleep timer pauses mid-track.
+pub const SLEEP_FADE: Duration = Duration::from_secs(8);
+const SLEEP_FADE_STEPS: u32 = 16;
 
 pub(crate) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -230,7 +252,23 @@ impl ZoneService {
             sonos,
             pool,
             port: AtomicU16::new(crate::settings::DEFAULT_PORT),
+            sleep_fade: Mutex::new(SLEEP_FADE),
         }
+    }
+
+    /// Shortens the sleep fade (tests).
+    pub fn set_sleep_fade(&self, fade: Duration) {
+        *self
+            .sleep_fade
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = fade;
+    }
+
+    fn sleep_fade(&self) -> Duration {
+        *self
+            .sleep_fade
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub fn set_port(&self, port: u16) {
@@ -338,6 +376,8 @@ impl ZoneService {
                     last_seen: Instant::now(),
                     commands: VecDeque::new(),
                     next_seq: 1,
+                    repeat: RepeatMode::Off,
+                    shuffle: false,
                 });
             let fallback = match report.kind {
                 ZoneKind::Mobile => "Phone",
@@ -352,6 +392,8 @@ impl ZoneService {
                 || zone.current_position != report.current_position
                 || zone.volume != report.volume
                 || zone.muted != report.muted
+                || zone.repeat != report.repeat
+                || zone.shuffle != report.shuffle
                 || zone.kind != report.kind;
             let expected = extrapolate_position(
                 zone.position_ms,
@@ -378,6 +420,8 @@ impl ZoneService {
             zone.reported_at_ms = now;
             zone.volume = report.volume;
             zone.muted = report.muted;
+            zone.repeat = report.repeat;
+            zone.shuffle = report.shuffle;
             zone.last_seen = Instant::now();
             while zone
                 .commands
@@ -566,6 +610,8 @@ impl ZoneService {
                 song_ids: zone.song_ids.clone(),
                 current_position: zone.current_position,
             },
+            repeat: zone.repeat,
+            shuffle: zone.shuffle,
             position_ms: extrapolate_position(
                 zone.position_ms,
                 zone.reported_at_ms,
@@ -587,6 +633,9 @@ impl ZoneService {
                 volume: true,
                 mute: true,
                 queue: true,
+                queue_edit: true,
+                repeat: true,
+                shuffle: true,
                 group: true,
                 transfer_target: true,
                 sleep_timer: true,
@@ -659,9 +708,19 @@ impl ZoneService {
                 )),
             })
             .collect();
+        let (repeat, sonos_shuffles) = RepeatMode::from_sonos_play_mode(&group.play_mode);
         let mut notes = vec![
             "Sonos plays up to 48 kHz/24-bit. MP3, AAC, ALAC, FLAC and WAV within that limit stream untouched; anything else is converted to 24-bit FLAC at 44.1 or 48 kHz.".to_string(),
         ];
+        if let Some(queue) = queue
+            && queue.song_ids.len() > queue.window_len
+        {
+            notes.push(format!(
+                "Sonos holds {} of the {} queued tracks at a time; Parson loads the next ones as playback moves on.",
+                queue.window_len,
+                queue.song_ids.len()
+            ));
+        }
         if source == ZoneSource::External {
             notes.push(
                 "Another app is playing on this Sonos zone. Playing from Parson replaces it."
@@ -685,6 +744,8 @@ impl ZoneService {
                     .unwrap_or_default(),
                 current_position,
             },
+            repeat,
+            shuffle: queue.is_some_and(|queue| queue.shuffle) || sonos_shuffles,
             position_ms: extrapolate_position(
                 group.position_ms,
                 group.polled_at_ms,
@@ -715,6 +776,9 @@ impl ZoneService {
                 volume: true,
                 mute: true,
                 queue: source == ZoneSource::Parson,
+                queue_edit: source == ZoneSource::Parson,
+                repeat: source != ZoneSource::None,
+                shuffle: source == ZoneSource::Parson,
                 group: true,
                 transfer_target: true,
                 sleep_timer: true,
@@ -785,9 +849,61 @@ impl ZoneService {
         }
         if zone_id.starts_with("client:") {
             let command = self.clamp_client_command(user_id, zone_id, command)?;
+            self.preview_client_edit(user_id, zone_id, &command)?;
             return self.queue_client_command(user_id, zone_id, command);
         }
         Err(ZoneError::NotFound)
+    }
+
+    /// Checks a queue edit against the client's last reported queue and
+    /// shows it right away, so every remote sees the change before the
+    /// client's next report. The client re-sends its real queue afterwards.
+    fn preview_client_edit(
+        &self,
+        user_id: i32,
+        zone_id: &str,
+        command: &ZoneCommand,
+    ) -> Result<(), ZoneError> {
+        let is_mode = matches!(
+            command,
+            ZoneCommand::SetRepeat { .. } | ZoneCommand::SetShuffle { .. }
+        );
+        if !command.is_queue_edit() && !is_mode {
+            return Ok(());
+        }
+        {
+            let mut state = self.lock();
+            let zone = state
+                .clients
+                .get_mut(zone_id)
+                .filter(|zone| zone.user_id == user_id)
+                .ok_or(ZoneError::NotFound)?;
+            match command {
+                ZoneCommand::SetRepeat { mode } => zone.repeat = *mode,
+                ZoneCommand::SetShuffle { enabled } => {
+                    // The client shuffles with its own order; it reports back.
+                    zone.shuffle = *enabled;
+                    zone.has_queue = false;
+                }
+                _ => {
+                    let mut song_ids = zone.song_ids.clone();
+                    let mut shuffle = zone.shuffle;
+                    let mut original = None;
+                    apply_queue_edit(
+                        &mut song_ids,
+                        zone.current_position,
+                        &mut shuffle,
+                        &mut original,
+                        command,
+                        &mut |_| 0,
+                    )?;
+                    zone.song_ids = song_ids;
+                    zone.has_queue = false;
+                }
+            }
+        }
+        self.changed(Some(user_id));
+        Ok(())
     }
 
     fn max_volume(&self, zone_id: &str) -> u8 {
@@ -994,7 +1110,207 @@ impl ZoneService {
                 )
                 .await
             }
+            ZoneCommand::SetRepeat { mode } => sonos
+                .set_play_mode(&coordinator, mode.sonos_play_mode())
+                .await
+                .map_err(device),
+            command @ (ZoneCommand::MoveQueueItem { .. }
+            | ZoneCommand::RemoveQueueItem { .. }
+            | ZoneCommand::ClearUpcoming
+            | ZoneCommand::SetShuffle { .. }) => {
+                let cache = cache.ok_or(ZoneError::Unsupported("library_unavailable"))?;
+                self.sonos_queue_edit(&sonos, &coordinator, &command, cache)
+                    .await
+            }
         }
+    }
+
+    /// Edits the Parson queue mapped onto a Sonos group and mirrors the
+    /// change on the speaker's queue without interrupting the current
+    /// track: native reorder/remove inside the mapped window, otherwise the
+    /// upcoming part of the Sonos queue is rewritten.
+    async fn sonos_queue_edit(
+        &self,
+        sonos: &SonosController,
+        coordinator: &str,
+        command: &ZoneCommand,
+        cache: &LibraryCache,
+    ) -> Result<(), ZoneError> {
+        let device = |error: crate::sonos::soap::SoapError| ZoneError::Device(error.to_string());
+        // Act on the speaker's real position, not a stale poll.
+        let _ = sonos.poll_group(coordinator).await;
+        let group = sonos.group_of(coordinator).ok_or(ZoneError::NotFound)?;
+        if !group.track_uri.contains(ZONE_MEDIA_PATH) {
+            return Err(ZoneError::Unsupported("zone_has_no_parson_queue"));
+        }
+        let track_index = group.track_number.saturating_sub(1) as usize;
+        let (edit, song_ids, window_start, window_len, current) = {
+            let mut state = self.lock();
+            let queue = state
+                .sonos_queues
+                .get_mut(coordinator)
+                .ok_or(ZoneError::Unsupported("zone_has_no_parson_queue"))?;
+            let current =
+                (queue.window_start + track_index).min(queue.song_ids.len().saturating_sub(1));
+            let mut song_ids = queue.song_ids.clone();
+            let mut shuffle = queue.shuffle;
+            let mut original = queue.original.clone();
+            let edit = apply_queue_edit(
+                &mut song_ids,
+                current,
+                &mut shuffle,
+                &mut original,
+                command,
+                &mut |bound| rand::random_range(0..bound.max(1)),
+            )?;
+            if edit == QueueEdit::Unchanged {
+                return Ok(());
+            }
+            queue.shuffle = shuffle;
+            queue.original = original;
+            (
+                edit,
+                song_ids,
+                queue.window_start,
+                queue.window_len,
+                current,
+            )
+        };
+        let in_window =
+            |position: usize| position >= window_start && position < window_start + window_len;
+        let relative = |position: usize| (position - window_start) as u32;
+        let mut new_len = window_len;
+        // Record the new order first so the speaker may fetch new tracks.
+        let commit = |len: usize| {
+            let mut state = self.lock();
+            if let Some(queue) = state.sonos_queues.get_mut(coordinator) {
+                queue.song_ids = song_ids.clone();
+                queue.window_len = len;
+            }
+        };
+        let result: Result<(), ZoneError> = async {
+            match edit {
+                QueueEdit::Moved { from, to } if in_window(from) && in_window(to) => {
+                    commit(window_len);
+                    sonos
+                        .move_track(coordinator, relative(from), relative(to))
+                        .await
+                        .map_err(device)
+                }
+                QueueEdit::Removed { position } => {
+                    if in_window(position) {
+                        new_len -= 1;
+                        commit(new_len);
+                        sonos
+                            .remove_track(coordinator, relative(position))
+                            .await
+                            .map_err(device)?;
+                    } else {
+                        commit(new_len);
+                    }
+                    // Top the window back up from the rest of the queue.
+                    let end = (window_start + MAX_SONOS_QUEUE_ITEMS).min(song_ids.len());
+                    let from = window_start + new_len;
+                    if from < end {
+                        let tracks =
+                            self.sonos_tracks(sonos, coordinator, &song_ids[from..end], cache)?;
+                        new_len += tracks.len();
+                        commit(new_len);
+                        sonos
+                            .append_tracks(coordinator, &tracks)
+                            .await
+                            .map_err(device)?;
+                    }
+                    Ok(())
+                }
+                QueueEdit::Moved { .. } | QueueEdit::UpcomingReplaced => {
+                    let kept = current + 1 - window_start;
+                    let end = (window_start + MAX_SONOS_QUEUE_ITEMS).min(song_ids.len());
+                    let tracks = self.sonos_tracks(
+                        sonos,
+                        coordinator,
+                        &song_ids[(current + 1).min(end)..end],
+                        cache,
+                    )?;
+                    new_len = kept + tracks.len();
+                    commit(new_len);
+                    sonos
+                        .remove_track_range(coordinator, kept as u32, (window_len - kept) as u32)
+                        .await
+                        .map_err(device)?;
+                    sonos
+                        .append_tracks(coordinator, &tracks)
+                        .await
+                        .map_err(device)
+                }
+                QueueEdit::Unchanged => Ok(()),
+            }
+        }
+        .await;
+        if matches!(command, ZoneCommand::SetShuffle { .. })
+            && RepeatMode::from_sonos_play_mode(&group.play_mode).1
+        {
+            // Parson owns the order now; stop Sonos shuffling on top of it.
+            let (repeat, _) = RepeatMode::from_sonos_play_mode(&group.play_mode);
+            let _ = sonos
+                .set_play_mode(coordinator, repeat.sonos_play_mode())
+                .await;
+        }
+        if let Err(error) = result {
+            // The speaker's queue no longer matches; load the edited queue.
+            tracing::warn!(%error, coordinator, "Sonos queue edit failed; reloading the queue");
+            let playing = group.transport == TransportState::Playing;
+            let position_ms = extrapolate_position(
+                group.position_ms,
+                group.polled_at_ms,
+                now_ms(),
+                playing,
+                group.duration_ms,
+            );
+            self.load_sonos(
+                sonos,
+                coordinator,
+                song_ids,
+                current,
+                position_ms,
+                playing,
+                cache,
+            )
+            .await?;
+        }
+        let _ = sonos.poll_group(coordinator).await;
+        self.changed(None);
+        Ok(())
+    }
+
+    /// Signed URLs and DIDL-Lite for `song_ids` on a Sonos group.
+    fn sonos_tracks(
+        &self,
+        sonos: &SonosController,
+        coordinator: &str,
+        song_ids: &[String],
+        cache: &LibraryCache,
+    ) -> Result<Vec<(String, String)>, ZoneError> {
+        if song_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let origin = sonos
+            .local_origin_for(coordinator, self.port())
+            .ok_or_else(|| ZoneError::Device("no network route to the Sonos player".into()))?;
+        let expires = chrono::Utc::now().timestamp() + MEDIA_URL_LIFETIME_SECONDS;
+        let media_key = self
+            .lock()
+            .sonos_queues
+            .get(coordinator)
+            .map(|queue| queue.media_key.clone())
+            .unwrap_or_else(|| coordinator.to_string());
+        song_ids
+            .iter()
+            .map(|song_id| {
+                sonos_track(cache, &origin, &media_key, song_id, expires)
+                    .ok_or(ZoneError::Invalid("invalid_zone_queue"))
+            })
+            .collect()
     }
 
     /// Next/previous; reloads the window when the Sonos queue edge is reached.
@@ -1070,6 +1386,16 @@ impl ZoneService {
         if tracks.len() != window_len {
             return Err(ZoneError::Invalid("invalid_zone_queue"));
         }
+        // A window reload of the same queue keeps its shuffle state.
+        let (shuffle, original) = {
+            let state = self.lock();
+            match state.sonos_queues.get(coordinator) {
+                Some(queue) if queue.song_ids == song_ids => {
+                    (queue.shuffle, queue.original.clone())
+                }
+                _ => (false, None),
+            }
+        };
         // Record the queue first so media requests that arrive during
         // loading are authorised.
         {
@@ -1081,6 +1407,8 @@ impl ZoneService {
                     song_ids,
                     window_start,
                     window_len,
+                    shuffle,
+                    original,
                 },
             );
         }
@@ -1383,70 +1711,209 @@ impl ZoneService {
                     state.sleep.insert(
                         zone_id.to_string(),
                         SleepTimer {
+                            user_id,
                             ends_at_ms: now_ms() + i64::from(minutes) * 60_000,
                             finishing_track: false,
+                            finishing_position: None,
+                            fading: false,
                         },
                     );
                 }
                 Some(_) => return Err(ZoneError::Invalid("invalid_sleep_minutes")),
                 None => {
+                    // Cancelling during a fade stops it and restores volume.
                     state.sleep.remove(zone_id);
                 }
             }
         }
+        self.sleep_changed(user_id, zone_id);
+        Ok(())
+    }
+
+    fn sleep_changed(&self, user_id: i32, zone_id: &str) {
         self.changed(if zone_id.starts_with("sonos:") {
             None
         } else {
             Some(user_id)
         });
-        Ok(())
     }
 
-    /// Fires due sleep timers. A timer that runs out within five minutes of a
-    /// track's end lets that track finish first, as Roon does.
-    pub async fn run_sleep_timers(&self, user_for_zone: impl Fn(&str) -> Option<i32>) {
+    /// Fires due sleep timers. A timer that runs out within five minutes of
+    /// a track's end lets that track finish (Roon parity), then pauses as
+    /// the next track starts or the track ends. Otherwise the zone fades
+    /// out, pauses, and gets its volume back for next time.
+    pub async fn run_sleep_timers(&self) {
         let now = now_ms();
-        let due: Vec<(String, bool)> = {
+        let timers: Vec<(String, i32, i64, bool, Option<usize>, bool)> = {
             let state = self.lock();
             state
                 .sleep
                 .iter()
-                .filter(|(_, timer)| timer.ends_at_ms <= now)
-                .map(|(id, timer)| (id.clone(), timer.finishing_track))
+                .map(|(id, timer)| {
+                    (
+                        id.clone(),
+                        timer.user_id,
+                        timer.ends_at_ms,
+                        timer.finishing_track,
+                        timer.finishing_position,
+                        timer.fading,
+                    )
+                })
                 .collect()
         };
-        for (zone_id, finishing) in due {
-            let Some(user_id) = self.owner_of(&zone_id).or_else(|| user_for_zone(&zone_id)) else {
+        for (zone_id, user_id, ends_at_ms, finishing, finishing_position, fading) in timers {
+            if fading {
+                continue;
+            }
+            let zone = self.zone(user_id, &zone_id, None);
+            let Some(zone) = zone else {
+                // The zone went away (device closed, speaker unplugged).
                 self.lock().sleep.remove(&zone_id);
+                self.sleep_changed(user_id, &zone_id);
                 continue;
             };
-            let zone = self.zone(user_id, &zone_id, None);
-            if !finishing
-                && let Some(zone) = &zone
-                && zone.status == ZoneStatus::Playing
-                && zone.duration_ms > 0
-            {
+            let track_moved_on = finishing
+                && (finishing_position != Some(zone.queue.current_position)
+                    || !zone.status.is_playing());
+            if ends_at_ms > now && !track_moved_on {
+                continue;
+            }
+            let playing = zone.status.is_playing();
+            if finishing {
+                self.lock().sleep.remove(&zone_id);
+                if playing {
+                    let _ = self
+                        .command(user_id, &zone_id, ZoneCommand::Pause, None)
+                        .await;
+                }
+                self.sleep_changed(user_id, &zone_id);
+                continue;
+            }
+            if playing && zone.duration_ms > 0 {
                 let remaining = zone.duration_ms - zone.position_ms;
                 if remaining > 1_000 && remaining <= SLEEP_FINISH_TRACK_WINDOW_MS {
                     if let Some(timer) = self.lock().sleep.get_mut(&zone_id) {
-                        timer.ends_at_ms = now + remaining - 500;
+                        timer.ends_at_ms = now + remaining - 250;
                         timer.finishing_track = true;
+                        timer.finishing_position = Some(zone.queue.current_position);
                     }
-                    self.changed(Some(user_id));
+                    self.sleep_changed(user_id, &zone_id);
                     continue;
                 }
             }
-            self.lock().sleep.remove(&zone_id);
-            if zone.is_some() {
-                let _ = self
-                    .command(user_id, &zone_id, ZoneCommand::Pause, None)
-                    .await;
+            if !playing {
+                self.lock().sleep.remove(&zone_id);
+                self.sleep_changed(user_id, &zone_id);
+                continue;
             }
-            self.changed(if zone_id.starts_with("sonos:") {
-                None
-            } else {
-                Some(user_id)
-            });
+            if let Some(timer) = self.lock().sleep.get_mut(&zone_id) {
+                timer.fading = true;
+            }
+            self.sleep_changed(user_id, &zone_id);
+            self.fade_and_pause(user_id, &zone).await;
+            {
+                let mut state = self.lock();
+                if state.sleep.get(&zone_id).is_some_and(|timer| timer.fading) {
+                    state.sleep.remove(&zone_id);
+                }
+            }
+            self.sleep_changed(user_id, &zone_id);
+        }
+    }
+
+    /// Volume controls a fade has to move: each Sonos room on its own (a
+    /// group fade would lose the rooms' balance), each member of a linked
+    /// group, or the client itself.
+    fn fade_targets(&self, user_id: i32, zone: &Zone) -> Vec<(String, Option<String>, u8)> {
+        let audible = |volume: &Option<ZoneVolume>| {
+            volume
+                .as_ref()
+                .filter(|volume| !volume.muted && volume.level > 0)
+                .map(|volume| volume.level)
+        };
+        match zone.kind {
+            ZoneKind::Sonos => match &zone.group {
+                Some(group) => group
+                    .members
+                    .iter()
+                    .filter_map(|member| {
+                        audible(&member.volume)
+                            .map(|level| (zone.id.clone(), Some(member.id.clone()), level))
+                    })
+                    .collect(),
+                None => audible(&zone.volume)
+                    .map(|level| vec![(zone.id.clone(), Some(zone.id.clone()), level)])
+                    .unwrap_or_default(),
+            },
+            ZoneKind::Linked => zone
+                .group
+                .iter()
+                .flat_map(|group| group.members.iter())
+                .filter_map(|member| self.zone(user_id, &member.id, None))
+                .flat_map(|member| self.fade_targets(user_id, &member))
+                .collect(),
+            ZoneKind::Chromecast => Vec::new(),
+            _ => audible(&zone.volume)
+                .map(|level| vec![(zone.id.clone(), None, level)])
+                .unwrap_or_default(),
+        }
+    }
+
+    async fn fade_and_pause(&self, user_id: i32, zone: &Zone) {
+        let targets = self.fade_targets(user_id, zone);
+        let fade = self.sleep_fade();
+        let still_fading = || {
+            self.lock()
+                .sleep
+                .get(&zone.id)
+                .is_some_and(|timer| timer.fading)
+        };
+        let mut cancelled = false;
+        if !targets.is_empty() && !fade.is_zero() {
+            let step = fade / SLEEP_FADE_STEPS;
+            for index in 1..=SLEEP_FADE_STEPS {
+                tokio::time::sleep(step).await;
+                if !still_fading() {
+                    cancelled = true;
+                    break;
+                }
+                for (zone_id, member_id, level) in &targets {
+                    let volume =
+                        (u32::from(*level) * (SLEEP_FADE_STEPS - index) / SLEEP_FADE_STEPS) as u8;
+                    let _ = self
+                        .command(
+                            user_id,
+                            zone_id,
+                            ZoneCommand::SetVolume {
+                                volume,
+                                member_id: member_id.clone(),
+                            },
+                            None,
+                        )
+                        .await;
+                }
+            }
+        }
+        if !cancelled
+            && let Err(error) = self
+                .command(user_id, &zone.id, ZoneCommand::Pause, None)
+                .await
+        {
+            tracing::warn!(%error, zone = zone.id, "sleep timer could not pause the zone");
+        }
+        // Put the volume back so the next play is not silent.
+        for (zone_id, member_id, level) in targets {
+            let _ = self
+                .command(
+                    user_id,
+                    &zone_id,
+                    ZoneCommand::SetVolume {
+                        volume: level,
+                        member_id,
+                    },
+                    None,
+                )
+                .await;
         }
     }
 
@@ -1457,20 +1924,21 @@ impl ZoneService {
         }
     }
 
-    fn owner_of(&self, zone_id: &str) -> Option<i32> {
-        let state = self.lock();
-        state
-            .clients
-            .get(zone_id)
-            .map(|zone| zone.user_id)
-            .or_else(|| state.linked.get(zone_id).map(|group| group.user_id))
-    }
-
     // ----- Sonos background work ---------------------------------------
 
     /// Background loop: discovery, topology, polling, events, timers and
     /// client expiry.
     pub async fn run(self: Arc<Self>) {
+        // Sleep timers run on their own so a fade never delays polling.
+        let sleeper = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                sleeper.run_sleep_timers().await;
+            }
+        });
         let mut tick: u64 = 0;
         let mut sonos_changes = self.sonos.as_ref().map(|sonos| sonos.subscribe_changes());
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -1492,7 +1960,6 @@ impl ZoneService {
             }
             tick += 1;
             self.expire_clients();
-            self.run_sleep_timers(|_| None).await;
             let Some(sonos) = self.sonos.clone() else {
                 continue;
             };
@@ -1577,6 +2044,7 @@ fn sleep_view(state: &State, zone_id: &str) -> Option<ZoneSleepTimer> {
     state.sleep.get(zone_id).map(|timer| ZoneSleepTimer {
         ends_at_ms: timer.ends_at_ms,
         finishing_track: timer.finishing_track,
+        fading: timer.fading,
     })
 }
 
@@ -1616,6 +2084,8 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
         source: leader.source,
         now_playing: leader.now_playing.clone(),
         queue: leader.queue.clone(),
+        repeat: leader.repeat,
+        shuffle: leader.shuffle,
         position_ms: leader.position_ms,
         duration_ms: leader.duration_ms,
         volume: Some(ZoneVolume::new(level, muted, settings.max_volume)),
@@ -1640,6 +2110,9 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
             volume: true,
             mute: true,
             queue: true,
+            queue_edit: leader.capabilities.queue_edit,
+            repeat: leader.capabilities.repeat,
+            shuffle: leader.capabilities.shuffle,
             group: false,
             transfer_target: true,
             sleep_timer: true,

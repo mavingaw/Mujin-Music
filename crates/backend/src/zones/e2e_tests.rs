@@ -110,6 +110,8 @@ fn web_client(status: ZoneStatus, song_ids: Option<Vec<String>>) -> ClientRegist
         volume: 80,
         muted: false,
         acknowledged_seq: 0,
+        repeat: RepeatMode::Off,
+        shuffle: false,
     }
 }
 
@@ -637,6 +639,8 @@ async fn zone_http_api_lists_controls_and_validates() {
                 volume: 50,
                 muted: false,
                 acknowledged_seq: 0,
+                repeat: RepeatMode::Off,
+                shuffle: false,
             },
         )
         .expect("heartbeat");
@@ -742,14 +746,14 @@ fn sleep_timer_lets_a_nearly_finished_track_end() {
             .expect("timer");
         // Force the timer due now.
         service.force_sleep_due("client:browser-sleep1");
-        service.run_sleep_timers(|_| None).await;
+        service.run_sleep_timers().await;
         let zone = service
             .zone(USER, "client:browser-sleep1", None)
             .expect("zone");
         let timer = zone.sleep_timer.expect("timer kept while the track ends");
         assert!(timer.finishing_track);
         service.force_sleep_due("client:browser-sleep1");
-        service.run_sleep_timers(|_| None).await;
+        service.run_sleep_timers().await;
         let zone = service
             .zone(USER, "client:browser-sleep1", None)
             .expect("zone");
@@ -767,6 +771,416 @@ fn sleep_timer_lets_a_nearly_finished_track_end() {
             Some(ZoneCommand::Pause)
         );
     });
+}
+
+async fn single_sonos_room(
+    room: &'static str,
+    uuid: &'static str,
+) -> (FakeSonos, Arc<SonosController>, ZoneService) {
+    let fake = FakeSonos::start(&[FakePlayerSpec {
+        uuid,
+        room,
+        model: "Sonos One",
+        pair_of: None,
+    }])
+    .await;
+    let sonos = Arc::new(
+        SonosController::new(SonosConfig {
+            ssdp_targets: vec![fake.ssdp_address],
+            static_hosts: Vec::new(),
+            search_timeout: Duration::from_millis(400),
+        })
+        .expect("controller"),
+    );
+    assert_eq!(sonos.discover().await.expect("discovery"), 1);
+    let service = ZoneService::new(Some(sonos.clone()), None);
+    (fake, sonos, service)
+}
+
+fn queue_titles(fake: &FakeSonos, uuid: &str) -> Vec<String> {
+    fake.player(uuid)
+        .queue
+        .iter()
+        .map(|(uri, _)| {
+            uri.split("/zones/media/")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+#[actix_web::test]
+async fn sonos_queue_is_managed_remotely_through_zone_commands() {
+    const DEN: &str = "RINCON_DEN000001400";
+    let (fake, _sonos, service) = single_sonos_room("Den", DEN).await;
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let cache = library(&directory);
+    let zone_id = format!("sonos:{DEN}");
+    let all: Vec<String> = ["song-1", "song-2", "song-3", "song-4"]
+        .map(String::from)
+        .to_vec();
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Load {
+                song_ids: all.clone(),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert!(zone.capabilities.queue_edit && zone.capabilities.repeat);
+    assert!(zone.capabilities.shuffle);
+    let removes_before = fake.calls("RemoveAllTracksFromQueue").len();
+
+    // Drag the last song up next: a native Sonos reorder, no reload.
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::MoveQueueItem {
+                from: 3,
+                to: 1,
+                song_id: Some("song-4".into()),
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("move");
+    assert_eq!(
+        queue_titles(&fake, DEN),
+        ["song-1", "song-4", "song-2", "song-3"]
+    );
+    assert_eq!(fake.calls("ReorderTracksInQueue").len(), 1);
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert_eq!(
+        zone.queue.song_ids,
+        ["song-1", "song-4", "song-2", "song-3"]
+    );
+    assert_eq!(fake.player(DEN).track, 1, "the playing track is untouched");
+    assert_eq!(fake.player(DEN).state, "PLAYING");
+
+    // A remote acting on a stale queue is refused instead of removing the
+    // wrong song.
+    assert_eq!(
+        service
+            .command(
+                USER,
+                &zone_id,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 2,
+                    song_id: Some("song-3".into()),
+                },
+                Some(&cache),
+            )
+            .await,
+        Err(ZoneError::Invalid("queue_changed"))
+    );
+    // The playing track cannot be removed from under the speaker.
+    assert_eq!(
+        service
+            .command(
+                USER,
+                &zone_id,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 0,
+                    song_id: None,
+                },
+                Some(&cache),
+            )
+            .await,
+        Err(ZoneError::Invalid("only_upcoming_items_remove"))
+    );
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::RemoveQueueItem {
+                queue_position: 2,
+                song_id: Some("song-2".into()),
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("remove");
+    assert_eq!(queue_titles(&fake, DEN), ["song-1", "song-4", "song-3"]);
+    assert!(
+        fake.calls("RemoveTrackFromQueue")
+            .iter()
+            .any(|call| call.arguments["ObjectID"] == "Q:0/3")
+    );
+    assert!(
+        !service.media_allowed(DEN, "song-2"),
+        "removed songs stop streaming"
+    );
+    assert!(service.media_allowed(DEN, "song-3"));
+
+    // Repeat maps onto the Sonos play mode and is reported back.
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::SetRepeat {
+                mode: RepeatMode::All,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("repeat");
+    assert_eq!(fake.player(DEN).play_mode, "REPEAT_ALL");
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert_eq!(zone.repeat, RepeatMode::All);
+
+    // Shuffle reorders only what is upcoming, on the speaker too, and
+    // turning it off restores the order.
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::SetShuffle { enabled: true },
+            Some(&cache),
+        )
+        .await
+        .expect("shuffle");
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert!(zone.shuffle);
+    assert_eq!(zone.queue.song_ids[0], "song-1");
+    assert_eq!(queue_titles(&fake, DEN), zone.queue.song_ids);
+    let mut shuffled = zone.queue.song_ids.clone();
+    shuffled.sort();
+    assert_eq!(shuffled, ["song-1", "song-3", "song-4"]);
+    assert_eq!(fake.player(DEN).track, 1);
+    assert_eq!(fake.player(DEN).play_mode, "REPEAT_ALL", "repeat survives");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::SetShuffle { enabled: false },
+            Some(&cache),
+        )
+        .await
+        .expect("unshuffle");
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert!(!zone.shuffle);
+    assert_eq!(zone.queue.song_ids, ["song-1", "song-4", "song-3"]);
+    assert_eq!(queue_titles(&fake, DEN), ["song-1", "song-4", "song-3"]);
+
+    // Clear upcoming leaves only the playing track, still playing.
+    service
+        .command(USER, &zone_id, ZoneCommand::ClearUpcoming, Some(&cache))
+        .await
+        .expect("clear");
+    assert_eq!(queue_titles(&fake, DEN), ["song-1"]);
+    assert_eq!(fake.player(DEN).state, "PLAYING");
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert_eq!(zone.queue.song_ids, ["song-1"]);
+    assert_eq!(
+        fake.calls("RemoveAllTracksFromQueue").len(),
+        removes_before,
+        "no edit reloaded the whole queue"
+    );
+
+    // With repeat-all on, the speaker starts over after the last track.
+    fake.advance(DEN);
+    assert_eq!(fake.player(DEN).track, 1);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[actix_web::test]
+async fn client_zone_queue_edits_show_at_once_and_reach_the_client() {
+    let service = ZoneService::new(None, None);
+    let queue: Vec<String> = ["song-1", "song-2", "song-3", "song-4"]
+        .map(String::from)
+        .to_vec();
+    service
+        .register_client(
+            USER,
+            "browser-edit01",
+            web_client(ZoneStatus::Playing, Some(queue)),
+        )
+        .expect("register");
+    let zone_id = "client:browser-edit01";
+    service
+        .command(
+            USER,
+            zone_id,
+            ZoneCommand::MoveQueueItem {
+                from: 3,
+                to: 2,
+                song_id: Some("song-4".into()),
+            },
+            None,
+        )
+        .await
+        .expect("move");
+    service
+        .command(
+            USER,
+            zone_id,
+            ZoneCommand::SetRepeat {
+                mode: RepeatMode::One,
+            },
+            None,
+        )
+        .await
+        .expect("repeat");
+    let zone = service.zone(USER, zone_id, None).expect("zone");
+    assert_eq!(
+        zone.queue.song_ids,
+        ["song-1", "song-2", "song-4", "song-3"]
+    );
+    assert_eq!(zone.repeat, RepeatMode::One);
+    assert_eq!(
+        service
+            .command(
+                USER,
+                zone_id,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 1,
+                    song_id: None,
+                },
+                None,
+            )
+            .await,
+        Err(ZoneError::Invalid("only_upcoming_items_remove")),
+        "current track is position 1"
+    );
+    let mut heartbeat = web_client(ZoneStatus::Playing, None);
+    heartbeat.repeat = RepeatMode::One;
+    let pending = service
+        .register_client(USER, "browser-edit01", heartbeat)
+        .expect("heartbeat");
+    assert!(pending.needs_queue, "the client confirms its real queue");
+    assert_eq!(
+        pending
+            .commands
+            .iter()
+            .map(|command| command.command.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ZoneCommand::MoveQueueItem {
+                from: 3,
+                to: 2,
+                song_id: Some("song-4".into())
+            },
+            ZoneCommand::SetRepeat {
+                mode: RepeatMode::One
+            },
+        ]
+    );
+}
+
+#[actix_web::test]
+async fn sonos_sleep_timer_fades_pauses_and_restores_volume() {
+    const STUDY: &str = "RINCON_STUDY00001400";
+    let (fake, sonos, service) = single_sonos_room("Study", STUDY).await;
+    service.set_sleep_fade(Duration::from_millis(160));
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let mut cache = library(&directory);
+    // A 15-minute first track: a timer running out early in it fades.
+    Arc::make_mut(&mut cache.artists)[0].albums[0].songs[0].duration = 900.0;
+    let zone_id = format!("sonos:{STUDY}");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Load {
+                song_ids: vec!["song-1".into(), "song-2".into()],
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::SetVolume {
+                volume: 40,
+                member_id: None,
+            },
+            None,
+        )
+        .await
+        .expect("volume");
+
+    // Sonos rooms belong to no single account; the timer remembers who set
+    // it instead of being dropped when it runs out.
+    service
+        .set_sleep_timer(USER, &zone_id, Some(30))
+        .expect("timer");
+    service.force_sleep_due(&zone_id);
+    service.run_sleep_timers().await;
+    let player = fake.player(STUDY);
+    assert_eq!(player.state, "PAUSED_PLAYBACK", "the timer paused the room");
+    assert_eq!(player.volume, 40, "volume is back for the next play");
+    let levels: Vec<u8> = fake
+        .calls("SetVolume")
+        .iter()
+        .filter_map(|call| call.arguments["DesiredVolume"].parse().ok())
+        .collect();
+    assert!(levels.contains(&0), "faded out: {levels:?}");
+    assert!(levels.windows(2).any(|pair| pair[1] < pair[0]));
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert!(zone.sleep_timer.is_none());
+
+    // Near the end of a track the timer lets it finish, then pauses when
+    // the next track starts, without fading.
+    service
+        .command(USER, &zone_id, ZoneCommand::Play, None)
+        .await
+        .expect("play");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Seek {
+                position_ms: 880_000,
+            },
+            None,
+        )
+        .await
+        .expect("seek");
+    let fades = fake.calls("SetVolume").len();
+    service
+        .set_sleep_timer(USER, &zone_id, Some(1))
+        .expect("timer");
+    service.force_sleep_due(&zone_id);
+    service.run_sleep_timers().await;
+    let timer = service
+        .zone(USER, &zone_id, Some(&cache))
+        .and_then(|zone| zone.sleep_timer)
+        .expect("finishing timer");
+    assert!(timer.finishing_track);
+    assert_eq!(fake.player(STUDY).state, "PLAYING");
+    fake.advance(STUDY);
+    let _ = sonos.poll_group(STUDY).await;
+    service.run_sleep_timers().await;
+    assert_eq!(fake.player(STUDY).state, "PAUSED_PLAYBACK");
+    assert_eq!(
+        fake.calls("SetVolume").len(),
+        fades,
+        "no fade after a finished track"
+    );
+    assert!(
+        service
+            .zone(USER, &zone_id, Some(&cache))
+            .and_then(|zone| zone.sleep_timer)
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

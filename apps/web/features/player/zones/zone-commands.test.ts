@@ -28,11 +28,47 @@ function fakeControls(playing = false, muted = false) {
     load: async (ids, position, positionMs, play) => {
       calls.push(`load:${ids.join(",")}@${position}+${positionMs}:${play}`);
     },
+    songIdAt: (index) => ["a", "b", "c", "d"][index],
+    moveQueueItem: (from, to) => calls.push(`move:${from}->${to}`),
+    removeQueueItem: (index) => calls.push(`remove:${index}`),
+    clearUpcoming: () => calls.push("clear"),
+    setRepeat: (mode) => calls.push(`repeat:${mode}`),
+    setShuffle: (enabled) => calls.push(`shuffle:${enabled}`),
   };
   return { calls, controls };
 }
 
 describe("remote zone commands on this device", () => {
+  test("queue edits apply only to the queue the remote saw", async () => {
+    const { calls, controls } = fakeControls(true);
+    await applyZoneCommand(
+      { command: "move_queue_item", from: 3, to: 2, song_id: "d" },
+      controls,
+    );
+    await applyZoneCommand(
+      { command: "move_queue_item", from: 3, to: 2, song_id: "x" },
+      controls,
+    );
+    await applyZoneCommand(
+      { command: "remove_queue_item", queue_position: 2, song_id: "c" },
+      controls,
+    );
+    await applyZoneCommand(
+      { command: "remove_queue_item", queue_position: 2, song_id: "z" },
+      controls,
+    );
+    await applyZoneCommand({ command: "clear_upcoming" }, controls);
+    await applyZoneCommand({ command: "set_repeat", mode: "all" }, controls);
+    await applyZoneCommand({ command: "set_shuffle", enabled: true }, controls);
+    expect(calls).toEqual([
+      "move:3->2",
+      "remove:2",
+      "clear",
+      "repeat:all",
+      "shuffle:true",
+    ]);
+  });
+
   test("play and pause are idempotent", async () => {
     const paused = fakeControls(false);
     await applyZoneCommand({ command: "play" }, paused.controls);

@@ -71,6 +71,43 @@ pub enum ZoneSource {
     External,
 }
 
+/// Repeat mode of a zone queue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    /// Start the queue again after the last track.
+    All,
+    /// Repeat the current track.
+    One,
+}
+
+impl RepeatMode {
+    /// Sonos AVTransport `PlayMode` for this repeat mode. Parson shuffles
+    /// its own queue (so Sonos and Parson agree on the order), so shuffle
+    /// modes are never sent.
+    pub fn sonos_play_mode(self) -> &'static str {
+        match self {
+            Self::Off => "NORMAL",
+            Self::All => "REPEAT_ALL",
+            Self::One => "REPEAT_ONE",
+        }
+    }
+
+    /// Repeat mode and whether Sonos itself shuffles, from a `PlayMode`.
+    pub fn from_sonos_play_mode(mode: &str) -> (Self, bool) {
+        match mode {
+            "REPEAT_ALL" => (Self::All, false),
+            "REPEAT_ONE" => (Self::One, false),
+            "SHUFFLE" => (Self::All, true),
+            "SHUFFLE_NOREPEAT" => (Self::Off, true),
+            "SHUFFLE_REPEAT_ONE" => (Self::One, true),
+            _ => (Self::Off, false),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ZoneVolume {
     /// 0..=100.
@@ -117,7 +154,12 @@ pub struct ZoneCapabilities {
     pub seek: bool,
     pub volume: bool,
     pub mute: bool,
+    /// Lists the queue.
     pub queue: bool,
+    /// Reorders, removes and clears upcoming queue items.
+    pub queue_edit: bool,
+    pub repeat: bool,
+    pub shuffle: bool,
     pub group: bool,
     /// Can receive a transferred queue.
     pub transfer_target: bool,
@@ -146,6 +188,8 @@ pub struct ZoneSleepTimer {
     pub ends_at_ms: i64,
     /// The timer ran out mid-track and is letting the track finish.
     pub finishing_track: bool,
+    /// The timer ran out and the zone is fading out before it pauses.
+    pub fading: bool,
 }
 
 /// A place music plays: a Parson app, a Chromecast session, a Sonos group or
@@ -162,6 +206,8 @@ pub struct Zone {
     pub source: ZoneSource,
     pub now_playing: Option<ZoneNowPlaying>,
     pub queue: ZoneQueue,
+    pub repeat: RepeatMode,
+    pub shuffle: bool,
     pub position_ms: i64,
     pub duration_ms: i64,
     pub volume: Option<ZoneVolume>,
@@ -214,6 +260,29 @@ pub enum ZoneCommand {
         #[serde(default = "default_true")]
         play: bool,
     },
+    /// Moves an upcoming item. `song_id`, when given, must be the song at
+    /// `from`, so an edit made against a stale queue is refused.
+    MoveQueueItem {
+        from: usize,
+        to: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        song_id: Option<String>,
+    },
+    /// Removes one upcoming item.
+    RemoveQueueItem {
+        queue_position: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        song_id: Option<String>,
+    },
+    /// Removes everything after the current track.
+    ClearUpcoming,
+    SetRepeat {
+        mode: RepeatMode,
+    },
+    /// Shuffles the upcoming items; turning it off restores their order.
+    SetShuffle {
+        enabled: bool,
+    },
 }
 
 fn default_true() -> bool {
@@ -244,8 +313,48 @@ impl ZoneCommand {
                     Ok(())
                 }
             }
+            Self::MoveQueueItem { from, to, song_id } => {
+                if from == to {
+                    Err("invalid_queue_move")
+                } else if *from >= MAX_ZONE_QUEUE_ITEMS || *to >= MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_position")
+                } else if song_id
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > 256)
+                {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::RemoveQueueItem {
+                queue_position,
+                song_id,
+            } => {
+                if *queue_position >= MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_position")
+                } else if song_id
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > 256)
+                {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
             _ => Ok(()),
         }
+    }
+
+    /// Commands that change the order or content of the queue.
+    pub fn is_queue_edit(&self) -> bool {
+        matches!(
+            self,
+            Self::MoveQueueItem { .. }
+                | Self::RemoveQueueItem { .. }
+                | Self::ClearUpcoming
+                | Self::SetShuffle { .. }
+        )
     }
 
     pub fn member_id(&self) -> Option<&str> {
@@ -288,6 +397,149 @@ impl std::fmt::Display for ZoneError {
 
 impl std::error::Error for ZoneError {}
 
+/// A queue edit applied to `song_ids`, as the Sonos driver needs to mirror
+/// it: which absolute positions changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QueueEdit {
+    Moved {
+        from: usize,
+        to: usize,
+    },
+    Removed {
+        position: usize,
+    },
+    /// Everything after `current` changed (clear, shuffle, unshuffle).
+    UpcomingReplaced,
+    Unchanged,
+}
+
+/// Applies a queue-editing command to `song_ids` with the current track at
+/// `current`. Only upcoming items (after `current`) can move or be removed,
+/// as in Roon: the playing track and history stay put. `original` keeps the
+/// unshuffled order while shuffle is on.
+pub fn apply_queue_edit(
+    song_ids: &mut Vec<String>,
+    current: usize,
+    shuffle: &mut bool,
+    original: &mut Option<Vec<String>>,
+    command: &ZoneCommand,
+    random: &mut dyn FnMut(usize) -> usize,
+) -> Result<QueueEdit, ZoneError> {
+    let guard = |position: usize, song_id: &Option<String>| -> Result<(), ZoneError> {
+        match (song_ids.get(position), song_id) {
+            (None, _) => Err(ZoneError::Invalid("invalid_queue_position")),
+            (Some(found), Some(expected)) if found != expected => {
+                Err(ZoneError::Invalid("queue_changed"))
+            }
+            _ => Ok(()),
+        }
+    };
+    match command {
+        ZoneCommand::MoveQueueItem { from, to, song_id } => {
+            guard(*from, song_id)?;
+            if *to >= song_ids.len() {
+                return Err(ZoneError::Invalid("invalid_queue_position"));
+            }
+            if *from <= current || *to <= current {
+                return Err(ZoneError::Invalid("only_upcoming_items_move"));
+            }
+            let item = song_ids.remove(*from);
+            song_ids.insert(*to, item);
+            Ok(QueueEdit::Moved {
+                from: *from,
+                to: *to,
+            })
+        }
+        ZoneCommand::RemoveQueueItem {
+            queue_position,
+            song_id,
+        } => {
+            guard(*queue_position, song_id)?;
+            if *queue_position <= current {
+                return Err(ZoneError::Invalid("only_upcoming_items_remove"));
+            }
+            let removed = song_ids.remove(*queue_position);
+            forget_one(original, &removed, song_ids);
+            Ok(QueueEdit::Removed {
+                position: *queue_position,
+            })
+        }
+        ZoneCommand::ClearUpcoming => {
+            if current + 1 >= song_ids.len() {
+                return Ok(QueueEdit::Unchanged);
+            }
+            song_ids.truncate(current + 1);
+            if let Some(original) = original {
+                // Keep only what is still queued, in original order.
+                let mut kept = song_ids.clone();
+                original.retain(|id| match kept.iter().position(|k| k == id) {
+                    Some(index) => {
+                        kept.remove(index);
+                        true
+                    }
+                    None => false,
+                });
+            }
+            Ok(QueueEdit::UpcomingReplaced)
+        }
+        ZoneCommand::SetShuffle { enabled } => {
+            if *enabled == *shuffle {
+                return Ok(QueueEdit::Unchanged);
+            }
+            *shuffle = *enabled;
+            let start = (current + 1).min(song_ids.len());
+            if *enabled {
+                *original = Some(song_ids.clone());
+                let upcoming = &mut song_ids[start..];
+                for index in (1..upcoming.len()).rev() {
+                    let target = random(index + 1).min(index);
+                    upcoming.swap(index, target);
+                }
+            } else if let Some(order) = original.take() {
+                // Upcoming items go back to their original relative order.
+                let rank = |id: &String, used: &mut [bool]| -> usize {
+                    order
+                        .iter()
+                        .enumerate()
+                        .position(|(index, candidate)| candidate == id && !used[index])
+                        .inspect(|&index| used[index] = true)
+                        .unwrap_or(usize::MAX)
+                };
+                let mut used = vec![false; order.len()];
+                // History and the current track claim their original slots first.
+                for id in &song_ids[..start] {
+                    rank(id, &mut used);
+                }
+                let mut upcoming: Vec<(usize, usize, String)> = song_ids[start..]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, id)| (rank(id, &mut used), index, id.clone()))
+                    .collect();
+                upcoming.sort();
+                song_ids.truncate(start);
+                song_ids.extend(upcoming.into_iter().map(|(_, _, id)| id));
+            }
+            Ok(QueueEdit::UpcomingReplaced)
+        }
+        _ => Ok(QueueEdit::Unchanged),
+    }
+}
+
+/// Drops one occurrence of `removed` from the unshuffled order, so turning
+/// shuffle off does not bring a removed song back.
+fn forget_one(original: &mut Option<Vec<String>>, removed: &str, remaining: &[String]) {
+    let Some(order) = original else {
+        return;
+    };
+    let still_queued = remaining.iter().filter(|id| *id == removed).count();
+    let in_order = order.iter().filter(|id| *id == removed).count();
+    if in_order > still_queued
+        && let Some(index) = order.iter().rposition(|id| id == removed)
+    {
+        order.remove(index);
+    }
+}
+
 /// Extrapolates a reported position to `now_ms` while playing.
 pub fn extrapolate_position(
     position_ms: i64,
@@ -310,7 +562,173 @@ pub fn extrapolate_position(
 
 #[cfg(test)]
 mod tests {
-    use super::{ZoneCommand, extrapolate_position};
+    use super::{
+        QueueEdit, RepeatMode, ZoneCommand, ZoneError, apply_queue_edit, extrapolate_position,
+    };
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn queue_edits_touch_only_upcoming_items_and_guard_stale_queues() {
+        let mut queue = ids(&["a", "b", "c", "d", "e"]);
+        let mut shuffle = false;
+        let mut original = None;
+        let mut random = |_: usize| 0;
+        let mut edit = |queue: &mut Vec<String>, command: ZoneCommand| {
+            apply_queue_edit(queue, 1, &mut shuffle, &mut original, &command, &mut random)
+        };
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::MoveQueueItem {
+                    from: 4,
+                    to: 2,
+                    song_id: Some("e".into())
+                }
+            ),
+            Ok(QueueEdit::Moved { from: 4, to: 2 })
+        );
+        assert_eq!(queue, ids(&["a", "b", "e", "c", "d"]));
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::MoveQueueItem {
+                    from: 1,
+                    to: 3,
+                    song_id: None
+                }
+            ),
+            Err(ZoneError::Invalid("only_upcoming_items_move"))
+        );
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 3,
+                    song_id: Some("d".into())
+                }
+            ),
+            Err(ZoneError::Invalid("queue_changed")),
+            "a remote acting on an old queue must not remove the wrong song"
+        );
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 3,
+                    song_id: Some("c".into())
+                }
+            ),
+            Ok(QueueEdit::Removed { position: 3 })
+        );
+        assert_eq!(queue, ids(&["a", "b", "e", "d"]));
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 1,
+                    song_id: None
+                }
+            ),
+            Err(ZoneError::Invalid("only_upcoming_items_remove"))
+        );
+        assert_eq!(
+            edit(&mut queue, ZoneCommand::ClearUpcoming),
+            Ok(QueueEdit::UpcomingReplaced)
+        );
+        assert_eq!(queue, ids(&["a", "b"]));
+        assert_eq!(
+            edit(&mut queue, ZoneCommand::ClearUpcoming),
+            Ok(QueueEdit::Unchanged)
+        );
+    }
+
+    #[test]
+    fn shuffle_keeps_history_and_current_and_unshuffle_restores_order() {
+        let mut queue = ids(&["a", "b", "c", "d", "e", "f"]);
+        let mut shuffle = false;
+        let mut original = None;
+        // Deterministic "random": always swap with the first upcoming item.
+        let mut random = |_: usize| 0;
+        apply_queue_edit(
+            &mut queue,
+            1,
+            &mut shuffle,
+            &mut original,
+            &ZoneCommand::SetShuffle { enabled: true },
+            &mut random,
+        )
+        .expect("shuffle");
+        assert!(shuffle);
+        assert_eq!(&queue[..2], &ids(&["a", "b"])[..]);
+        assert_ne!(queue, ids(&["a", "b", "c", "d", "e", "f"]));
+        let mut sorted = queue.clone();
+        sorted.sort();
+        assert_eq!(sorted, ids(&["a", "b", "c", "d", "e", "f"]));
+        // Remove one shuffled item, then unshuffle: it stays gone.
+        let removed = queue[3].clone();
+        apply_queue_edit(
+            &mut queue,
+            1,
+            &mut shuffle,
+            &mut original,
+            &ZoneCommand::RemoveQueueItem {
+                queue_position: 3,
+                song_id: Some(removed.clone()),
+            },
+            &mut random,
+        )
+        .expect("remove");
+        apply_queue_edit(
+            &mut queue,
+            1,
+            &mut shuffle,
+            &mut original,
+            &ZoneCommand::SetShuffle { enabled: false },
+            &mut random,
+        )
+        .expect("unshuffle");
+        assert!(!shuffle);
+        assert!(original.is_none());
+        let expected: Vec<String> = ids(&["a", "b", "c", "d", "e", "f"])
+            .into_iter()
+            .filter(|id| *id != removed)
+            .collect();
+        assert_eq!(queue, expected);
+    }
+
+    #[test]
+    fn sonos_play_modes_map_to_repeat_and_shuffle() {
+        assert_eq!(RepeatMode::All.sonos_play_mode(), "REPEAT_ALL");
+        assert_eq!(
+            RepeatMode::from_sonos_play_mode("SHUFFLE_REPEAT_ONE"),
+            (RepeatMode::One, true)
+        );
+        assert_eq!(
+            RepeatMode::from_sonos_play_mode("NORMAL"),
+            (RepeatMode::Off, false)
+        );
+        let parsed: ZoneCommand =
+            serde_json::from_value(serde_json::json!({"command": "set_repeat", "mode": "one"}))
+                .expect("set_repeat");
+        assert_eq!(
+            parsed,
+            ZoneCommand::SetRepeat {
+                mode: RepeatMode::One
+            }
+        );
+        assert_eq!(
+            ZoneCommand::MoveQueueItem {
+                from: 3,
+                to: 3,
+                song_id: None
+            }
+            .validate(),
+            Err("invalid_queue_move")
+        );
+    }
 
     #[test]
     fn commands_parse_from_tagged_json_and_validate() {

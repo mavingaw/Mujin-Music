@@ -43,6 +43,7 @@ pub struct FakePlayer {
     pub playing_since: Option<std::time::Instant>,
     pub volume: u8,
     pub muted: bool,
+    pub play_mode: String,
 }
 
 impl FakePlayer {
@@ -178,6 +179,7 @@ impl FakeSonos {
                 playing_since: None,
                 volume: 20,
                 muted: false,
+                play_mode: "NORMAL".to_string(),
             });
             let uuid = spec.uuid.to_string();
             let state = household.clone();
@@ -267,8 +269,13 @@ impl FakeSonos {
             let index = household.index(uuid).expect("fake player");
             let player = &mut household.players[index];
             player.settle();
-            if (player.track as usize) < player.queue.len() {
+            if player.play_mode == "REPEAT_ONE" {
+                player.position_ms = 0;
+            } else if (player.track as usize) < player.queue.len() {
                 player.track += 1;
+                player.position_ms = 0;
+            } else if player.play_mode == "REPEAT_ALL" && !player.queue.is_empty() {
+                player.track = 1;
                 player.position_ms = 0;
             } else {
                 player.state = "STOPPED";
@@ -591,9 +598,14 @@ fn handle_action(
                 if player.position_ms < duration {
                     break;
                 }
-                if (player.track as usize) < player.queue.len() {
+                if player.play_mode == "REPEAT_ONE" {
+                    player.position_ms -= duration;
+                } else if (player.track as usize) < player.queue.len() {
                     player.position_ms -= duration;
                     player.track += 1;
+                } else if player.play_mode == "REPEAT_ALL" {
+                    player.position_ms -= duration;
+                    player.track = 1;
                 } else {
                     player.position_ms = duration;
                     player.state = "STOPPED";
@@ -675,6 +687,83 @@ fn dispatch_action(
                 ("NewQueueLength", length),
             ])
         }
+        (Service::AVTransport, "RemoveTrackFromQueue") => {
+            let object = argument("ObjectID")?;
+            let number: usize = object
+                .strip_prefix("Q:0/")
+                .and_then(|value| value.parse().ok())
+                .ok_or(402_u32)?;
+            let player = &mut household.players[index];
+            if number == 0 || number > player.queue.len() {
+                return Err(701);
+            }
+            player.queue.remove(number - 1);
+            if number < player.track as usize {
+                player.track -= 1;
+            }
+            Ok(vec![("NewUpdateID", "1".to_string())])
+        }
+        (Service::AVTransport, "RemoveTrackRangeFromQueue") => {
+            let start: usize = argument("StartingIndex")?.parse().map_err(|_| 402_u32)?;
+            let count: usize = argument("NumberOfTracks")?.parse().map_err(|_| 402_u32)?;
+            let player = &mut household.players[index];
+            if start == 0 || start + count - 1 > player.queue.len() {
+                return Err(701);
+            }
+            player.queue.drain(start - 1..start - 1 + count);
+            if (player.track as usize) >= start + count {
+                player.track -= count as u32;
+            }
+            Ok(vec![("NewUpdateID", "1".to_string())])
+        }
+        (Service::AVTransport, "ReorderTracksInQueue") => {
+            let start: usize = argument("StartingIndex")?.parse().map_err(|_| 402_u32)?;
+            let count: usize = argument("NumberOfTracks")?.parse().map_err(|_| 402_u32)?;
+            let before: usize = argument("InsertBefore")?.parse().map_err(|_| 402_u32)?;
+            let player = &mut household.players[index];
+            let length = player.queue.len();
+            if count != 1 || start == 0 || start > length || before == 0 || before > length + 1 {
+                return Err(701);
+            }
+            let current = player.track as usize;
+            let item = player.queue.remove(start - 1);
+            let target = if before > start {
+                before - 2
+            } else {
+                before - 1
+            };
+            player.queue.insert(target, item);
+            // The playing track keeps playing wherever it ends up.
+            if current == start {
+                player.track = target as u32 + 1;
+            } else if start < current && target + 1 >= current {
+                player.track -= 1;
+            } else if start > current && target < current {
+                player.track += 1;
+            }
+            Ok(vec![])
+        }
+        (Service::AVTransport, "SetPlayMode") => {
+            let mode = argument("NewPlayMode")?;
+            if ![
+                "NORMAL",
+                "REPEAT_ALL",
+                "REPEAT_ONE",
+                "SHUFFLE",
+                "SHUFFLE_NOREPEAT",
+                "SHUFFLE_REPEAT_ONE",
+            ]
+            .contains(&mode.as_str())
+            {
+                return Err(712);
+            }
+            household.players[index].play_mode = mode;
+            Ok(vec![])
+        }
+        (Service::AVTransport, "GetTransportSettings") => Ok(vec![
+            ("PlayMode", household.players[index].play_mode.clone()),
+            ("RecQualityMode", "NOT_IMPLEMENTED".to_string()),
+        ]),
         (Service::AVTransport, "Play") => {
             let player = &mut household.players[index];
             if player.transport_uri.is_empty() {

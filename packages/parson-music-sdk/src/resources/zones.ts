@@ -14,6 +14,9 @@ export type ZoneStatus =
 
 export type ZoneSource = "none" | "parson" | "external";
 
+/** `all` starts the queue over after the last track; `one` repeats a track. */
+export type ZoneRepeatMode = "off" | "all" | "one";
+
 export interface ZoneVolume {
   level: number;
   muted: boolean;
@@ -42,7 +45,12 @@ export interface ZoneCapabilities {
   seek: boolean;
   volume: boolean;
   mute: boolean;
+  /** Lists the queue. */
   queue: boolean;
+  /** Reorders, removes and clears upcoming items. */
+  queue_edit: boolean;
+  repeat: boolean;
+  shuffle: boolean;
   group: boolean;
   transfer_target: boolean;
   sleep_timer: boolean;
@@ -68,13 +76,21 @@ export interface Zone {
   source: ZoneSource;
   now_playing: ZoneNowPlaying | null;
   queue: { song_ids: string[]; current_position: number };
+  repeat: ZoneRepeatMode;
+  shuffle: boolean;
   position_ms: number;
   duration_ms: number;
   volume: ZoneVolume | null;
   group: ZoneGroupInfo | null;
   grouped_into: string | null;
   capabilities: ZoneCapabilities;
-  sleep_timer: { ends_at_ms: number; finishing_track: boolean } | null;
+  sleep_timer: {
+    ends_at_ms: number;
+    /** Letting a nearly finished track end before pausing. */
+    finishing_track: boolean;
+    /** Fading out before pausing. */
+    fading: boolean;
+  } | null;
   notes: string[];
 }
 
@@ -102,7 +118,13 @@ export type ZoneCommand =
       current_position?: number;
       position_ms?: number;
       play?: boolean;
-    };
+    }
+  /** `song_id` guards against editing a queue that changed meanwhile. */
+  | { command: "move_queue_item"; from: number; to: number; song_id?: string }
+  | { command: "remove_queue_item"; queue_position: number; song_id?: string }
+  | { command: "clear_upcoming" }
+  | { command: "set_repeat"; mode: ZoneRepeatMode }
+  | { command: "set_shuffle"; enabled: boolean };
 
 export interface ClientZoneReport {
   kind: "web" | "desktop" | "mobile";
@@ -117,6 +139,8 @@ export interface ClientZoneReport {
   volume: number;
   muted: boolean;
   acknowledged_seq: number;
+  repeat?: ZoneRepeatMode;
+  shuffle?: boolean;
 }
 
 export interface PendingZoneCommand {
@@ -395,4 +419,86 @@ export function formatSleepRemaining(endsAtMs: number, nowMs: number): string {
     return rest ? `${hours} h ${rest} min` : `${hours} h`;
   }
   return `${minutes} min`;
+}
+
+/** Whether queue item `index` can be moved or removed (upcoming only). */
+export function isEditableQueueItem(
+  zone: Pick<Zone, "queue" | "capabilities">,
+  index: number,
+): boolean {
+  return (
+    zone.capabilities.queue_edit &&
+    index > zone.queue.current_position &&
+    index < zone.queue.song_ids.length
+  );
+}
+
+/**
+ * Applies a queue edit to a copy of `songIds` the way the server does, for
+ * optimistic display. Returns `null` when the edit is not allowed: only
+ * upcoming items (after `current`) move or are removed.
+ */
+export function previewQueueEdit(
+  songIds: readonly string[],
+  current: number,
+  command: ZoneCommand,
+): string[] | null {
+  const next = [...songIds];
+  switch (command.command) {
+    case "move_queue_item": {
+      const { from, to } = command;
+      if (
+        from === to ||
+        from <= current ||
+        to <= current ||
+        from >= next.length ||
+        to >= next.length ||
+        (command.song_id !== undefined && next[from] !== command.song_id)
+      ) {
+        return null;
+      }
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item!);
+      return next;
+    }
+    case "remove_queue_item": {
+      const position = command.queue_position;
+      if (
+        position <= current ||
+        position >= next.length ||
+        (command.song_id !== undefined && next[position] !== command.song_id)
+      ) {
+        return null;
+      }
+      next.splice(position, 1);
+      return next;
+    }
+    case "clear_upcoming":
+      return next.slice(0, current + 1);
+    default:
+      return next;
+  }
+}
+
+/** The next repeat mode when cycling a single repeat button. */
+export function nextRepeatMode(mode: ZoneRepeatMode): ZoneRepeatMode {
+  return mode === "off" ? "all" : mode === "all" ? "one" : "off";
+}
+
+export function repeatModeLabel(mode: ZoneRepeatMode): string {
+  return mode === "all"
+    ? "Repeat queue"
+    : mode === "one"
+      ? "Repeat track"
+      : "Repeat off";
+}
+
+/** Short sleep timer status for zone lists. */
+export function sleepTimerLabel(
+  timer: NonNullable<Zone["sleep_timer"]>,
+  nowMs: number,
+): string {
+  if (timer.fading) return "Fading out to sleep";
+  if (timer.finishing_track) return "Sleep after this track";
+  return `Sleep in ${formatSleepRemaining(timer.ends_at_ms, nowMs)}`;
 }

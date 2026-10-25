@@ -23,7 +23,12 @@ import {
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
 import type { Player } from "./player-api";
-import { PlayerQueueList } from "./player-queue";
+import {
+  PlayerQueueList,
+  QueueToolbar,
+  type QueueEditing,
+} from "./player-queue";
+import { repeatModeLabel, type ZoneRepeatMode } from "@parson/music-sdk";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
   ActionButton,
@@ -54,6 +59,8 @@ export function FullscreenPlayer({
   readPosition,
   isPlaying,
   looping,
+  repeatMode,
+  queueEditing,
   lyricsOpen,
   lyricsFallback,
   lyricsFailed,
@@ -99,6 +106,8 @@ export function FullscreenPlayer({
   readPosition?: () => number;
   isPlaying: boolean;
   looping: boolean;
+  repeatMode?: ZoneRepeatMode;
+  queueEditing?: QueueEditing;
   lyricsOpen: boolean;
   lyricsFallback?: string | null;
   lyricsFailed: boolean;
@@ -274,12 +283,21 @@ export function FullscreenPlayer({
                 </div>
               ) : queueOpen ? (
                 <div className="mx-auto min-h-0 w-full max-w-160 flex-1 overflow-y-auto px-4 pt-4 md:pt-16">
-                  <h2 className="mb-4 text-base font-semibold text-zinc-200">
-                    Queue
-                  </h2>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <h2 className="text-base font-semibold text-zinc-200">
+                      Queue
+                    </h2>
+                    {queueEditing && (
+                      <QueueToolbar
+                        editing={queueEditing}
+                        length={queue.length}
+                      />
+                    )}
+                  </div>
                   {queue.length ? (
                     <PlayerQueueList
                       currentSongId={songId}
+                      editing={queueEditing}
                       onReorder={onReorderQueue}
                       onSelect={onSelectQueueItem}
                       queue={queue}
@@ -375,10 +393,12 @@ export function FullscreenPlayer({
                       {queueOpen ? "Now playing" : "Queue"}
                     </DropdownMenuItem>
                     <DropdownMenuCheckboxItem
-                      checked={looping}
+                      checked={
+                        (repeatMode ?? (looping ? "one" : "off")) !== "off"
+                      }
                       onCheckedChange={onToggleLoop}
                     >
-                      Repeat
+                      {repeatModeLabel(repeatMode ?? (looping ? "one" : "off"))}
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel>Sound</DropdownMenuLabel>
