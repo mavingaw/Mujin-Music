@@ -43,6 +43,21 @@ test("appending picks skips songs that are already queued", () => {
   expect(queue.map((item) => item.song.id)).toEqual(["a", "b", "c"]);
 });
 
+test("a song that already played can come back as a later Radio pick", () => {
+  // Only what is queued from `fromIndex` on blocks a repeat.
+  const queue = [...manual, ...picks];
+  const again = radioPickItems([
+    { ...(picks[0] as object), id: "a", name: "A again" },
+    { ...(picks[0] as object), id: "c", name: "C again" },
+  ] as never);
+  expect(appendRadioPicks(queue, again, 3).map((item) => item.song.id)).toEqual(
+    ["a", "b", "c", "a", "c"],
+  );
+  expect(appendRadioPicks(queue, again, 2).map((item) => item.song.id)).toEqual(
+    ["a", "b", "c", "a"],
+  );
+});
+
 test("removing an upcoming pick keeps the active item in place", () => {
   const queue = [...manual, ...picks];
   expect(removeUpcomingItem(queue, 1, 2)?.items.map((i) => i.song.id)).toEqual([

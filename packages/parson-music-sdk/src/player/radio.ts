@@ -99,6 +99,27 @@ export function radioStationLabel(
     : `Playing ${seed.name} radio`;
 }
 
+/**
+ * The queue as Radio's play history: each song once, at its most recent
+ * position, oldest first, capped to the newest `limit`. Radio uses the order
+ * to keep repeats a while away once the library is used up.
+ */
+export function radioQueueHistory(
+  songIds: Iterable<string | null | undefined>,
+  limit = 500,
+): string[] {
+  const latest = new Map<string, number>();
+  let position = 0;
+  for (const id of songIds) {
+    if (id) latest.set(id, position);
+    position += 1;
+  }
+  return [...latest.entries()]
+    .sort((left, right) => left[1] - right[1])
+    .map(([id]) => id)
+    .slice(-Math.max(0, limit));
+}
+
 /** Stable key for comparing seeds. */
 export function radioSeedKey(seed?: RadioSeed | null): string {
   return seed?.id ? `${seed.kind}:${seed.id}` : "";

@@ -46,6 +46,13 @@ test("extending with Radio keeps a bounded history and skips duplicates", () => 
   expect(extended.queue[extended.nextIndex - 1]?.id).toBe("d");
 });
 
+test("songs that already played can come back once Radio recycles", () => {
+  const queue = songs("a", "b", "c");
+  const extended = extendWithRadio(queue, 2, songs("a", "c", "b", "a"));
+  expect(extended.queue.map((s) => s.id)).toEqual(["a", "b", "c", "a", "b"]);
+  expect(extended.nextIndex).toBe(3);
+});
+
 test("a new ban drops upcoming Radio picks but keeps songs you queued", () => {
   const song = (id: string, artist: string, album = `album-${id}`) => ({
     id,

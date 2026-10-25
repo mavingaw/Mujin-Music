@@ -70,7 +70,9 @@ export function appendUnique<T extends Song>(
 
 /**
  * Appends Radio picks after the current queue, dropping the oldest played
- * tracks so an endless station does not grow without bound.
+ * tracks so an endless station does not grow without bound. Songs that
+ * already played may come back (Radio recycles the library once it is used
+ * up); only the current track and anything after it are never repeated.
  */
 export function extendWithRadio<T extends Song>(
   queue: readonly T[],
@@ -80,8 +82,12 @@ export function extendWithRadio<T extends Song>(
 ): { queue: T[]; nextIndex: number } {
   const trim = Math.max(0, Math.min(currentIndex, queue.length) - historyLimit);
   const kept = queue.slice(trim);
+  const from = Math.max(0, currentIndex - trim);
+  const additions = appendUnique(kept.slice(from), picks).slice(
+    kept.length - from,
+  );
   return {
-    queue: appendUnique(kept, picks),
+    queue: [...kept, ...additions],
     nextIndex: kept.length,
   };
 }

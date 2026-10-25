@@ -4,6 +4,9 @@ import {
   fillReverbImpulseChannel,
   getRadioPicks,
   getRadioSettings,
+  radioExhaustedNotice,
+  radioPicksExhaustedNotice,
+  radioQueueHistory,
   radioSeedParams,
   radioSkipReasonEvent,
   shouldContinueWithRadio,
@@ -704,9 +707,13 @@ export function PlayerProvider({ children }: PropsWithChildren) {
 
   const current = queue[currentIndex] ?? null;
   const queueRef = useRef(queue);
+  const currentIndexRef = useRef(currentIndex);
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
   useEffect(() => {
     radioEnabledRef.current = radioSettings.enabled;
   }, [radioSettings.enabled]);
@@ -1264,12 +1271,13 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     const endingIndex = currentIndex;
     void createPlaybackQueue({
       ...radioSeedParams(seed),
-      exclude_song_ids: [
-        ...new Set([
-          ...endingQueue.slice(-80).map((song) => song.id),
-          ...rejectedSongs.current,
-        ]),
-      ].slice(-100),
+      // The queue so far: Radio prefers fresh songs and, once the library
+      // is used up, brings back the ones heard longest ago.
+      exclude_song_ids: radioQueueHistory(
+        endingQueue.map((song) => song.id),
+        100,
+      ),
+      reject_song_ids: [...rejectedSongs.current],
       generated_items: 20,
       source: "radio",
     })
@@ -1285,7 +1293,14 @@ export function PlayerProvider({ children }: PropsWithChildren) {
           : [...extended.queue];
         loadAt(extended.queue, extended.nextIndex, true, true, "generated");
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        // Radio only runs out when everything left is banned or thumbed
+        // down: say so rather than stopping silently.
+        const notice = radioExhaustedNotice(error);
+        if (notice && request === radioRequest.current) {
+          setPlaybackError(notice);
+        }
+      });
   }, [
     addRadioIds,
     currentIndex,
@@ -1343,23 +1358,27 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       topUp.inFlight = true;
       void getRadioPicks({
         seed,
-        exclude_song_ids: [
-          ...new Set([
-            ...base.map((song) => song.id),
-            ...rejectedSongs.current,
-          ]),
-        ],
+        exclude_song_ids: radioQueueHistory(base.map((song) => song.id)),
+        reject_song_ids: [...rejectedSongs.current],
         limit,
       })
         .then((result) => {
           const latest = queueRef.current;
           if (!latest.length || latest[0]?.id !== base[0]?.id) return;
-          const known = new Set(latest.map((song) => song.id));
+          // Played songs may come back once the library is used up; only
+          // what is still to come must not be queued twice.
+          const known = new Set(
+            latest
+              .slice(Math.max(0, currentIndexRef.current + 1))
+              .map((song) => song.id),
+          );
           const songs = playableQueueSongs(result.items).filter(
             (song) => !known.has(song.id),
           );
           if (!songs.length) {
             topUp.exhaustedKey = key;
+            const notice = radioPicksExhaustedNotice(result);
+            if (notice) setPlaybackError(notice);
             return;
           }
           addRadioIds(songs);
@@ -1417,13 +1436,25 @@ export function PlayerProvider({ children }: PropsWithChildren) {
 
   const startRadio = useCallback(
     async (seed: RadioSeed) => {
-      const created = await createPlaybackQueue({
-        ...radioSeedParams(seed),
-        explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
-        exclude_song_ids: [...rejectedSongs.current].slice(-100),
-        generated_items: 25,
-        source: "radio",
-      });
+      let created: Awaited<ReturnType<typeof createPlaybackQueue>>;
+      try {
+        created = await createPlaybackQueue({
+          ...radioSeedParams(seed),
+          explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
+          exclude_song_ids: radioQueueHistory(
+            queueRef.current.map((song) => song.id),
+            100,
+          ),
+          reject_song_ids: [...rejectedSongs.current],
+          generated_items: 25,
+          source: "radio",
+        });
+      } catch (error) {
+        const notice = radioExhaustedNotice(error);
+        if (!notice) throw error;
+        setPlaybackError(notice);
+        return null;
+      }
       const songs = playableQueueSongs(created.items);
       if (!songs.length) return null;
       const generated = new Set(
