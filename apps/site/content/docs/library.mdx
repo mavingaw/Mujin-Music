@@ -33,6 +33,14 @@ Composer, lyricist, arranger, conductor, performer (with instrument), ensemble, 
 
 **Online metadata** (Settings → Library, off by default) adds MusicBrainz relationship credits, release facts such as label and catalog number, Wikipedia biographies, album background and critical reception, and freely licensed artist photos from Wikimedia Commons. Wikipedia text always shows its article and CC BY-SA license; reviews are the article's reception section, not a paid review service. When MusicBrainz has two artists with the same name and nothing in your tags tells them apart, Parson shows no biography rather than a wrong one. You can also keep a private note on any album or artist.
 
+### Works and recordings
+
+With online metadata on, Parson also learns which **work** each track performs from MusicBrainz: the piece, its composer, form, key, catalogue number (Op. 125, BWV 1007, K. 550 …) and when it was composed, and which movement of the piece the track is. Movements of one piece are grouped under a heading in the album's track list. **Go to work** in a track's menu opens the work page, which lists every recording of it in your library with its conductor, orchestra and soloists, grouped by album, conductor or performer, and marks recordings that only include some movements. A composer's page has a **Compositions** tab grouped by form, with filter chips for form, period and key.
+
+### Identify album
+
+Albums whose tags do not name a MusicBrainz release are matched by title and album artist; classical titles such as "Beethoven: Symphony No. 9" also match without the composer, and the year in your tags picks between several recordings. When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
+
 ### Albums and editions
 
 Albums are identified from normalized album title plus resolved album artist. Parson recognizes edition qualifiers such as deluxe, anniversary, remastered, expanded, special, collector's, limited, legacy, reissue, regional, mono/stereo, and bonus editions. It links confident variants into a release group while preserving the edition's visible title and tracks.

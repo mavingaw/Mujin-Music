@@ -22,6 +22,8 @@ import {
   useArtistCredits,
 } from "@/features/library/credits/use-editorial";
 import { ArtistCreditsPanel } from "./artist-credits";
+import { ArtistCompositionsPanel } from "./artist-compositions";
+import { useArtistWorks } from "@/features/library/works/use-works";
 import { ArtistOverview } from "./artist-overview";
 import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/components/app/title-metadata";
@@ -34,7 +36,7 @@ type ArtistDetailsProps = {
   devAlbums?: Album[];
 };
 
-type ArtistTab = "overview" | "discography" | "credits";
+type ArtistTab = "overview" | "discography" | "compositions" | "credits";
 
 const sortAlbumsByReleaseDate = (albums: Album[]) =>
   [...albums].sort((left, right) => {
@@ -70,6 +72,16 @@ export default function ArtistDetails({
     devArtist ? null : id,
     hasRoles || artistMissing,
   );
+  const isComposer = Boolean(
+    about?.roles.some((role) => role.role === "composer"),
+  );
+  const worksQuery = useArtistWorks(devArtist ? null : id, isComposer);
+  const hasCompositions = Boolean(worksQuery.data?.works.length);
+  const workFilter = {
+    form: searchParams?.get("form"),
+    period: searchParams?.get("period"),
+    key: searchParams?.get("key"),
+  };
   usePageTitle(artist?.name ?? about?.name ?? creditsQuery.data?.name);
   const albums = devAlbums ?? artist?.albums ?? [];
   const featuredAlbumIds = artist?.featured_on_album_ids ?? [];
@@ -126,19 +138,24 @@ export default function ArtistDetails({
     hasDiscography || artist
       ? { key: "discography" as const, label: "Discography" }
       : null,
+    hasCompositions
+      ? { key: "compositions" as const, label: "Compositions" }
+      : null,
     hasRoles || artistMissing
       ? { key: "credits" as const, label: "Credits" }
       : null,
   ].filter((tab): tab is { key: ArtistTab; label: string } => Boolean(tab));
   const defaultTab: ArtistTab = about?.biography
     ? "overview"
-    : hasDiscography
-      ? "discography"
-      : hasRoles || artistMissing
-        ? "credits"
-        : about
-          ? "overview"
-          : "discography";
+    : hasCompositions && !discographySections.length
+      ? "compositions"
+      : hasDiscography
+        ? "discography"
+        : hasRoles || artistMissing
+          ? "credits"
+          : about
+            ? "overview"
+            : "discography";
   const activeTab =
     tabs.find((tab) => tab.key === requestedTab)?.key ?? defaultTab;
   const navigate = (tab: ArtistTab, role: string | null = null) => {
@@ -146,6 +163,7 @@ export default function ArtistDetails({
     params.set("tab", tab);
     if (role) params.set("role", role);
     else params.delete("role");
+    for (const facet of ["form", "period", "key"]) params.delete(facet);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   };
 
@@ -282,6 +300,27 @@ export default function ArtistDetails({
             about={about}
             isAdmin={session?.role === "admin"}
             onShowCredits={(role) => navigate("credits", role)}
+          />
+        )}
+
+        {activeTab === "compositions" && worksQuery.data && (
+          <ArtistCompositionsPanel
+            filter={workFilter}
+            onFilterChange={(filter) => {
+              const params = new URLSearchParams(
+                searchParams?.toString() ?? "",
+              );
+              params.set("tab", "compositions");
+              for (const facet of ["form", "period", "key"] as const) {
+                const value = filter[facet];
+                if (value) params.set(facet, value);
+                else params.delete(facet);
+              }
+              router.replace(`${pathname}?${params.toString()}`, {
+                scroll: false,
+              });
+            }}
+            works={worksQuery.data}
           />
         )}
 

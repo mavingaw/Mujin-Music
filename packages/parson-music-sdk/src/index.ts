@@ -19,3 +19,5 @@ export * from "./resources/playback";
 export * from "./resources/search";
 export * from "./resources/songs";
 export * from "./resources/users";
+export * from "./resources/works";
+export * from "./editorial/works";

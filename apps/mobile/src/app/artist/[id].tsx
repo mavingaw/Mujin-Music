@@ -5,6 +5,7 @@ import {
   getArtistAbout,
   getArtistCredits,
   getArtistInfo,
+  getArtistWorks,
   lifeSpanFacts,
   type Album,
   type Artist,
@@ -28,6 +29,7 @@ import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { EditorialBlock, NoteBlock } from "@/components/credits";
+import { CompositionsSection } from "@/components/works";
 import { apiUrl } from "@/lib/runtime";
 import { joinMeta } from "@/lib/credit-links";
 import { palette } from "@/constants/colors";
@@ -58,6 +60,15 @@ export default function ArtistScreen() {
     queryKey: ["artist-credits", id],
     queryFn: () => getArtistCredits(id),
     enabled: !!id,
+    staleTime: 60_000,
+  });
+  const isComposer = Boolean(
+    about.data?.roles.some((role) => role.role === "composer"),
+  );
+  const works = useQuery({
+    queryKey: ["artist-works", id],
+    queryFn: () => getArtistWorks(id),
+    enabled: !!id && isComposer,
     staleTime: 60_000,
   });
   const sections = useMemo(() => {
@@ -234,6 +245,12 @@ export default function ArtistScreen() {
             <View style={styles.bio}>
               <SectionTitle>Biography</SectionTitle>
               <EditorialBlock text={about.data.biography} />
+            </View>
+          ) : null}
+          {works.data?.works.length ? (
+            <View>
+              <SectionTitle>Compositions</SectionTitle>
+              <CompositionsSection works={works.data.works} />
             </View>
           ) : null}
           {creditedAlbums.length ? (

@@ -18,6 +18,7 @@ pub mod search;
 pub mod setup;
 pub mod song;
 pub mod user;
+pub mod works;
 
 use crate::domain::{Album, Artist};
 

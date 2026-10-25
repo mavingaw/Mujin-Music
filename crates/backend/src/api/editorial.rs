@@ -15,6 +15,7 @@ use crate::api::auth::authenticated_user_id;
 use crate::api::error::{bad_request, internal_server_error, not_found};
 use crate::api::song::{ResponseSong, response_song};
 use crate::domain::{Album, Artist};
+use crate::enrichment::musicbrainz::is_placeholder_artist;
 use crate::enrichment::store::{
     self, CreditRow, EditorialText, ImageRow, MAX_NOTE_CHARS, NoteRow, TaskState,
 };
@@ -25,7 +26,7 @@ use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_
 use crate::persistence::connection::DbPool;
 
 const MAX_CREDITED_SONGS: usize = 500;
-const EXTERNAL_PREFIX: &str = "mb:";
+pub(crate) const EXTERNAL_PREFIX: &str = "mb:";
 
 /// A credit on an album page, merged across tags and external sources.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -67,6 +68,10 @@ pub struct AlbumAbout {
     pub links: Vec<ExternalLink>,
     pub note: Option<NoteRow>,
     pub enrichment: EnrichmentStatus,
+    /// The work (and piece) each track performs.
+    pub works: Vec<crate::api::works::TrackWork>,
+    /// The MusicBrainz release an administrator chose with "Identify album".
+    pub identification: Option<store::Identification>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -584,9 +589,43 @@ pub async fn album_about(
             return internal_server_error("Could not load album details.", "editorial_failed");
         }
     };
+    let lookup = album_id.clone();
+    let pool = pool.get_ref().clone();
+    let works = web::block(move || {
+        let mut connection = pool.get().map_err(|error| error.to_string())?;
+        let works = crate::api::works::load_album_track_works(&mut connection, &lookup)
+            .map_err(|error| error.to_string())?;
+        let identification = store::load_identification(&mut connection, &lookup)
+            .map_err(|error| error.to_string())?;
+        Ok::<_, String>((works, identification))
+    })
+    .await;
+    let ((work_links, work_rows), identification) = match works {
+        Ok(Ok(found)) => found,
+        _ => {
+            tracing::error!("could not load album works");
+            return internal_server_error("Could not load album details.", "editorial_failed");
+        }
+    };
+    let people = crate::api::works::person_index(&cache);
     let known = album_known_artists(&cache, album);
+    let mut stored = stored;
+    // An album by "Unknown Artist" is only trusted once a person identified
+    // it or its tags name the release; older versions matched namesakes.
+    let untrusted = identification.is_none()
+        && album.musicbrainz_id.is_empty()
+        && cache
+            .album_owner(&album.id)
+            .is_some_and(|owner| is_placeholder_artist(&owner.name));
+    if untrusted {
+        stored.profile = None;
+        stored.texts.clear();
+        stored.credits.clear();
+    }
     let mut texts = stored.texts;
     HttpResponse::Ok().json(AlbumAbout {
+        works: crate::api::works::album_track_works(&work_links, &work_rows, &people),
+        identification,
         album_id,
         credits: merge_album_credits(album, &known, &stored.credits),
         background: texts.remove("background"),
@@ -605,7 +644,10 @@ pub async fn album_about(
     })
 }
 
-fn person_query(cache: &LibraryCache, artist_id: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn person_query(
+    cache: &LibraryCache,
+    artist_id: &str,
+) -> (Option<String>, Option<String>) {
     if let Some(mbid) = artist_id.strip_prefix(EXTERNAL_PREFIX) {
         return (None, Some(mbid.to_string()));
     }
@@ -690,6 +732,14 @@ pub async fn artist_about(
     let Some(credits) = collect_artist_credits(&cache, &artist_id, &stored.credits) else {
         return not_found("Artist not found.", "artist_not_found");
     };
+    let mut stored = stored;
+    if is_placeholder_artist(&credits.name) {
+        // "Unknown Artist" is not a person; never show a namesake's
+        // biography, photo or facts for it.
+        stored.profile = None;
+        stored.texts.clear();
+        stored.image = None;
+    }
     let mut texts = stored.texts;
     HttpResponse::Ok().json(ArtistAbout {
         image: stored.image.map(|image| EditorialImage {

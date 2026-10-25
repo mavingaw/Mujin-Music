@@ -8,3 +8,8 @@ export function artistRoute(id: string, tab?: "credits") {
 export function joinMeta(parts: readonly (string | null | undefined)[]) {
   return parts.filter((part): part is string => Boolean(part)).join(" · ");
 }
+
+/** Route of a work page. */
+export function workRoute(mbid: string) {
+  return `/work/${encodeURIComponent(mbid)}`;
+}

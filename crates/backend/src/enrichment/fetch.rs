@@ -91,9 +91,16 @@ impl RateLimiter {
     }
 }
 
+/// One limiter for the whole process, so the background worker and an
+/// administrator's "Identify album" search together stay within
+/// MusicBrainz' one request per second.
+fn shared_limiter() -> &'static RateLimiter {
+    static LIMITER: std::sync::OnceLock<RateLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(RateLimiter::default)
+}
+
 pub struct HttpFetch {
     client: reqwest::Client,
-    limiter: RateLimiter,
 }
 
 impl HttpFetch {
@@ -104,10 +111,7 @@ impl HttpFetch {
             .user_agent(USER_AGENT)
             .redirect(reqwest::redirect::Policy::limited(3))
             .build()?;
-        Ok(Self {
-            client,
-            limiter: RateLimiter::default(),
-        })
+        Ok(Self { client })
     }
 }
 
@@ -116,7 +120,7 @@ impl Fetch for HttpFetch {
         if !url.starts_with("https://") {
             return Err(std::io::Error::other("enrichment only uses HTTPS").into());
         }
-        self.limiter.acquire(url_host(url)).await;
+        shared_limiter().acquire(url_host(url)).await;
         let mut response = self
             .client
             .get(url)

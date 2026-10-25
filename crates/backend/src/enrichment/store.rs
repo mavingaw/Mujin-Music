@@ -612,6 +612,349 @@ pub fn save_note(
     load_note(connection, user_id, entity_type, entity_id)
 }
 
+/// A stored work (composition).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, QueryableByName)]
+pub struct WorkRow {
+    #[diesel(sql_type = Text)]
+    pub mbid: String,
+    #[diesel(sql_type = Text)]
+    pub title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub form: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub musical_key: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub catalogue: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub composed: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub composer_name: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub composer_normalized: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub composer_mbid: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub language: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub parent_mbid: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    pub part_position: Option<i64>,
+}
+
+/// A track performing a work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, QueryableByName)]
+pub struct TrackWorkRow {
+    #[diesel(sql_type = Text)]
+    pub track_id: String,
+    #[diesel(sql_type = Text)]
+    pub album_id: String,
+    #[diesel(sql_type = Text)]
+    pub work_mbid: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub recording_mbid: Option<String>,
+}
+
+const WORK_COLUMNS: &str = "mbid, title, form, musical_key, catalogue, composed, composer_name,
+     composer_normalized, composer_mbid, language, parent_mbid, part_position";
+
+fn upsert_work(connection: &mut SqliteConnection, work: &WorkRow) -> QueryResult<()> {
+    // A work seen only as a parent has fewer facts than the same work seen
+    // directly; never replace a known fact with nothing.
+    diesel::sql_query(
+        "INSERT INTO work (mbid, title, form, musical_key, catalogue, composed, composer_name,
+             composer_normalized, composer_mbid, language, parent_mbid, part_position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(mbid) DO UPDATE SET
+             title = excluded.title,
+             form = COALESCE(excluded.form, work.form),
+             musical_key = COALESCE(excluded.musical_key, work.musical_key),
+             catalogue = COALESCE(excluded.catalogue, work.catalogue),
+             composed = COALESCE(excluded.composed, work.composed),
+             composer_name = COALESCE(excluded.composer_name, work.composer_name),
+             composer_normalized = COALESCE(excluded.composer_normalized, work.composer_normalized),
+             composer_mbid = COALESCE(excluded.composer_mbid, work.composer_mbid),
+             language = COALESCE(excluded.language, work.language),
+             parent_mbid = COALESCE(excluded.parent_mbid, work.parent_mbid),
+             part_position = COALESCE(excluded.part_position, work.part_position),
+             updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind::<Text, _>(&work.mbid)
+    .bind::<Text, _>(&work.title)
+    .bind::<Nullable<Text>, _>(work.form.as_deref())
+    .bind::<Nullable<Text>, _>(work.musical_key.as_deref())
+    .bind::<Nullable<Text>, _>(work.catalogue.as_deref())
+    .bind::<Nullable<Text>, _>(work.composed.as_deref())
+    .bind::<Nullable<Text>, _>(work.composer_name.as_deref())
+    .bind::<Nullable<Text>, _>(work.composer_normalized.as_deref())
+    .bind::<Nullable<Text>, _>(work.composer_mbid.as_deref())
+    .bind::<Nullable<Text>, _>(work.language.as_deref())
+    .bind::<Nullable<Text>, _>(work.parent_mbid.as_deref())
+    .bind::<Nullable<BigInt>, _>(work.part_position)
+    .execute(connection)?;
+    Ok(())
+}
+
+/// Stores the works an album's tracks perform and replaces the album's
+/// MusicBrainz track-to-work links.
+pub fn replace_album_works(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+    works: &[WorkRow],
+    links: &[TrackWorkRow],
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        for work in works {
+            upsert_work(connection, work)?;
+        }
+        diesel::sql_query("DELETE FROM track_work WHERE album_id = ? AND source = 'musicbrainz'")
+            .bind::<Text, _>(album_id)
+            .execute(connection)?;
+        for link in links {
+            diesel::sql_query(
+                "INSERT INTO track_work (track_id, album_id, work_mbid, recording_mbid, source)
+                 VALUES (?, ?, ?, ?, 'musicbrainz') ON CONFLICT DO NOTHING",
+            )
+            .bind::<Text, _>(&link.track_id)
+            .bind::<Text, _>(&link.album_id)
+            .bind::<Text, _>(&link.work_mbid)
+            .bind::<Nullable<Text>, _>(link.recording_mbid.as_deref())
+            .execute(connection)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn load_work(connection: &mut SqliteConnection, mbid: &str) -> QueryResult<Option<WorkRow>> {
+    let mut rows = diesel::sql_query(format!("SELECT {WORK_COLUMNS} FROM work WHERE mbid = ?"))
+        .bind::<Text, _>(mbid)
+        .load::<WorkRow>(connection)?;
+    Ok(rows.pop())
+}
+
+/// The movements (parts) of a work.
+pub fn work_parts(connection: &mut SqliteConnection, mbid: &str) -> QueryResult<Vec<WorkRow>> {
+    diesel::sql_query(format!(
+        "SELECT {WORK_COLUMNS} FROM work WHERE parent_mbid = ?
+         ORDER BY part_position IS NULL, part_position, title"
+    ))
+    .bind::<Text, _>(mbid)
+    .load::<WorkRow>(connection)
+}
+
+/// Tracks performing a work or any of its parts.
+pub fn work_tracks(
+    connection: &mut SqliteConnection,
+    mbid: &str,
+) -> QueryResult<Vec<TrackWorkRow>> {
+    diesel::sql_query(
+        "SELECT track_id, album_id, work_mbid, recording_mbid FROM track_work
+         WHERE work_mbid = ? OR work_mbid IN (SELECT mbid FROM work WHERE parent_mbid = ?)
+         ORDER BY album_id, rowid",
+    )
+    .bind::<Text, _>(mbid)
+    .bind::<Text, _>(mbid)
+    .load::<TrackWorkRow>(connection)
+}
+
+/// The works a track performs, each with its parent when there is one.
+pub fn track_works(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> QueryResult<Vec<(WorkRow, Option<WorkRow>)>> {
+    let works = diesel::sql_query(format!(
+        "SELECT {WORK_COLUMNS} FROM work
+         WHERE mbid IN (SELECT work_mbid FROM track_work WHERE track_id = ?)"
+    ))
+    .bind::<Text, _>(track_id)
+    .load::<WorkRow>(connection)?;
+    let mut result = Vec::new();
+    for work in works {
+        let parent = match &work.parent_mbid {
+            Some(parent) => load_work(connection, parent)?,
+            None => None,
+        };
+        result.push((work, parent));
+    }
+    Ok(result)
+}
+
+/// Track-to-work links for one album.
+pub fn album_track_works(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Vec<TrackWorkRow>> {
+    diesel::sql_query(
+        "SELECT track_id, album_id, work_mbid, recording_mbid FROM track_work
+         WHERE album_id = ? ORDER BY rowid",
+    )
+    .bind::<Text, _>(album_id)
+    .load::<TrackWorkRow>(connection)
+}
+
+/// Works by mbid, for a set of links.
+pub fn works_by_ids(
+    connection: &mut SqliteConnection,
+    mbids: &[String],
+) -> QueryResult<Vec<WorkRow>> {
+    let mut rows = Vec::new();
+    for chunk in mbids.chunks(200) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let mut query = diesel::sql_query(format!(
+            "SELECT {WORK_COLUMNS} FROM work WHERE mbid IN ({placeholders})"
+        ))
+        .into_boxed::<diesel::sqlite::Sqlite>();
+        for mbid in chunk {
+            query = query.bind::<Text, _>(mbid.clone());
+        }
+        rows.extend(query.load::<WorkRow>(connection)?);
+    }
+    Ok(rows)
+}
+
+/// Works whose composer has one of these MusicBrainz ids or this normalized
+/// name, with the number of library tracks performing each (parts count
+/// toward their parent).
+pub fn composer_works(
+    connection: &mut SqliteConnection,
+    normalized_name: Option<&str>,
+    mbids: &[String],
+) -> QueryResult<Vec<(WorkRow, i64, i64)>> {
+    #[derive(QueryableByName)]
+    struct CountedWork {
+        #[diesel(embed)]
+        work: WorkRow,
+        #[diesel(sql_type = BigInt)]
+        track_count: i64,
+        #[diesel(sql_type = BigInt)]
+        album_count: i64,
+    }
+    let ids = mbids
+        .iter()
+        .filter(|mbid| super::musicbrainz::is_mbid(mbid))
+        .map(|mbid| format!("'{mbid}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let by_id = if ids.is_empty() {
+        String::new()
+    } else {
+        format!(" OR w.composer_mbid IN ({ids})")
+    };
+    let rows = diesel::sql_query(format!(
+        "SELECT w.mbid, w.title, w.form, w.musical_key, w.catalogue, w.composed, w.composer_name,
+                w.composer_normalized, w.composer_mbid, w.language, w.parent_mbid, w.part_position,
+                (SELECT COUNT(DISTINCT tw.track_id) FROM track_work tw
+                 WHERE tw.work_mbid = w.mbid
+                    OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
+                  AS track_count,
+                (SELECT COUNT(DISTINCT tw.album_id) FROM track_work tw
+                 WHERE tw.work_mbid = w.mbid
+                    OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
+                  AS album_count
+         FROM work w
+         WHERE w.parent_mbid IS NULL AND (w.composer_normalized = ?{by_id})
+         ORDER BY w.title LIMIT 2000"
+    ))
+    .bind::<Text, _>(normalized_name.unwrap_or("\u{0}"))
+    .load::<CountedWork>(connection)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.work, row.track_count, row.album_count))
+        .collect())
+}
+
+/// The MusicBrainz release an administrator chose for an album.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, QueryableByName)]
+pub struct Identification {
+    #[diesel(sql_type = Text)]
+    pub release_mbid: String,
+    #[diesel(sql_type = Text)]
+    pub release_title: String,
+    #[diesel(sql_type = Text)]
+    pub release_artist: String,
+    #[diesel(sql_type = Text)]
+    pub created_at: String,
+}
+
+pub fn load_identification(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Option<Identification>> {
+    let mut rows = diesel::sql_query(
+        "SELECT release_mbid, release_title, release_artist, CAST(created_at AS TEXT) AS created_at
+         FROM album_identification WHERE album_id = ?",
+    )
+    .bind::<Text, _>(album_id)
+    .load::<Identification>(connection)?;
+    Ok(rows.pop())
+}
+
+/// Pins an album to a release (or clears the pin with `None`) and queues
+/// the album to be looked up again.
+pub fn set_identification(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+    release: Option<(&str, &str, &str)>,
+    user_id: Option<i32>,
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        match release {
+            Some((mbid, title, artist)) => {
+                diesel::sql_query(
+                    "INSERT INTO album_identification
+                         (album_id, release_mbid, release_title, release_artist, identified_by)
+                     VALUES (?, ?, ?, ?, ?)
+                     ON CONFLICT(album_id) DO UPDATE SET
+                         release_mbid = excluded.release_mbid,
+                         release_title = excluded.release_title,
+                         release_artist = excluded.release_artist,
+                         identified_by = excluded.identified_by,
+                         created_at = CURRENT_TIMESTAMP",
+                )
+                .bind::<Text, _>(album_id)
+                .bind::<Text, _>(mbid)
+                .bind::<Text, _>(title)
+                .bind::<Text, _>(artist)
+                .bind::<Nullable<Integer>, _>(user_id)
+                .execute(connection)?;
+            }
+            None => {
+                diesel::sql_query("DELETE FROM album_identification WHERE album_id = ?")
+                    .bind::<Text, _>(album_id)
+                    .execute(connection)?;
+            }
+        }
+        refresh_entity(connection, "album", album_id)
+    })
+}
+
+/// Removes everything enrichment stored for an entity (used when a match
+/// turns out to be wrong, e.g. a placeholder artist name).
+pub fn clear_editorial(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<()> {
+    for table in ["editorial_profile", "editorial_text", "editorial_image"] {
+        diesel::sql_query(format!(
+            "DELETE FROM {table} WHERE entity_type = ? AND entity_id = ?"
+        ))
+        .bind::<Text, _>(entity_type)
+        .bind::<Text, _>(entity_id)
+        .execute(connection)?;
+    }
+    if entity_type == "album" {
+        diesel::sql_query(
+            "DELETE FROM enriched_credit WHERE album_id = ? AND source = 'musicbrainz'",
+        )
+        .bind::<Text, _>(entity_id)
+        .execute(connection)?;
+        diesel::sql_query("DELETE FROM track_work WHERE album_id = ? AND source = 'musicbrainz'")
+            .bind::<Text, _>(entity_id)
+            .execute(connection)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,6 +1023,140 @@ mod tests {
                 .unwrap()
                 .status,
             "skipped"
+        );
+    }
+
+    fn work(mbid: &str, title: &str, parent: Option<&str>, position: Option<i64>) -> WorkRow {
+        WorkRow {
+            mbid: mbid.into(),
+            title: title.into(),
+            composer_name: Some("Ludwig van Beethoven".into()),
+            composer_normalized: Some("ludwig van beethoven".into()),
+            composer_mbid: Some("1f9df192-a621-4f54-8850-2c5373b7eac9".into()),
+            parent_mbid: parent.map(str::to_string),
+            part_position: position,
+            ..WorkRow::default()
+        }
+    }
+
+    fn link(track: &str, album: &str, work: &str) -> TrackWorkRow {
+        TrackWorkRow {
+            track_id: track.into(),
+            album_id: album.into(),
+            work_mbid: work.into(),
+            recording_mbid: None,
+        }
+    }
+
+    #[test]
+    fn works_link_tracks_to_movements_and_movements_to_the_piece() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        let symphony = WorkRow {
+            form: Some("Symphony".into()),
+            musical_key: Some("D minor".into()),
+            catalogue: Some("Op. 125".into()),
+            ..work("sym", "Symphony No. 9", None, None)
+        };
+        replace_album_works(
+            &mut connection,
+            "karajan",
+            &[
+                symphony.clone(),
+                work("m1", "Symphony No. 9: I.", Some("sym"), Some(1)),
+                work("m4", "Symphony No. 9: IV.", Some("sym"), Some(4)),
+            ],
+            &[link("k1", "karajan", "m1"), link("k4", "karajan", "m4")],
+        )
+        .unwrap();
+        // A second recording of the finale only; the parent is seen without
+        // its facts, which must not erase them.
+        replace_album_works(
+            &mut connection,
+            "bernstein",
+            &[
+                WorkRow {
+                    form: None,
+                    ..work("sym", "Symphony No. 9", None, None)
+                },
+                work("m4", "Symphony No. 9: IV.", Some("sym"), Some(4)),
+            ],
+            &[link("b4", "bernstein", "m4")],
+        )
+        .unwrap();
+        let stored = load_work(&mut connection, "sym").unwrap().unwrap();
+        assert_eq!(stored.form.as_deref(), Some("Symphony"));
+        assert_eq!(stored.catalogue.as_deref(), Some("Op. 125"));
+        let parts = work_parts(&mut connection, "sym").unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| part.mbid.as_str())
+                .collect::<Vec<_>>(),
+            ["m1", "m4"]
+        );
+        let tracks = work_tracks(&mut connection, "sym").unwrap();
+        let mut ids = tracks
+            .iter()
+            .map(|track| track.track_id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, ["b4", "k1", "k4"]);
+        let works = track_works(&mut connection, "k4").unwrap();
+        assert_eq!(works.len(), 1);
+        assert_eq!(
+            works[0].1.as_ref().map(|parent| parent.mbid.as_str()),
+            Some("sym")
+        );
+
+        let by_name = composer_works(&mut connection, Some("ludwig van beethoven"), &[]).unwrap();
+        assert_eq!(by_name.len(), 1);
+        assert_eq!(
+            (by_name[0].0.mbid.as_str(), by_name[0].1, by_name[0].2),
+            ("sym", 3, 2)
+        );
+        let by_id = composer_works(
+            &mut connection,
+            None,
+            &[
+                "1f9df192-a621-4f54-8850-2c5373b7eac9".into(),
+                "x'; DROP".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(by_id.len(), 1);
+
+        // Looking the album up again replaces its links but keeps others'.
+        replace_album_works(&mut connection, "karajan", &[], &[]).unwrap();
+        assert_eq!(work_tracks(&mut connection, "sym").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn identifying_an_album_pins_the_release_and_queues_a_lookup() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        set_identification(
+            &mut connection,
+            "album-1",
+            Some(("rel", "Symphonie Nr. 9", "Karajan")),
+            Some(1),
+        )
+        .unwrap();
+        let pinned = load_identification(&mut connection, "album-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(pinned.release_mbid, "rel");
+        assert_eq!(
+            task_state(&mut connection, "album", "album-1")
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending"
+        );
+        set_identification(&mut connection, "album-1", None, None).unwrap();
+        assert_eq!(
+            load_identification(&mut connection, "album-1").unwrap(),
+            None
         );
     }
 

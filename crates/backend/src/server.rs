@@ -17,7 +17,7 @@ use crate::api::library::{
 };
 use crate::api::{
     album, artist, cast, data, editorial, filesystem, genres, home, lyrics, metadata, playback,
-    playlist, search, setup, song, user,
+    playlist, search, setup, song, user, works,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -67,7 +67,10 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .service(metadata::upload_album_cover)
                 .service(editorial::get_enrichment)
                 .service(editorial::put_enrichment)
-                .service(editorial::refresh_enrichment),
+                .service(editorial::refresh_enrichment)
+                .service(works::identify_search)
+                .service(works::identify_album)
+                .service(works::clear_identification),
         )
         .service(
             web::scope("/data/admin")
@@ -86,6 +89,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
+        .configure(works::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -214,7 +218,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting", "credits"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "credits", "works"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),

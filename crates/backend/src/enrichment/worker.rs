@@ -13,8 +13,10 @@ use super::fetch::{BoxError, Fetch, FetchResponse, HttpFetch, MAX_IMAGE_BYTES, M
 use super::musicbrainz as mb;
 use super::store::{
     self, CreditRow, EditorialText, EnrichmentSettings, ImageRow, Outcome, ProfileRow,
+    TrackWorkRow, WorkRow,
 };
 use super::wikimedia as wiki;
+use super::works::WorkInfo;
 use crate::library::identity::{normalize_artist_identity, normalize_song_identity};
 use crate::library::state::LibraryLifecycle;
 use crate::persistence::connection::DbPool;
@@ -59,6 +61,11 @@ pub struct AlbumInput {
     pub tracks: Vec<TrackInput>,
     /// Local artists by normalized name, for linking external credits.
     pub known_artists: Vec<(String, String)>,
+    /// Release year from tags, to choose between recordings.
+    pub year: Option<String>,
+    /// The release was chosen by a person or named in tags, so tracks may
+    /// be matched by position even when the track counts differ.
+    pub release_trusted: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -190,11 +197,31 @@ impl<F: Fetch> Enricher<F> {
         album: &AlbumInput,
         settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
-        let release_mbid = match album.musicbrainz_id.as_deref().filter(|id| mb::is_mbid(id)) {
-            Some(mbid) => mbid.to_string(),
+        let album_id = album.id.clone();
+        let identified = db(&self.pool, move |connection| {
+            store::load_identification(connection, &album_id)
+        })
+        .await?
+        .map(|pinned| pinned.release_mbid)
+        .filter(|id| mb::is_mbid(id));
+        let tagged = album.musicbrainz_id.clone().filter(|id| mb::is_mbid(id));
+        let release_mbid = match identified.clone().or(tagged) {
+            Some(mbid) => mbid,
             None => {
                 if album.artist_name.trim().is_empty() || album.title.trim().is_empty() {
                     return Ok(Outcome::Skipped("the album has no title or artist".into()));
+                }
+                if mb::is_placeholder_artist(&album.artist_name) {
+                    // "Unknown Artist" would match a real namesake; only a
+                    // person can say which release this is.
+                    let album_id = album.id.clone();
+                    db(&self.pool, move |connection| {
+                        store::clear_editorial(connection, "album", &album_id)
+                    })
+                    .await?;
+                    return Ok(Outcome::Skipped(
+                        "the album artist is a placeholder; use Identify album".into(),
+                    ));
                 }
                 let body = match self
                     .get_json(&mb::release_search_url(&album.title, &album.artist_name))
@@ -205,10 +232,11 @@ impl<F: Fetch> Enricher<F> {
                     Err(outcome) => return Ok(outcome),
                 };
                 let candidates = mb::parse_release_search(&body);
-                match mb::choose_release(
+                match mb::choose_release_in_year(
                     &album.title,
                     &album.artist_name,
                     album.tracks.len(),
+                    album.year.as_deref(),
                     &candidates,
                 ) {
                     Some(release) => release.mbid,
@@ -268,10 +296,16 @@ impl<F: Fetch> Enricher<F> {
             }
         }
 
-        let exact = album.musicbrainz_id.as_deref() == Some(release.mbid.as_str())
-            || release.tracks.len() == album.tracks.len();
+        let trusted = identified.as_deref() == Some(release.mbid.as_str())
+            || album.musicbrainz_id.as_deref() == Some(release.mbid.as_str());
+        let exact = trusted || release.tracks.len() == album.tracks.len();
+        let album = &AlbumInput {
+            release_trusted: trusted,
+            ..album.clone()
+        };
         let credits = album_credit_rows(album, &release);
         let links = artist_links(album, &release);
+        let (works, work_links) = album_work_rows(album, &release);
         let profile = ProfileRow {
             musicbrainz_id: Some(release.mbid.clone()),
             release_group_mbid: release.release_group_mbid.clone(),
@@ -299,6 +333,7 @@ impl<F: Fetch> Enricher<F> {
                 store::replace_texts(connection, "album", &album_id, texts)?;
             }
             store::replace_album_credits(connection, &album_id, "musicbrainz", &credits)?;
+            store::replace_album_works(connection, &album_id, &works, &work_links)?;
             for (artist_id, mbid) in &links {
                 store::link_artist_mbid(connection, artist_id, mbid)?;
             }
@@ -317,8 +352,17 @@ impl<F: Fetch> Enricher<F> {
             return Ok(Outcome::Skipped("the artist has no name".into()));
         }
         let wanted = normalize_artist_identity(&artist.name);
-        if wanted == "various artists" {
-            return Ok(Outcome::Skipped("Various Artists is not a person".into()));
+        if mb::is_placeholder_artist(&artist.name) {
+            // Drop anything an earlier version matched for this name.
+            let artist_id = artist.id.clone();
+            db(&self.pool, move |connection| {
+                store::clear_editorial(connection, "artist", &artist_id)
+            })
+            .await?;
+            return Ok(Outcome::Skipped(format!(
+                "\"{}\" is a placeholder, not an artist",
+                artist.name.trim()
+            )));
         }
         let artist_id = artist.id.clone();
         let known = db(&self.pool, move |connection| {
@@ -502,32 +546,120 @@ fn wikipedia_text(
     }
 }
 
-/// Matches MusicBrainz tracks to local tracks by title, then by position
-/// when the track lists line up.
+/// The part of a track title after the last colon ("…, Op. 125: II. Molto
+/// vivace" -> "ii molto vivace"), where movements differ.
+fn title_tail(title: &str) -> String {
+    let tail = title.rsplit_once(':').map_or(title, |(_, tail)| tail);
+    let normalized = normalize_song_identity(tail);
+    // "I. Grave" and "1. Grave" are the same movement.
+    let mut words = normalized.split(' ');
+    let first = words.next().unwrap_or_default();
+    let rest = words.collect::<Vec<_>>().join(" ");
+    let mut words = match roman_number(first) {
+        Some(number) => format!("{number} {rest}"),
+        None => normalized.clone(),
+    };
+    // "Adagio sostenuto - Attacca" is the same movement as "Adagio
+    // sostenuto".
+    if let Some(stripped) = words.strip_suffix(" attacca") {
+        words = stripped.to_string();
+    }
+    words.trim().to_string()
+}
+
+fn roman_number(word: &str) -> Option<u32> {
+    if word.is_empty() || word.len() > 6 {
+        return None;
+    }
+    let value = |c| match c {
+        'i' => Some(1),
+        'v' => Some(5),
+        'x' => Some(10),
+        'l' => Some(50),
+        _ => None,
+    };
+    let digits = word.chars().map(value).collect::<Option<Vec<u32>>>()?;
+    let mut total = 0;
+    for (index, digit) in digits.iter().enumerate() {
+        if digits.get(index + 1).is_some_and(|next| next > digit) {
+            total -= *digit as i64;
+        } else {
+            total += *digit as i64;
+        }
+    }
+    u32::try_from(total).ok().filter(|total| *total > 0)
+}
+
+/// Matches MusicBrainz tracks to local tracks: by title, then by the
+/// movement part of the title (tags often shorten "I. Allegro ma non
+/// troppo, un poco maestoso"), then by position when the track lists have
+/// the same length (and, for a release with several discs, only when a
+/// person chose it or tags name it).
 pub fn match_tracks(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<(usize, String)> {
     let single_disc = release.tracks.iter().all(|track| track.disc == 1);
     let same_length = release.tracks.len() == album.tracks.len();
-    let mut matches = Vec::new();
-    for (index, track) in release.tracks.iter().enumerate() {
-        let title = normalize_song_identity(&track.title);
-        let by_title = album
+    let mut matched: Vec<Option<usize>> = vec![None; release.tracks.len()];
+    let mut used = vec![false; album.tracks.len()];
+    let unique = |used: &[bool], test: &dyn Fn(&TrackInput) -> bool| {
+        let found = album
             .tracks
             .iter()
-            .filter(|local| normalize_song_identity(&local.title) == title)
+            .enumerate()
+            .filter(|(local, track)| !used[*local] && test(track))
+            .map(|(local, _)| local)
             .collect::<Vec<_>>();
-        let local = match by_title.as_slice() {
+        match found.as_slice() {
             [only] => Some(*only),
-            _ if single_disc && same_length => album
-                .tracks
-                .iter()
-                .find(|local| i64::from(local.track_number) == track.position),
             _ => None,
-        };
-        if let Some(local) = local {
-            matches.push((index, local.id.clone()));
+        }
+    };
+    for (index, track) in release.tracks.iter().enumerate() {
+        let title = normalize_song_identity(&track.title);
+        if let Some(local) = unique(&used, &|local| {
+            normalize_song_identity(&local.title) == title
+        }) {
+            matched[index] = Some(local);
+            used[local] = true;
         }
     }
-    matches
+    for (index, track) in release.tracks.iter().enumerate() {
+        if matched[index].is_some() {
+            continue;
+        }
+        let tail = title_tail(&track.title);
+        if tail.chars().count() < 6 {
+            continue;
+        }
+        let similar = |local: &TrackInput| {
+            let local_tail = title_tail(&local.title);
+            local_tail.chars().count() >= 6
+                && (local_tail == tail
+                    || tail.starts_with(&format!("{local_tail} "))
+                    || local_tail.starts_with(&format!("{tail} ")))
+        };
+        if let Some(local) = unique(&used, &similar) {
+            matched[index] = Some(local);
+            used[local] = true;
+        }
+    }
+    if same_length && (single_disc || album.release_trusted) {
+        for (index, track) in release.tracks.iter().enumerate() {
+            if matched[index].is_some() {
+                continue;
+            }
+            if let Some(local) = unique(&used, &|local| {
+                i64::from(local.track_number) == track.position
+            }) {
+                matched[index] = Some(local);
+                used[local] = true;
+            }
+        }
+    }
+    matched
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, local)| Some((index, album.tracks[local?].id.clone())))
+        .collect()
 }
 
 fn album_credit_rows(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<CreditRow> {
@@ -555,6 +687,55 @@ fn album_credit_rows(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<Cr
         );
     }
     rows
+}
+
+fn work_row(work: &WorkInfo, parent: Option<&WorkInfo>) -> WorkRow {
+    let composer = work.composers.first();
+    WorkRow {
+        mbid: work.mbid.clone(),
+        title: work.title.clone(),
+        form: work.form.clone(),
+        musical_key: work.key.clone(),
+        catalogue: work.catalogue.clone(),
+        composed: work.composed.clone(),
+        composer_name: composer.map(|composer| composer.name.clone()),
+        composer_normalized: composer.map(|composer| normalize_artist_identity(&composer.name)),
+        composer_mbid: composer.and_then(|composer| composer.mbid.clone()),
+        language: work.language.clone(),
+        parent_mbid: parent.map(|parent| parent.mbid.clone()),
+        part_position: work.position,
+    }
+}
+
+/// Works performed on the release (movements and the pieces they belong
+/// to) and the local tracks that perform them.
+pub fn album_work_rows(
+    album: &AlbumInput,
+    release: &mb::ReleaseDetails,
+) -> (Vec<WorkRow>, Vec<TrackWorkRow>) {
+    let mut works: Vec<WorkRow> = Vec::new();
+    let mut add = |row: WorkRow| {
+        if !works.iter().any(|known| known.mbid == row.mbid) {
+            works.push(row);
+        }
+    };
+    let mut links = Vec::new();
+    for (index, track_id) in match_tracks(album, release) {
+        let track = &release.tracks[index];
+        for work in &track.works {
+            if let Some(parent) = work.parent.as_deref() {
+                add(work_row(parent, None));
+            }
+            add(work_row(work, work.parent.as_deref()));
+            links.push(TrackWorkRow {
+                track_id: track_id.clone(),
+                album_id: album.id.clone(),
+                work_mbid: work.mbid.clone(),
+                recording_mbid: track.recording_mbid.clone(),
+            });
+        }
+    }
+    (works, links)
 }
 
 /// Local artists named on the release (as album artist or in a credit) and
@@ -632,6 +813,12 @@ fn album_input(cache: &crate::library::state::LibraryCache, album_id: &str) -> O
             })
             .collect(),
         known_artists,
+        year: album
+            .first_release_date
+            .get(..4)
+            .filter(|year| year.bytes().all(|byte| byte.is_ascii_digit()))
+            .map(str::to_string),
+        release_trusted: false,
     })
 }
 
@@ -765,6 +952,8 @@ mod tests {
                 },
             ],
             known_artists: vec![("bill evans".into(), "artist-evans".into())],
+            year: None,
+            release_trusted: false,
         }
     }
 
@@ -1041,6 +1230,311 @@ mod tests {
             store::load_texts(&mut connection, "album", "album-1")
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    const KARAJAN_RELEASE: &str = "77777777-7777-4777-8777-777777777777";
+    const SYMPHONY: &str = "22222222-2222-4222-8222-222222222222";
+    const MOVEMENT_ONE: &str = "33333333-3333-4333-8333-333333333333";
+    const MOVEMENT_FOUR: &str = "44444444-4444-4444-8444-444444444444";
+    const BEETHOVEN: &str = "1f9df192-a621-4f54-8850-2c5373b7eac9";
+
+    fn karajan_album() -> AlbumInput {
+        AlbumInput {
+            id: "karajan-9".into(),
+            title: "Beethoven: Symphony No. 9".into(),
+            artist_id: "artist-karajan".into(),
+            artist_name: "Herbert von Karajan".into(),
+            musicbrainz_id: None,
+            tracks: vec![
+                TrackInput {
+                    id: "k1".into(),
+                    title: "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo".into(),
+                    track_number: 1,
+                },
+                TrackInput {
+                    id: "k4".into(),
+                    title: "Symphony No. 9 in D minor, Op. 125: IV. Presto".into(),
+                    track_number: 2,
+                },
+            ],
+            known_artists: Vec::new(),
+            year: None,
+            release_trusted: false,
+        }
+    }
+
+    fn movement(id: &str, title: &str, position: i64) -> Value {
+        serde_json::json!({"type": "performance", "target-type": "work", "work": {
+            "id": id, "title": title,
+            "relations": [
+                {"type": "composer", "target-type": "artist", "begin": "1822", "end": "1824",
+                 "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}},
+                {"type": "parts", "target-type": "work", "direction": "backward", "ordering-key": position,
+                 "work": {"id": SYMPHONY, "title": "Symphony no. 9 in D minor, op. 125", "type": "Symphony"}}
+            ]
+        }})
+    }
+
+    fn karajan_release() -> Value {
+        serde_json::json!({
+            "id": KARAJAN_RELEASE, "title": "Symphonie Nr. 9",
+            "release-group": {"primary-type": "Album"},
+            "artist-credit": [{"name": "Beethoven", "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}}],
+            "media": [{"position": 1, "tracks": [
+                {"position": 1, "title": "Symphonie Nr. 9: I. Allegro ma non troppo",
+                 "recording": {"id": MOVEMENT_ONE, "relations": [
+                     movement(MOVEMENT_ONE, "Symphony no. 9 in D minor, op. 125: I. Allegro ma non troppo, un poco maestoso", 1)
+                 ]}},
+                {"position": 2, "title": "Symphonie Nr. 9: IV. Presto",
+                 "recording": {"id": MOVEMENT_FOUR, "relations": [
+                     movement(MOVEMENT_FOUR, "Symphony no. 9 in D minor, op. 125: IV. Presto – Allegro assai", 4),
+                     {"type": "conductor", "target-type": "artist", "attributes": [],
+                      "artist": {"id": KARAJAN_RELEASE, "name": "Herbert von Karajan"}}
+                 ]}}
+            ]}]
+        })
+    }
+
+    #[tokio::test]
+    async fn an_identified_album_uses_the_chosen_release_and_stores_its_works() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::set_identification(
+                &mut connection,
+                "karajan-9",
+                Some((KARAJAN_RELEASE, "Symphonie Nr. 9", "Beethoven")),
+                None,
+            )
+            .unwrap();
+        }
+        let enricher = Enricher {
+            fetch: MockFetch::default()
+                .json(&mb::release_lookup_url(KARAJAN_RELEASE), karajan_release()),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher
+            .enrich_album(
+                &karajan_album(),
+                &EnrichmentSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        // No search: the administrator's choice is looked up directly.
+        assert_eq!(
+            enricher.fetch.requested(),
+            [mb::release_lookup_url(KARAJAN_RELEASE)]
+        );
+        let mut connection = pool.get().unwrap();
+        let symphony = store::load_work(&mut connection, SYMPHONY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(symphony.title, "Symphony No. 9 in D minor, Op. 125");
+        assert_eq!(symphony.catalogue.as_deref(), Some("Op. 125"));
+        assert_eq!(symphony.musical_key.as_deref(), Some("D minor"));
+        assert_eq!(symphony.form.as_deref(), Some("Symphony"));
+        assert_eq!(symphony.composed.as_deref(), Some("1822–1824"));
+        assert_eq!(symphony.composer_mbid.as_deref(), Some(BEETHOVEN));
+        let parts = store::work_parts(&mut connection, SYMPHONY).unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| (part.mbid.as_str(), part.part_position))
+                .collect::<Vec<_>>(),
+            [(MOVEMENT_ONE, Some(1)), (MOVEMENT_FOUR, Some(4))]
+        );
+        let links = store::work_tracks(&mut connection, SYMPHONY).unwrap();
+        assert_eq!(
+            links
+                .iter()
+                .map(|link| (link.track_id.as_str(), link.work_mbid.as_str()))
+                .collect::<Vec<_>>(),
+            [("k1", MOVEMENT_ONE), ("k4", MOVEMENT_FOUR)]
+        );
+        let profile = store::load_profile(&mut connection, "album", "karajan-9")
+            .unwrap()
+            .unwrap();
+        assert!(profile.profile_json.contains("\"exact\":true"));
+    }
+
+    #[test]
+    fn movements_match_by_their_shortened_titles_and_trusted_positions() {
+        let local = |id: &str, title: &str, number: u16| TrackInput {
+            id: id.into(),
+            title: title.into(),
+            track_number: number,
+        };
+        let album = AlbumInput {
+            tracks: vec![
+                local(
+                    "k1",
+                    "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo",
+                    1,
+                ),
+                local(
+                    "k2",
+                    "Symphony No. 9 in D minor, Op. 125: II. Molto vivace",
+                    2,
+                ),
+                local("k3", "Adagio", 3),
+                local(
+                    "k4",
+                    "Symphony No. 9 in D minor, Op. 125: IV. Presto – Allegro assai",
+                    4,
+                ),
+            ],
+            ..karajan_album()
+        };
+        let release_track = |position: i64, title: &str| mb::ReleaseTrack {
+            disc: 1,
+            position,
+            title: title.into(),
+            recording_mbid: None,
+            credits: Vec::new(),
+            works: Vec::new(),
+        };
+        let release = mb::ReleaseDetails {
+            tracks: vec![
+                release_track(
+                    1,
+                    "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo, un poco maestoso",
+                ),
+                release_track(2, "Symphony No. 9 in D minor, Op. 125: II. Molto vivace"),
+                release_track(
+                    3,
+                    "Symphony No. 9 in D minor, Op. 125: III. Adagio molto e cantabile",
+                ),
+                release_track(4, "Symphony No. 9 in D minor, Op. 125: IV. Presto"),
+                release_track(
+                    5,
+                    "Symphony No. 9 in D minor, Op. 125: IV. Presto - \"O Freunde\" - Allegro assai",
+                ),
+            ],
+            ..mb::ReleaseDetails::default()
+        };
+        let summary = |album: &AlbumInput| {
+            match_tracks(album, &release)
+                .into_iter()
+                .map(|(index, id)| (release.tracks[index].position, id))
+                .collect::<Vec<_>>()
+        };
+        // Track counts differ, so an automatic match never guesses by
+        // position; "Adagio" is too short to match on its own.
+        assert_eq!(
+            summary(&album),
+            [
+                (1, "k1".to_string()),
+                (2, "k2".to_string()),
+                (4, "k4".to_string())
+            ]
+        );
+        // Even for a chosen release, positions only count when the track
+        // lists have the same length: a 4-track album is not tracks 1-4 of
+        // a 12-track compilation.
+        let chosen = AlbumInput {
+            release_trusted: true,
+            ..album.clone()
+        };
+        assert_eq!(summary(&chosen), summary(&album));
+        // Roman and Arabic movement numbers match, and "Attacca" is ignored.
+        let sonatas = AlbumInput {
+            tracks: vec![
+                local(
+                    "p1",
+                    "Piano Sonata No. 8, Op. 13: I. Grave – Allegro di molto e con brio",
+                    1,
+                ),
+                local(
+                    "p2",
+                    "Piano Sonata No. 14, Op. 27 No. 2: I. Adagio sostenuto",
+                    2,
+                ),
+            ],
+            ..karajan_album()
+        };
+        let release = mb::ReleaseDetails {
+            tracks: vec![
+                release_track(
+                    1,
+                    "Sonate no. 8 c-moll, op. 13: 1. Grave - Allegro di molto e con brio",
+                ),
+                release_track(2, "Sonate no. 8 c-moll, op. 13: 2. Adagio cantabile"),
+                release_track(
+                    4,
+                    "Sonate no. 14 cis-moll, op. 27 no. 2: 1. Adagio sostenuto - Attacca",
+                ),
+            ],
+            ..mb::ReleaseDetails::default()
+        };
+        assert_eq!(
+            match_tracks(&sonatas, &release),
+            [(0, "p1".to_string()), (2, "p2".to_string())]
+        );
+        assert_eq!(roman_number("iv"), Some(4));
+        assert_eq!(roman_number("xiv"), Some(14));
+        assert_eq!(roman_number("live"), None);
+    }
+
+    #[tokio::test]
+    async fn placeholder_artists_are_never_matched_automatically() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "artist",
+                "unknown",
+                &ProfileRow {
+                    musicbrainz_id: Some(MILES.into()),
+                    profile_json: "{\"disambiguation\":\"drum and bass\"}".into(),
+                    ..ProfileRow::default()
+                },
+            )
+            .unwrap();
+        }
+        let enricher = Enricher {
+            fetch: MockFetch::default(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        for name in ["Unknown Artist", "Various Artists", "[unknown]", "  VA "] {
+            let outcome = enricher
+                .enrich_artist(
+                    &ArtistInput {
+                        id: "unknown".into(),
+                        name: name.into(),
+                    },
+                    &settings,
+                )
+                .await
+                .unwrap();
+            assert!(matches!(outcome, Outcome::Skipped(_)), "{name}");
+        }
+        let album = AlbumInput {
+            title: "Basement Tapes".into(),
+            artist_name: "Unknown Artist".into(),
+            ..album()
+        };
+        assert!(matches!(
+            enricher.enrich_album(&album, &settings).await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        assert!(enricher.fetch.requested().is_empty());
+        let mut connection = pool.get().unwrap();
+        // The wrong match an earlier version stored is gone.
+        assert_eq!(
+            store::load_profile(&mut connection, "artist", "unknown").unwrap(),
+            None
         );
     }
 

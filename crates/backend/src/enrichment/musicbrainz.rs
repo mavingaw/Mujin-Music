@@ -45,12 +45,42 @@ pub fn artist_lookup_url(mbid: &str) -> String {
     format!("{API_ROOT}/artist/{mbid}?inc=url-rels&fmt=json")
 }
 
+/// A title and, for classical albums titled "Beethoven: Symphony No. 9",
+/// the title without the composer, which is how MusicBrainz names most
+/// such releases.
+pub fn title_variants(title: &str) -> Vec<String> {
+    let title = title.trim();
+    let mut variants = vec![title.to_string()];
+    if let Some((prefix, rest)) = title.split_once(": ") {
+        let rest = rest.trim();
+        if !prefix.trim().is_empty()
+            && prefix.chars().count() <= 40
+            && !prefix.chars().any(|c| c.is_ascii_digit())
+            && rest.chars().count() >= 3
+        {
+            variants.push(rest.to_string());
+        }
+    }
+    variants
+}
+
+fn title_clause(title: &str) -> String {
+    let variants = title_variants(title)
+        .iter()
+        .map(|variant| phrase(variant))
+        .collect::<Vec<_>>();
+    match variants.as_slice() {
+        [only] => format!("release:{only}"),
+        _ => format!("release:({})", variants.join(" OR ")),
+    }
+}
+
 pub fn release_search_url(title: &str, artist: &str) -> String {
     format!(
         "{API_ROOT}/release?query={}&limit=10&fmt=json",
         encode(&format!(
-            "release:{} AND artist:{}",
-            phrase(title),
+            "{} AND artist:{}",
+            title_clause(title),
             phrase(artist)
         ))
     )
@@ -196,8 +226,18 @@ pub struct ReleaseCandidate {
     pub title: String,
     pub score: i64,
     pub artist: String,
+    /// Every credited artist name, for matching an album artist that is
+    /// one of several (a conductor on a classical release).
+    pub artist_names: Vec<String>,
     pub track_count: Option<i64>,
     pub date: Option<String>,
+    pub country: Option<String>,
+    pub disambiguation: Option<String>,
+    pub labels: Vec<String>,
+    pub catalog_numbers: Vec<String>,
+    /// Medium formats, e.g. `CD` or `2×Vinyl`.
+    pub format: Option<String>,
+    pub release_type: Option<String>,
 }
 
 pub fn parse_release_search(body: &Value) -> Vec<ReleaseCandidate> {
@@ -209,11 +249,111 @@ pub fn parse_release_search(body: &Value) -> Vec<ReleaseCandidate> {
                 title: text(release, "title")?,
                 score: release.get("score").and_then(Value::as_i64).unwrap_or(0),
                 artist: artist_credit_phrase(release),
+                artist_names: array(release, "artist-credit")
+                    .iter()
+                    .filter_map(|credit| {
+                        text(credit, "name").or_else(|| {
+                            credit.get("artist").and_then(|artist| text(artist, "name"))
+                        })
+                    })
+                    .collect(),
                 track_count: release.get("track-count").and_then(Value::as_i64),
                 date: text(release, "date"),
+                country: text(release, "country"),
+                disambiguation: text(release, "disambiguation"),
+                labels: array(release, "label-info")
+                    .iter()
+                    .filter_map(|info| info.get("label").and_then(|label| text(label, "name")))
+                    .filter(|label| label != "[no label]")
+                    .fold(Vec::new(), |mut labels, label| {
+                        if !labels.contains(&label) {
+                            labels.push(label);
+                        }
+                        labels
+                    }),
+                catalog_numbers: array(release, "label-info")
+                    .iter()
+                    .filter_map(|info| text(info, "catalog-number"))
+                    .filter(|number| number != "[none]")
+                    .collect(),
+                format: media_format(release),
+                release_type: release
+                    .get("release-group")
+                    .and_then(|group| text(group, "primary-type")),
             })
         })
         .collect()
+}
+
+/// "CD", "2×CD" or "CD + DVD" from a release's media.
+fn media_format(release: &Value) -> Option<String> {
+    let mut formats: Vec<(String, usize)> = Vec::new();
+    for medium in array(release, "media") {
+        let format = text(medium, "format").unwrap_or_else(|| "Unknown".to_string());
+        match formats.iter_mut().find(|(known, _)| *known == format) {
+            Some((_, count)) => *count += 1,
+            None => formats.push((format, 1)),
+        }
+    }
+    let parts = formats
+        .into_iter()
+        .map(|(format, count)| {
+            if count > 1 {
+                format!("{count}×{format}")
+            } else {
+                format
+            }
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" + "))
+}
+
+/// A free-text release search for manual identification. The text is
+/// searched as typed (MusicBrainz' default fields: release, artist, label,
+/// catalogue number, barcode).
+pub fn release_query_url(query: &str) -> String {
+    format!(
+        "{API_ROOT}/release?query={}&limit=15&fmt=json",
+        encode(query)
+    )
+}
+
+/// Release search by title and, when known, artist; the default query for
+/// the identify dialog.
+pub fn identify_query(title: &str, artist: Option<&str>) -> String {
+    let title = title_clause(title);
+    match artist.filter(|artist| !artist.trim().is_empty()) {
+        Some(artist) => format!("{title} AND artist:{}", phrase(artist.trim())),
+        None => title,
+    }
+}
+
+/// Names that stand for "no artist" in tags. They are never matched to a
+/// MusicBrainz artist (MusicBrainz has real artists with these names).
+pub fn is_placeholder_artist(name: &str) -> bool {
+    let normalized = normalize_artist_identity(name);
+    let trimmed = normalized.trim_matches(|c: char| !c.is_alphanumeric());
+    matches!(
+        trimmed,
+        "" | "unknown"
+            | "unknown artist"
+            | "unknown artists"
+            | "artist"
+            | "various"
+            | "various artists"
+            | "va"
+            | "v a"
+            | "no artist"
+            | "anonymous"
+            | "traditional"
+            | "untitled artist"
+            | "unknown album artist"
+            | "album artist"
+            | "soundtrack"
+            | "original soundtrack"
+            | "cast"
+            | "original cast"
+    )
 }
 
 fn artist_credit_phrase(value: &Value) -> String {
@@ -240,16 +380,53 @@ pub fn choose_release(
     track_count: usize,
     candidates: &[ReleaseCandidate],
 ) -> Option<ReleaseCandidate> {
-    let wanted_title = normalize_album_identity(title);
+    choose_release_in_year(title, artist, track_count, None, candidates)
+}
+
+/// [`choose_release`], preferring releases from the album's own year when
+/// its tags have one: a conductor often recorded a work several times.
+pub fn choose_release_in_year(
+    title: &str,
+    artist: &str,
+    track_count: usize,
+    year: Option<&str>,
+    candidates: &[ReleaseCandidate],
+) -> Option<ReleaseCandidate> {
+    let wanted_titles = title_variants(title)
+        .iter()
+        .map(|variant| normalize_album_identity(variant))
+        .collect::<Vec<_>>();
     let wanted_artist = normalize_artist_identity(artist);
     let matching = candidates
         .iter()
         .filter(|candidate| {
             candidate.score >= MIN_SEARCH_SCORE
-                && normalize_album_identity(&candidate.title) == wanted_title
-                && normalize_artist_identity(&candidate.artist) == wanted_artist
+                && wanted_titles.contains(&normalize_album_identity(&candidate.title))
+                && (normalize_artist_identity(&candidate.artist) == wanted_artist
+                    || candidate
+                        .artist_names
+                        .iter()
+                        .any(|name| normalize_artist_identity(name) == wanted_artist))
         })
         .collect::<Vec<_>>();
+    let same_year = matching
+        .iter()
+        .filter(|candidate| {
+            year.is_some_and(|year| {
+                year.len() == 4
+                    && candidate
+                        .date
+                        .as_deref()
+                        .is_some_and(|date| date.starts_with(year))
+            })
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let matching = if same_year.is_empty() {
+        matching
+    } else {
+        same_year
+    };
     // Same track count first; otherwise the earliest dated release, which is
     // most often the original.
     matching
@@ -280,6 +457,8 @@ pub struct ReleaseTrack {
     pub title: String,
     pub recording_mbid: Option<String>,
     pub credits: Vec<ExternalCredit>,
+    /// Works the recording performs (with their parent work).
+    pub works: Vec<super::works::WorkInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -425,6 +604,7 @@ pub fn parse_release(body: &Value) -> Option<ReleaseDetails> {
                     .unwrap_or_default(),
                 recording_mbid: text(&recording, "id").filter(|id| is_mbid(id)),
                 credits: track_credits,
+                works: super::works::recording_works(&recording),
             });
         }
     }
@@ -561,6 +741,105 @@ mod tests {
             choose_release("Let It Be", "The Beatles", 12, &candidates),
             None
         );
+    }
+
+    #[test]
+    fn a_conductor_album_artist_matches_a_release_credited_to_several_artists() {
+        let candidates = parse_release_search(&json!({"releases": [
+            {"id": BEATLES, "title": "Symphonie Nr. 9", "score": 100, "track-count": 4,
+             "artist-credit": [
+                {"name": "Ludwig van Beethoven", "joinphrase": "; "},
+                {"name": "Berliner Philharmoniker", "joinphrase": ", "},
+                {"name": "Herbert von Karajan"}
+             ]}
+        ]}));
+        assert_eq!(
+            choose_release("Symphonie Nr. 9", "Herbert von Karajan", 4, &candidates)
+                .map(|release| release.mbid),
+            Some(BEATLES.to_string())
+        );
+        assert_eq!(
+            choose_release("Symphonie Nr. 9", "Karl Böhm", 4, &candidates),
+            None
+        );
+    }
+
+    #[test]
+    fn classical_titles_also_match_without_the_composer_prefix() {
+        assert_eq!(
+            title_variants("Beethoven: Symphony No. 9"),
+            ["Beethoven: Symphony No. 9", "Symphony No. 9"]
+        );
+        assert_eq!(title_variants("Kind of Blue"), ["Kind of Blue"]);
+        // A colon after a number is part of the title, not a composer.
+        assert_eq!(title_variants("1999: Remastered"), ["1999: Remastered"]);
+        assert!(
+            release_search_url("Beethoven: Symphony No. 9", "Herbert von Karajan").contains(
+                &encode("release:(\"Beethoven: Symphony No. 9\" OR \"Symphony No. 9\")")
+            )
+        );
+        let candidates = parse_release_search(&json!({"releases": [
+            {"id": BEATLES, "title": "Symphony no. 9", "score": 100, "track-count": 5,
+             "artist-credit": [{"name": "Beethoven", "joinphrase": "; "},
+                               {"name": "Berliner Philharmoniker", "joinphrase": ", "},
+                               {"name": "Herbert von Karajan"}]}
+        ]}));
+        assert_eq!(
+            choose_release(
+                "Beethoven: Symphony No. 9",
+                "Herbert von Karajan",
+                4,
+                &candidates
+            )
+            .map(|release| release.mbid),
+            Some(BEATLES.to_string())
+        );
+    }
+
+    #[test]
+    fn the_album_year_picks_between_recordings_of_one_title() {
+        let candidates = parse_release_search(&json!({"releases": [
+            {"id": BEATLES, "title": "Symphony no. 9", "score": 100, "track-count": 5, "date": "1977",
+             "artist-credit": [{"name": "Herbert von Karajan"}],
+             "label-info": [{"catalog-number": "[none]", "label": {"name": "[no label]"}}]},
+            {"id": OTHER, "title": "Symphony no. 9", "score": 100, "track-count": 5, "date": "1963-05",
+             "artist-credit": [{"name": "Herbert von Karajan"}]}
+        ]}));
+        assert!(candidates[0].labels.is_empty() && candidates[0].catalog_numbers.is_empty());
+        let pick = |year| {
+            choose_release_in_year(
+                "Symphony No. 9",
+                "Herbert von Karajan",
+                4,
+                year,
+                &candidates,
+            )
+            .map(|release| release.mbid)
+        };
+        assert_eq!(pick(Some("1977")), Some(BEATLES.to_string()));
+        assert_eq!(pick(Some("1963")), Some(OTHER.to_string()));
+        // No year, or none matching: the earliest release.
+        assert_eq!(pick(None), Some(OTHER.to_string()));
+        assert_eq!(pick(Some("2001")), Some(OTHER.to_string()));
+    }
+
+    #[test]
+    fn placeholder_names_are_recognised() {
+        for name in [
+            "Unknown Artist",
+            "unknown",
+            "[unknown]",
+            "Various Artists",
+            "VA",
+            "V.A.",
+            "",
+            "Anonymous",
+        ] {
+            assert!(is_placeholder_artist(name), "{name}");
+        }
+        for name in ["Miles Davis", "Unknown Mortal Orchestra", "The Unknowns"] {
+            assert!(!is_placeholder_artist(name), "{name}");
+        }
     }
 
     #[test]
