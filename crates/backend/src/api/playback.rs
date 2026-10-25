@@ -11,7 +11,7 @@ use crate::api::auth::authenticated_user_id;
 use crate::library::state::LibraryCache;
 use crate::library::state::{LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
-use crate::recommendation::{RadioSeed, RankedCandidate, catalog_genre, recommend_radio};
+use crate::recommendation::{RadioSeed, RankedCandidate, catalog_genre, recommend_radio_widening};
 
 const DEFAULT_GENERATED_ITEMS: usize = 20;
 const MAX_QUEUE_ITEMS: usize = 100;
@@ -113,7 +113,7 @@ struct CreateQueueRequest {
 }
 
 #[derive(Serialize)]
-struct QueueSong {
+pub(super) struct QueueSong {
     id: String,
     name: String,
     artist: String,
@@ -193,17 +193,17 @@ struct UpdateQueueRequest {
 }
 
 #[derive(QueryableByName)]
-struct QueueItemRow {
+pub(super) struct QueueItemRow {
     #[diesel(sql_type = Integer)]
-    position: i32,
+    pub(super) position: i32,
     #[diesel(sql_type = Text)]
-    song_id: String,
+    pub(super) song_id: String,
     #[diesel(sql_type = Text)]
-    origin: String,
+    pub(super) origin: String,
     #[diesel(sql_type = Double)]
-    score: f64,
+    pub(super) score: f64,
     #[diesel(sql_type = Text)]
-    reason: String,
+    pub(super) reason: String,
 }
 
 #[derive(Debug, PartialEq, QueryableByName)]
@@ -276,7 +276,7 @@ struct QueueCountRow {
     count: i64,
 }
 
-fn hydrate_queue_item(
+pub(super) fn hydrate_queue_item(
     row: QueueItemRow,
     cache: &crate::library::state::LibraryCache,
 ) -> Option<QueueSong> {
@@ -308,7 +308,7 @@ fn hydrate_queue_item(
     })
 }
 
-fn valid_song_id(value: &str) -> bool {
+pub(super) fn valid_song_id(value: &str) -> bool {
     !value.is_empty() && value.chars().count() <= MAX_QUEUE_SONG_ID_CHARACTERS
 }
 
@@ -675,7 +675,7 @@ async fn radio_candidates(
     limit: usize,
 ) -> Option<Vec<RankedCandidate>> {
     match web::block(move || {
-        recommend_radio(
+        recommend_radio_widening(
             user_id,
             seed.as_ref(),
             cache.as_ref(),
@@ -936,7 +936,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::scope("/playback/radio")
             .service(radio_picks)
             .service(get_radio_settings)
-            .service(update_radio_settings),
+            .service(update_radio_settings)
+            .service(super::radio_library::list_bans)
+            .service(super::radio_library::add_ban)
+            .service(super::radio_library::remove_ban)
+            .service(super::radio_library::list_dislikes)
+            .service(super::radio_library::clear_dislike),
     );
 }
 

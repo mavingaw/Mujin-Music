@@ -12,13 +12,16 @@ import { getArtistInfo } from "@parson/music-sdk";
 import { Play, Radio, UserRound } from "lucide-react";
 import { useStartRadio } from "@/features/player/radio/radio-controls";
 import Link from "next/link";
+import { BanMenuItem } from "@/features/library/radio-bans";
 import { toast } from "sonner";
 
 export default function ArtistMenu({
   artistId,
+  artistName,
   children,
 }: {
   artistId: string;
+  artistName?: string;
   children: React.ReactNode;
 }) {
   const player = usePlayer();
@@ -66,6 +69,9 @@ export default function ArtistMenu({
           <Radio className="h-4 w-4" />
           Start radio
         </ContextMenuItem>
+        <BanMenuItem
+          target={{ kind: "artist", id: artistId, name: artistName }}
+        />
         <ContextMenuSeparator />
         <ContextMenuItem asChild>
           <Link href={`/artist?id=${artistId}`}>

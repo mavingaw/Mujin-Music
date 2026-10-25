@@ -147,30 +147,59 @@ pub fn fetch_song_info_from_cache(
     fetch_song_info(song_id, bare, cache)
 }
 
+/// How many random songs to draw so that `amount` survive the bans.
+pub(crate) fn oversample_for_bans(amount: usize, bans: &crate::radio_bans::RadioBans) -> usize {
+    if bans.is_empty() {
+        amount
+    } else {
+        amount.saturating_mul(2).max(amount + 8)
+    }
+}
+
+/// Drops banned songs (and their albums' and artists' songs) from a shuffle.
+pub(crate) fn without_banned(
+    songs: Vec<ResponseSong>,
+    bans: &crate::radio_bans::RadioBans,
+    cache: &LibraryCache,
+    amount: usize,
+) -> Vec<ResponseSong> {
+    songs
+        .into_iter()
+        .filter(|song| !bans.excludes_song(&song.id, cache))
+        .take(amount)
+        .collect()
+}
+
 #[derive(Deserialize)]
 struct RandomSongQuery {
     genre: Option<String>,
 }
 
+/// Library shuffle. Like Roon's Shuffle All, it never picks anything the
+/// listener banned.
 #[get("/random/{amount}")]
 async fn get_random_song(
+    request: actix_web::HttpRequest,
     amount: web::Path<usize>,
     query: web::Query<RandomSongQuery>,
     lifecycle: web::Data<LibraryLifecycle>,
+    pool: Option<web::Data<crate::persistence::connection::DbPool>>,
 ) -> HttpResponse {
     let cache = match lifecycle.cache().await {
         Ok(cache) => cache,
         Err(readiness) => return library_unavailable_response(readiness),
     };
+    let bans = crate::api::radio_library::listener_bans(&request, pool.as_ref()).await;
+    let amount = (*amount).min(MAX_COLLECTION_RESPONSE_SIZE);
 
     match fetch_random_songs(
-        (*amount).min(MAX_COLLECTION_RESPONSE_SIZE),
+        oversample_for_bans(amount, &bans),
         query.genre.clone(),
         &cache,
     )
     .await
     {
-        Ok(songs) => HttpResponse::Ok().json(songs),
+        Ok(songs) => HttpResponse::Ok().json(without_banned(songs, &bans, &cache, amount)),
         Err(_) => internal_server_error("Failed to load songs.", "random_songs_failed"),
     }
 }

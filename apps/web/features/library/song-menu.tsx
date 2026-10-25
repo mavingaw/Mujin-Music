@@ -11,6 +11,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
+import { BanMenuItem } from "@/features/library/radio-bans";
 import { usePlayer } from "@/features/player/player-context";
 import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
@@ -157,6 +158,9 @@ export default function SongMenu({
             <Radio className="h-4 w-4" />
             Start radio
           </ContextMenuItem>
+          <BanMenuItem
+            target={{ kind: "song", id: song_id, name: song_name }}
+          />
           {context !== "artist" && <ContextMenuSeparator />}
           {context !== "artist" && (
             <ContextMenuSub>

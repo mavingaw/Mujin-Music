@@ -18,6 +18,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { StartRadioAction } from "@/components/radio-ui";
+import { BanAction, BannedMark } from "@/components/radio-bans";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import {
@@ -131,9 +132,12 @@ export function SongRow({
           <Artwork path={song.album_object?.cover_url} size={48} />
         )}
         <View style={styles.songLabels}>
-          <Text numberOfLines={1} style={styles.songTitle}>
-            {song.name}
-          </Text>
+          <View style={styles.songTitleRow}>
+            <Text numberOfLines={1} style={[styles.songTitle, styles.shrink]}>
+              {song.name}
+            </Text>
+            <BannedMark target={{ kind: "song", id: song.id }} />
+          </View>
           {subtitle ? (
             <Text numberOfLines={1} style={styles.songArtist}>
               {subtitle}
@@ -186,6 +190,10 @@ export function SongRow({
             onStarted={() => setMenu(false)}
           />
         ) : null}
+        <BanAction
+          target={{ kind: "song", id: song.id, name: song.name }}
+          onDone={() => setMenu(false)}
+        />
         {session.phase !== "offline" && song.album_object?.id ? (
           <DrawerAction
             icon={Disc3}
@@ -342,6 +350,8 @@ export function AlbumRail({ albums }: { albums: ResponseAlbum[] }) {
 }
 
 const styles = StyleSheet.create({
+  songTitleRow: { alignItems: "center", flexDirection: "row", gap: 6 },
+  shrink: { flexShrink: 1 },
   screen: { flex: 1, backgroundColor: palette.background },
   titleBlock: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 14 },
   pageTitle: {

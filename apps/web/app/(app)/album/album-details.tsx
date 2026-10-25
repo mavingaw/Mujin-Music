@@ -33,6 +33,7 @@ import {
 } from "@/features/player/radio/radio-controls";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor from "@/features/library/album-editor";
+import { BanToggleButton } from "@/features/library/radio-bans";
 import { useAlbum } from "@/features/library/use-library-entity";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import {
@@ -294,6 +295,9 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           <StartRadioButton
             label={`Start radio from ${album.name}`}
             seed={{ kind: "album", id: album.id }}
+          />
+          <BanToggleButton
+            target={{ kind: "album", id: album.id, name: album.name }}
           />
           <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
             <DropdownMenuTrigger asChild>

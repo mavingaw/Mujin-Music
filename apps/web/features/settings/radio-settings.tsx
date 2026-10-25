@@ -2,6 +2,7 @@
 
 import { usePlayer } from "@/features/player/player-context";
 import { RadioSwitch } from "@/features/player/radio/radio-controls";
+import Link from "next/link";
 
 function SettingRow({
   checked,
@@ -51,9 +52,26 @@ export default function RadioSettings() {
           onChange={radio.setComingUpNotice}
         />
       </div>
+      <div className="flex items-start justify-between gap-6 border-t border-white/8 py-4">
+        <div>
+          <p className="text-sm font-medium text-zinc-200">
+            Bans and thumbs down
+          </p>
+          <p className="mt-1 max-w-md text-xs leading-5 text-zinc-500">
+            Banned artists, albums and tracks never play in Radio, Shuffle or
+            recommendations. Review them, unban, or undo a thumbs down.
+          </p>
+        </div>
+        <Link
+          className="shrink-0 rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-zinc-100 hover:border-white/40 hover:bg-white/6"
+          href="/library?view=banned"
+        >
+          Manage
+        </Link>
+      </div>
       <p className="mt-2 text-xs leading-5 text-zinc-500">
         Thumbs down skips a track and keeps it out of Radio. Clearing your
-        listening history in Data resets what Radio has learned.
+        listening history in Data resets what Radio has learned; bans stay.
       </p>
     </section>
   );
