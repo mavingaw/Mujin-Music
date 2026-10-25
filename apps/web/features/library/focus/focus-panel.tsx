@@ -6,27 +6,54 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cn";
 import {
   cycleFilter,
   decadeCriterion,
   decadesFromYears,
+  emptyFocus,
   facetBaseQuery,
+  facetColumnKey,
+  facetSelectionSummary,
   facetTitle,
   facetValueState,
   filterState,
   getFocusFacets,
   isYearFacet,
+  orderedFacetValues,
   setFilter,
   toggleFacetValue,
   visibleFacets,
   type Facet,
-  type FacetValue,
+  type FacetValueOrder,
   type FilterState,
   type FocusQuery,
 } from "@parson/music-sdk";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Minus, Plus, Search } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Columns3,
+  EyeOff,
+  Minus,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -34,42 +61,76 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type ReactNode,
 } from "react";
 import {
-  anchoredScrollLeft,
-  facetQueryKey,
-  scrollAnchor,
-  type ColumnBox,
-} from "./focus-state";
+  COLUMN_GAP,
+  EMPTY_PREFS,
+  arrangeColumns,
+  columnsPerPage,
+  loadColumnPrefs,
+  pageLayout,
+  resumeStart,
+  saveColumnPrefs,
+  setValueOrder,
+  toggleHidden,
+  togglePinned,
+  type ColumnPrefs,
+} from "./focus-columns";
+import { facetQueryKey } from "./focus-state";
 
+/** Rows a column shows before "View more". */
 const COLUMN_VALUES = 6;
+/** Values fetched when a column is expanded; search reaches the rest. */
+const EXPANDED_VALUES = 200;
+const PHONE_QUERY = "(max-width: 639px)";
+/** Facets a phone lists before "more". */
+const PHONE_FACETS = 6;
 
-interface ScrollAnchor {
-  /** The first column at least partly visible. */
-  key: string;
-  /** Its left edge relative to the visible area, in pixels. */
-  offset: number;
+interface PagePosition {
+  start: number;
+  /** The column that led the page, so paging survives column changes. */
+  anchor: string | null;
 }
 
-/**
- * Where each panel was scrolled, by browser and scope, so a click that
- * changes, adds or removes columns (or remounts the panel) keeps the same
- * columns under the pointer instead of jumping.
- */
-const scrollMemory = new Map<string, ScrollAnchor>();
+/** Each browser's page position, so remounting the panel keeps it. */
+const pageMemory = new Map<string, PagePosition>();
 
-function columnKey(facet: Facet) {
-  return `${facet.key}:${facet.role ?? ""}`;
+function subscribePhone(onChange: () => void) {
+  const media = window.matchMedia(PHONE_QUERY);
+  media.addEventListener("change", onChange);
+  return () => media.removeEventListener("change", onChange);
 }
 
-function columnBoxes(node: HTMLElement): ColumnBox[] {
-  return Array.from(
-    node.querySelectorAll<HTMLElement>("[data-focus-column]"),
-  ).map((column) => ({
-    key: column.dataset.focusColumn ?? "",
-    left: column.offsetLeft,
-    width: column.offsetWidth,
-  }));
+function usePhoneLayout() {
+  return useSyncExternalStore(
+    subscribePhone,
+    () => window.matchMedia(PHONE_QUERY).matches,
+    () => false,
+  );
+}
+
+/** Width of an element, tracked as it resizes. */
+function useWidth<T extends HTMLElement>() {
+  const [node, setNode] = useState<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (!node) return;
+    setWidth(node.clientWidth);
+    const observer = new ResizeObserver(() => setWidth(node.clientWidth));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [node]);
+  return [setNode, width] as const;
+}
+
+interface ColumnTools {
+  order: FacetValueOrder;
+  pinned: boolean;
+  onOrder: (order: FacetValueOrder) => void;
+  onPin: () => void;
+  onHide: () => void;
 }
 
 export default function FocusPanel({
@@ -86,9 +147,22 @@ export default function FocusPanel({
     placeholderData: keepPreviousData,
     staleTime: 30_000,
   });
-  const [more, setMore] = useState<Facet | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-  const [edges, setEdges] = useState({ start: true, end: true });
+  const phone = usePhoneLayout();
+  const [rangeFacet, setRangeFacet] = useState<Facet | null>(null);
+  const [prefs, setPrefs] = useState<ColumnPrefs>(() =>
+    loadColumnPrefs(query.entity),
+  );
+  useEffect(() => setPrefs(loadColumnPrefs(query.entity)), [query.entity]);
+  const updatePrefs = useCallback(
+    (change: (prefs: ColumnPrefs) => ColumnPrefs) =>
+      setPrefs((current) => {
+        const next = change(current);
+        saveColumnPrefs(query.entity, next);
+        return next;
+      }),
+    [query.entity],
+  );
+
   const composerScoped = Boolean(
     query.scope?.some(
       (criterion) =>
@@ -103,59 +177,24 @@ export default function FocusPanel({
       }),
     [facets.data, query, composerScoped],
   );
-  const memoryKey = `${query.entity}:${JSON.stringify(query.scope ?? [])}`;
-
-  const rememberAnchor = useCallback(() => {
-    const node = scroller.current;
-    if (!node) return;
-    const anchor = scrollAnchor(columnBoxes(node), node.scrollLeft);
-    if (anchor) scrollMemory.set(memoryKey, anchor);
-  }, [memoryKey]);
-
-  // Restore the anchor column's position after columns change or the panel
-  // mounts, without the smooth scrolling used by the arrows.
-  useLayoutEffect(() => {
-    const node = scroller.current;
-    const anchor = scrollMemory.get(memoryKey);
-    if (!node || !anchor) return;
-    const left = anchoredScrollLeft(columnBoxes(node), anchor);
-    if (left === null || Math.abs(node.scrollLeft - left) < 1) return;
-    const behavior = node.style.scrollBehavior;
-    node.style.scrollBehavior = "auto";
-    node.scrollLeft = left;
-    node.style.scrollBehavior = behavior;
-  }, [columns, memoryKey]);
-
-  useEffect(() => {
-    const node = scroller.current;
-    if (!node) return;
-    const update = () =>
-      setEdges({
-        start: node.scrollLeft <= 4,
-        end: node.scrollLeft + node.clientWidth >= node.scrollWidth - 4,
-      });
-    const onScroll = () => {
-      update();
-      rememberAnchor();
+  const arranged = useMemo(
+    () => arrangeColumns(columns, facetColumnKey, prefs),
+    [columns, prefs],
+  );
+  const toolsFor = (facet: Facet): ColumnTools => {
+    const key = facetColumnKey(facet);
+    return {
+      order: prefs.order[key] ?? "count",
+      pinned: prefs.pinned.includes(key),
+      onOrder: (order) =>
+        updatePrefs((current) => setValueOrder(current, key, order)),
+      onPin: () => updatePrefs((current) => togglePinned(current, key)),
+      onHide: () => updatePrefs((current) => toggleHidden(current, key)),
     };
-    update();
-    node.addEventListener("scroll", onScroll, { passive: true });
-    const observer = new ResizeObserver(update);
-    observer.observe(node);
-    return () => {
-      node.removeEventListener("scroll", onScroll);
-      observer.disconnect();
-    };
-  }, [columns.length, rememberAnchor]);
-
-  const page = (direction: 1 | -1) => {
-    const node = scroller.current;
-    if (!node) return;
-    node.scrollBy({
-      left: direction * node.clientWidth * 0.8,
-      behavior: "smooth",
-    });
   };
+
+  const loading = facets.isPending && !facets.data;
+  const empty = !loading && columns.length === 0;
 
   return (
     <section
@@ -163,45 +202,67 @@ export default function FocusPanel({
       className="relative rounded-2xl border border-white/10 bg-white/[0.025]"
       id="library-focus-panel"
     >
-      <div className="flex items-center justify-between gap-3 border-b border-white/6 px-5 py-2.5 text-xs text-zinc-500">
-        <p>Click to focus, click again to exclude.</p>
-        <div
-          aria-label="Combine filters"
-          className="flex rounded-full border border-white/10 p-0.5"
-          role="radiogroup"
-        >
-          {(["all", "any"] as const).map((mode) => {
-            const active = (query.match ?? "all") === mode;
-            return (
-              <button
-                aria-checked={active}
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-xs transition-colors",
-                  active
-                    ? "bg-white text-black"
-                    : "text-zinc-400 hover:text-white",
-                )}
-                key={mode}
-                onClick={() =>
-                  setQuery({
-                    ...query,
-                    match: mode === "all" ? undefined : "any",
-                  })
-                }
-                role="radio"
-                type="button"
-              >
-                Match {mode}
-              </button>
-            );
-          })}
+      <div className="flex items-center justify-between gap-2 border-b border-white/6 px-4 py-2 text-xs text-zinc-500 sm:px-5">
+        <p className="min-w-0 truncate">
+          <span className="sm:hidden">Tap to focus, again to exclude.</span>
+          <span className="hidden sm:inline">
+            Click to focus, click again to exclude.
+          </span>
+        </p>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <ColumnsMenu
+            columns={columns}
+            prefs={prefs}
+            onReset={() => updatePrefs(() => EMPTY_PREFS)}
+            onToggleHidden={(key) =>
+              updatePrefs((current) => toggleHidden(current, key))
+            }
+            onTogglePinned={(key) =>
+              updatePrefs((current) => togglePinned(current, key))
+            }
+          />
+          <div
+            aria-label="Combine filters"
+            className="flex rounded-full border border-white/10 p-0.5"
+            role="radiogroup"
+          >
+            {(["all", "any"] as const).map((mode) => {
+              const active = (query.match ?? "all") === mode;
+              return (
+                <button
+                  aria-checked={active}
+                  className={cn(
+                    "whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs transition-colors",
+                    active
+                      ? "bg-white text-black"
+                      : "text-zinc-400 hover:text-white",
+                  )}
+                  key={mode}
+                  onClick={() =>
+                    setQuery({
+                      ...query,
+                      match: mode === "all" ? undefined : "any",
+                    })
+                  }
+                  role="radio"
+                  type="button"
+                >
+                  <span className="hidden sm:inline">Match </span>
+                  {mode}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
-      {facets.isPending && !facets.data ? (
-        <div className="grid grid-flow-col auto-cols-[minmax(10.5rem,1fr)] gap-6 px-5 py-5">
+      {loading ? (
+        <div className="grid grid-cols-2 gap-6 px-5 py-5 sm:grid-cols-5">
           {Array.from({ length: 5 }, (_, index) => (
-            <div className="space-y-3" key={index}>
+            <div
+              className={cn("space-y-3", index > 1 && "hidden sm:block")}
+              key={index}
+            >
               <div className="h-3 w-20 rounded bg-white/8" />
               {Array.from({ length: 5 }, (__, row) => (
                 <div className="h-3 w-28 rounded bg-white/5" key={row} />
@@ -209,63 +270,60 @@ export default function FocusPanel({
             </div>
           ))}
         </div>
-      ) : columns.length === 0 ? (
+      ) : empty ? (
         <p className="px-5 py-8 text-sm text-zinc-500">
           {facets.isError
             ? "Focus options could not be loaded."
             : "Nothing left to focus on. Remove a filter to see more options."}
         </p>
+      ) : phone ? (
+        <FacetAccordion
+          columns={[...arranged.pinned, ...arranged.rest]}
+          fetching={facets.isFetching}
+          onCustomRange={setRangeFacet}
+          query={query}
+          setQuery={setQuery}
+          toolsFor={toolsFor}
+        />
       ) : (
-        <div className="relative">
-          <div
-            className={cn(
-              "grid grid-flow-col auto-cols-[minmax(10.5rem,1fr)] gap-6 overflow-x-auto scroll-smooth px-5 py-5 scrollbar-none [&::-webkit-scrollbar]:hidden",
-              facets.isFetching && "opacity-80",
-            )}
-            ref={scroller}
-          >
-            {columns.map((facet) => (
-              <div
-                className="min-w-0"
-                data-focus-column={columnKey(facet)}
-                key={columnKey(facet)}
-                // A click inside a column pins that column in place.
-                onPointerDownCapture={rememberAnchor}
-              >
-                <FacetColumn
-                  facet={facet}
-                  onMore={() => setMore(facet)}
-                  query={query}
-                  setQuery={setQuery}
-                />
-              </div>
-            ))}
-          </div>
-          {!edges.start && (
-            <button
-              aria-label="Previous focus columns"
-              className="absolute left-1 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-black/80 text-zinc-300 shadow-lg hover:text-white"
-              onClick={() => page(-1)}
-              type="button"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-          )}
-          {!edges.end && (
-            <button
-              aria-label="More focus columns"
-              className="absolute right-1 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-black/80 text-zinc-300 shadow-lg hover:text-white"
-              onClick={() => page(1)}
-              type="button"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+        <FacetPages
+          fetching={facets.isFetching}
+          key={`${query.entity}:${JSON.stringify(query.scope ?? [])}`}
+          memoryKey={`${query.entity}:${JSON.stringify(query.scope ?? [])}`}
+          onCustomRange={setRangeFacet}
+          pinned={arranged.pinned}
+          query={query}
+          rest={arranged.rest}
+          setQuery={setQuery}
+          toolsFor={toolsFor}
+        />
       )}
-      <FacetMoreDialog
-        facet={more}
-        onOpenChange={(open) => !open && setMore(null)}
+      {!loading && !empty && arranged.hidden.length > 0 && (
+        <p className="border-t border-white/6 px-4 py-2 text-xs text-zinc-500 sm:px-5">
+          {arranged.hidden.length} hidden{" "}
+          {arranged.hidden.length === 1 ? "column" : "columns"}:{" "}
+          {arranged.hidden.map((facet, index) => (
+            <span key={facetColumnKey(facet)}>
+              {index > 0 && ", "}
+              <button
+                className="text-zinc-300 underline-offset-4 hover:text-white hover:underline"
+                onClick={() =>
+                  updatePrefs((current) =>
+                    toggleHidden(current, facetColumnKey(facet)),
+                  )
+                }
+                title={`Show ${facetTitle(facet)}`}
+                type="button"
+              >
+                {facetTitle(facet)}
+              </button>
+            </span>
+          ))}
+        </p>
+      )}
+      <YearRangeDialog
+        facet={rangeFacet}
+        onOpenChange={(open) => !open && setRangeFacet(null)}
         query={query}
         setQuery={setQuery}
       />
@@ -273,22 +331,500 @@ export default function FocusPanel({
   );
 }
 
+/** Desktop: whole columns, paged with arrows in their own gutters. */
+function FacetPages({
+  fetching,
+  memoryKey,
+  onCustomRange,
+  pinned,
+  query,
+  rest,
+  setQuery,
+  toolsFor,
+}: {
+  fetching: boolean;
+  memoryKey: string;
+  onCustomRange: (facet: Facet) => void;
+  pinned: Facet[];
+  query: FocusQuery;
+  rest: Facet[];
+  setQuery: (query: FocusQuery) => void;
+  toolsFor: (facet: Facet) => ColumnTools;
+}) {
+  const [measure, width] = useWidth<HTMLDivElement>();
+  const perPage = columnsPerPage(width);
+  const [position, setPosition] = useState<PagePosition>(
+    () => pageMemory.get(memoryKey) ?? { start: 0, anchor: null },
+  );
+  const restKeys = rest.map(facetColumnKey);
+  const layout = pageLayout(
+    pinned.length,
+    rest.length,
+    perPage,
+    resumeStart(position.start, position.anchor, restKeys),
+  );
+  const goTo = (start: number) => {
+    const next = { start, anchor: restKeys[start] ?? null };
+    pageMemory.set(memoryKey, next);
+    setPosition(next);
+  };
+  const shownPinned = pinned.slice(0, layout.pinnedShown);
+  const shownRest = rest.slice(layout.start, layout.end);
+  const total = pinned.length + rest.length;
+  const paged = layout.canPrevious || layout.canNext;
+
+  return (
+    <div className="relative">
+      <div className="grid grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-stretch">
+        <PageArrow
+          direction="previous"
+          disabled={!layout.canPrevious}
+          onClick={() => goTo(layout.previous)}
+        />
+        <div
+          className={cn(
+            "grid min-w-0 py-5 transition-opacity",
+            fetching && "opacity-80",
+          )}
+          ref={measure}
+          style={{
+            columnGap: COLUMN_GAP,
+            gridTemplateColumns: `repeat(${perPage}, minmax(0, 1fr))`,
+          }}
+        >
+          {[...shownPinned, ...shownRest].map((facet, index) => (
+            <div
+              className={cn(
+                "group/column min-w-0",
+                index === shownPinned.length - 1 &&
+                  shownRest.length > 0 &&
+                  "relative after:absolute after:-right-3 after:top-0 after:h-full after:w-px after:bg-white/8",
+              )}
+              data-focus-column={facetColumnKey(facet)}
+              key={facetColumnKey(facet)}
+            >
+              <FacetColumn
+                facet={facet}
+                onCustomRange={() => onCustomRange(facet)}
+                query={query}
+                setQuery={setQuery}
+                tools={toolsFor(facet)}
+              />
+            </div>
+          ))}
+        </div>
+        <PageArrow
+          direction="next"
+          disabled={!layout.canNext}
+          onClick={() => goTo(layout.next)}
+        />
+      </div>
+      {paged && (
+        <div className="-mt-2 flex items-center justify-center gap-1.5 pb-3">
+          <span className="sr-only">
+            Columns {layout.start + 1 + shownPinned.length}–
+            {layout.end + shownPinned.length} of {total}
+          </span>
+          {layout.starts.map((start, index) => {
+            const active = index === layout.page;
+            return (
+              <button
+                aria-current={active ? "page" : undefined}
+                aria-label={`Show ${rest[start] ? facetTitle(rest[start]) : "columns"} and after`}
+                className={cn(
+                  "h-1.5 rounded-full transition-all",
+                  active
+                    ? "w-5 bg-zinc-300"
+                    : "w-1.5 bg-zinc-700 hover:bg-zinc-500",
+                )}
+                key={start}
+                onClick={() => goTo(start)}
+                type="button"
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PageArrow({
+  direction,
+  disabled,
+  onClick,
+}: {
+  direction: "previous" | "next";
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const Icon = direction === "previous" ? ChevronLeft : ChevronRight;
+  return (
+    <div className="flex items-center justify-center">
+      <button
+        aria-label={
+          direction === "previous"
+            ? "Previous focus columns"
+            : "More focus columns"
+        }
+        className={cn(
+          "grid h-8 w-8 place-items-center rounded-full text-zinc-400 transition-colors hover:bg-white/8 hover:text-white",
+          disabled && "pointer-events-none opacity-0",
+        )}
+        disabled={disabled}
+        onClick={onClick}
+        tabIndex={disabled ? -1 : undefined}
+        type="button"
+      >
+        <Icon className="h-5 w-5" />
+      </button>
+    </div>
+  );
+}
+
+/** Phone: one facet per row, opened in place. */
+function FacetAccordion({
+  columns,
+  fetching,
+  onCustomRange,
+  query,
+  setQuery,
+  toolsFor,
+}: {
+  columns: Facet[];
+  fetching: boolean;
+  onCustomRange: (facet: Facet) => void;
+  query: FocusQuery;
+  setQuery: (query: FocusQuery) => void;
+  toolsFor: (facet: Facet) => ColumnTools;
+}) {
+  const [open, setOpen] = useState<Set<string>>(
+    () =>
+      new Set(
+        columns
+          .filter((facet) => facetSelectionSummary(facet, query))
+          .map(facetColumnKey),
+      ),
+  );
+  const [all, setAll] = useState(false);
+  // A phone shows the first facets and any with a filter; the rest wait
+  // behind one row so the albums stay within reach.
+  const shown = all
+    ? columns
+    : columns.filter(
+        (facet, index) =>
+          index < PHONE_FACETS || facetSelectionSummary(facet, query) !== "",
+      );
+  return (
+    <ul
+      className={cn(
+        "divide-y divide-white/6 transition-opacity",
+        fetching && "opacity-80",
+      )}
+    >
+      {shown.map((facet) => {
+        const key = facetColumnKey(facet);
+        const expanded = open.has(key);
+        const summary = facetSelectionSummary(facet, query);
+        const tools = toolsFor(facet);
+        return (
+          <li key={key}>
+            <button
+              aria-controls={`focus-facet-${key}`}
+              aria-expanded={expanded}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left"
+              onClick={() =>
+                setOpen((current) => {
+                  const next = new Set(current);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+              type="button"
+            >
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+                  {tools.pinned && <Pin className="h-3 w-3" />}
+                  {facetTitle(facet)}
+                </span>
+                <span
+                  className={cn(
+                    "truncate text-sm",
+                    summary ? "text-white" : "text-zinc-500",
+                  )}
+                >
+                  {summary || facetPreview(facet)}
+                </span>
+              </span>
+              <ChevronDown
+                className={cn(
+                  "h-4 w-4 shrink-0 text-zinc-500 transition-transform",
+                  expanded && "rotate-180",
+                )}
+              />
+            </button>
+            {expanded && (
+              <div className="px-4 pb-4" id={`focus-facet-${key}`}>
+                <div className="-mt-1 mb-1 flex items-center justify-end gap-1">
+                  {!isYearFacet(facet.key) && (
+                    <ColumnMenu facet={facet} tools={tools}>
+                      <button
+                        aria-label={`${facetTitle(facet)} options`}
+                        className="flex h-7 items-center gap-1 rounded-full px-2 text-xs text-zinc-500 hover:bg-white/8 hover:text-white"
+                        type="button"
+                      >
+                        {tools.order === "name" ? "A to Z" : "Most items"}
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                    </ColumnMenu>
+                  )}
+                  <ColumnToggles facet={facet} tools={tools} />
+                </div>
+                <FacetBody
+                  facet={facet}
+                  onCustomRange={() => onCustomRange(facet)}
+                  order={tools.order}
+                  query={query}
+                  roomy
+                  setQuery={setQuery}
+                />
+              </div>
+            )}
+          </li>
+        );
+      })}
+      {columns.length > shown.length && (
+        <li>
+          <button
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-zinc-400 hover:text-white"
+            onClick={() => setAll(true)}
+            type="button"
+          >
+            <span>
+              {columns.length - shown.length} more:{" "}
+              <span className="text-zinc-500">
+                {columns
+                  .filter((facet) => !shown.includes(facet))
+                  .slice(0, 3)
+                  .map(facetTitle)
+                  .join(", ")}
+                …
+              </span>
+            </span>
+            <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500" />
+          </button>
+        </li>
+      )}
+    </ul>
+  );
+}
+
+/** "Rock, Pop, Jazz +27": a closed facet's most common values. */
+function facetPreview(facet: Facet): string {
+  if (isYearFacet(facet.key)) {
+    const decades = decadesFromYears(facet.values);
+    if (decades.length === 0) return "";
+    const first = decades[0]!.decade;
+    const last = decades[decades.length - 1]!.decade;
+    return first === last ? `${first}s` : `${first}s – ${last}s`;
+  }
+  const { values, more } = orderedFacetValues(facet, emptyFocus(), {
+    cap: 3,
+  });
+  const labels = values.map((value) => value.label).join(", ");
+  return more > 0 ? `${labels} +${more.toLocaleString("en-US")}` : labels;
+}
+
+/** Show, hide and pin columns; lists every column the panel can show. */
+function ColumnsMenu({
+  columns,
+  onReset,
+  onToggleHidden,
+  onTogglePinned,
+  prefs,
+}: {
+  columns: Facet[];
+  onReset: () => void;
+  onToggleHidden: (key: string) => void;
+  onTogglePinned: (key: string) => void;
+  prefs: ColumnPrefs;
+}) {
+  if (columns.length === 0) return null;
+  const customised =
+    prefs.hidden.length > 0 ||
+    prefs.pinned.length > 0 ||
+    Object.keys(prefs.order).length > 0;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label="Choose focus columns"
+          className="flex h-7 items-center gap-1.5 rounded-full px-2 text-xs text-zinc-400 hover:bg-white/8 hover:text-white"
+          type="button"
+        >
+          <Columns3 className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Columns</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="max-h-[60vh] w-60 overflow-y-auto"
+      >
+        <DropdownMenuLabel>Show columns</DropdownMenuLabel>
+        {columns.map((facet) => {
+          const key = facetColumnKey(facet);
+          const pinned = prefs.pinned.includes(key);
+          return (
+            <div className="flex items-center" key={key}>
+              <DropdownMenuCheckboxItem
+                checked={!prefs.hidden.includes(key)}
+                className="flex-1"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onToggleHidden(key);
+                }}
+              >
+                {facetTitle(facet)}
+              </DropdownMenuCheckboxItem>
+              <button
+                aria-label={`${pinned ? "Unpin" : "Pin"} ${facetTitle(facet)}`}
+                aria-pressed={pinned}
+                className={cn(
+                  "grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-white/8",
+                  pinned ? "text-white" : "text-zinc-600 hover:text-zinc-300",
+                )}
+                onClick={() => onTogglePinned(key)}
+                type="button"
+              >
+                <Pin className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          );
+        })}
+        {customised && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onReset}>
+              Reset columns
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The column's menu: value order, pin and hide. */
+function ColumnMenu({
+  children,
+  facet,
+  tools,
+}: {
+  children: ReactNode;
+  facet: Facet;
+  tools: ColumnTools;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-52">
+        <DropdownMenuLabel>{facetTitle(facet)}</DropdownMenuLabel>
+        {!isYearFacet(facet.key) && (
+          <>
+            <DropdownMenuRadioGroup
+              onValueChange={(value) => tools.onOrder(value as FacetValueOrder)}
+              value={tools.order}
+            >
+              <DropdownMenuRadioItem value="count">
+                Most items first
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="name">A to Z</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuItem onSelect={tools.onPin}>
+          {tools.pinned ? <PinOff /> : <Pin />}
+          {tools.pinned ? "Unpin column" : "Pin to the front"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={tools.onHide}>
+          <EyeOff />
+          Hide column
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Pin and hide toggles beside a column title. */
+/**
+ * Toggles that take no room until the column is hovered or focused, so a
+ * long title such as "Conductor / Ensemble" is never cut short at rest.
+ */
+const REVEAL = "hidden group-hover/column:grid group-focus-within/column:grid";
+
+function ColumnToggles({
+  facet,
+  tools,
+  revealOnHover,
+}: {
+  facet: Facet;
+  tools: ColumnTools;
+  revealOnHover?: boolean;
+}) {
+  const title = facetTitle(facet);
+  return (
+    <span className="flex shrink-0 items-center">
+      <button
+        aria-label={`${tools.pinned ? "Unpin" : "Pin"} ${title}`}
+        aria-pressed={tools.pinned}
+        className={cn(
+          "grid h-5 w-5 place-items-center rounded hover:bg-white/8",
+          tools.pinned ? "text-zinc-200" : "text-zinc-600 hover:text-zinc-200",
+          revealOnHover && !tools.pinned && REVEAL,
+        )}
+        onClick={tools.onPin}
+        title={tools.pinned ? "Unpin column" : "Pin column to the front"}
+        type="button"
+      >
+        <Pin className={cn("h-3 w-3", tools.pinned && "fill-current")} />
+      </button>
+      <button
+        aria-label={`Hide ${title}`}
+        className={cn(
+          "grid h-5 w-5 place-items-center rounded text-zinc-600 hover:bg-white/8 hover:text-zinc-200",
+          revealOnHover && REVEAL,
+        )}
+        onClick={tools.onHide}
+        title="Hide column"
+        type="button"
+      >
+        <EyeOff className="h-3 w-3" />
+      </button>
+    </span>
+  );
+}
+
 function FacetValueButton({
   label,
   count,
   onClick,
+  roomy,
   state,
 }: {
   label: string;
   count: number;
   onClick: () => void;
+  roomy?: boolean;
   state: FilterState;
 }) {
   return (
     <button
       aria-pressed={state !== null}
       className={cn(
-        "group flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 text-left text-sm transition-colors",
+        "group flex w-full min-w-0 items-center gap-1.5 rounded-md text-left text-sm transition-colors",
+        roomy ? "py-2" : "py-1",
         state === "include" && "font-medium text-white",
         state === "exclude" && "text-rose-200/90",
         state === null && "text-zinc-400 hover:text-white",
@@ -327,65 +863,223 @@ function FacetValueButton({
 
 function FacetColumn({
   facet,
-  onMore,
+  onCustomRange,
   query,
   setQuery,
+  tools,
 }: {
   facet: Facet;
-  onMore: () => void;
+  onCustomRange: () => void;
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
+  tools: ColumnTools;
 }) {
-  if (isYearFacet(facet.key)) {
-    return (
-      <YearColumn
+  return (
+    <div className="min-w-0">
+      <div className="mb-1.5 flex h-6 min-w-0 items-center gap-0.5">
+        <h3 className="flex min-w-0">
+          <ColumnMenu facet={facet} tools={tools}>
+            <button
+              aria-label={`${facetTitle(facet)} column options`}
+              className="flex min-w-0 items-center gap-0.5 rounded text-[11px] font-semibold uppercase tracking-[0.06em] text-zinc-500 hover:text-zinc-200"
+              title={`${facetTitle(facet)}: order, pin or hide`}
+              type="button"
+            >
+              <span className="truncate">{facetTitle(facet)}</span>
+              <ChevronDown className="h-3 w-3 shrink-0" />
+            </button>
+          </ColumnMenu>
+        </h3>
+        <ColumnToggles facet={facet} revealOnHover tools={tools} />
+      </div>
+      <FacetBody
         facet={facet}
-        onMore={onMore}
+        onCustomRange={onCustomRange}
+        order={tools.order}
         query={query}
         setQuery={setQuery}
       />
-    );
-  }
-  const values = facet.values.slice(0, COLUMN_VALUES);
+    </div>
+  );
+}
+
+function FacetBody(props: {
+  facet: Facet;
+  onCustomRange: () => void;
+  order: FacetValueOrder;
+  query: FocusQuery;
+  roomy?: boolean;
+  setQuery: (query: FocusQuery) => void;
+}) {
+  return isYearFacet(props.facet.key) ? (
+    <YearValues {...props} />
+  ) : (
+    <FacetValues {...props} />
+  );
+}
+
+/**
+ * A column's values, most frequent first, capped at six rows. "View more"
+ * opens the column in place: it loads the rest of the values and, for long
+ * lists, a search field that asks the server, so it scales to libraries far
+ * larger than the rows it shows.
+ */
+function FacetValues({
+  facet,
+  order,
+  query,
+  roomy,
+  setQuery,
+}: {
+  facet: Facet;
+  order: FacetValueOrder;
+  query: FocusQuery;
+  roomy?: boolean;
+  setQuery: (query: FocusQuery) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(search.trim()), 200);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  const base = facetBaseQuery(query);
+  const full = useQuery({
+    enabled: expanded,
+    queryKey: [
+      "library",
+      "focus",
+      "facet-values",
+      facet.key,
+      facet.role ?? null,
+      debounced,
+      facetQueryKey(base),
+    ],
+    queryFn: () =>
+      getFocusFacets(base, {
+        only: [facet.key],
+        search: debounced,
+        limit: EXPANDED_VALUES,
+      }),
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  });
+  const loaded =
+    full.data?.facets.find(
+      (candidate) =>
+        candidate.key === facet.key &&
+        (candidate.role ?? null) === (facet.role ?? null),
+    ) ?? null;
+  const searchable = expanded && facet.total > COLUMN_VALUES * 2;
+  const source = expanded && loaded ? loaded : facet;
+  const { values, more } = orderedFacetValues(
+    {
+      ...source,
+      values: source.values.filter(
+        (value) =>
+          value.count > 0 || facetValueState(query, facet, value) !== null,
+      ),
+    },
+    query,
+    { cap: expanded ? undefined : COLUMN_VALUES, order },
+  );
+  const inputRef = useRef<HTMLInputElement>(null);
+
   return (
     <div className="min-w-0">
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500">
-        {facetTitle(facet)}
-      </h3>
-      <ul className="space-y-0.5">
+      {searchable && (
+        <label className="mb-1.5 flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-black/40 px-2 text-sm focus-within:border-white/25">
+          <Search className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+          <input
+            aria-label={`Search ${facetTitle(facet)}`}
+            autoFocus
+            className="min-w-0 flex-1 bg-transparent text-zinc-100 outline-none placeholder:text-zinc-600"
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search"
+            ref={inputRef}
+            value={search}
+          />
+          {search && (
+            <button
+              aria-label="Clear search"
+              className="text-zinc-500 hover:text-white"
+              onClick={() => {
+                setSearch("");
+                inputRef.current?.focus();
+              }}
+              type="button"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </label>
+      )}
+      <ul
+        className={cn(
+          "space-y-0.5",
+          expanded && "-mr-2 max-h-64 overflow-y-auto overscroll-contain pr-2",
+        )}
+      >
         {values.map((value) => (
           <li key={value.value}>
             <FacetValueButton
               count={value.count}
               label={value.label}
               onClick={() => setQuery(toggleFacetValue(query, facet, value))}
+              roomy={roomy}
               state={facetValueState(query, facet, value)}
             />
           </li>
         ))}
+        {expanded && full.isSuccess && values.length === 0 && (
+          <li className="py-3 text-sm text-zinc-500">No matches</li>
+        )}
       </ul>
-      {facet.total > values.length && (
+      {expanded && loaded && more > 0 && (
+        <p className="mt-1 text-xs text-zinc-600">
+          {more.toLocaleString("en-US")} more. Search to find them.
+        </p>
+      )}
+      {!expanded && more > 0 && (
         <button
-          className="mt-2 text-sm text-zinc-500 underline-offset-4 hover:text-white hover:underline"
-          onClick={onMore}
+          className="mt-1.5 text-sm text-zinc-500 underline-offset-4 hover:text-white hover:underline"
+          onClick={() => setExpanded(true)}
           type="button"
         >
-          View more
+          View more{" "}
+          <span className="tabular-nums text-zinc-600">
+            ({more.toLocaleString("en-US")})
+          </span>
+        </button>
+      )}
+      {expanded && (
+        <button
+          className="mt-1.5 text-sm text-zinc-500 underline-offset-4 hover:text-white hover:underline"
+          onClick={() => {
+            setExpanded(false);
+            setSearch("");
+          }}
+          type="button"
+        >
+          Show less
         </button>
       )}
     </div>
   );
 }
 
-function YearColumn({
+function YearValues({
   facet,
-  onMore,
+  onCustomRange,
   query,
+  roomy,
   setQuery,
 }: {
   facet: Facet;
-  onMore: () => void;
+  onCustomRange: () => void;
   query: FocusQuery;
+  roomy?: boolean;
   setQuery: (query: FocusQuery) => void;
 }) {
   const yearKey = facet.key === "composed" ? "composed" : "year";
@@ -396,13 +1090,10 @@ function YearColumn({
   const yearSpan = Math.max(1, Math.max(...years) - firstYear);
   return (
     <div className="min-w-0">
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500">
-        {facetTitle(facet)}
-      </h3>
       <button
         aria-label="Choose a custom year range"
         className="relative mb-2 block h-8 w-full rounded opacity-80 hover:opacity-100"
-        onClick={onMore}
+        onClick={onCustomRange}
         title="Choose a custom range"
         type="button"
       >
@@ -433,6 +1124,7 @@ function YearColumn({
                   cycleFilter(query, decadeCriterion(bucket.decade, yearKey)),
                 )
               }
+              roomy={roomy}
               state={filterState(
                 query,
                 decadeCriterion(bucket.decade, yearKey),
@@ -442,8 +1134,8 @@ function YearColumn({
         ))}
       </ul>
       <button
-        className="mt-2 text-sm text-zinc-500 underline-offset-4 hover:text-white hover:underline"
-        onClick={onMore}
+        className="mt-1.5 text-sm text-zinc-500 underline-offset-4 hover:text-white hover:underline"
+        onClick={onCustomRange}
         type="button"
       >
         {decades.length > COLUMN_VALUES ? "View more" : "Custom range"}
@@ -452,7 +1144,8 @@ function YearColumn({
   );
 }
 
-function FacetMoreDialog({
+/** Custom year range for Release date and Composition date. */
+function YearRangeDialog({
   facet,
   onOpenChange,
   query,
@@ -463,61 +1156,42 @@ function FacetMoreDialog({
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
 }) {
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(search), 200);
-    return () => window.clearTimeout(timer);
-  }, [search]);
-  useEffect(() => {
-    setSearch("");
-    setDebounced("");
-  }, [facet?.key, facet?.role]);
-
   // A range facet lists every year the other filters allow, so the range
   // can be widened as well as narrowed.
   const yearFacet = facet && isYearFacet(facet.key) ? facet.key : null;
-  const base = yearFacet
-    ? {
-        ...facetBaseQuery(query),
-        filters: facetBaseQuery(query).filters.filter(
-          (filter) => filter.facet !== yearFacet,
-        ),
-      }
-    : facetBaseQuery(query);
+  const base = {
+    ...facetBaseQuery(query),
+    filters: facetBaseQuery(query).filters.filter(
+      (filter) => filter.facet !== yearFacet,
+    ),
+  };
   const values = useQuery({
-    enabled: Boolean(facet),
+    enabled: Boolean(yearFacet),
     queryKey: [
       "library",
       "focus",
       "facet-values",
-      facet?.key,
-      facet?.role,
-      debounced,
+      yearFacet,
       facetQueryKey(base),
     ],
     queryFn: () =>
       getFocusFacets(base, {
-        only: facet ? [facet.key] : [],
-        search: yearFacet ? undefined : debounced,
-        limit: 200,
+        only: yearFacet ? [yearFacet] : [],
+        limit: EXPANDED_VALUES,
       }),
     placeholderData: keepPreviousData,
   });
   const loaded =
-    values.data?.facets.find(
-      (candidate) =>
-        candidate.key === facet?.key &&
-        (candidate.role ?? null) === (facet?.role ?? null),
-    ) ?? null;
+    values.data?.facets.find((candidate) => candidate.key === yearFacet) ??
+    null;
 
   return (
-    <Dialog onOpenChange={onOpenChange} open={Boolean(facet)}>
+    <Dialog onOpenChange={onOpenChange} open={Boolean(yearFacet)}>
       <DialogContent aria-describedby={undefined} className="max-w-md">
         <DialogHeader>
           <DialogTitle>{facet ? facetTitle(facet) : ""}</DialogTitle>
         </DialogHeader>
-        {facet && yearFacet ? (
+        {facet && yearFacet && (
           <YearRange
             facet={loaded ?? facet}
             facetKey={yearFacet}
@@ -525,43 +1199,6 @@ function FacetMoreDialog({
             query={query}
             setQuery={setQuery}
           />
-        ) : (
-          <>
-            <label className="flex h-10 items-center gap-2 rounded-md border border-zinc-800 bg-black px-3 text-sm focus-within:border-zinc-600">
-              <Search className="h-4 w-4 text-zinc-500" />
-              <input
-                aria-label="Filter values"
-                autoFocus
-                className="min-w-0 flex-1 bg-transparent text-zinc-100 outline-none placeholder:text-zinc-600"
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Filter"
-                value={search}
-              />
-            </label>
-            <ul className="-mx-1 max-h-[55vh] space-y-0.5 overflow-y-auto px-1">
-              {(loaded?.values ?? [])
-                .filter((value: FacetValue) => value.count > 0)
-                .map((value: FacetValue) =>
-                  facet ? (
-                    <li key={value.value}>
-                      <FacetValueButton
-                        count={value.count}
-                        label={value.label}
-                        onClick={() =>
-                          setQuery(toggleFacetValue(query, facet, value))
-                        }
-                        state={facetValueState(query, facet, value)}
-                      />
-                    </li>
-                  ) : null,
-                )}
-              {values.isSuccess && !loaded?.values.length && (
-                <li className="py-6 text-center text-sm text-zinc-500">
-                  No matches
-                </li>
-              )}
-            </ul>
-          </>
         )}
       </DialogContent>
     </Dialog>

@@ -34,7 +34,10 @@ import {
   emptyFocus,
   encodeFocus,
   facetBaseQuery,
+  facetColumnKey,
+  facetSelectionSummary,
   facetTitle,
+  orderedFacetValues,
   facetValueState,
   filterKey,
   filterState,
@@ -506,5 +509,93 @@ describe("compositions and work facets", () => {
     expect(visibleFacets(facets, "albums").map((facet) => facet.key)).toContain(
       "genre",
     );
+  });
+});
+
+describe("facet columns", () => {
+  const genres = {
+    key: "genre" as const,
+    total: 40,
+    values: [
+      { value: "rock", label: "Rock", count: 3 },
+      { value: "jazz", label: "Jazz", count: 9 },
+      { value: "folk", label: "Folk", count: 3 },
+      { value: "ambient", label: "Ambient", count: 1 },
+      { value: "pop", label: "Pop", count: 12 },
+    ],
+  };
+
+  test("values read most frequent first, ties in server order", () => {
+    const { values, more } = orderedFacetValues(genres, emptyFocus(), {
+      cap: 3,
+    });
+    expect(values.map((value) => value.label)).toEqual(["Pop", "Jazz", "Rock"]);
+    expect(more).toBe(37);
+  });
+
+  test("values can be ordered by name", () => {
+    const { values } = orderedFacetValues(genres, emptyFocus(), {
+      order: "name",
+    });
+    expect(values.map((value) => value.label)).toEqual([
+      "Ambient",
+      "Folk",
+      "Jazz",
+      "Pop",
+      "Rock",
+    ]);
+  });
+
+  test("an active value past the cap stays visible in place of the rarest", () => {
+    const query = toggleFacetValue(
+      toggleFacetValue(emptyFocus(), genres, genres.values[3]!),
+      genres,
+      genres.values[3]!,
+    );
+    expect(facetValueState(query, genres, genres.values[3]!)).toBe("exclude");
+    const { values } = orderedFacetValues(genres, query, { cap: 3 });
+    expect(values.map((value) => value.label)).toEqual([
+      "Pop",
+      "Jazz",
+      "Ambient",
+    ]);
+  });
+
+  test("collapsed facets summarise their filters", () => {
+    let query = toggleFacetValue(emptyFocus(), genres, genres.values[1]!);
+    const formats = {
+      key: "format" as const,
+      total: 1,
+      values: [{ value: "mp3", label: "MP3", count: 2 }],
+    };
+    query = toggleFacetValue(
+      toggleFacetValue(query, formats, formats.values[0]!),
+      formats,
+      formats.values[0]!,
+    );
+    query = cycleFilter(query, decadeCriterion(1970, "year"));
+    expect(facetSelectionSummary(genres, query)).toBe("Jazz");
+    expect(facetSelectionSummary(formats, query)).toBe("−MP3");
+    expect(facetSelectionSummary({ key: "year" }, query)).toBe("1970s");
+    expect(facetSelectionSummary({ key: "label" }, query)).toBe("");
+  });
+
+  test("credit columns are keyed and summarised per role", () => {
+    const conductors = {
+      key: "credit" as const,
+      role: "conductor",
+      total: 1,
+      values: [{ value: "a1", label: "Tomas Reyes", count: 1 }],
+    };
+    const query = toggleFacetValue(
+      emptyFocus(),
+      conductors,
+      conductors.values[0]!,
+    );
+    expect(facetColumnKey(conductors)).toBe("credit:conductor");
+    expect(facetSelectionSummary(conductors, query)).toBe("Tomas Reyes");
+    expect(
+      facetSelectionSummary({ key: "credit", role: "performer" }, query),
+    ).toBe("");
   });
 });

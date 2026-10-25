@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  anchoredScrollLeft,
   audioBadge,
-  scrollAnchor,
   catalogSongsToQueue,
   compositionSummary,
   focusedAlbumTracks,
@@ -210,34 +208,4 @@ test("scoped queries key on their scope", () => {
     }),
   ).not.toEqual(facetQueryKey(base));
   expect(focusQueryKey(base).scope).toEqual([]);
-});
-
-test("the focus panel keeps the clicked column in place when columns change", () => {
-  const before = [
-    { key: "form:", left: 0, width: 180 },
-    { key: "instrumentation:", left: 204, width: 180 },
-    { key: "period:", left: 408, width: 180 },
-    { key: "credit:performer", left: 612, width: 180 },
-  ];
-  // Scrolled so Period is the first visible column, 20px in.
-  const anchor = scrollAnchor(before, 388);
-  expect(anchor).toEqual({ key: "period:", offset: 20 });
-  // A click removes the Instrumentation column: Period moves left by one
-  // column, so the scroll position follows it instead of jumping.
-  const after = [
-    { key: "form:", left: 0, width: 180 },
-    { key: "period:", left: 204, width: 180 },
-    { key: "credit:performer", left: 408, width: 180 },
-  ];
-  expect(anchoredScrollLeft(after, anchor!)).toBe(184);
-  // Columns that grow (fewer columns share the width) still anchor.
-  const wider = [
-    { key: "period:", left: 0, width: 300 },
-    { key: "credit:performer", left: 324, width: 300 },
-  ];
-  expect(
-    anchoredScrollLeft(wider, { key: "credit:performer", offset: 0 }),
-  ).toBe(324);
-  expect(anchoredScrollLeft(after, { key: "gone:", offset: 0 })).toBeNull();
-  expect(scrollAnchor([], 0)).toBeNull();
 });

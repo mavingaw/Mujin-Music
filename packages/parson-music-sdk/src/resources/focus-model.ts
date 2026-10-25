@@ -885,3 +885,109 @@ export function composerFacts(composer: {
     .filter(Boolean)
     .join(" · ");
 }
+
+/** How a facet column orders its values. */
+export type FacetValueOrder = "count" | "name";
+
+/** Stable identity of a facet column (credit facets are one per role). */
+export function facetColumnKey(facet: Pick<Facet, "key" | "role">): string {
+  return `${facet.key}:${facet.role ?? ""}`;
+}
+
+const nameCollator = new Intl.Collator("en", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+/**
+ * The values a facet column shows: most frequent first (or by name), capped
+ * at `cap` rows, while every value with an active filter stays visible so
+ * it can be cleared where it was set. `more` is how many values are left
+ * for "View more", counting values the server did not send.
+ */
+export function orderedFacetValues(
+  facet: Facet,
+  query: FocusQuery,
+  options: { cap?: number; order?: FacetValueOrder } = {},
+): { values: FacetValue[]; more: number } {
+  const order = options.order ?? "count";
+  const sorted = facet.values
+    .map((value, index) => ({ value, index }))
+    .sort((left, right) => {
+      if (order === "count" && left.value.count !== right.value.count) {
+        return right.value.count - left.value.count;
+      }
+      if (order === "name") {
+        const byName = nameCollator.compare(
+          left.value.label,
+          right.value.label,
+        );
+        if (byName !== 0) return byName;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.value);
+  const cap = options.cap ?? sorted.length;
+  if (sorted.length <= cap) {
+    return {
+      values: sorted,
+      more: Math.max(0, facet.total - sorted.length),
+    };
+  }
+  const active = new Set(
+    sorted
+      .filter((value) => facetValueState(query, facet, value) !== null)
+      .map((value) => value.value),
+  );
+  const kept = new Set(sorted.slice(0, cap).map((value) => value.value));
+  // Make room for active values beyond the cap by dropping the least
+  // frequent inactive rows, keeping the column at `cap` rows when possible.
+  const overflow = sorted.filter(
+    (value) => active.has(value.value) && !kept.has(value.value),
+  );
+  const shown = sorted.slice(0, cap);
+  for (const value of overflow) {
+    let drop = shown.length - 1;
+    while (drop >= 0 && active.has(shown[drop]!.value)) drop -= 1;
+    if (drop === -1) shown.push(value);
+    else shown.splice(drop, 1, value);
+  }
+  const values = sorted.filter((value) =>
+    shown.some((candidate) => candidate.value === value.value),
+  );
+  return {
+    values,
+    more: Math.max(0, Math.max(facet.total, sorted.length) - values.length),
+  };
+}
+
+/** Whether a filter was set from this facet column. */
+export function filterBelongsToFacet(
+  filter: FocusFilter,
+  facet: Pick<Facet, "key" | "role">,
+): boolean {
+  if (facet.key === "status") {
+    return filter.facet === "liked" || filter.facet === "played";
+  }
+  if (filter.facet !== facet.key) return false;
+  return filter.facet !== "credit" || filter.role === (facet.role ?? "any");
+}
+
+/** Short text for a collapsed facet: its active filters, e.g. "Jazz, −MP3". */
+export function facetSelectionSummary(
+  facet: Pick<Facet, "key" | "role">,
+  query: FocusQuery,
+): string {
+  return query.filters
+    .filter((filter) => filterBelongsToFacet(filter, facet))
+    .map((filter) => {
+      const label =
+        filter.facet === "credit"
+          ? filter.name || "Unknown"
+          : criterionLabel(filter);
+      return filter.exclude && !labelCarriesExclusion(filter)
+        ? `−${label}`
+        : label;
+    })
+    .join(", ");
+}

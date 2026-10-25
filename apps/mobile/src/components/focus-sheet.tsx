@@ -9,12 +9,14 @@ import {
   effectiveDirection,
   effectiveSort,
   facetBaseQuery,
+  facetSelectionSummary,
   facetTitle,
   facetValueState,
   filterState,
   focusSummary,
   getFocusFacets,
   getSavedFocuses,
+  orderedFacetValues,
   saveFocus,
   toggleFacetValue,
   visibleFacets,
@@ -28,11 +30,12 @@ import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   Bookmark,
+  ChevronDown,
   ListMusic,
   Trash2,
   X,
 } from "lucide-react-native";
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -52,7 +55,12 @@ import {
   smartPlaylistName,
 } from "@/lib/library-focus";
 
-const COLLAPSED_VALUES = 10;
+/** Chips a facet shows, most frequent first, before "View more". */
+const COLLAPSED_VALUES = 8;
+/** Facets open when the sheet opens (plus any with a filter). */
+const OPEN_FACETS = 3;
+/** Facets with more values than this get a search field. */
+const SEARCH_FROM = 20;
 
 export function FocusSheet({
   bookmarks = true,
@@ -267,10 +275,14 @@ export function FocusSheet({
           {facets.isPending && !facets.data ? (
             <ActivityIndicator color="white" style={{ marginTop: 28 }} />
           ) : null}
-          {columns.map((facet) => (
+          {columns.map((facet, index) => (
             <FacetSection
               expanded={Boolean(expanded[facetId(facet)])}
               facet={facet}
+              initiallyOpen={
+                index < OPEN_FACETS ||
+                facetSelectionSummary(facet, query) !== ""
+              }
               key={facetId(facet)}
               onExpand={() =>
                 setExpanded((current) => ({
@@ -376,70 +388,152 @@ function facetId(facet: Facet) {
 function FacetSection({
   expanded,
   facet,
+  initiallyOpen,
   onExpand,
   query,
   setQuery,
 }: {
   expanded: boolean;
   facet: Facet;
+  initiallyOpen: boolean;
   onExpand: () => void;
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
 }) {
-  if (isYearFacet(facet.key)) {
+  const [open, setOpen] = useState(initiallyOpen);
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(search.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+  // Long lists search the server, so a large library stays reachable.
+  const searchable =
+    open && expanded && !isYearFacet(facet.key) && facet.total > SEARCH_FROM;
+  const base = facetBaseQuery(query);
+  const found = useQuery({
+    queryKey: [
+      "library",
+      "focus",
+      "facet-values",
+      facet.key,
+      facet.role ?? null,
+      debounced,
+      base.entity,
+      base.match ?? "all",
+      base.filters,
+      base.text ?? null,
+      base.scope ?? [],
+      "mobile",
+    ],
+    queryFn: () =>
+      getFocusFacets(base, {
+        only: [facet.key],
+        search: debounced,
+        limit: 200,
+      }),
+    enabled: searchable && debounced.length > 0,
+    placeholderData: (previous) => previous,
+  });
+  const summary = facetSelectionSummary(facet, query);
+  const title = facetTitle(facet);
+
+  let body: ReactNode = null;
+  if (open && isYearFacet(facet.key)) {
     const yearKey = facet.key;
-    return (
-      <View>
-        <Text style={styles.section}>{facetTitle(facet)}</Text>
-        <View style={styles.wrap}>
-          {decadesFromYears(facet.values).map((bucket) => (
-            <Chip
-              count={bucket.count}
-              key={bucket.decade}
-              label={`${bucket.decade}s`}
-              onPress={() =>
-                setQuery(
-                  cycleFilter(query, decadeCriterion(bucket.decade, yearKey)),
-                )
-              }
-              state={filterState(
-                query,
-                decadeCriterion(bucket.decade, yearKey),
-              )}
-            />
-          ))}
-        </View>
-      </View>
-    );
-  }
-  const values = expanded
-    ? facet.values
-    : facet.values.slice(0, COLLAPSED_VALUES);
-  return (
-    <View>
-      <Text style={styles.section}>{facetTitle(facet)}</Text>
+    body = (
       <View style={styles.wrap}>
-        {values.map((value) => (
+        {decadesFromYears(facet.values).map((bucket) => (
           <Chip
-            count={value.count}
-            key={value.value}
-            label={value.label}
-            onPress={() => setQuery(toggleFacetValue(query, facet, value))}
-            state={facetValueState(query, facet, value)}
+            count={bucket.count}
+            key={bucket.decade}
+            label={`${bucket.decade}s`}
+            onPress={() =>
+              setQuery(
+                cycleFilter(query, decadeCriterion(bucket.decade, yearKey)),
+              )
+            }
+            state={filterState(query, decadeCriterion(bucket.decade, yearKey))}
           />
         ))}
-        {!expanded && facet.values.length > COLLAPSED_VALUES ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={onExpand}
-            style={styles.moreChip}
-          >
-            <Text style={styles.moreText}>
-              +{facet.values.length - COLLAPSED_VALUES} more
-            </Text>
-          </Pressable>
-        ) : null}
       </View>
+    );
+  } else if (open) {
+    const searched =
+      searchable && debounced
+        ? (found.data?.facets.find(
+            (candidate) =>
+              candidate.key === facet.key &&
+              (candidate.role ?? null) === (facet.role ?? null),
+          ) ?? null)
+        : null;
+    const { values, more } = orderedFacetValues(searched ?? facet, query, {
+      cap: expanded ? undefined : COLLAPSED_VALUES,
+    });
+    body = (
+      <>
+        {searchable ? (
+          <TextInput
+            accessibilityLabel={`Search ${title}`}
+            onChangeText={setSearch}
+            placeholder={`Search ${facet.total} ${title.toLowerCase()}`}
+            placeholderTextColor={palette.muted}
+            style={[styles.input, styles.facetSearch]}
+            value={search}
+          />
+        ) : null}
+        <View style={styles.wrap}>
+          {values.map((value) => (
+            <Chip
+              count={value.count}
+              key={value.value}
+              label={value.label}
+              onPress={() => setQuery(toggleFacetValue(query, facet, value))}
+              state={facetValueState(query, facet, value)}
+            />
+          ))}
+          {searched && values.length === 0 ? (
+            <Text style={styles.moreText}>No matches</Text>
+          ) : null}
+          {!expanded && more > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={onExpand}
+              style={styles.moreChip}
+            >
+              <Text style={styles.moreText}>View {more} more</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </>
+    );
+  }
+
+  return (
+    <View style={styles.facet}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((current) => !current)}
+        style={styles.facetHeader}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.facetTitle}>{title}</Text>
+          <Text
+            numberOfLines={1}
+            style={[styles.facetSummary, summary ? styles.facetActive : null]}
+          >
+            {summary ||
+              `${facet.total} ${facet.total === 1 ? "value" : "values"}`}
+          </Text>
+        </View>
+        <ChevronDown
+          color={palette.secondary}
+          size={18}
+          style={open ? { transform: [{ rotate: "180deg" }] } : undefined}
+        />
+      </Pressable>
+      {body ? <View style={styles.facetBody}>{body}</View> : null}
     </View>
   );
 }
@@ -540,6 +634,28 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  facet: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.borderStrong,
+  },
+  facetHeader: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
+  },
+  facetTitle: {
+    color: palette.secondary,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
+  facetSummary: { color: palette.muted, fontSize: 14, marginTop: 3 },
+  facetActive: { color: "white", fontWeight: "600" },
+  facetBody: { paddingBottom: 16 },
+  facetSearch: { flex: 0, height: 42, marginBottom: 10 },
   chip: {
     minHeight: 36,
     maxWidth: "100%",

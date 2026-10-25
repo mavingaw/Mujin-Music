@@ -166,33 +166,3 @@ export function recordingQueue(recording: CompositionRecording): QueueInput[] {
     album,
   }));
 }
-
-/** A facet column's key and horizontal extent inside the panel scroller. */
-export interface ColumnBox {
-  key: string;
-  left: number;
-  width: number;
-}
-
-/** Where the first visible column sits, to keep it in place across updates. */
-export function scrollAnchor(
-  columns: ColumnBox[],
-  scrollLeft: number,
-): { key: string; offset: number } | null {
-  const first = columns.find(
-    (column) => column.left + column.width > scrollLeft + 1,
-  );
-  return first ? { key: first.key, offset: first.left - scrollLeft } : null;
-}
-
-/**
- * The scroll position that puts the anchored column back where it was;
- * null when that column is gone (the panel then keeps its position).
- */
-export function anchoredScrollLeft(
-  columns: ColumnBox[],
-  anchor: { key: string; offset: number },
-): number | null {
-  const column = columns.find((candidate) => candidate.key === anchor.key);
-  return column ? Math.max(0, column.left - anchor.offset) : null;
-}
