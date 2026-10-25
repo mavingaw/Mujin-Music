@@ -7,14 +7,20 @@ import type {
 } from "./library";
 
 /** The library browser a focus applies to. */
-export type FocusEntity = "albums" | "songs" | "artists";
+export type FocusEntity = "albums" | "songs" | "artists" | "composers";
 
 /** Audio quality tiers derived from codec, sample rate and bit depth. */
 export type QualityTier = "hires" | "lossless" | "cd" | "lossy";
 
-/** Canonical credit roles the indexer stores, plus `any`. */
+/**
+ * Canonical credit roles the indexer stores, `any`, and the merged facet
+ * columns `conductor_ensemble` (conductor or ensemble) and `production`
+ * (producer, engineer, mixer or remixer).
+ */
 export type FocusCreditRole =
   | "any"
+  | "conductor_ensemble"
+  | "production"
   | "composer"
   | "lyricist"
   | "arranger"
@@ -44,6 +50,7 @@ export type FocusCriterion =
       name?: string | null;
     }
   | { facet: "artist"; artist_id: string; name?: string | null }
+  | { facet: "album"; album_id: string; name?: string | null }
   | { facet: "label"; value: string }
   | { facet: "release_type"; value: string }
   | { facet: "tag"; tag_id: number; name?: string | null }
@@ -81,6 +88,12 @@ export interface FocusQuery {
   direction?: SortDirection | null;
   /** Seed for a stable random order while paging. */
   seed?: number | null;
+  /**
+   * Criteria that fix the subset being browsed (a composer's works, an
+   * album's tracks). They always apply, are not chips, and bound the
+   * "of N" total.
+   */
+  scope?: FocusCriterion[];
 }
 
 export type FocusQualityBadge = "hires" | "cd" | "lossy";
@@ -94,6 +107,16 @@ export interface FocusSong extends LibraryCatalogSong {
   quality: FocusQualityBadge | null;
 }
 
+/** A person in the Composers browser. */
+export interface FocusComposer {
+  id: string;
+  name: string;
+  trackCount: number;
+  /** Distinct compositions (tagged works, or titles without one). */
+  workCount: number;
+  albumCount: number;
+}
+
 export interface FocusPage {
   entity: FocusEntity;
   /** Entities that match the focus. */
@@ -104,6 +127,66 @@ export interface FocusPage {
   albums: FocusAlbum[];
   songs: FocusSong[];
   artists: LibraryCatalogArtist[];
+  composers?: FocusComposer[];
+}
+
+export interface NamedRef {
+  id: string;
+  name: string;
+}
+
+export interface CompositionTrack {
+  id: string;
+  title: string;
+  /** From MOVEMENTNAME, or the title after "Work: ". */
+  movement: string | null;
+  movementNumber: number | null;
+  durationSeconds: number;
+}
+
+/** One album's performance of a composition. */
+export interface CompositionRecording {
+  albumId: string | null;
+  albumName: string | null;
+  artistId: string | null;
+  artistName: string | null;
+  /** Album artwork path for `/media/images/`. */
+  coverPath: string | null;
+  releaseYear: string | null;
+  /** Conductors, ensembles and soloists. */
+  performers: string[];
+  durationSeconds: number;
+  tracks: CompositionTrack[];
+}
+
+export interface Composition {
+  key: string;
+  title: string;
+  /** Whether the title comes from a WORK tag. */
+  tagged: boolean;
+  composers: NamedRef[];
+  movementCount: number;
+  recordings: CompositionRecording[];
+}
+
+export interface FocusCompositions {
+  total: number;
+  trackTotal: number;
+  truncated: boolean;
+  compositions: Composition[];
+}
+
+export interface FocusPersonRole {
+  /** `primary`, or a credit facet column such as `composer`. */
+  role: string;
+  track_count: number;
+}
+
+export interface FocusPerson {
+  id: string;
+  name: string;
+  roles: FocusPersonRole[];
+  composer: FocusComposer | null;
 }
 
 export type FacetKey =
@@ -191,6 +274,25 @@ export async function getFocusPage(
     offset,
     limit,
   });
+  return response.data;
+}
+
+/** Groups a focus's tracks into compositions with their recordings. */
+export async function getFocusCompositions(
+  query: FocusQuery,
+): Promise<FocusCompositions> {
+  const response = await api.post<FocusCompositions>(
+    "/library/focus/compositions",
+    { query },
+  );
+  return response.data;
+}
+
+/** A credited person (composer, conductor, performer) and their roles. */
+export async function getFocusPerson(id: string): Promise<FocusPerson> {
+  const response = await api.get<FocusPerson>(
+    `/library/focus/people/${encodeURIComponent(id)}`,
+  );
   return response.data;
 }
 

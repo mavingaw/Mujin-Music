@@ -172,12 +172,15 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     }
   };
 
-  const playTrack = (track: LibraryAlbum["songs"][number]) => {
+  const playTrack = (
+    track: LibraryAlbum["songs"][number],
+    tracks: LibraryAlbum["songs"] = album?.songs ?? [],
+  ) => {
     if (!album || !artist) {
       return;
     }
-    const index = album.songs.findIndex((song) => song.id === track.id);
-    setQueue(album.songs.map((song) => ({ song, album, artist })));
+    const index = tracks.findIndex((song) => song.id === track.id);
+    setQueue(tracks.map((song) => ({ song, album, artist })));
     setCurrentSongIndex(Math.max(index, 0));
     if (currentSong?.id === track.id) {
       togglePlayPause();

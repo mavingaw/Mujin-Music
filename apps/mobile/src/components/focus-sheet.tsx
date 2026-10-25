@@ -54,11 +54,14 @@ import {
 const COLLAPSED_VALUES = 10;
 
 export function FocusSheet({
+  bookmarks = true,
   onClose,
   open,
   query,
   setQuery,
 }: {
+  /** Scoped browsers (a composer, an album) have no bookmarks. */
+  bookmarks?: boolean;
   onClose: () => void;
   open: boolean;
   query: FocusQuery;
@@ -77,6 +80,7 @@ export function FocusSheet({
       base.match ?? "all",
       base.filters,
       base.text ?? null,
+      base.scope ?? [],
       "mobile",
     ],
     queryFn: () => getFocusFacets(base, { limit: 40 }),
@@ -86,7 +90,7 @@ export function FocusSheet({
   const saved = useQuery({
     queryKey: ["library", "focus", "saved"],
     queryFn: getSavedFocuses,
-    enabled: open,
+    enabled: open && bookmarks,
   });
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [bookmarkName, setBookmarkName] = useState("");
@@ -270,8 +274,8 @@ export function FocusSheet({
             />
           ))}
 
-          <Text style={styles.section}>Bookmarks</Text>
-          {saved.data?.map((item) => (
+          {bookmarks ? <Text style={styles.section}>Bookmarks</Text> : null}
+          {(bookmarks ? (saved.data ?? []) : []).map((item) => (
             <View key={item.id} style={styles.savedRow}>
               <Pressable
                 accessibilityRole="button"
@@ -307,7 +311,7 @@ export function FocusSheet({
               </Pressable>
             </View>
           ))}
-          <View style={styles.bookmarkRow}>
+          <View style={[styles.bookmarkRow, !bookmarks && { display: "none" }]}>
             <TextInput
               accessibilityLabel="Bookmark name"
               maxLength={100}

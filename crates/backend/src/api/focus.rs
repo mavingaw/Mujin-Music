@@ -84,6 +84,70 @@ async fn focus_page(
 }
 
 #[derive(Deserialize)]
+struct CompositionsRequest {
+    #[serde(default)]
+    query: FocusQuery,
+}
+
+/// Groups the focused tracks into compositions (composer Compositions tab).
+#[post("/compositions")]
+async fn compositions(
+    request: HttpRequest,
+    body: web::Json<CompositionsRequest>,
+    pool: web::Data<DbPool>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let query = body.into_inner().query;
+    if let Err(error) = query.validate() {
+        return bad_request(error.to_string(), "focus_invalid");
+    }
+    if let Err(readiness) = lifecycle.cache().await {
+        return library_unavailable_response(readiness);
+    }
+    let app = LocalApp {
+        database: pool.get_ref().clone(),
+        library: lifecycle.into_inner(),
+    };
+    match app.focus_compositions(user_id, query).await {
+        Ok(compositions) => HttpResponse::Ok().json(compositions),
+        Err(error) => worker_failed("focus compositions query failed", error),
+    }
+}
+
+/// A credited person with their roles, for composer and performer pages.
+#[get("/people/{id}")]
+async fn person(
+    request: HttpRequest,
+    id: web::Path<String>,
+    pool: web::Data<DbPool>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    let id = id.into_inner();
+    if id.trim().is_empty() || id.chars().count() > MAX_ENTITY_ID_CHARACTERS {
+        return bad_request("The person id is invalid.", "focus_person_invalid");
+    }
+    if let Err(readiness) = lifecycle.cache().await {
+        return library_unavailable_response(readiness);
+    }
+    let app = LocalApp {
+        database: pool.get_ref().clone(),
+        library: lifecycle.into_inner(),
+    };
+    match app.focus_person(id).await {
+        Ok(Some(person)) => HttpResponse::Ok().json(person),
+        Ok(None) => not_found("The person was not found.", "focus_person_not_found"),
+        Err(error) => worker_failed("focus person query failed", error),
+    }
+}
+
+#[derive(Deserialize)]
 struct FocusFacetsRequest {
     #[serde(default)]
     query: FocusQuery,
@@ -1381,6 +1445,8 @@ async fn remove_tag_items(
 pub fn configure_focus(cfg: &mut web::ServiceConfig) {
     cfg.service(focus_page)
         .service(focus_facets)
+        .service(compositions)
+        .service(person)
         .service(saved_focuses)
         .service(create_saved)
         .service(reorder_saved)

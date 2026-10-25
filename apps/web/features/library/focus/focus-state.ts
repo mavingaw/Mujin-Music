@@ -3,6 +3,7 @@ import {
   formatLabel,
   sampleRateLabel,
   type AudioProperties,
+  type CompositionRecording,
   type FocusQuery,
   type FocusSong,
   type LibraryCatalogSong,
@@ -11,6 +12,7 @@ import {
 export {
   entityNoun,
   focusCountLabel,
+  focusedAlbumTracks,
   usesFocusEndpoint,
 } from "@parson/music-sdk";
 
@@ -59,6 +61,7 @@ export function focusQueryKey(query: FocusQuery) {
     sort: query.sort ?? null,
     direction: query.direction ?? null,
     seed: query.seed ?? null,
+    scope: query.scope ?? [],
   };
 }
 
@@ -69,7 +72,22 @@ export function facetQueryKey(query: FocusQuery) {
     match: query.match ?? "all",
     filters: query.filters,
     text: query.text?.trim() || null,
+    scope: query.scope ?? [],
   };
+}
+
+/** "4 recordings · 3 movements" style summary for a composition. */
+export function compositionSummary(composition: {
+  movementCount: number;
+  recordings: unknown[];
+}): string {
+  const parts = [
+    `${composition.recordings.length} ${composition.recordings.length === 1 ? "recording" : "recordings"}`,
+  ];
+  if (composition.movementCount > 1) {
+    parts.push(`${composition.movementCount} movements`);
+  }
+  return parts.join(" · ");
 }
 
 /** Player queue entries for catalog-shaped songs. */
@@ -124,4 +142,27 @@ export function smartRefreshLabel(refreshedAt: string, now: number): string {
   if (hours < 24) return `Updated ${hours} h ago`;
   const days = Math.floor(hours / 24);
   return `Updated ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** Queue entries for one recording of a composition, in movement order. */
+export function recordingQueue(recording: CompositionRecording): QueueInput[] {
+  const artist = {
+    id: recording.artistId ?? "",
+    name: recording.artistName ?? "",
+  };
+  const album = {
+    id: recording.albumId ?? "",
+    name: recording.albumName ?? "",
+    cover_url: recording.coverPath ?? "",
+  };
+  return recording.tracks.map((track) => ({
+    song: {
+      id: track.id,
+      name: track.title,
+      artist: artist.name,
+      duration: track.durationSeconds,
+    },
+    artist,
+    album,
+  }));
 }

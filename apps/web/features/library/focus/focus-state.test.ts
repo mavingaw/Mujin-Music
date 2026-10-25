@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 import {
   audioBadge,
   catalogSongsToQueue,
+  compositionSummary,
+  focusedAlbumTracks,
+  focusQueryKey,
+  recordingQueue,
   shuffled,
   facetQueryKey,
   focusCountLabel,
@@ -135,4 +139,73 @@ test("smart playlist refresh times read server UTC timestamps", () => {
     "Updated 2 days ago",
   );
   expect(smartRefreshLabel("garbage", now)).toBe("Not refreshed yet");
+});
+
+test("album focus keeps track order unless a sort is chosen", () => {
+  const tracks = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  expect(focusedAlbumTracks(tracks, undefined, false)).toEqual(tracks);
+  expect(focusedAlbumTracks(tracks, ["c", "a"], false)).toEqual([
+    { id: "a" },
+    { id: "c" },
+  ]);
+  expect(focusedAlbumTracks(tracks, ["c", "missing", "a"], true)).toEqual([
+    { id: "c" },
+    { id: "a" },
+  ]);
+});
+
+test("compositions summarise recordings and movements", () => {
+  expect(compositionSummary({ movementCount: 1, recordings: [{}] })).toBe(
+    "1 recording",
+  );
+  expect(compositionSummary({ movementCount: 4, recordings: [{}, {}] })).toBe(
+    "2 recordings · 4 movements",
+  );
+});
+
+test("a recording plays its movements with album context", () => {
+  const queue = recordingQueue({
+    albumId: "al",
+    albumName: "Symphonies",
+    artistId: "ar",
+    artistName: "Berliner Philharmoniker",
+    coverPath: null,
+    releaseYear: "1978",
+    performers: [],
+    durationSeconds: 30,
+    tracks: [
+      {
+        id: "t1",
+        title: "I. Allegro",
+        movement: "Allegro",
+        movementNumber: 1,
+        durationSeconds: 10,
+      },
+      {
+        id: "t2",
+        title: "II. Adagio",
+        movement: null,
+        movementNumber: null,
+        durationSeconds: 20,
+      },
+    ],
+  });
+  expect(queue.map((item) => item.song.id)).toEqual(["t1", "t2"]);
+  expect(queue[0]?.album).toEqual({
+    id: "al",
+    name: "Symphonies",
+    cover_url: "",
+  });
+  expect(queue[1]?.song.artist).toBe("Berliner Philharmoniker");
+});
+
+test("scoped queries key on their scope", () => {
+  const base = { entity: "songs" as const, filters: [] };
+  expect(
+    facetQueryKey({
+      ...base,
+      scope: [{ facet: "album", album_id: "a" }],
+    }),
+  ).not.toEqual(facetQueryKey(base));
+  expect(focusQueryKey(base).scope).toEqual([]);
 });

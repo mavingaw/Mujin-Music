@@ -34,6 +34,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bookmark,
+  Feather,
   BookmarkCheck,
   BookmarkPlus,
   Disc3,
@@ -51,6 +52,7 @@ const VIEW_ICONS = {
   albums: Disc3,
   songs: Music2,
   artists: UserRound,
+  composers: Feather,
 } as const;
 
 function sameFocus(left: FocusQuery, right: FocusQuery) {

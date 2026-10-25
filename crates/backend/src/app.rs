@@ -10,8 +10,9 @@ use serde::Serialize;
 
 use crate::domain::AudioProperties;
 use crate::library::focus::{
-    FacetRequest, FocusEntity, FocusFacets, FocusQuery, MAX_PAGE_SIZE, focus_facets, focus_ids,
-    library_total,
+    FacetRequest, FocusComposer, FocusCompositions, FocusEntity, FocusFacets, FocusPerson,
+    FocusQuery, MAX_PAGE_SIZE, composer_rows, focus_compositions, focus_facets, focus_ids,
+    focus_person, library_total,
 };
 use crate::library::identity::normalize_artist_identity;
 use crate::library::indexer::{
@@ -273,6 +274,7 @@ pub struct LocalFocusPage {
     pub albums: Vec<LocalFocusAlbum>,
     pub songs: Vec<LocalFocusSong>,
     pub artists: Vec<LocalCatalogArtist>,
+    pub composers: Vec<FocusComposer>,
 }
 
 /// Quality tier of one file: `hires`, `cd` (lossless up to 48 kHz/16-bit)
@@ -377,6 +379,7 @@ pub fn hydrate_focus_page(
         albums: Vec::new(),
         songs: Vec::new(),
         artists: Vec::new(),
+        composers: Vec::new(),
     };
     match entity {
         FocusEntity::Albums => {
@@ -391,6 +394,9 @@ pub fn hydrate_focus_page(
                 .filter_map(|id| focus_artist(cache, id))
                 .collect();
         }
+        // Composer rows come from the catalog tables (contributor-only
+        // people are not in the cache); `LocalApp::focus` fills them in.
+        FocusEntity::Composers => {}
     }
     page
 }
@@ -639,22 +645,80 @@ impl LocalApp {
         let pool = self.database.clone();
         let entity = query.entity;
         let limit = limit.clamp(1, MAX_PAGE_SIZE);
-        let (focused, unfiltered) = tokio::task::spawn_blocking(move || {
+        let (focused, unfiltered, composers) = tokio::task::spawn_blocking(move || {
             let mut connection = pool.get()?;
             let focused = focus_ids(&mut connection, &query, user_id, offset, limit)?;
-            let unfiltered = library_total(&mut connection, query.entity)?;
-            Ok::<_, AppError>((focused, unfiltered))
+            let unfiltered = library_total(&mut connection, &query)?;
+            let composers = if query.entity == FocusEntity::Composers {
+                composer_rows(&mut connection, &focused.ids)?
+            } else {
+                Vec::new()
+            };
+            Ok::<_, AppError>((focused, unfiltered, composers))
         })
         .await
         .map_err(|error| format!("The focus task stopped unexpectedly: {error}"))??;
-        Ok(hydrate_focus_page(
+        let mut page = hydrate_focus_page(
             &cache,
             entity,
             &focused.ids,
             focused.total,
             unfiltered,
             offset,
-        ))
+        );
+        page.composers = composers;
+        Ok(page)
+    }
+
+    /// Groups a focus's tracks into compositions (works with movements and
+    /// one recording per album).
+    pub async fn focus_compositions(
+        &self,
+        user_id: i32,
+        query: FocusQuery,
+    ) -> Result<FocusCompositions, AppError> {
+        query.validate()?;
+        let cache = self.library.cache().await.map_err(|readiness| {
+            readiness
+                .message
+                .unwrap_or_else(|| "The local library is not ready.".into())
+        })?;
+        let pool = self.database.clone();
+        let mut compositions = tokio::task::spawn_blocking(move || {
+            let mut connection = pool.get()?;
+            focus_compositions(&mut connection, &query, user_id)
+        })
+        .await
+        .map_err(|error| format!("The compositions task stopped unexpectedly: {error}"))??;
+        for recording in compositions
+            .compositions
+            .iter_mut()
+            .flat_map(|composition| composition.recordings.iter_mut())
+        {
+            recording.cover_path = recording
+                .album_id
+                .as_deref()
+                .and_then(|id| cache.album(id))
+                .map(|album| album.cover_url.clone())
+                .filter(|cover| !cover.is_empty());
+        }
+        Ok(compositions)
+    }
+
+    /// A credited person (composer, performer, conductor) with their roles.
+    pub async fn focus_person(&self, id: String) -> Result<Option<FocusPerson>, AppError> {
+        self.library.cache().await.map_err(|readiness| {
+            readiness
+                .message
+                .unwrap_or_else(|| "The local library is not ready.".into())
+        })?;
+        let pool = self.database.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut connection = pool.get()?;
+            Ok::<_, AppError>(focus_person(&mut connection, &id)?)
+        })
+        .await
+        .map_err(|error| format!("The person task stopped unexpectedly: {error}"))?
     }
 
     /// Facet counts for the entities a Focus matches.
