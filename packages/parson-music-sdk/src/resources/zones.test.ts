@@ -5,7 +5,17 @@ import {
   estimateZonePosition,
   formatSleepRemaining,
   getZoneEventsURL,
+  getZones,
   groupingPlan,
+  levelingGainDb,
+  resolveLevelBy,
+  setZoneViewerDevice,
+  updateZoneSettings,
+  zoneIconName,
+  zoneSettingsDraft,
+  zoneSettingsPatch,
+  zoneSettingsProblem,
+  zoneSliderMax,
   isEditableQueueItem,
   nextRepeatMode,
   orderZones,
@@ -264,4 +274,184 @@ test("sleep timer labels say what will happen", () => {
   expect(sleepTimerLabel({ ...timer, fading: true }, 0)).toBe(
     "Fading out to sleep",
   );
+});
+
+const settingsView = (
+  overrides: Partial<NonNullable<Zone["settings"]>> = {},
+): NonNullable<Zone["settings"]> => ({
+  default_name: "Living Room",
+  custom_name: true,
+  icon: null,
+  crossfade_seconds: 0,
+  leveling: "off",
+  leveling_target_lufs: -18,
+  leveling_adjustment_db: 0,
+  private: false,
+  supports: {
+    crossfade: true,
+    leveling: true,
+    volume_limits: true,
+    private: false,
+  },
+  notes: [],
+  ...overrides,
+});
+
+test("saving zone settings leaves an unchanged name out of the request", () => {
+  const lounge = zone({
+    id: "sonos:RINCON_1",
+    kind: "sonos",
+    name: "Lounge",
+    volume: {
+      level: 30,
+      muted: false,
+      min: 0,
+      max: 100,
+      comfort: null,
+      step: 2,
+    },
+    settings: settingsView(),
+  });
+  const initial = zoneSettingsDraft(lounge);
+  // Only the crossfade changed: no name, and certainly no `name: null`.
+  const patch = zoneSettingsPatch(initial, {
+    ...initial,
+    crossfade_seconds: 4,
+  });
+  expect(patch).toEqual({ crossfade_seconds: 4 });
+  expect("name" in patch).toBe(false);
+  // Whitespace-only edits are not a rename.
+  expect(zoneSettingsPatch(initial, { ...initial, name: " Lounge " })).toEqual(
+    {},
+  );
+  // A new name is sent; clearing the field resets to the device's name.
+  expect(zoneSettingsPatch(initial, { ...initial, name: "Den" })).toEqual({
+    name: "Den",
+  });
+  expect(zoneSettingsPatch(initial, { ...initial, name: "  " })).toEqual({
+    reset_name: true,
+  });
+  // Limits and leveling are sent as changed, `null` clears a limit.
+  const limited = { ...initial, comfort_volume: 40, safety_max_volume: 70 };
+  expect(zoneSettingsPatch(initial, limited)).toEqual({
+    comfort_volume: 40,
+    safety_max_volume: 70,
+  });
+  expect(
+    zoneSettingsPatch(limited, { ...limited, comfort_volume: null }),
+  ).toEqual({ comfort_volume: null });
+  expect(
+    zoneSettingsPatch(initial, {
+      ...initial,
+      leveling: "album",
+      leveling_target_lufs: -14,
+      icon: "sofa",
+      private: true,
+    }),
+  ).toEqual({
+    leveling: "album",
+    leveling_target_lufs: -14,
+    icon: "sofa",
+    private: true,
+  });
+});
+
+test("zone settings drafts read limits from the zone volume", () => {
+  const draft = zoneSettingsDraft(
+    zone({
+      volume: {
+        level: 30,
+        muted: false,
+        min: 10,
+        max: 70,
+        comfort: 40,
+        step: 2,
+      },
+      settings: settingsView({ icon: "sofa", leveling: "auto" }),
+    }),
+  );
+  expect(draft).toMatchObject({
+    comfort_volume: 40,
+    safety_min_volume: 10,
+    safety_max_volume: 70,
+    icon: "sofa",
+    leveling: "auto",
+  });
+  expect(zoneSettingsProblem(draft)).toBeNull();
+  expect(zoneSettingsProblem({ ...draft, safety_min_volume: 80 })).toContain(
+    "below",
+  );
+  expect(zoneSettingsProblem({ ...draft, comfort_volume: 90 })).toContain(
+    "inside",
+  );
+  // An older zone without settings still gives a usable draft.
+  expect(zoneSettingsDraft(zone({})).leveling).toBe("off");
+});
+
+test("volume sliders stop at the comfort limit", () => {
+  const volume = {
+    level: 30,
+    muted: false,
+    min: 0,
+    max: 70,
+    comfort: 40,
+    step: 2,
+  };
+  expect(zoneSliderMax(volume)).toBe(40);
+  expect(zoneSliderMax({ ...volume, comfort: null })).toBe(70);
+  expect(zoneSliderMax({ ...volume, comfort: undefined })).toBe(70);
+});
+
+test("zone icons fall back to the kind's icon", () => {
+  expect(zoneIconName({ kind: "sonos" })).toBe("speaker");
+  expect(zoneIconName({ kind: "sonos", icon: "sofa" })).toBe("sofa");
+  expect(zoneIconName({ kind: "mobile", icon: "rocket" })).toBe("phone");
+});
+
+test("leveling gain matches the server's", () => {
+  // Same vectors as the Rust tests in zones/leveling.rs.
+  const loud = { integrated_lufs: -8, true_peak_db: 0.5 };
+  expect(levelingGainDb(loud, -18, 0)).toBe(-10);
+  expect(levelingGainDb(loud, -18, 3)).toBe(-7);
+  expect(
+    levelingGainDb({ integrated_lufs: -28, true_peak_db: -6 }, -18, 0),
+  ).toBe(5);
+  expect(
+    levelingGainDb({ integrated_lufs: -70, true_peak_db: -60 }, -18, 0),
+  ).toBe(12);
+});
+
+test("auto leveling uses the album only while an album plays in order", () => {
+  const queue = ["a1", "a2", "b1", "c1"];
+  const albumOf = (id: string) => id.slice(0, 1);
+  expect(resolveLevelBy("auto", queue, 0, albumOf)).toBe("album");
+  expect(resolveLevelBy("auto", queue, 1, albumOf)).toBe("album");
+  expect(resolveLevelBy("auto", queue, 2, albumOf)).toBe("track");
+  expect(resolveLevelBy("off", queue, 0, albumOf)).toBeNull();
+  expect(resolveLevelBy("album", queue, 3, albumOf)).toBe("album");
+});
+
+test("zone requests name this device so its private zone stays visible", async () => {
+  const get = spyOn(api, "get").mockResolvedValue(
+    ok({ zones: [], server_time_ms: 0, sonos: null }),
+  );
+  const patch = spyOn(api, "patch").mockResolvedValue(ok({ zone: null }));
+  setZoneViewerDevice("desktop-private1");
+  try {
+    await getZones();
+    expect(get).toHaveBeenCalledWith("/zones", {
+      timeout: 5_000,
+      headers: { "X-Parson-Zone-Device": "desktop-private1" },
+    });
+    await updateZoneSettings("client:desktop-private1", { private: true });
+    expect(patch).toHaveBeenCalledWith(
+      "/zones/client%3Adesktop-private1/settings",
+      { private: true },
+      { headers: { "X-Parson-Zone-Device": "desktop-private1" } },
+    );
+  } finally {
+    setZoneViewerDevice(null);
+  }
+  await getZones();
+  expect(get).toHaveBeenLastCalledWith("/zones", { timeout: 5_000 });
 });

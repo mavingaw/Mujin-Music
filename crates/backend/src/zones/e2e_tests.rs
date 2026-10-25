@@ -379,6 +379,7 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
             ZoneCommand::SetVolume {
                 volume: 35,
                 member_id: None,
+                above_comfort: false,
             },
             None,
         )
@@ -389,10 +390,13 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
         .update_settings(
             USER,
             &living_id,
-            ZoneSettings {
+            ZoneSettingsPatch {
                 name: Some("Lounge".to_string()),
-                max_volume: Some(40),
+                max_volume: Some(Some(40)),
+                ..ZoneSettingsPatch::default()
             },
+            None,
+            None,
         )
         .await
         .expect("settings");
@@ -403,6 +407,7 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
             ZoneCommand::SetVolume {
                 volume: 90,
                 member_id: None,
+                above_comfort: false,
             },
             None,
         )
@@ -452,7 +457,17 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
     assert!(group.synced);
     assert_eq!(group.members.len(), 2);
     service
-        .update_settings(USER, &living_id, ZoneSettings::default())
+        .update_settings(
+            USER,
+            &living_id,
+            ZoneSettingsPatch {
+                reset_name: true,
+                safety_max_volume: Some(None),
+                ..ZoneSettingsPatch::default()
+            },
+            None,
+            None,
+        )
         .await
         .expect("clear settings");
     assert_eq!(
@@ -466,6 +481,7 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
             ZoneCommand::SetVolume {
                 volume: 12,
                 member_id: Some(kitchen_id.clone()),
+                above_comfort: false,
             },
             None,
         )
@@ -648,7 +664,8 @@ async fn zone_http_api_lists_controls_and_validates() {
         pending.commands[0].command,
         ZoneCommand::SetVolume {
             volume: 60,
-            member_id: None
+            member_id: None,
+            above_comfort: false,
         }
     );
 
@@ -1110,6 +1127,7 @@ async fn sonos_sleep_timer_fades_pauses_and_restores_volume() {
             ZoneCommand::SetVolume {
                 volume: 40,
                 member_id: None,
+                above_comfort: false,
             },
             None,
         )
@@ -1271,4 +1289,677 @@ async fn serve_fake_sonos_household() {
     loop {
         tokio::time::sleep(Duration::from_secs(3600)).await;
     }
+}
+
+fn set_duration(cache: &mut LibraryCache, song_index: usize, seconds: f64) {
+    Arc::make_mut(&mut cache.artists)[0].albums[0].songs[song_index].duration = seconds;
+}
+
+async fn sonos_pair_of_rooms() -> (FakeSonos, Arc<SonosController>, ZoneService) {
+    let fake = FakeSonos::start(&[
+        FakePlayerSpec {
+            uuid: LIVING,
+            room: "Living Room",
+            model: "Sonos Five",
+            pair_of: None,
+        },
+        FakePlayerSpec {
+            uuid: KITCHEN,
+            room: "Kitchen",
+            model: "Sonos One",
+            pair_of: None,
+        },
+    ])
+    .await;
+    let sonos = Arc::new(
+        SonosController::new(SonosConfig {
+            ssdp_targets: vec![fake.ssdp_address],
+            static_hosts: Vec::new(),
+            search_timeout: Duration::from_millis(400),
+        })
+        .expect("controller"),
+    );
+    assert_eq!(sonos.discover().await.expect("discovery"), 2);
+    let service = ZoneService::new(Some(sonos.clone()), None);
+    (fake, sonos, service)
+}
+
+/// Regression: a remote Sonos zone, and the group it joins, report the
+/// queued track's own length (B/05a and B/08 showed 4:16 for a 3:20 track).
+#[actix_web::test]
+async fn transferred_and_grouped_sonos_zones_report_the_tracks_own_duration() {
+    let (fake, sonos, service) = sonos_pair_of_rooms().await;
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let mut cache = library(&directory);
+    set_duration(&mut cache, 0, 256.0);
+    set_duration(&mut cache, 1, 200.0);
+    let living_id = format!("sonos:{LIVING}");
+    let kitchen_id = format!("sonos:{KITCHEN}");
+    let queue: Vec<String> = ["song-1", "song-2", "song-3"].map(String::from).to_vec();
+    service
+        .register_client(
+            USER,
+            "browser-duration",
+            web_client(ZoneStatus::Playing, Some(queue)),
+        )
+        .expect("register");
+    service
+        .transfer(USER, "client:browser-duration", &living_id, Some(&cache))
+        .await
+        .expect("transfer");
+    sonos.poll_all().await;
+    let metadata_ms = (cache.song("song-2").expect("song").duration * 1_000.0) as i64;
+    assert_eq!(metadata_ms, 200_000);
+    let duration_of = |zone_id: &str| {
+        let zone = service.zone(USER, zone_id, Some(&cache)).expect("zone");
+        assert_eq!(
+            zone.now_playing.as_ref().map(|now| now.title.as_str()),
+            Some("Second <Song>")
+        );
+        assert!(zone.position_ms <= zone.duration_ms);
+        (
+            zone.duration_ms,
+            zone.now_playing.map(|now| now.duration_ms),
+        )
+    };
+    assert_eq!(duration_of(&living_id), (200_000, Some(200_000)));
+
+    // A speaker still reporting the previous track's length (4:16) does
+    // not leak into the readout.
+    fake.report_duration(LIVING, Some(256_000));
+    sonos.poll_all().await;
+    assert_eq!(duration_of(&living_id), (200_000, Some(200_000)));
+
+    // Native Sonos group: the group zone shows the same track length.
+    let group_id = service
+        .group(USER, &[living_id.clone(), kitchen_id.clone()])
+        .await
+        .expect("group");
+    sonos.poll_all().await;
+    let group = service.zone(USER, &group_id, Some(&cache)).expect("group");
+    assert_eq!(group.group.as_ref().map(|info| info.members.len()), Some(2));
+    assert_eq!(duration_of(&group_id), (200_000, Some(200_000)));
+    service
+        .ungroup(USER, &group_id, None)
+        .await
+        .expect("ungroup");
+
+    // Linked group led by the Sonos room: same again.
+    let linked = service
+        .group(
+            USER,
+            &[living_id.clone(), "client:browser-duration".to_string()],
+        )
+        .await
+        .expect("linked");
+    assert_eq!(duration_of(&linked), (200_000, Some(200_000)));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[actix_web::test]
+async fn sonos_volume_limits_crossfade_and_leveling_reach_the_speaker() {
+    const DEN: &str = "RINCON_DEN000002400";
+    let (fake, _sonos, service) = single_sonos_room("Den", DEN).await;
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let cache = library(&directory);
+    let zone_id = format!("sonos:{DEN}");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Load {
+                song_ids: ["song-1", "song-2", "song-3"].map(String::from).to_vec(),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let settings = |patch: ZoneSettingsPatch| {
+        let service = &service;
+        let zone_id = zone_id.clone();
+        let cache = &cache;
+        async move {
+            service
+                .update_settings(USER, &zone_id, patch, None, Some(cache))
+                .await
+        }
+    };
+    settings(ZoneSettingsPatch {
+        comfort_volume: Some(Some(30)),
+        safety_min_volume: Some(Some(5)),
+        safety_max_volume: Some(Some(60)),
+        ..ZoneSettingsPatch::default()
+    })
+    .await
+    .expect("limits");
+    let volume = |command: ZoneCommand| {
+        let service = &service;
+        let zone_id = zone_id.clone();
+        async move { service.command(USER, &zone_id, command, None).await }
+    };
+    // The slider (absolute) stops at the comfort limit...
+    volume(ZoneCommand::SetVolume {
+        volume: 50,
+        member_id: None,
+        above_comfort: false,
+    })
+    .await
+    .expect("set");
+    assert_eq!(fake.player(DEN).volume, 30);
+    // ...the + button goes past it, up to the safety maximum.
+    volume(ZoneCommand::AdjustVolume {
+        delta: 20,
+        member_id: None,
+    })
+    .await
+    .expect("step");
+    assert_eq!(fake.player(DEN).volume, 50);
+    volume(ZoneCommand::AdjustVolume {
+        delta: 20,
+        member_id: None,
+    })
+    .await
+    .expect("step");
+    assert_eq!(fake.player(DEN).volume, 60);
+    volume(ZoneCommand::SetVolume {
+        volume: 0,
+        member_id: None,
+        above_comfort: false,
+    })
+    .await
+    .expect("low");
+    assert_eq!(fake.player(DEN).volume, 5, "safety minimum holds");
+    volume(ZoneCommand::AdjustVolume {
+        delta: 40,
+        member_id: None,
+    })
+    .await
+    .expect("step");
+    // Tightening the safety maximum pulls the speaker down at once.
+    settings(ZoneSettingsPatch {
+        comfort_volume: Some(None),
+        safety_max_volume: Some(Some(35)),
+        ..ZoneSettingsPatch::default()
+    })
+    .await
+    .expect("tighter");
+    assert_eq!(fake.player(DEN).volume, 35);
+    let zone = service.zone(USER, &zone_id, None).expect("zone");
+    let reported = zone.volume.expect("volume");
+    assert_eq!(
+        (reported.min, reported.max, reported.comfort),
+        (5, 35, None)
+    );
+    assert_eq!((reported.device_min, reported.device_max), (0, 100));
+
+    // Crossfade maps onto Sonos crossfade.
+    settings(ZoneSettingsPatch {
+        crossfade_seconds: Some(6),
+        ..ZoneSettingsPatch::default()
+    })
+    .await
+    .expect("crossfade");
+    assert!(fake.player(DEN).crossfade);
+    settings(ZoneSettingsPatch {
+        crossfade_seconds: Some(0),
+        ..ZoneSettingsPatch::default()
+    })
+    .await
+    .expect("no crossfade");
+    assert!(!fake.player(DEN).crossfade);
+
+    // Leveling re-sends the upcoming tracks with signed leveling; the
+    // playing track is left alone.
+    let current_before = fake.player(DEN).queue[0].0.clone();
+    settings(ZoneSettingsPatch {
+        leveling: Some(LevelingMode::Auto),
+        leveling_target_lufs: Some(-16),
+        ..ZoneSettingsPatch::default()
+    })
+    .await
+    .expect("leveling");
+    let player = fake.player(DEN);
+    assert_eq!(player.queue.len(), 3);
+    assert_eq!(player.queue[0].0, current_before);
+    assert_eq!(player.track, 1);
+    for (uri, metadata) in &player.queue[1..] {
+        assert!(
+            uri.ends_with("&level=album&target=-16&adjust=0"),
+            "auto levels an album played in order: {uri}"
+        );
+        assert!(metadata.contains("http-get:*:audio/flac:*"));
+    }
+    let zone = service.zone(USER, &zone_id, None).expect("zone");
+    assert_eq!(zone.settings.leveling, LevelingMode::Auto);
+    assert_eq!(zone.settings.leveling_target_lufs, -16);
+    assert!(zone.settings.supports.crossfade && zone.settings.supports.leveling);
+    assert!(!zone.settings.supports.private);
+    assert_eq!(
+        settings(ZoneSettingsPatch {
+            private: Some(true),
+            ..ZoneSettingsPatch::default()
+        })
+        .await,
+        Err(ZoneError::Unsupported("only_parson_apps_can_be_private"))
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+fn ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Leveling end to end: the speaker fetches a leveled URL, the server
+/// measures the track (EBU R128) and serves it at the target loudness.
+#[actix_web::test]
+async fn leveled_sonos_stream_reaches_the_target_loudness() {
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg is not installed; leveling needs it to measure loudness");
+        return;
+    }
+    const DEN: &str = "RINCON_DEN000003400";
+    let (fake, _sonos, service) = single_sonos_room("Den", DEN).await;
+    let directory = std::env::temp_dir().join(format!("parson-zones-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let mut cache = library(&directory);
+    // Two real tracks, one loud and one quiet.
+    for (index, volume) in [(0_usize, "-2dB"), (1, "-20dB")] {
+        let path = directory.join(format!("tone-{index}.flac"));
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("sine=frequency=440:sample_rate=44100:duration=6")
+            .args(["-af", &format!("volume={volume}"), "-c:a", "flac"])
+            .arg(&path)
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success());
+        let song = &mut Arc::make_mut(&mut cache.artists)[0].albums[0].songs[index];
+        song.path = path.to_string_lossy().to_string();
+        song.duration = 6.0;
+        song.audio = Some(AudioProperties {
+            codec: Some("flac".to_string()),
+            container: Some("flac".to_string()),
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(1),
+            bitrate_kbps: None,
+            lossless: Some(true),
+        });
+    }
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle.set_ready(cache).await;
+    let cache = lifecycle.cache().await.expect("cache");
+    let service = web::Data::new(service);
+    let server_service = service.clone();
+    let server_lifecycle = web::Data::from(lifecycle.clone());
+    let server = HttpServer::new(move || {
+        App::new()
+            .app_data(server_service.clone())
+            .app_data(server_lifecycle.clone())
+            .configure(crate::api::zones::configure_device_routes)
+    })
+    .workers(1)
+    .bind(("127.0.0.1", 0))
+    .expect("bind test server");
+    let port = server.addrs()[0].port();
+    let server = server.run();
+    let server_handle = server.handle();
+    actix_web::rt::spawn(server);
+    service.set_port(port);
+    let zone_id = format!("sonos:{DEN}");
+    service
+        .update_settings(
+            USER,
+            &zone_id,
+            ZoneSettingsPatch {
+                leveling: Some(LevelingMode::Track),
+                ..ZoneSettingsPatch::default()
+            },
+            None,
+            Some(&cache),
+        )
+        .await
+        .expect("leveling");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::Load {
+                song_ids: vec!["song-1".into(), "song-2".into()],
+                current_position: 0,
+                position_ms: 0,
+                play: false,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("client");
+    let mut levels = Vec::new();
+    for (uri, _) in fake.player(DEN).queue {
+        assert!(uri.contains("&level=track&target=-18&adjust=0"), "{uri}");
+        // The leveling is signed: changing it in the URL is refused.
+        let tampered = uri.replace("target=-18", "target=-5");
+        assert_eq!(
+            http.get(&tampered).send().await.expect("tampered").status(),
+            401
+        );
+        let response = http.get(&uri).send().await.expect("leveled stream");
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("audio/flac")
+        );
+        let bytes = response.bytes().await.expect("audio");
+        let output = directory.join(format!("leveled-{}.flac", levels.len()));
+        std::fs::write(&output, &bytes).expect("write leveled audio");
+        let measured = super::leveling::measure_file(&output)
+            .await
+            .expect("measure leveled audio");
+        levels.push(measured);
+    }
+    // Both tracks were pulled toward -18 LUFS, but the quiet one is only
+    // raised as far as its peak allows (true peak at most -1 dBTP).
+    let loud = levels[0];
+    let quiet = levels[1];
+    assert!(
+        (loud.integrated_lufs + 18.0).abs() < 1.0,
+        "loud track leveled to {loud:?}"
+    );
+    assert!(loud.true_peak_db <= -0.5, "{loud:?}");
+    assert!(quiet.true_peak_db <= -0.5, "{quiet:?}");
+    let original_quiet = super::leveling::measure_file(&directory.join("tone-1.flac"))
+        .await
+        .expect("measure original");
+    assert!(
+        quiet.integrated_lufs > original_quiet.integrated_lufs + 5.0,
+        "quiet track raised: {original_quiet:?} -> {quiet:?}"
+    );
+    server_handle.stop(false).await;
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[actix_web::test]
+async fn zone_settings_change_only_what_is_sent_and_private_zones_stay_private() {
+    let service = web::Data::new(ZoneService::new(None, None));
+    let lifecycle = web::Data::new(LibraryLifecycle::new());
+    let pool = web::Data::new(test_pool());
+    let app = actix_test::init_service(
+        App::new()
+            .app_data(service.clone())
+            .app_data(lifecycle.clone())
+            .app_data(pool.clone())
+            .wrap_fn(|request, next| {
+                request.extensions_mut().insert(claims());
+                next.call(request)
+            })
+            .configure(crate::api::zones::configure),
+    )
+    .await;
+    for (device, kind, name) in [
+        ("desktop-private1", "desktop", "Studio PC"),
+        ("phone-remote0001", "mobile", "Pixel"),
+    ] {
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::put()
+                .uri(&format!("/zones/clients/{device}"))
+                .set_json(serde_json::json!({
+                    "kind": kind, "name": name, "status": "playing",
+                    "song_ids": ["song-1"], "volume": 50
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), 200);
+    }
+    let studio = "/zones/client:desktop-private1/settings";
+    let patch = |body: serde_json::Value, device: Option<&'static str>| {
+        let mut request = actix_test::TestRequest::patch().uri(studio).set_json(body);
+        if let Some(device) = device {
+            request = request.insert_header((crate::api::zones::ZONE_DEVICE_HEADER, device));
+        }
+        request.to_request()
+    };
+    let name_of = |body: &serde_json::Value| body["zone"]["name"].as_str().map(str::to_string);
+
+    let renamed: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        patch(serde_json::json!({"name": "Studio"}), None),
+    )
+    .await;
+    assert_eq!(name_of(&renamed).as_deref(), Some("Studio"));
+    assert_eq!(renamed["zone"]["settings"]["custom_name"], true);
+    // Saving other settings leaves the name alone, with or without a null.
+    for body in [
+        serde_json::json!({"crossfade_seconds": 4}),
+        serde_json::json!({"name": null, "leveling": "album", "leveling_target_lufs": -14}),
+        serde_json::json!({"icon": "headphones", "comfort_volume": 40, "safety_max_volume": 80}),
+    ] {
+        let saved: serde_json::Value =
+            actix_test::call_and_read_body_json(&app, patch(body.clone(), None)).await;
+        assert_eq!(name_of(&saved).as_deref(), Some("Studio"), "{body}");
+    }
+    let listed: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        actix_test::TestRequest::get().uri("/zones").to_request(),
+    )
+    .await;
+    let studio_zone = listed["zones"]
+        .as_array()
+        .and_then(|zones| {
+            zones
+                .iter()
+                .find(|zone| zone["id"] == "client:desktop-private1")
+        })
+        .cloned()
+        .expect("studio zone");
+    assert_eq!(studio_zone["icon"], "headphones");
+    assert_eq!(studio_zone["settings"]["crossfade_seconds"], 4);
+    assert_eq!(studio_zone["settings"]["leveling"], "album");
+    assert_eq!(studio_zone["settings"]["leveling_target_lufs"], -14);
+    assert_eq!(studio_zone["volume"]["comfort"], 40);
+    assert_eq!(studio_zone["volume"]["max"], 80);
+    // Only an explicit reset goes back to the device's name.
+    let reset: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        patch(serde_json::json!({"reset_name": true}), None),
+    )
+    .await;
+    assert_eq!(name_of(&reset).as_deref(), Some("Studio PC"));
+    assert_eq!(reset["zone"]["settings"]["custom_name"], false);
+
+    for (body, status) in [
+        (serde_json::json!({"crossfade_seconds": 13}), 400),
+        (serde_json::json!({"icon": "rocket"}), 400),
+        (serde_json::json!({"name": "  "}), 400),
+        (
+            serde_json::json!({"safety_min_volume": 50, "safety_max_volume": 40}),
+            400,
+        ),
+        (serde_json::json!({"comfort_volume": 90}), 400),
+        (serde_json::json!({"leveling_target_lufs": -40}), 400),
+        (serde_json::json!({"volume_cap": 10}), 400),
+        // Private is set on the device itself.
+        (serde_json::json!({"private": true}), 409),
+    ] {
+        let response = actix_test::call_service(&app, patch(body.clone(), None)).await;
+        assert_eq!(response.status(), status, "{body}");
+    }
+    // The phone app cannot crossfade or level.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::patch()
+            .uri("/zones/client:phone-remote0001/settings")
+            .set_json(serde_json::json!({"crossfade_seconds": 3}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 409);
+
+    // The studio PC makes itself private.
+    let private: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        patch(
+            serde_json::json!({"private": true}),
+            Some("desktop-private1"),
+        ),
+    )
+    .await;
+    assert_eq!(private["zone"]["settings"]["private"], true);
+    assert_eq!(private["zone"]["capabilities"]["group"], false);
+    let ids = |listed: &serde_json::Value| -> Vec<String> {
+        listed["zones"]
+            .as_array()
+            .map(|zones| {
+                zones
+                    .iter()
+                    .filter_map(|zone| zone["id"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let from_phone: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/zones")
+            .insert_header((crate::api::zones::ZONE_DEVICE_HEADER, "phone-remote0001"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(ids(&from_phone), ["client:phone-remote0001"]);
+    let from_itself: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/zones")
+            .insert_header((crate::api::zones::ZONE_DEVICE_HEADER, "desktop-private1"))
+            .to_request(),
+    )
+    .await;
+    assert!(ids(&from_itself).contains(&"client:desktop-private1".to_string()));
+    // Other remotes can neither control nor group it.
+    for request in [
+        actix_test::TestRequest::post()
+            .uri("/zones/client:desktop-private1/commands")
+            .insert_header((crate::api::zones::ZONE_DEVICE_HEADER, "phone-remote0001"))
+            .set_json(serde_json::json!({"command": "pause"}))
+            .to_request(),
+        actix_test::TestRequest::post()
+            .uri("/zones/transfer")
+            .set_json(serde_json::json!({
+                "from": "client:desktop-private1", "to": "client:phone-remote0001"
+            }))
+            .to_request(),
+        actix_test::TestRequest::post()
+            .uri("/zones/groups")
+            .set_json(serde_json::json!({
+                "zone_ids": ["client:desktop-private1", "client:phone-remote0001"]
+            }))
+            .to_request(),
+    ] {
+        assert_eq!(actix_test::call_service(&app, request).await.status(), 404);
+    }
+    // Even its own device cannot group it.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/zones/groups")
+            .insert_header((crate::api::zones::ZONE_DEVICE_HEADER, "desktop-private1"))
+            .set_json(serde_json::json!({
+                "zone_ids": ["client:desktop-private1", "client:phone-remote0001"]
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 409);
+    // Its own device still controls it.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/zones/client:desktop-private1/commands")
+            .insert_header((crate::api::zones::ZONE_DEVICE_HEADER, "desktop-private1"))
+            .set_json(serde_json::json!({"command": "pause"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 202);
+}
+
+#[test]
+fn zone_settings_persist_across_restarts() {
+    use diesel_migrations::MigrationHarness;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let pool = test_pool();
+    pool.get()
+        .expect("connection")
+        .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
+        .expect("migrations");
+    runtime.block_on(async {
+        let service = ZoneService::new(None, Some(pool.clone()));
+        service
+            .register_client(USER, "browser-persist", web_client(ZoneStatus::Idle, None))
+            .expect("register");
+        service
+            .update_settings(
+                USER,
+                "client:browser-persist",
+                ZoneSettingsPatch {
+                    name: Some("Den laptop".into()),
+                    icon: Some(Some("sofa".into())),
+                    crossfade_seconds: Some(5),
+                    leveling: Some(LevelingMode::Track),
+                    leveling_target_lufs: Some(-20),
+                    leveling_adjustment_db: Some(2),
+                    comfort_volume: Some(Some(45)),
+                    safety_min_volume: Some(Some(10)),
+                    safety_max_volume: Some(Some(70)),
+                    ..ZoneSettingsPatch::default()
+                },
+                None,
+                None,
+            )
+            .await
+            .expect("settings");
+        let restarted = ZoneService::new(None, Some(pool.clone()));
+        restarted.load_settings();
+        restarted
+            .register_client(USER, "browser-persist", web_client(ZoneStatus::Idle, None))
+            .expect("register again");
+        let zone = restarted
+            .zone(USER, "client:browser-persist", None)
+            .expect("zone");
+        assert_eq!(zone.name, "Den laptop");
+        assert_eq!(zone.icon, "sofa");
+        assert_eq!(zone.settings.crossfade_seconds, 5);
+        assert_eq!(zone.settings.leveling, LevelingMode::Track);
+        assert_eq!(
+            (
+                zone.settings.leveling_target_lufs,
+                zone.settings.leveling_adjustment_db
+            ),
+            (-20, 2)
+        );
+        let volume = zone.volume.expect("volume");
+        assert_eq!((volume.min, volume.max, volume.comfort), (10, 70, Some(45)));
+    });
 }

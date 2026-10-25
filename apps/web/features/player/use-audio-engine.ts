@@ -14,6 +14,19 @@ import {
   type AudioPresetId,
 } from "./audio-presets";
 import { canPromotePreloadedMedia } from "./gapless-playback";
+import { crossfadeGains, leveledVolume } from "./crossfade";
+
+const CROSSFADE_TICK_MS = 50;
+
+type Crossfade = {
+  outgoing: HTMLAudioElement;
+  /** The outgoing element's audio graph, closed when the fade ends. */
+  outgoingGraph: AudioGraph | null;
+  startVolume: number;
+  startedAt: number;
+  seconds: number;
+  timer: ReturnType<typeof setInterval>;
+};
 
 const PLAYBACK_START_TIMEOUT_MS = 12_000;
 
@@ -32,6 +45,13 @@ export function useAudioEngine() {
   const mutedRef = useRef(false);
   const recovered = useRef(false);
   const presetRef = useRef<AudioPreset>(audioPresets[0]!);
+  /** Volume leveling factor for the current track (zone setting). */
+  const levelFactor = useRef(1);
+  /** Zone crossfade time in seconds (0: off). */
+  const crossfadeSeconds = useRef(0);
+  /** The next source change should crossfade instead of cutting. */
+  const crossfadeArmed = useRef(false);
+  const crossfade = useRef<Crossfade | null>(null);
   const [audioVersion, setAudioVersion] = useState(0);
   const [audioPreset, setAudioPresetState] =
     useState<AudioPresetId>("original");
@@ -49,9 +69,29 @@ export function useAudioEngine() {
     preloadedSource.current = "";
   }, []);
 
+  const outputVolume = useCallback(
+    () => leveledVolume(volumeRef.current, levelFactor.current),
+    [],
+  );
+
+  /** Ends a running crossfade now: the outgoing track stops. */
+  const finishCrossfade = useCallback(() => {
+    const fade = crossfade.current;
+    if (!fade) return;
+    crossfade.current = null;
+    clearInterval(fade.timer);
+    fade.outgoing.pause();
+    fade.outgoing.removeAttribute("src");
+    fade.outgoing.load();
+    if (fade.outgoingGraph) {
+      void fade.outgoingGraph.context.close().catch(() => {});
+    }
+    if (audio.current) audio.current.volume = outputVolume();
+  }, [outputVolume]);
+
   const configureAudioElement = useCallback((element: HTMLAudioElement) => {
     element.crossOrigin = "anonymous";
-    element.volume = volumeRef.current;
+    element.volume = leveledVolume(volumeRef.current, levelFactor.current);
     element.muted = mutedRef.current;
     setPitchPreservation(element, presetRef.current.preservePitch);
     element.defaultPlaybackRate = presetRef.current.rate;
@@ -168,6 +208,10 @@ export function useAudioEngine() {
       source.current = next;
       if (!audio.current) return;
 
+      const armed = crossfadeArmed.current;
+      crossfadeArmed.current = false;
+      // Any running fade ends before the source changes again.
+      finishCrossfade();
       const prepared = preloadedAudio.current;
       if (
         prepared &&
@@ -178,12 +222,45 @@ export function useAudioEngine() {
         preloadedAudio.current = null;
         preloadedSource.current = "";
         configureAudioElement(prepared);
-        previous.pause();
-        previous.removeAttribute("src");
-        previous.load();
-        if (graph.current) {
-          void graph.current.context.close().catch(() => {});
-          graph.current = null;
+        const previousGraph = graph.current;
+        graph.current = null;
+        const remaining =
+          Number.isFinite(previous.duration) && previous.duration > 0
+            ? previous.duration - previous.currentTime
+            : 0;
+        const seconds = Math.min(crossfadeSeconds.current, remaining);
+        if (armed && !previous.paused && seconds > 0.2) {
+          // Crossfade: the outgoing track keeps playing and fades out
+          // while the new one fades in (equal power).
+          prepared.volume = 0;
+          const fade: Crossfade = {
+            outgoing: previous,
+            outgoingGraph: previousGraph,
+            startVolume: previous.volume,
+            startedAt: performance.now(),
+            seconds,
+            timer: setInterval(() => {
+              const current = crossfade.current;
+              if (!current) return;
+              const progress =
+                (performance.now() - current.startedAt) /
+                (current.seconds * 1000);
+              const gains = crossfadeGains(progress);
+              current.outgoing.volume = current.startVolume * gains.outgoing;
+              if (audio.current) {
+                audio.current.volume = outputVolume() * gains.incoming;
+              }
+              if (progress >= 1) finishCrossfade();
+            }, CROSSFADE_TICK_MS),
+          };
+          crossfade.current = fade;
+        } else {
+          previous.pause();
+          previous.removeAttribute("src");
+          previous.load();
+          if (previousGraph) {
+            void previousGraph.context.close().catch(() => {});
+          }
         }
         setAudioVersion((version) => version + 1);
         return;
@@ -193,7 +270,52 @@ export function useAudioEngine() {
       configureAudioElement(audio.current);
       audio.current.src = next;
     },
-    [configureAudioElement, discardPreloadedAudio],
+    [
+      configureAudioElement,
+      discardPreloadedAudio,
+      finishCrossfade,
+      outputVolume,
+    ],
+  );
+
+  /**
+   * Asks the next source change to crossfade. Only when a crossfade time is
+   * set and the next track is already buffered (else it would stall).
+   */
+  const armCrossfade = useCallback(() => {
+    const prepared = preloadedAudio.current;
+    if (
+      crossfadeSeconds.current <= 0 ||
+      crossfade.current ||
+      !prepared ||
+      !canPromotePreloadedMedia(
+        prepared,
+        preloadedSource.current,
+        preloadedSource.current,
+      )
+    ) {
+      return false;
+    }
+    crossfadeArmed.current = true;
+    return true;
+  }, []);
+
+  /** Zone settings for this device: crossfade time and leveling gain. */
+  const setOutputSettings = useCallback(
+    ({
+      crossfadeSeconds: seconds,
+      levelingFactor: factor,
+    }: {
+      crossfadeSeconds: number;
+      levelingFactor: number;
+    }) => {
+      crossfadeSeconds.current = Math.max(0, seconds);
+      levelFactor.current = Number.isFinite(factor) && factor > 0 ? factor : 1;
+      if (audio.current && !crossfade.current) {
+        audio.current.volume = outputVolume();
+      }
+    },
+    [outputVolume],
   );
 
   const playAudioSource = useCallback(() => {
@@ -263,9 +385,10 @@ export function useAudioEngine() {
   const setAudioVolume = useCallback((value: number | string) => {
     const next = boundedVolume(value);
     if (next === null) return;
-    if (audio.current) audio.current.volume = next;
-    if (preloadedAudio.current) preloadedAudio.current.volume = next;
     volumeRef.current = next;
+    const leveled = leveledVolume(next, levelFactor.current);
+    if (audio.current && !crossfade.current) audio.current.volume = leveled;
+    if (preloadedAudio.current) preloadedAudio.current.volume = leveled;
     setVolume(next);
     if (next > 0) {
       mutedRef.current = false;
@@ -279,6 +402,7 @@ export function useAudioEngine() {
     audio.current.muted = !audio.current.muted;
     mutedRef.current = audio.current.muted;
     if (preloadedAudio.current) preloadedAudio.current.muted = mutedRef.current;
+    if (crossfade.current) crossfade.current.outgoing.muted = mutedRef.current;
     setMuted(audio.current.muted);
   }, []);
   const setAudioPreset = useCallback(
@@ -309,10 +433,14 @@ export function useAudioEngine() {
   }, [audioPreset]);
 
   useEffect(() => discardPreloadedAudio, [discardPreloadedAudio]);
+  useEffect(() => finishCrossfade, [finishCrossfade]);
 
   return {
+    armCrossfade,
     audio,
     audioPreset,
+    finishCrossfade,
+    setOutputSettings,
     audioVersion,
     backgroundWasPlaying,
     error,

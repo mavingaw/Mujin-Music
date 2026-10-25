@@ -5,22 +5,16 @@ import {
   sleepTimerLabel,
   zoneStatusLabel,
   type Zone,
-  type ZoneKind,
 } from "@parson/music-sdk";
 import {
   ArrowRightLeft,
-  Cast,
-  Laptop,
-  Link2,
   Minus,
-  Monitor,
   Pause,
   Play,
   Plus,
+  Settings2,
   SkipBack,
   SkipForward,
-  Smartphone,
-  Speaker,
   Unlink,
   X,
 } from "lucide-react-native";
@@ -41,24 +35,7 @@ import { immediatePressFeedback } from "@/lib/press-feedback";
 import { useZones } from "@/providers/zones-provider";
 
 import { ZoneQueue } from "./zone-queue";
-
-function ZoneGlyph({ kind, color }: { kind: ZoneKind; color: string }) {
-  const props = { color, size: 20 };
-  switch (kind) {
-    case "mobile":
-      return <Smartphone {...props} />;
-    case "desktop":
-      return <Laptop {...props} />;
-    case "chromecast":
-      return <Cast {...props} />;
-    case "sonos":
-      return <Speaker {...props} />;
-    case "linked":
-      return <Link2 {...props} />;
-    default:
-      return <Monitor {...props} />;
-  }
-}
+import { ZoneIconGlyph, ZoneSettingsSheet } from "./zone-settings-sheet";
 
 function formatTime(seconds: number) {
   const total = Math.max(0, Math.floor(seconds));
@@ -88,9 +65,9 @@ export function ZoneButton() {
         onPress={() => setOpen(true)}
         style={[styles.zoneButton, remote && styles.zoneButtonActive]}
       >
-        <ZoneGlyph
+        <ZoneIconGlyph
           color={remote ? palette.success : "white"}
-          kind={remote?.kind ?? "mobile"}
+          zone={remote ?? { kind: "mobile" }}
         />
         {remote ? (
           <Text numberOfLines={1} style={styles.zoneButtonText}>
@@ -114,6 +91,7 @@ export function ZoneSheet({
   const insets = useSafeAreaInsets();
   const [grouping, setGrouping] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
+  const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const { setSheetOpen } = zones;
   useEffect(() => {
     setSheetOpen(open);
@@ -209,16 +187,17 @@ export function ZoneSheet({
                     (grouping ? isChecked : isActive) && styles.rowActive,
                   ]}
                 >
-                  <ZoneGlyph
+                  <ZoneIconGlyph
                     color={
                       zone.status === "playing" ? palette.success : "white"
                     }
-                    kind={zone.kind}
+                    zone={zone}
                   />
                   <View style={styles.rowText}>
                     <Text numberOfLines={1} style={styles.rowTitle}>
                       {zone.name}
                       {zone.id === zones.localZoneId ? "  · This phone" : ""}
+                      {zone.settings?.private ? "  · Private" : ""}
                     </Text>
                     <Text numberOfLines={1} style={styles.rowSubtitle}>
                       {subtitle}
@@ -258,6 +237,17 @@ export function ZoneSheet({
                       style={styles.iconButton}
                     >
                       <ArrowRightLeft color="white" size={18} />
+                    </Pressable>
+                  ) : null}
+                  {!grouping && zone.settings ? (
+                    <Pressable
+                      accessibilityLabel={`${zone.name} settings`}
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={() => setSettingsFor(zone.id)}
+                      style={styles.iconButton}
+                    >
+                      <Settings2 color="white" size={18} />
                     </Pressable>
                   ) : null}
                   {!grouping && zone.group ? (
@@ -312,6 +302,10 @@ export function ZoneSheet({
           </View>
         ) : null}
       </View>
+      <ZoneSettingsSheet
+        onClose={() => setSettingsFor(null)}
+        zone={zones.zones.find((zone) => zone.id === settingsFor) ?? null}
+      />
     </Modal>
   );
 }
@@ -394,7 +388,13 @@ function RemoteControls({ zone }: { zone: Zone }) {
             <Minus color="white" size={18} />
           </Pressable>
           <Text style={styles.volumeText}>
-            {zone.volume.muted ? "Muted" : `Volume ${zone.volume.level}`}
+            {zone.volume.muted
+              ? "Muted"
+              : `Volume ${zone.volume.level}${
+                  zone.volume.comfort != null
+                    ? ` · comfort ${zone.volume.comfort}`
+                    : ""
+                }${zone.volume.max < 100 ? ` · max ${zone.volume.max}` : ""}`}
           </Text>
           <Pressable
             accessibilityLabel="Volume up"

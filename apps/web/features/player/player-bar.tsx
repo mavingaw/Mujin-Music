@@ -12,6 +12,7 @@ import {
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
 import { PlayerFooter } from "./player-footer";
 import PlayerQueue, { type QueueEditing } from "./player-queue";
+import { timelinePlaybackRate } from "./player-controls-state";
 import { useMediaSession } from "./use-media-session";
 import { useCastOutput } from "./use-cast-output";
 import { getSongInfo } from "@parson/music-sdk";
@@ -109,7 +110,11 @@ export default function PlayerBar() {
       ? (cast.session?.position_ms ?? 0) / 1000
       : currentTime;
   const effectiveDuration = remote
-    ? (remote.duration_ms || remoteNow?.duration_ms || 0) / 1000
+    ? // The queued track's own length first (the speaker's lags a change).
+      ((remoteNow?.song_id ? remoteNow.duration_ms : 0) ||
+        remote.duration_ms ||
+        remoteNow?.duration_ms ||
+        0) / 1000
     : casting
       ? (cast.session?.duration_ms || castItem?.duration_ms || 0) / 1000
       : duration;
@@ -245,8 +250,11 @@ export default function PlayerBar() {
   }, []);
   const closeQueue = useCallback(() => setQueueOpen(false), []);
   const cover = effectiveCover;
-  const playbackRate =
-    audioPresets.find((preset) => preset.id === audioPreset)?.rate ?? 1;
+  // Presets slow or speed up this device only, never a remote zone's times.
+  const playbackRate = timelinePlaybackRate(
+    audioPresets.find((preset) => preset.id === audioPreset)?.rate ?? 1,
+    Boolean(remote) || casting,
+  );
 
   usePlayerShortcuts({
     currentTime: effectiveCurrentTime,

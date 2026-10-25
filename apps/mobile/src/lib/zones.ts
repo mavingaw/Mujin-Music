@@ -138,3 +138,18 @@ export function zonePollInterval(sheetOpen: boolean, playing: boolean) {
   if (sheetOpen) return 2_000;
   return playing ? 5_000 : 15_000;
 }
+
+/** A stepper's next value, kept inside `min`..`max`. */
+export function steppedValue(
+  value: number,
+  delta: number,
+  min: number,
+  max: number,
+): number {
+  return Math.min(max, Math.max(min, Math.round(value + delta)));
+}
+
+/** "+2 dB", "0 dB", "-3 dB". */
+export function signedLabel(value: number, unit: string): string {
+  return `${value > 0 ? "+" : ""}${value} ${unit}`;
+}

@@ -1,0 +1,11 @@
+DROP TABLE track_loudness;
+UPDATE zone_setting SET max_volume = safety_max_volume;
+ALTER TABLE zone_setting DROP COLUMN private;
+ALTER TABLE zone_setting DROP COLUMN safety_max_volume;
+ALTER TABLE zone_setting DROP COLUMN safety_min_volume;
+ALTER TABLE zone_setting DROP COLUMN comfort_volume;
+ALTER TABLE zone_setting DROP COLUMN leveling_adjustment_db;
+ALTER TABLE zone_setting DROP COLUMN leveling_target_lufs;
+ALTER TABLE zone_setting DROP COLUMN leveling;
+ALTER TABLE zone_setting DROP COLUMN crossfade_seconds;
+ALTER TABLE zone_setting DROP COLUMN icon;
