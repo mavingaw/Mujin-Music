@@ -487,6 +487,99 @@ export interface AlbumAbout {
   works?: TrackWork[];
   /** The release an administrator chose with "Identify album". */
   identification?: AlbumIdentification | null;
+  /** Canonical genres from tags, MusicBrainz or an edit; older servers leave this out. */
+  genres?: GenreRef[];
+  /** Whether an administrator chose the genres by hand. */
+  genres_edited?: boolean;
+}
+
+/** Where a genre came from. */
+export type GenreOrigin = "tags" | "musicbrainz" | "user";
+
+/** Which genres albums and artists show; each falls back to the other. */
+export type GenreSource = "online" | "tags";
+
+/** A genre on an album or artist, normalised into the canonical tree. */
+export interface GenreRef {
+  /** Canonical slug, or a slug made from the name for unknown genres. */
+  slug: string;
+  name: string;
+  /** Ancestor names from the top-level genre down ("Jazz" for Hard Bop). */
+  path: string[];
+  /** Whether the genre is part of the canonical tree. */
+  canonical: boolean;
+  sources: (GenreOrigin | (string & {}))[];
+  /** The raw names that were normalised to this genre. */
+  raw_names: string[];
+}
+
+export interface GenreLink {
+  slug: string;
+  name: string;
+}
+
+export interface GenreCount extends GenreLink {
+  album_count: number;
+}
+
+export interface GenreTreeNode extends GenreCount {
+  children: GenreTreeNode[];
+}
+
+/** The library's genres as a tree, with album counts. */
+export interface GenreTree {
+  genres: GenreTreeNode[];
+  /** Genres the canonical tree does not know. */
+  other: GenreCount[];
+  source: GenreSource;
+  /** Every canonical genre, for choosing genres when editing an album. */
+  catalog?: { slug: string; name: string; parent: string | null }[];
+}
+
+export interface GenreAlbum {
+  id: string;
+  name: string;
+  cover_url: string;
+  year: string | null;
+  artist_id: string;
+  artist_name: string;
+  genres: GenreLink[];
+}
+
+export interface GenrePerson {
+  artist_id: string;
+  name: string;
+  /** The library's artist picture. */
+  icon_url: string | null;
+  /** API path of a cached Wikimedia Commons photo. */
+  image_url: string | null;
+  album_count: number;
+  track_count: number;
+}
+
+/** A genre page: About text, sub-genres and the library's music in it. */
+export interface GenreDetails {
+  slug: string;
+  name: string;
+  canonical: boolean;
+  path: GenreLink[];
+  children: GenreCount[];
+  related: GenreCount[];
+  /** The Wikipedia article lead, with CC BY-SA attribution. */
+  about: EditorialText | null;
+  links: ExternalLink[];
+  enrichment: EnrichmentStatus;
+  album_count: number;
+  albums: GenreAlbum[];
+  artists: GenrePerson[];
+  composers: GenrePerson[];
+  source: GenreSource;
+}
+
+export interface AlbumGenres {
+  album_id: string;
+  genres: GenreRef[];
+  edited: boolean;
 }
 
 export interface ArtistFacts {
@@ -520,6 +613,8 @@ export interface ArtistAbout {
   roles: CreditRoleSummary[];
   note: UserNote | null;
   enrichment: EnrichmentStatus;
+  /** The artist's genres, or those of the albums they are credited on. */
+  genres?: GenreRef[];
 }
 
 export interface CreditRoleRef {
@@ -555,6 +650,8 @@ export interface EnrichmentSettings {
   enabled: boolean;
   language: string;
   artist_images: boolean;
+  /** Genres from MusicBrainz or from file tags; older servers leave this out. */
+  genre_source?: GenreSource;
 }
 
 export interface EnrichmentOverview extends EnrichmentSettings {

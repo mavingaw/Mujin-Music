@@ -13,3 +13,8 @@ export function joinMeta(parts: readonly (string | null | undefined)[]) {
 export function workRoute(mbid: string) {
   return `/work/${encodeURIComponent(mbid)}`;
 }
+
+/** Route of a genre page. */
+export function genreRoute(slug: string) {
+  return `/genre/${encodeURIComponent(slug)}`;
+}

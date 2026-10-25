@@ -42,7 +42,7 @@ pub fn artist_search_url(name: &str) -> String {
 }
 
 pub fn artist_lookup_url(mbid: &str) -> String {
-    format!("{API_ROOT}/artist/{mbid}?inc=url-rels&fmt=json")
+    format!("{API_ROOT}/artist/{mbid}?inc=url-rels+genres&fmt=json")
 }
 
 /// A title and, for classical albums titled "Beethoven: Symphony No. 9",
@@ -93,7 +93,7 @@ pub fn release_lookup_url(mbid: &str) -> String {
 }
 
 pub fn release_group_lookup_url(mbid: &str) -> String {
-    format!("{API_ROOT}/release-group/{mbid}?inc=url-rels&fmt=json")
+    format!("{API_ROOT}/release-group/{mbid}?inc=url-rels+genres&fmt=json")
 }
 
 pub fn artist_page_url(mbid: &str) -> String {
@@ -184,6 +184,11 @@ pub struct ArtistProfile {
     pub end: Option<String>,
     pub disambiguation: Option<String>,
     pub wikidata_id: Option<String>,
+    /// Genres voted on MusicBrainz, most votes first.
+    pub genres: Vec<MbGenre>,
+    /// A Commons file linked as the artist's image, a fallback when the
+    /// Wikidata item has no P18 image.
+    pub image_file: Option<String>,
 }
 
 pub fn parse_artist(body: &Value) -> Option<ArtistProfile> {
@@ -198,6 +203,65 @@ pub fn parse_artist(body: &Value) -> Option<ArtistProfile> {
         end: text(&life_span, "end"),
         disambiguation: text(body, "disambiguation"),
         wikidata_id: wikidata_relation(body),
+        genres: parse_genres(body),
+        image_file: image_relation(body),
+    })
+}
+
+/// A genre as MusicBrainz names it, with its vote count.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MbGenre {
+    pub name: String,
+    pub mbid: Option<String>,
+    pub count: i64,
+}
+
+/// At most this many genres are kept per release group or artist.
+pub const MAX_GENRES: usize = 8;
+
+/// The `genres` of an entity looked up with `inc=genres`: voted genres
+/// only, most votes first.
+pub fn parse_genres(body: &Value) -> Vec<MbGenre> {
+    let mut genres = array(body, "genres")
+        .iter()
+        .filter_map(|genre| {
+            let name = text(genre, "name")?;
+            let count = genre.get("count").and_then(Value::as_i64).unwrap_or(0);
+            (count > 0 && name.chars().count() <= 64).then(|| MbGenre {
+                name,
+                mbid: text(genre, "id").filter(|id| is_mbid(id)),
+                count,
+            })
+        })
+        .collect::<Vec<_>>();
+    genres.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    genres.truncate(MAX_GENRES);
+    genres
+}
+
+/// The Commons file named by an `image` URL relationship
+/// (`https://commons.wikimedia.org/wiki/File:Name.jpg`).
+pub fn image_relation(body: &Value) -> Option<String> {
+    array(body, "relations").iter().find_map(|relation| {
+        if relation.get("type").and_then(Value::as_str) != Some("image") {
+            return None;
+        }
+        let resource = relation.get("url").and_then(|url| text(url, "resource"))?;
+        let file = resource
+            .strip_prefix("https://commons.wikimedia.org/wiki/File:")
+            .or_else(|| resource.strip_prefix("http://commons.wikimedia.org/wiki/File:"))?;
+        let file = percent_encoding::percent_decode_str(file)
+            .decode_utf8()
+            .ok()?
+            .replace('_', " ");
+        let file = file.trim();
+        (!file.is_empty() && file.len() <= 240 && !file.contains(['/', '\\', '|', '#', '?']))
+            .then(|| file.to_string())
     })
 }
 
@@ -934,5 +998,40 @@ mod tests {
                 ("Bill Evans", "composer", None)
             ]
         );
+    }
+
+    #[test]
+    fn genres_keep_voted_names_most_votes_first_and_image_links_name_a_commons_file() {
+        let body = json!({
+            "id": BEATLES, "name": "Miles Davis",
+            "genres": [
+                {"id": OTHER, "name": "jazz", "count": 4},
+                {"name": "hard bop", "count": 9},
+                {"name": "unvoted", "count": 0}
+            ],
+            "relations": [
+                {"type": "image", "url": {"resource": "https://commons.wikimedia.org/wiki/File:Miles_Davis_by_Palumbo%C3%A9.jpg"}},
+            ]
+        });
+        let profile = parse_artist(&body).expect("artist");
+        assert_eq!(
+            profile
+                .genres
+                .iter()
+                .map(|genre| (genre.name.as_str(), genre.count))
+                .collect::<Vec<_>>(),
+            [("hard bop", 9), ("jazz", 4)]
+        );
+        assert_eq!(profile.genres[1].mbid.as_deref(), Some(OTHER));
+        assert_eq!(
+            profile.image_file.as_deref(),
+            Some("Miles Davis by Palumboé.jpg")
+        );
+        assert!(artist_lookup_url(BEATLES).contains("inc=url-rels+genres"));
+        assert!(release_group_lookup_url(BEATLES).contains("inc=url-rels+genres"));
+        let elsewhere = json!({"relations": [
+            {"type": "image", "url": {"resource": "https://example.com/wiki/File:x.jpg"}}
+        ]});
+        assert_eq!(image_relation(&elsewhere), None);
     }
 }

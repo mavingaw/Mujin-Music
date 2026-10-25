@@ -27,6 +27,7 @@ import { useArtistWorks } from "@/features/library/works/use-works";
 import { ArtistOverview } from "./artist-overview";
 import { PersonAvatar } from "@/features/library/credits/person-avatar";
 import { lifeSpanFacts } from "@/features/library/credits/credit-roles";
+import { GenreChips } from "@/features/library/genres/genre-chips";
 import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
@@ -267,6 +268,7 @@ export default function ArtistDetails({
                 {[subtitle, lifeSpan].filter(Boolean).join(" · ")}
               </p>
             )}
+            <GenreChips className="mt-3" genres={about?.genres} />
             {!artistIconURL && about?.image && (
               <p className="mt-2 text-xs text-zinc-400">
                 Photo:{" "}

@@ -32,6 +32,7 @@ import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { EditorialBlock, NoteBlock } from "@/components/credits";
 import { CompositionsSection } from "@/components/works";
+import { GenreChips } from "@/components/genres";
 import { apiUrl } from "@/lib/runtime";
 import { joinMeta } from "@/lib/credit-links";
 import { palette } from "@/constants/colors";
@@ -215,6 +216,7 @@ export default function ArtistScreen() {
                 ])}
               </Text>
             ) : null}
+            <GenreChips centered genres={about.data?.genres} />
             {!data.icon_url && about.data?.image ? (
               <Text style={styles.photoCredit}>
                 Photo: {about.data.image.author}, {about.data.image.license},

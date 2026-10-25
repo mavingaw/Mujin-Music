@@ -7,6 +7,7 @@ import {
   getEnrichment,
   updateEnrichment,
   type EnrichmentSettings as Settings,
+  type GenreSource,
 } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Loader2 } from "lucide-react";
@@ -47,6 +48,8 @@ export default function EnrichmentSettings() {
       queryClient.setQueryData(["metadata-enrichment"], data);
       void queryClient.invalidateQueries({ queryKey: ["album-about"] });
       void queryClient.invalidateQueries({ queryKey: ["artist-about"] });
+      void queryClient.invalidateQueries({ queryKey: ["genre-tree"] });
+      void queryClient.invalidateQueries({ queryKey: ["genre-page"] });
     },
     onError: () => toast("Could not change online metadata settings."),
   });
@@ -152,7 +155,29 @@ export default function EnrichmentSettings() {
             />
             Freely licensed artist photos from Wikimedia Commons
           </label>
+          <label className="flex items-center gap-2 text-zinc-300">
+            <span>Genres from</span>
+            <select
+              aria-describedby="genre-source-note"
+              className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-zinc-100"
+              disabled={!data || update.isPending}
+              onChange={(event) =>
+                update.mutate({
+                  genre_source: event.target.value as GenreSource,
+                })
+              }
+              value={data?.genre_source ?? "online"}
+            >
+              <option value="online">Online (MusicBrainz)</option>
+              <option value="tags">File tags</option>
+            </select>
+          </label>
         </div>
+        <p className="text-xs leading-5 text-zinc-500" id="genre-source-note">
+          Each falls back to the other when an album has none; genres you edit
+          on an album page always win.
+          {!data?.enabled && " Online genres need online metadata turned on."}
+        </p>
       </div>
     </section>
   );

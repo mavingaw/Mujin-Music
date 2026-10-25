@@ -21,6 +21,10 @@ pub struct EnrichmentSettings {
     /// Download freely licensed artist photos from Wikimedia Commons.
     #[serde(default = "default_true")]
     pub artist_images: bool,
+    /// Whether albums and artists show MusicBrainz genres or the genres
+    /// in the files' tags (each falls back to the other).
+    #[serde(default)]
+    pub genre_source: crate::enrichment::genres::GenreSource,
 }
 
 fn default_language() -> String {
@@ -37,6 +41,7 @@ impl Default for EnrichmentSettings {
             enabled: false,
             language: default_language(),
             artist_images: true,
+            genre_source: Default::default(),
         }
     }
 }
@@ -284,9 +289,9 @@ pub fn next_stage_task(
     let mut tasks = diesel::sql_query(
         "SELECT id, entity_type, entity_id, attempts FROM metadata_task
          WHERE provider = ? AND status = 'pending'
-           AND entity_type IN ('album', 'artist')
+           AND entity_type IN ('album', 'artist', 'genre')
            AND (not_before IS NULL OR not_before <= CURRENT_TIMESTAMP)
-         ORDER BY CASE entity_type WHEN 'album' THEN 0 ELSE 1 END, attempts, id
+         ORDER BY CASE entity_type WHEN 'genre' THEN 0 WHEN 'album' THEN 1 ELSE 2 END, attempts, id
          LIMIT 1",
     )
     .bind::<Text, _>(stage.provider())
@@ -382,7 +387,8 @@ pub fn task_state(
     .bind::<Text, _>(entity_id)
     .load::<TaskState>(connection)?;
     let by_stage = |stage: Stage| rows.iter().find(|row| row.stage == stage.provider());
-    let Some(first) = by_stage(Stage::Musicbrainz) else {
+    // Genres start at Wikidata; they have no MusicBrainz stage.
+    let Some(first) = by_stage(Stage::Musicbrainz).or_else(|| by_stage(Stage::Wikidata)) else {
         return Ok(None);
     };
     if first.status != "done" {
@@ -391,6 +397,7 @@ pub fn task_state(
     Ok(Stage::ALL[1..]
         .iter()
         .filter_map(|stage| by_stage(*stage))
+        .filter(|row| row.stage != first.stage)
         .find(|row| row.status == "pending")
         .or_else(|| {
             Stage::ALL[1..]
@@ -1163,6 +1170,7 @@ mod tests {
             enabled: true,
             language: "de".into(),
             artist_images: false,
+            genre_source: crate::enrichment::genres::GenreSource::Tags,
         };
         save_settings(&mut connection, &enabled).unwrap();
         assert_eq!(load_settings(&mut connection).unwrap(), enabled);
@@ -1502,4 +1510,199 @@ mod tests {
         );
         assert_eq!(load_note(&mut connection, 1, "album", "x").unwrap(), None);
     }
+}
+
+/// A genre an external source attached to an album or artist.
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct GenreLinkRow {
+    #[diesel(sql_type = Text)]
+    pub entity_type: String,
+    #[diesel(sql_type = Text)]
+    pub entity_id: String,
+    #[diesel(sql_type = Text)]
+    pub name: String,
+    #[diesel(sql_type = Text)]
+    pub source: String,
+    #[diesel(sql_type = BigInt)]
+    pub weight: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub mbid: Option<String>,
+}
+
+/// Replaces the genres one source gave an album or artist.
+pub fn replace_genre_links(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+    source: &str,
+    genres: &[crate::enrichment::musicbrainz::MbGenre],
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        diesel::sql_query(
+            "DELETE FROM genre_link WHERE entity_type = ? AND entity_id = ? AND source = ?",
+        )
+        .bind::<Text, _>(entity_type)
+        .bind::<Text, _>(entity_id)
+        .bind::<Text, _>(source)
+        .execute(connection)?;
+        for genre in genres {
+            diesel::sql_query(
+                "INSERT INTO genre_link (entity_type, entity_id, name, source, weight, mbid)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(entity_type, entity_id, name, source) DO UPDATE SET
+                     weight = MAX(weight, excluded.weight)",
+            )
+            .bind::<Text, _>(entity_type)
+            .bind::<Text, _>(entity_id)
+            .bind::<Text, _>(&genre.name)
+            .bind::<Text, _>(source)
+            .bind::<BigInt, _>(genre.count)
+            .bind::<Nullable<Text>, _>(genre.mbid.as_deref())
+            .execute(connection)?;
+        }
+        Ok(())
+    })
+}
+
+/// Every external genre of one entity type, for building the genre index.
+pub fn genre_links(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+) -> QueryResult<Vec<GenreLinkRow>> {
+    diesel::sql_query(
+        "SELECT entity_type, entity_id, name, source, CAST(weight AS BIGINT) AS weight, mbid
+         FROM genre_link WHERE entity_type = ? ORDER BY entity_id, weight DESC, name",
+    )
+    .bind::<Text, _>(entity_type)
+    .load::<GenreLinkRow>(connection)
+}
+
+#[derive(QueryableByName)]
+struct AlbumNameRow {
+    #[diesel(sql_type = Text)]
+    album_id: String,
+    #[diesel(sql_type = Text)]
+    name: String,
+}
+
+/// Genres read from the files' tags (GENRE, TCON, ©gen) for every album.
+pub fn album_tag_genres(
+    connection: &mut SqliteConnection,
+) -> QueryResult<std::collections::HashMap<String, Vec<String>>> {
+    let rows = diesel::sql_query(
+        "SELECT ag.album_id AS album_id, g.name AS name
+         FROM album_genre ag JOIN genre_entity g ON g.id = ag.genre_id
+         ORDER BY ag.album_id, g.normalized_name",
+    )
+    .load::<AlbumNameRow>(connection)?;
+    let mut genres = std::collections::HashMap::<String, Vec<String>>::new();
+    for row in rows {
+        genres.entry(row.album_id).or_default().push(row.name);
+    }
+    Ok(genres)
+}
+
+/// Albums whose genres an administrator chose by hand.
+pub fn album_genre_edits(
+    connection: &mut SqliteConnection,
+) -> QueryResult<std::collections::HashMap<String, Vec<String>>> {
+    let rows = diesel::sql_query("SELECT album_id, genres_json AS name FROM album_genre_edit")
+        .load::<AlbumNameRow>(connection)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.album_id,
+                serde_json::from_str::<Vec<String>>(&row.name).unwrap_or_default(),
+            )
+        })
+        .collect())
+}
+
+/// Sets an album's genres by hand, or (with `None`) goes back to tag and
+/// online genres.
+pub fn set_album_genre_edit(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+    genres: Option<&[String]>,
+    user_id: Option<i32>,
+) -> QueryResult<()> {
+    match genres {
+        Some(genres) => {
+            let value = serde_json::to_string(genres).unwrap_or_else(|_| "[]".to_string());
+            diesel::sql_query(
+                "INSERT INTO album_genre_edit (album_id, genres_json, edited_by) VALUES (?, ?, ?)
+                 ON CONFLICT(album_id) DO UPDATE SET genres_json = excluded.genres_json,
+                     edited_by = excluded.edited_by, updated_at = CURRENT_TIMESTAMP",
+            )
+            .bind::<Text, _>(album_id)
+            .bind::<Text, _>(value)
+            .bind::<Nullable<Integer>, _>(user_id)
+            .execute(connection)?;
+        }
+        None => {
+            diesel::sql_query("DELETE FROM album_genre_edit WHERE album_id = ?")
+                .bind::<Text, _>(album_id)
+                .execute(connection)?;
+        }
+    }
+    Ok(())
+}
+
+/// Queues a genre's About text (Wikidata, then Wikipedia) unless it was
+/// already looked up. Returns whether a task was added.
+pub fn queue_genre(connection: &mut SqliteConnection, slug: &str) -> QueryResult<bool> {
+    let added = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id) VALUES (?, 'genre', ?)
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .bind::<Text, _>(Stage::Wikidata.provider())
+    .bind::<Text, _>(slug)
+    .execute(connection)?;
+    Ok(added > 0)
+}
+
+/// Queues About texts for every canonical genre (and its parents) the
+/// library's tags or MusicBrainz name.
+pub fn seed_genre_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
+    use crate::enrichment::genres;
+    let mut names = album_tag_genres(connection)?
+        .into_values()
+        .flatten()
+        .collect::<Vec<_>>();
+    names.extend(
+        genre_links(connection, "album")?
+            .into_iter()
+            .map(|row| row.name),
+    );
+    names.extend(
+        genre_links(connection, "artist")?
+            .into_iter()
+            .map(|row| row.name),
+    );
+    let slugs = genres::with_ancestors(
+        names
+            .iter()
+            .filter_map(|name| genres::canonical(name))
+            .map(|node| node.slug),
+    );
+    let mut queued = 0;
+    for slug in slugs {
+        if queue_genre(connection, &slug)? {
+            queued += 1;
+        }
+    }
+    Ok(queued)
+}
+
+/// Every external credit with one role, for genre pages' composers.
+pub fn credits_with_role(
+    connection: &mut SqliteConnection,
+    role: &str,
+) -> QueryResult<Vec<CreditRow>> {
+    diesel::sql_query(format!(
+        "SELECT {CREDIT_COLUMNS} FROM enriched_credit WHERE role = ? LIMIT 50000"
+    ))
+    .bind::<Text, _>(role)
+    .load::<CreditRow>(connection)
 }

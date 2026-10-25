@@ -155,6 +155,18 @@ fn wikidata_links(profile: &ProfileRow) -> WikidataLinks {
 /// The profile key holding what Wikidata linked to. It is internal and is
 /// not shown as a fact.
 pub const WIKIDATA_KEY: &str = "wikidata";
+/// The profile key holding the Commons file MusicBrainz links as the
+/// artist's image. Internal, like [`WIKIDATA_KEY`].
+pub const COMMONS_IMAGE_KEY: &str = "commons_image";
+
+/// The MusicBrainz-linked Commons photo, used when Wikidata has none.
+fn commons_fallback(profile: &ProfileRow) -> Option<String> {
+    serde_json::from_str::<Value>(&profile.profile_json)
+        .ok()?
+        .get(COMMONS_IMAGE_KEY)?
+        .as_str()
+        .map(str::to_string)
+}
 
 pub fn images_directory() -> PathBuf {
     data_path(&["Editorial", "Images"])
@@ -332,9 +344,13 @@ impl<F: Fetch> Enricher<F> {
         };
 
         let mut wikidata_id = None;
+        let mut genres = Vec::new();
         if let Some(group) = &release.release_group_mbid {
             match self.get_json(&mb::release_group_lookup_url(group)).await? {
-                Ok(Some(body)) => wikidata_id = mb::wikidata_relation(&body),
+                Ok(Some(body)) => {
+                    wikidata_id = mb::wikidata_relation(&body);
+                    genres = mb::parse_genres(&body);
+                }
                 Ok(None) => {}
                 Err(outcome) => return Ok(outcome),
             }
@@ -376,6 +392,7 @@ impl<F: Fetch> Enricher<F> {
             store::save_profile(connection, "album", &album_id, &profile)?;
             store::replace_album_credits(connection, &album_id, "musicbrainz", &credits)?;
             store::replace_album_works(connection, &album_id, &works, &work_links)?;
+            store::replace_genre_links(connection, "album", &album_id, "musicbrainz", &genres)?;
             for (artist_id, mbid) in &links {
                 store::link_artist_mbid(connection, artist_id, mbid)?;
             }
@@ -467,14 +484,23 @@ impl<F: Fetch> Enricher<F> {
                 "begin": profile.begin,
                 "end": profile.end,
                 "disambiguation": profile.disambiguation,
+                COMMONS_IMAGE_KEY: profile.image_file,
             })
             .to_string(),
         };
         let artist_id = artist.id.clone();
+        let genres = profile.genres.clone();
+        let image_fallback = profile.image_file.is_some();
         db(&self.pool, move |connection| {
             let linked = row.wikidata_id.is_some();
             store::save_profile(connection, "artist", &artist_id, &row)?;
-            queue_wikidata(connection, "artist", &artist_id, linked)
+            store::replace_genre_links(connection, "artist", &artist_id, "musicbrainz", &genres)?;
+            queue_wikidata(connection, "artist", &artist_id, linked)?;
+            if !linked && image_fallback {
+                // No Wikidata item, but MusicBrainz links a Commons photo.
+                store::queue_stage(connection, Stage::Commons, "artist", &artist_id)?;
+            }
+            Ok(())
         })
         .await?;
         Ok(Outcome::Done)
@@ -488,6 +514,9 @@ impl<F: Fetch> Enricher<F> {
         entity_id: &str,
         settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
+        if entity_type == "genre" {
+            return self.genre_wikidata_stage(entity_id, settings).await;
+        }
         let Some(mut profile) = self.profile(entity_type, entity_id).await? else {
             return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
         };
@@ -507,7 +536,7 @@ impl<F: Fetch> Enricher<F> {
         };
         let article = entity.article(&settings.language);
         let image = (entity_type == "artist")
-            .then(|| entity.image.clone())
+            .then(|| entity.image.clone().or_else(|| commons_fallback(&profile)))
             .flatten();
         let mut facts = serde_json::from_str::<Value>(&profile.profile_json)
             .ok()
@@ -576,7 +605,14 @@ impl<F: Fetch> Enricher<F> {
             ));
         };
         let mut texts = Vec::new();
-        if entity_type == "artist" {
+        if entity_type == "genre" {
+            texts.push(wikipedia_text(
+                "background",
+                &language,
+                &article,
+                &article.lead,
+            ));
+        } else if entity_type == "artist" {
             texts.push(wikipedia_text(
                 "biography",
                 &language,
@@ -617,8 +653,11 @@ impl<F: Fetch> Enricher<F> {
         let Some(profile) = self.profile(entity_type, entity_id).await? else {
             return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
         };
-        let Some(file) = wikidata_links(&profile).image else {
-            return Ok(Outcome::Skipped("no Wikidata image".into()));
+        let Some(file) = wikidata_links(&profile)
+            .image
+            .or_else(|| commons_fallback(&profile))
+        else {
+            return Ok(Outcome::Skipped("no Wikidata or MusicBrainz image".into()));
         };
         let image = match self.download_image(entity_id, &file).await? {
             Ok(Some(image)) => image,
@@ -632,6 +671,55 @@ impl<F: Fetch> Enricher<F> {
         let entity_id = entity_id.to_string();
         db(&self.pool, move |connection| {
             store::save_image(connection, "artist", &entity_id, &image)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The Wikidata stage for a genre: the item behind the genre's English
+    /// Wikipedia article, and the article in the preferred language.
+    pub async fn genre_wikidata_stage(
+        &self,
+        slug: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(node) = super::genres::by_slug(slug) else {
+            return Ok(Outcome::Skipped("not a known genre".into()));
+        };
+        let entity = match self
+            .get_json(&wiki::wikidata_by_article_url(node.wikipedia))
+            .await?
+        {
+            Ok(Some(body)) => wiki::parse_wikidata_entity(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(entity) = entity.filter(|entity| mb::is_wikidata_id(&entity.id)) else {
+            return Ok(Outcome::Skipped("no Wikidata item for the genre".into()));
+        };
+        let article = entity.article(&settings.language);
+        let profile = ProfileRow {
+            musicbrainz_id: None,
+            release_group_mbid: None,
+            wikidata_id: Some(entity.id.clone()),
+            profile_json: json!({
+                "name": node.name,
+                WIKIDATA_KEY: {
+                    "article_language": article.as_ref().map(|(language, _)| language),
+                    "article_title": article.as_ref().map(|(_, title)| title),
+                },
+            })
+            .to_string(),
+        };
+        let slug = slug.to_string();
+        db(&self.pool, move |connection| {
+            store::save_profile(connection, "genre", &slug, &profile)?;
+            if article.is_some() {
+                store::queue_stage(connection, Stage::Wikipedia, "genre", &slug)
+            } else {
+                store::replace_texts(connection, "genre", &slug, &[])?;
+                store::drop_stage(connection, Stage::Wikipedia, "genre", &slug)
+            }
         })
         .await?;
         Ok(Outcome::Done)
@@ -1235,6 +1323,14 @@ async fn run_stage(
                 Ok(queued) if queued > 0 => tracing::info!(queued, "queued metadata enrichment"),
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "could not queue metadata enrichment"),
+            }
+            match db(&pool, store::seed_genre_tasks).await {
+                Ok(queued) if queued > 0 => {
+                    tracing::info!(queued, "queued genre descriptions");
+                    wake().notify_all();
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "could not queue genre descriptions"),
             }
             seeded = true;
         }
@@ -2140,5 +2236,175 @@ mod tests {
         assert_eq!(image_file_name("artist", "abc", "image/gif"), None);
         assert!(sniff_image(b"\x89PNG\r\n\x1a\nrest", "image/png"));
         assert!(!sniff_image(b"<html>", "image/jpeg"));
+    }
+
+    #[tokio::test]
+    async fn musicbrainz_genres_are_kept_and_genre_pages_get_text_through_wikidata() {
+        let pool = migrated_memory_pool();
+        let fetch = mock()
+            .json(
+                &mb::release_group_lookup_url(GROUP),
+                serde_json::json!({
+                    "relations": [{"type": "wikidata",
+                        "url": {"resource": "https://www.wikidata.org/wiki/Q731473"}}],
+                    "genres": [{"name": "modal jazz", "count": 5}, {"name": "jazz", "count": 2}]
+                }),
+            )
+            .json(
+                &wiki::wikidata_by_article_url("Modal jazz"),
+                serde_json::json!({"entities": {"Q845831": {"id": "Q845831",
+                    "sitelinks": {"enwiki": {"site": "enwiki", "title": "Modal jazz"}}}}}),
+            )
+            .json(
+                &wiki::wikipedia_extract_url("en", "Modal jazz"),
+                serde_json::json!({"query": {"pages": [{"title": "Modal jazz",
+                    "fullurl": "https://en.wikipedia.org/wiki/Modal_jazz",
+                    "extract": "Modal jazz is jazz that uses musical modes."}]}}),
+            )
+            .json(
+                &wiki::wikidata_by_article_url("Jazz"),
+                serde_json::json!({"entities": {"-1": {"site": "enwiki", "title": "Jazz", "missing": ""}}}),
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.enrich_album(&album(), &settings).await.unwrap(),
+            Outcome::Done
+        );
+        {
+            let mut connection = pool.get().unwrap();
+            let links = store::genre_links(&mut connection, "album").unwrap();
+            assert_eq!(
+                links
+                    .iter()
+                    .map(|row| (row.name.as_str(), row.source.as_str(), row.weight))
+                    .collect::<Vec<_>>(),
+                [("modal jazz", "musicbrainz", 5), ("jazz", "musicbrainz", 2)]
+            );
+            // Modal Jazz and its parent Jazz are queued for their About text.
+            assert_eq!(store::seed_genre_tasks(&mut connection).unwrap(), 2);
+            assert_eq!(store::seed_genre_tasks(&mut connection).unwrap(), 0);
+            let state = store::task_state(&mut connection, "genre", "modal-jazz")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (state.status.as_str(), state.stage.as_str()),
+                ("pending", "wikidata")
+            );
+        }
+        // Genre tasks run before albums and artists in the Wikidata queue.
+        let Step::Ran(task, _) = enricher
+            .step(Stage::Wikidata, &settings, None, &Backoffs::default())
+            .await
+            .unwrap()
+        else {
+            panic!("a genre task was due");
+        };
+        assert_eq!(task.entity_type, "genre");
+        assert_eq!(
+            enricher
+                .wikidata_stage("genre", "modal-jazz", &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        assert_eq!(
+            enricher
+                .wikipedia_stage("genre", "modal-jazz")
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        assert!(matches!(
+            enricher
+                .wikidata_stage("genre", "jazz", &settings)
+                .await
+                .unwrap(),
+            Outcome::Skipped(_)
+        ));
+        assert!(matches!(
+            enricher
+                .wikidata_stage("genre", "not-a-genre", &settings)
+                .await
+                .unwrap(),
+            Outcome::Skipped(_)
+        ));
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "genre", "modal-jazz").unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].kind, "background");
+        assert_eq!(texts[0].body, "Modal jazz is jazz that uses musical modes.");
+        assert_eq!(texts[0].license, "CC BY-SA 4.0");
+        let profile = store::load_profile(&mut connection, "genre", "modal-jazz")
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.wikidata_id.as_deref(), Some("Q845831"));
+    }
+
+    #[tokio::test]
+    async fn a_musicbrainz_image_link_gives_a_photo_when_wikidata_has_none() {
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = MockFetch::default()
+            .json(
+                &mb::artist_search_url("Bill Evans"),
+                serde_json::json!({"artists": [{"id": EVANS, "name": "Bill Evans", "score": 100}]}),
+            )
+            .json(
+                &mb::artist_lookup_url(EVANS),
+                serde_json::json!({"id": EVANS, "name": "Bill Evans", "type": "Person",
+                    "genres": [{"name": "cool jazz", "count": 3}],
+                    "relations": [{"type": "image", "url": {"resource":
+                        "https://commons.wikimedia.org/wiki/File:Bill_Evans_1961.jpg"}}]}),
+            )
+            .json(
+                &wiki::commons_image_info_url("Bill Evans 1961.jpg"),
+                serde_json::json!({"query": {"pages": [{"imageinfo": [{
+                    "thumburl": "https://upload.wikimedia.org/thumb/evans.jpg",
+                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Bill_Evans_1961.jpg",
+                    "mime": "image/jpeg",
+                    "extmetadata": {"LicenseShortName": {"value": "Public domain"}, "Artist": {"value": "Unknown"}}
+                }]}]}}),
+            )
+            .bytes("https://upload.wikimedia.org/thumb/evans.jpg", "image/jpeg", &jpeg);
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let artist = ArtistInput {
+            id: "artist-evans".into(),
+            name: "Bill Evans".into(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.enrich_artist(&artist, &settings).await.unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let image = store::load_image(&mut connection, "artist", "artist-evans")
+            .unwrap()
+            .expect("the MusicBrainz-linked photo");
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        let genres = store::genre_links(&mut connection, "artist").unwrap();
+        assert_eq!(genres[0].name, "cool jazz");
+        // The internal key is never shown as a fact.
+        let profile = store::load_profile(&mut connection, "artist", "artist-evans")
+            .unwrap()
+            .unwrap();
+        assert!(profile.profile_json.contains(COMMONS_IMAGE_KEY));
+        std::fs::remove_dir_all(images).unwrap();
     }
 }
