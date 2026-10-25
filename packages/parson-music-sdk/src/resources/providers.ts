@@ -758,3 +758,167 @@ export function formatLastSync(
         minute: "2-digit",
       });
 }
+
+/**
+ * Which copy plays when an album is in the local library and on TIDAL or
+ * Qobuz. `highest_quality` picks the highest bit depth and sample rate
+ * (local files win ties); the others put one source first.
+ */
+export type StreamingSourcePreference =
+  "highest_quality" | "local" | StreamingProviderId;
+
+export const SOURCE_PREFERENCES: readonly StreamingSourcePreference[] = [
+  "highest_quality",
+  "local",
+  "qobuz",
+  "tidal",
+];
+
+export const SOURCE_PREFERENCE_LABELS: Record<
+  StreamingSourcePreference,
+  string
+> = {
+  highest_quality: "Highest quality",
+  local: "My files first",
+  qobuz: "Qobuz first",
+  tidal: "TIDAL first",
+};
+
+export async function getSourcePreference(): Promise<StreamingSourcePreference> {
+  return (
+    await api.get<{ source: StreamingSourcePreference }>(
+      "/providers/preferences/source",
+    )
+  ).data.source;
+}
+
+export async function setSourcePreference(
+  source: StreamingSourcePreference,
+): Promise<StreamingSourcePreference> {
+  return (
+    await api.put<{ source: StreamingSourcePreference }>(
+      "/providers/preferences/source",
+      { source },
+    )
+  ).data.source;
+}
+
+export type AlbumVersionSource = "local" | StreamingProviderId;
+
+/** One place an album lives, with the best format it is offered in. */
+export interface AlbumVersion {
+  id: string;
+  title: string;
+  source: AlbumVersionSource;
+  format: Pick<
+    StreamingAudioFormat,
+    "lossless" | "bit_depth" | "sample_rate" | "bitrate_kbps" | "label"
+  > | null;
+}
+
+export interface RankedAlbumVersion extends AlbumVersion {
+  /** The copy that plays under the listener's preference. */
+  preferred: boolean;
+  /** Why this copy is first, for the preferred one only. */
+  reason: string | null;
+}
+
+/**
+ * A sortable quality score: any lossless copy beats any lossy one, then bit
+ * depth, then sample rate; lossy copies compare by bitrate. Unknown formats
+ * score lowest.
+ */
+export function formatScore(format: AlbumVersion["format"]): number {
+  if (!format) return -1;
+  if (format.lossless) {
+    return (
+      1_000_000_000 +
+      (format.bit_depth ?? 16) * 1_000_000 +
+      (format.sample_rate ?? 44_100)
+    );
+  }
+  return format.bitrate_kbps ?? 0;
+}
+
+const SOURCE_NAMES: Record<AlbumVersionSource, string> = {
+  local: "your files",
+  qobuz: "Qobuz",
+  tidal: "TIDAL",
+};
+
+const TIE_ORDER: Record<AlbumVersionSource, number> = {
+  local: 0,
+  qobuz: 1,
+  tidal: 2,
+};
+
+/**
+ * Orders an album's copies for a preference and marks the one that plays.
+ * Ties go to local files (no network), then Qobuz, then TIDAL.
+ */
+export function rankAlbumVersions(
+  versions: readonly AlbumVersion[],
+  preference: StreamingSourcePreference,
+): RankedAlbumVersion[] {
+  const favored = preference === "highest_quality" ? null : preference;
+  const ordered = [...versions].sort((a, b) => {
+    if (favored && (a.source === favored) !== (b.source === favored)) {
+      return a.source === favored ? -1 : 1;
+    }
+    const byQuality = formatScore(b.format) - formatScore(a.format);
+    if (byQuality !== 0) return byQuality;
+    return TIE_ORDER[a.source] - TIE_ORDER[b.source];
+  });
+  return ordered.map((version, index) => {
+    if (index > 0) return { ...version, preferred: false, reason: null };
+    const label = version.format?.label;
+    let reason: string;
+    if (favored && version.source === favored) {
+      reason = `${SOURCE_PREFERENCE_LABELS[preference]} in your settings`;
+    } else if (ordered.length === 1) {
+      reason = "Only copy";
+    } else if (favored) {
+      reason = `Not in ${SOURCE_NAMES[favored]}; best of the rest`;
+    } else if (
+      formatScore(version.format) > formatScore(ordered[1]?.format ?? null)
+    ) {
+      reason = label ? `Highest quality: ${label}` : "Highest quality";
+    } else {
+      reason = "Same quality; local files and Qobuz win ties";
+    }
+    return { ...version, preferred: true, reason };
+  });
+}
+
+/**
+ * The best format a local album's files are in, from the technical
+ * properties the indexer read, as a version format.
+ */
+export function localAlbumFormat(
+  songs: readonly { audio?: AudioProperties | null }[],
+): AlbumVersion["format"] {
+  let best: AlbumVersion["format"] = null;
+  for (const song of songs) {
+    const audio = song.audio;
+    if (!audio?.codec) continue;
+    const lossless = audio.lossless === true;
+    const codec = audio.codec.toUpperCase();
+    const label = lossless
+      ? `${audio.bit_depth ?? 16}/${formatKhz(audio.sample_rate ?? 44_100)} ${codec}`
+      : `${codec} ${audio.bitrate_kbps ?? ""}`.trim();
+    const format = {
+      lossless,
+      bit_depth: audio.bit_depth,
+      sample_rate: audio.sample_rate,
+      bitrate_kbps: audio.bitrate_kbps,
+      label,
+    };
+    if (formatScore(format) > formatScore(best)) best = format;
+  }
+  return best;
+}
+
+function formatKhz(rate: number): string {
+  const khz = rate / 1000;
+  return Number.isInteger(khz) ? String(khz) : khz.toFixed(1);
+}

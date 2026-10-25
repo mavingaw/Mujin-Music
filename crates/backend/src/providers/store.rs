@@ -337,6 +337,42 @@ pub fn remove_server_credentials(
         .execute(connection)
 }
 
+#[derive(Debug, QueryableByName)]
+struct SourcePreferenceRow {
+    #[diesel(sql_type = Text)]
+    source: String,
+}
+
+/// The listener's source preference, `None` when never set.
+pub fn source_preference(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+) -> QueryResult<Option<String>> {
+    let rows: Vec<SourcePreferenceRow> =
+        diesel::sql_query("SELECT source FROM provider_source_preference WHERE user_id = ?")
+            .bind::<Integer, _>(user_id)
+            .load(connection)?;
+    Ok(rows.into_iter().next().map(|row| row.source))
+}
+
+pub fn set_source_preference(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    source: &str,
+) -> QueryResult<usize> {
+    diesel::sql_query(
+        "INSERT INTO provider_source_preference (user_id, source, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           source = excluded.source,
+           updated_at = excluded.updated_at",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<Text, _>(source)
+    .bind::<BigInt, _>(unix_now())
+    .execute(connection)
+}
+
 /// A saved, read-only copy of a service playlist.
 #[derive(Clone, Debug, QueryableByName)]
 pub struct PlaylistCopyRow {

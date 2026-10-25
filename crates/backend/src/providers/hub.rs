@@ -21,8 +21,8 @@ use super::vault::{SealPurpose, TokenVault};
 use super::{
     AudioFormat, BrowsePage, BrowseSection, ClientCredentials, ItemKind, ProviderAlbum,
     ProviderArtist, ProviderContext, ProviderError, ProviderId, ProviderPlaylist, ProviderSession,
-    ProviderTrack, QualityOption, ResolvedStream, SearchResults, StreamQuality, StreamSource,
-    StreamingProvider, sandbox, unix_now,
+    ProviderTrack, QualityOption, ResolvedStream, SearchResults, SourcePreference, StreamQuality,
+    StreamSource, StreamingProvider, sandbox, unix_now,
 };
 use crate::persistence::connection::DbPool;
 
@@ -37,6 +37,8 @@ const MAX_CREDENTIAL_CHARACTERS: usize = 256;
 /// can have (SQLite ids start at 1).
 const SERVER_SCOPE_USER: i32 = 0;
 const MAX_DELIVERIES: usize = 512;
+/// DASH segment-size indexes kept so a seek does not re-measure the track.
+const MAX_SEGMENT_INDEXES: usize = 256;
 
 #[derive(Debug)]
 pub enum HubError {
@@ -293,6 +295,7 @@ pub struct StreamingHub {
     server_credentials: RwLock<HashMap<ProviderId, ServerCredential>>,
     media: Arc<dyn MediaTransport>,
     deliveries: Mutex<HashMap<(i32, String), DeliveredStream>>,
+    segment_indexes: Mutex<HashMap<String, media::SegmentIndex>>,
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -433,6 +436,7 @@ impl StreamingHub {
             server_credentials: RwLock::new(server_credentials),
             media: Arc::new(media::FixtureMedia::new()),
             deliveries: Mutex::new(HashMap::new()),
+            segment_indexes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -445,6 +449,33 @@ impl StreamingHub {
 
     pub fn media(&self) -> Arc<dyn MediaTransport> {
         self.media.clone()
+    }
+
+    /// The segment sizes of a DASH stream, measured once per track and
+    /// quality. Signed segment URLs change between resolutions but the
+    /// files behind them do not, so the index outlives the URLs.
+    pub async fn segment_index(
+        &self,
+        key: String,
+        urls: &[String],
+    ) -> Result<media::SegmentIndex, media::MediaError> {
+        let cached = self
+            .segment_indexes
+            .lock()
+            .ok()
+            .and_then(|indexes| indexes.get(&key).cloned())
+            .filter(|index| index.segments() == urls.len());
+        if let Some(index) = cached {
+            return Ok(index);
+        }
+        let index = media::index_segments(self.media.clone(), urls).await?;
+        if let Ok(mut indexes) = self.segment_indexes.lock() {
+            if indexes.len() >= MAX_SEGMENT_INDEXES {
+                indexes.clear();
+            }
+            indexes.insert(key, index.clone());
+        }
+        Ok(index)
     }
 
     /// Loads credentials an admin saved in Settings. Environment variables
@@ -1378,6 +1409,28 @@ impl StreamingHub {
             return Err(HubError::Provider(ProviderError::NotConnected));
         }
         self.provider_status(user_id, provider).await
+    }
+
+    pub async fn source_preference(&self, user_id: i32) -> HubResult<SourcePreference> {
+        let stored = self
+            .db(move |connection| store::source_preference(connection, user_id))
+            .await?;
+        Ok(stored
+            .as_deref()
+            .and_then(SourcePreference::parse)
+            .unwrap_or_default())
+    }
+
+    pub async fn set_source_preference(
+        &self,
+        user_id: i32,
+        preference: SourcePreference,
+    ) -> HubResult<SourcePreference> {
+        self.db(move |connection| {
+            store::set_source_preference(connection, user_id, preference.as_str())
+        })
+        .await?;
+        Ok(preference)
     }
 
     pub async fn sign_out(&self, user_id: i32, provider: ProviderId) -> HubResult<ProviderStatus> {
