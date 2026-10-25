@@ -39,6 +39,7 @@ import {
   shouldAdvancePastFailedTrack,
   shouldRetryWithCompatibilityStream,
 } from "./playback-recovery";
+import { shouldStartCrossfade } from "./crossfade";
 import { syncQueuePosition } from "./queue-position-sync";
 import {
   activeQueueIndexAfterMove,
@@ -57,9 +58,12 @@ const cover = (path?: string) =>
 
 export function usePlayerController() {
   const {
+    armCrossfade,
     audio,
     audioPreset,
     audioVersion,
+    finishCrossfade,
+    setOutputSettings,
     backgroundWasPlaying,
     error,
     graph,
@@ -463,9 +467,10 @@ export function usePlayerController() {
     } else {
       resumeOnReconnect.current = false;
       setIsPlaying(false);
+      finishCrossfade();
       element.pause();
     }
-  }, [playAudioSource, setIsPlaying]);
+  }, [finishCrossfade, playAudioSource, setIsPlaying]);
   const handleTimeChange = useCallback((value: number | string) => {
     const element = audio.current;
     const bounded = setMediaPosition(element, value, element?.duration);
@@ -570,6 +575,44 @@ export function usePlayerController() {
     song.id,
   ]);
 
+  // Crossfade (zone setting): start the next track a few seconds early.
+  const crossfadeStartedFor = useRef("");
+  const crossfadeSettings = useRef(0);
+  const setZoneOutput = useCallback(
+    (settings: { crossfadeSeconds: number; levelingFactor: number }) => {
+      crossfadeSettings.current = settings.crossfadeSeconds;
+      setOutputSettings(settings);
+    },
+    [setOutputSettings],
+  );
+  useEffect(() => {
+    const element = audio.current;
+    if (!element) return;
+    const check = () => {
+      const queueItems = queueRef.current;
+      const hasNext =
+        index.current + 1 < queueItems.length ||
+        (repeatRef.current === "all" && queueItems.length > 1);
+      if (
+        !shouldStartCrossfade({
+          seconds: crossfadeSettings.current,
+          currentTime: element.currentTime,
+          duration: element.duration,
+          repeatOne: repeatRef.current === "one",
+          hasNext,
+          alreadyStarted: crossfadeStartedFor.current === source.current,
+        }) ||
+        element.paused
+      ) {
+        return;
+      }
+      crossfadeStartedFor.current = source.current;
+      if (armCrossfade()) handleEnded();
+    };
+    element.addEventListener("timeupdate", check);
+    return () => element.removeEventListener("timeupdate", check);
+  }, [armCrossfade, audio, audioVersion, handleEnded, source]);
+
   useTransientPlayerError(error, setError);
   useAudioEvents({
     audio,
@@ -664,6 +707,7 @@ export function usePlayerController() {
       handleTimeChange,
       getPlaybackPosition,
       setAudioVolume,
+      setOutputSettings: setZoneOutput,
       toggleMute,
       toggleSlowedReverb,
       setAudioPreset,
@@ -698,6 +742,7 @@ export function usePlayerController() {
       session?.sub,
       setAudioVolume,
       setAudioPreset,
+      setZoneOutput,
       setQueue,
       addNextToQueue,
       addToQueue,

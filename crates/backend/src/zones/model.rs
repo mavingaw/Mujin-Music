@@ -108,26 +108,204 @@ impl RepeatMode {
     }
 }
 
+/// Per-zone volume limits (Roon's Volume Limits): a soft comfort limit the
+/// slider stops at (the +/- buttons may go past it) and a hard safety range
+/// nothing can leave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VolumeLimits {
+    pub comfort: Option<u8>,
+    pub safety_min: Option<u8>,
+    pub safety_max: Option<u8>,
+}
+
+impl VolumeLimits {
+    pub fn min(self) -> u8 {
+        self.safety_min.unwrap_or(0).min(100)
+    }
+
+    pub fn max(self) -> u8 {
+        self.safety_max.unwrap_or(100).min(100).max(self.min())
+    }
+
+    /// Where an absolute (slider) change stops.
+    pub fn slider_max(self) -> u8 {
+        self.comfort
+            .map(|comfort| comfort.clamp(self.min(), self.max()))
+            .unwrap_or_else(|| self.max())
+    }
+
+    /// Clamps a requested level. `step` requests (the +/- buttons, relative
+    /// changes) may pass the comfort limit; absolute ones stop at it unless
+    /// `above_comfort` allows it. The safety range always applies.
+    pub fn clamp(self, requested: i16, step: bool, above_comfort: bool) -> u8 {
+        let ceiling = if step || above_comfort {
+            self.max()
+        } else {
+            self.slider_max()
+        };
+        requested.clamp(i16::from(self.min()), i16::from(ceiling)) as u8
+    }
+
+    /// The level to move to when the current level is outside the safety
+    /// range (after the limits were tightened).
+    pub fn enforce(self, level: u8) -> Option<u8> {
+        if level > self.max() {
+            Some(self.max())
+        } else if level < self.min() {
+            Some(self.min())
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ZoneVolume {
     /// 0..=100.
     pub level: u8,
     pub muted: bool,
+    /// Hard safety minimum (0 when unset).
     pub min: u8,
-    /// Safety limit set in zone settings (100 when unset).
+    /// Hard safety maximum (100 when unset).
     pub max: u8,
+    /// Soft comfort limit: volume sliders stop here, +/- may go past it.
+    pub comfort: Option<u8>,
+    /// The range the device itself reports (read-only).
+    pub device_min: u8,
+    pub device_max: u8,
     pub step: u8,
 }
 
 impl ZoneVolume {
-    pub fn new(level: u8, muted: bool, max: Option<u8>) -> Self {
+    pub fn new(level: u8, muted: bool, limits: VolumeLimits) -> Self {
         Self {
             level: level.min(100),
             muted,
-            min: 0,
-            max: max.unwrap_or(100).min(100),
+            min: limits.min(),
+            max: limits.max(),
+            comfort: limits.comfort.map(|_| limits.slider_max()),
+            device_min: 0,
+            device_max: 100,
             step: 2,
         }
+    }
+}
+
+/// Roon's volume leveling modes. `Auto` levels by album while an album plays
+/// in order and by track otherwise.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LevelingMode {
+    #[default]
+    Off,
+    Auto,
+    Track,
+    Album,
+}
+
+impl LevelingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Track => "track",
+            Self::Album => "album",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "auto" => Some(Self::Auto),
+            "track" => Some(Self::Track),
+            "album" => Some(Self::Album),
+            _ => None,
+        }
+    }
+}
+
+/// Icons a zone can wear (names shared with the web and mobile apps).
+pub const ZONE_ICONS: &[&str] = &[
+    "speaker",
+    "headphones",
+    "monitor",
+    "laptop",
+    "phone",
+    "tablet",
+    "tv",
+    "radio",
+    "turntable",
+    "amplifier",
+    "car",
+    "bed",
+    "sofa",
+    "kitchen",
+    "office",
+    "garden",
+    "music",
+];
+
+pub const CROSSFADE_MAX_SECONDS: u8 = 12;
+pub const LEVELING_TARGET_RANGE: std::ops::RangeInclusive<i8> = -30..=-5;
+pub const LEVELING_ADJUSTMENT_RANGE: std::ops::RangeInclusive<i8> = -12..=12;
+/// ReplayGain 2.0 reference loudness.
+pub const DEFAULT_LEVELING_TARGET_LUFS: i8 = -18;
+
+/// Which settings a zone can take.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ZoneSettingsSupport {
+    pub crossfade: bool,
+    pub leveling: bool,
+    pub volume_limits: bool,
+    /// Only Parson apps can be private (they belong to one device).
+    pub private: bool,
+}
+
+/// A zone's settings as clients show them.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneSettingsView {
+    /// The name the device or group gives itself.
+    pub default_name: String,
+    /// Whether `Zone::name` is a custom name.
+    pub custom_name: bool,
+    /// Custom icon; `None` uses the device's icon.
+    pub icon: Option<String>,
+    pub crossfade_seconds: u8,
+    pub leveling: LevelingMode,
+    pub leveling_target_lufs: i8,
+    pub leveling_adjustment_db: i8,
+    pub private: bool,
+    pub supports: ZoneSettingsSupport,
+    /// How the settings apply on this kind of zone.
+    pub notes: Vec<String>,
+}
+
+impl ZoneSettingsView {
+    pub fn unsupported(default_name: &str) -> Self {
+        Self {
+            default_name: default_name.to_string(),
+            custom_name: false,
+            icon: None,
+            crossfade_seconds: 0,
+            leveling: LevelingMode::Off,
+            leveling_target_lufs: DEFAULT_LEVELING_TARGET_LUFS,
+            leveling_adjustment_db: 0,
+            private: false,
+            supports: ZoneSettingsSupport::default(),
+            notes: Vec::new(),
+        }
+    }
+}
+
+/// The icon a zone of `kind` shows by default.
+pub fn default_zone_icon(kind: ZoneKind) -> &'static str {
+    match kind {
+        ZoneKind::Web => "monitor",
+        ZoneKind::Desktop => "laptop",
+        ZoneKind::Mobile => "phone",
+        ZoneKind::Chromecast => "tv",
+        ZoneKind::Sonos => "speaker",
+        ZoneKind::Linked => "music",
     }
 }
 
@@ -200,6 +378,8 @@ pub struct Zone {
     pub kind: ZoneKind,
     pub ecosystem: &'static str,
     pub name: String,
+    /// Icon name from [`ZONE_ICONS`]: the custom icon or the kind's default.
+    pub icon: String,
     /// Device description, e.g. "Sonos Play:5" or "Chrome on macOS".
     pub device: String,
     pub status: ZoneStatus,
@@ -216,6 +396,7 @@ pub struct Zone {
     pub grouped_into: Option<String>,
     pub capabilities: ZoneCapabilities,
     pub sleep_timer: Option<ZoneSleepTimer>,
+    pub settings: ZoneSettingsView,
     /// Format limits or other facts worth showing, e.g. Sonos conversions.
     pub notes: Vec<String>,
 }
@@ -236,11 +417,17 @@ pub enum ZoneCommand {
     Jump {
         queue_position: usize,
     },
+    /// An absolute (slider) change: stops at the comfort limit.
     SetVolume {
         volume: u8,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         member_id: Option<String>,
+        /// Server-internal: a step or a restore that may pass the comfort
+        /// limit (never accepted from or sent to clients).
+        #[serde(skip)]
+        above_comfort: bool,
     },
+    /// A +/- step: may pass the comfort limit, never the safety limits.
     AdjustVolume {
         delta: i8,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -563,7 +750,8 @@ pub fn extrapolate_position(
 #[cfg(test)]
 mod tests {
     use super::{
-        QueueEdit, RepeatMode, ZoneCommand, ZoneError, apply_queue_edit, extrapolate_position,
+        QueueEdit, RepeatMode, VolumeLimits, ZoneCommand, ZoneError, ZoneVolume, apply_queue_edit,
+        extrapolate_position,
     };
 
     fn ids(values: &[&str]) -> Vec<String> {
@@ -759,7 +947,8 @@ mod tests {
         assert_eq!(
             ZoneCommand::SetVolume {
                 volume: 101,
-                member_id: None
+                member_id: None,
+                above_comfort: false,
             }
             .validate(),
             Err("invalid_volume")
@@ -771,12 +960,59 @@ mod tests {
         let volume = serde_json::to_value(ZoneCommand::SetVolume {
             volume: 30,
             member_id: None,
+            above_comfort: true,
         })
         .expect("serialize");
         assert_eq!(
             volume,
-            serde_json::json!({"command": "set_volume", "volume": 30})
+            serde_json::json!({"command": "set_volume", "volume": 30}),
+            "the server-internal comfort override never reaches clients"
         );
+        // ...and cannot be set by them either.
+        let parsed: ZoneCommand = serde_json::from_value(serde_json::json!({
+            "command": "set_volume",
+            "volume": 30,
+            "above_comfort": true
+        }))
+        .expect("parse");
+        assert_eq!(
+            parsed,
+            ZoneCommand::SetVolume {
+                volume: 30,
+                member_id: None,
+                above_comfort: false,
+            }
+        );
+    }
+
+    #[test]
+    fn comfort_limit_stops_sliders_but_not_steps_and_safety_always_holds() {
+        let limits = VolumeLimits {
+            comfort: Some(40),
+            safety_min: Some(10),
+            safety_max: Some(70),
+        };
+        // The slider stops at the comfort limit...
+        assert_eq!(limits.clamp(90, false, false), 40);
+        // ...the +/- buttons may pass it, up to the safety maximum.
+        assert_eq!(limits.clamp(55, true, false), 55);
+        assert_eq!(limits.clamp(90, true, false), 70);
+        // The safety minimum holds both ways.
+        assert_eq!(limits.clamp(2, false, false), 10);
+        assert_eq!(limits.clamp(-5, true, false), 10);
+        // Tightened limits pull an out-of-range level back in.
+        assert_eq!(limits.enforce(85), Some(70));
+        assert_eq!(limits.enforce(5), Some(10));
+        assert_eq!(limits.enforce(50), None);
+        let volume = ZoneVolume::new(50, false, limits);
+        assert_eq!(
+            (volume.min, volume.max, volume.comfort, volume.device_max),
+            (10, 70, Some(40), 100)
+        );
+        // No limits: the whole device range, no comfort stop.
+        let open = VolumeLimits::default();
+        assert_eq!(open.clamp(100, false, false), 100);
+        assert_eq!(ZoneVolume::new(5, false, open).comfort, None);
     }
 
     #[test]

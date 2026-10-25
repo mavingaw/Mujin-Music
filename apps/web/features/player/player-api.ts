@@ -49,6 +49,11 @@ export type Player = {
   handleTimeChange: (value: number | string) => void;
   getPlaybackPosition: () => number;
   setAudioVolume: (value: number | string) => void;
+  /** This zone's crossfade time (s) and leveling factor for the current track. */
+  setOutputSettings: (settings: {
+    crossfadeSeconds: number;
+    levelingFactor: number;
+  }) => void;
   toggleMute: () => void;
   toggleSlowedReverb: () => void;
   setAudioPreset: (preset: AudioPresetId) => void;

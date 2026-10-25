@@ -5,13 +5,16 @@ import {
   groupZones,
   reportClientZone,
   sendZoneCommand,
+  setZoneViewerDevice,
   transferZone,
   ungroupZones,
   unseenZoneCommands,
+  updateZoneSettings,
   type LibrarySong,
   type PendingZoneCommand,
   type Zone,
   type ZoneCommand,
+  type ZoneSettingsPatch,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Device from "expo-device";
@@ -51,6 +54,8 @@ type ZonesValue = {
   transfer: (from: string, to: string) => Promise<void>;
   group: (zoneIds: string[]) => Promise<void>;
   ungroup: (groupId: string, memberId?: string) => Promise<void>;
+  /** Changes only the fields in `patch`. */
+  updateSettings: (zoneId: string, patch: ZoneSettingsPatch) => Promise<void>;
   setSheetOpen: (open: boolean) => void;
   refresh: () => void;
 };
@@ -96,6 +101,8 @@ export function ZonesProvider({ children }: PropsWithChildren) {
       }
       const selected = await getSecureItem(ZONE_SELECTED_KEY);
       if (!cancelled) {
+        // Zone requests name this phone so its private zone stays visible.
+        setZoneViewerDevice(id);
         setDeviceId(id);
         setSelectedId(selected || null);
       }
@@ -268,6 +275,10 @@ export function ZonesProvider({ children }: PropsWithChildren) {
       },
       ungroup: async (groupId, memberId) => {
         await ungroupZones(groupId, memberId);
+        refresh();
+      },
+      updateSettings: async (zoneId, patch) => {
+        await updateZoneSettings(zoneId, patch);
         refresh();
       },
       setSheetOpen,

@@ -20,9 +20,58 @@ export type ZoneRepeatMode = "off" | "all" | "one";
 export interface ZoneVolume {
   level: number;
   muted: boolean;
+  /** Hard safety minimum (0 when unset). */
   min: number;
+  /** Hard safety maximum (100 when unset). */
   max: number;
+  /** Soft comfort limit: sliders stop here, +/- may go past it. */
+  comfort?: number | null;
+  /** The range the device itself reports (read-only). */
+  device_min?: number;
+  device_max?: number;
   step: number;
+}
+
+/** Roon's volume leveling: `auto` levels by album while an album plays in order. */
+export type ZoneLevelingMode = "off" | "auto" | "track" | "album";
+
+export interface ZoneSettingsView {
+  /** The device's (or group's) own name. */
+  default_name: string;
+  custom_name: boolean;
+  /** Custom icon, `null` for the device's icon. */
+  icon: string | null;
+  crossfade_seconds: number;
+  leveling: ZoneLevelingMode;
+  leveling_target_lufs: number;
+  leveling_adjustment_db: number;
+  /** Only the device the zone runs on sees and controls it. */
+  private: boolean;
+  supports: {
+    crossfade: boolean;
+    leveling: boolean;
+    volume_limits: boolean;
+    private: boolean;
+  };
+  notes: string[];
+}
+
+/**
+ * A settings change: only the fields present change. `name` never resets a
+ * custom name; `reset_name: true` does. `null` clears icon and limits.
+ */
+export interface ZoneSettingsPatch {
+  name?: string;
+  reset_name?: boolean;
+  icon?: string | null;
+  crossfade_seconds?: number;
+  leveling?: ZoneLevelingMode;
+  leveling_target_lufs?: number;
+  leveling_adjustment_db?: number;
+  comfort_volume?: number | null;
+  safety_min_volume?: number | null;
+  safety_max_volume?: number | null;
+  private?: boolean;
 }
 
 export interface ZoneGroupMember {
@@ -71,6 +120,8 @@ export interface Zone {
   kind: ZoneKind;
   ecosystem: "parson" | "chromecast" | "sonos" | "linked";
   name: string;
+  /** Icon name from `ZONE_ICONS` (custom or the device's). */
+  icon?: string;
   device: string;
   status: ZoneStatus;
   source: ZoneSource;
@@ -91,6 +142,7 @@ export interface Zone {
     /** Fading out before pausing. */
     fading: boolean;
   } | null;
+  settings?: ZoneSettingsView;
   notes: string[];
 }
 
@@ -169,8 +221,30 @@ export const MAX_ZONE_QUEUE_ITEMS = 500;
 
 const zonePath = (zoneId: string) => `/zones/${encodeURIComponent(zoneId)}`;
 
+/** Header naming this app's own zone device (for private zones). */
+export const ZONE_DEVICE_HEADER = "X-Parson-Zone-Device";
+let zoneViewerDevice: string | null = null;
+
+/**
+ * Names this app's zone device on zone requests, so the server shows this
+ * device its private zone and hides other devices' private zones.
+ */
+export function setZoneViewerDevice(deviceId: string | null): void {
+  zoneViewerDevice = deviceId || null;
+}
+
+/** Request options with the zone device header when one is set. */
+function zoneRequest<T extends object>(options: T): T {
+  return zoneViewerDevice
+    ? { ...options, headers: { [ZONE_DEVICE_HEADER]: zoneViewerDevice } }
+    : options;
+}
+
 export async function getZones(): Promise<ZoneList> {
-  const response = await api.get<ZoneList>("/zones", { timeout: 5_000 });
+  const response = await api.get<ZoneList>(
+    "/zones",
+    zoneRequest({ timeout: 5_000 }),
+  );
   return response.data;
 }
 
@@ -203,7 +277,11 @@ export async function sendZoneCommand(
   zoneId: string,
   command: ZoneCommand,
 ): Promise<void> {
-  await api.post(`${zonePath(zoneId)}/commands`, command, { timeout: 8_000 });
+  await api.post(
+    `${zonePath(zoneId)}/commands`,
+    command,
+    zoneRequest({ timeout: 8_000 }),
+  );
 }
 
 /** Moves the queue, track and position from one zone to another. */
@@ -214,7 +292,7 @@ export async function transferZone(
   const response = await api.post<{ zone: Zone | null }>(
     "/zones/transfer",
     { from, to },
-    { timeout: 30_000 },
+    zoneRequest({ timeout: 30_000 }),
   );
   return response.data;
 }
@@ -227,7 +305,7 @@ export async function groupZones(zoneIds: string[]): Promise<{
   const response = await api.post(
     "/zones/groups",
     { zone_ids: zoneIds },
-    { timeout: 15_000 },
+    zoneRequest({ timeout: 15_000 }),
   );
   return response.data;
 }
@@ -244,9 +322,40 @@ export async function ungroupZones(
 
 export async function updateZoneSettings(
   zoneId: string,
-  settings: { name?: string | null; max_volume?: number | null },
-): Promise<{ name: string | null; max_volume: number | null }> {
-  const response = await api.patch(`${zonePath(zoneId)}/settings`, settings);
+  patch: ZoneSettingsPatch,
+): Promise<{ settings: unknown; zone: Zone | null }> {
+  const response = await api.patch(
+    `${zonePath(zoneId)}/settings`,
+    patch,
+    zoneRequest({}),
+  );
+  return response.data;
+}
+
+export interface Loudness {
+  integrated_lufs: number;
+  true_peak_db: number;
+}
+
+export interface TrackLoudness {
+  track: Loudness | null;
+  /** Present once every track of the album is measured. */
+  album: Loudness | null;
+}
+
+/**
+ * EBU R128 loudness for volume leveling (at most 20 songs). Songs not
+ * measured yet come back `null` with `pending: true`; ask again shortly.
+ */
+export async function getZoneLoudness(songIds: string[]): Promise<{
+  tracks: Record<string, TrackLoudness | null>;
+  pending: boolean;
+}> {
+  const response = await api.post(
+    "/zones/loudness",
+    { song_ids: songIds.slice(0, 20) },
+    { timeout: 30_000 },
+  );
   return response.data;
 }
 
@@ -255,7 +364,7 @@ export async function setZoneSleepTimer(
   zoneId: string,
   minutes: number | null,
 ): Promise<void> {
-  await api.post(`${zonePath(zoneId)}/sleep`, { minutes });
+  await api.post(`${zonePath(zoneId)}/sleep`, { minutes }, zoneRequest({}));
 }
 
 export async function discoverSonos(): Promise<{
@@ -501,4 +610,194 @@ export function sleepTimerLabel(
   if (timer.fading) return "Fading out to sleep";
   if (timer.finishing_track) return "Sleep after this track";
   return `Sleep in ${formatSleepRemaining(timer.ends_at_ms, nowMs)}`;
+}
+
+// ----- zone settings --------------------------------------------------------
+
+/** Icons a zone can wear (the server accepts exactly these). */
+export const ZONE_ICONS = [
+  "speaker",
+  "headphones",
+  "monitor",
+  "laptop",
+  "phone",
+  "tablet",
+  "tv",
+  "radio",
+  "turntable",
+  "amplifier",
+  "car",
+  "bed",
+  "sofa",
+  "kitchen",
+  "office",
+  "garden",
+  "music",
+] as const;
+export type ZoneIconName = (typeof ZONE_ICONS)[number];
+
+const DEFAULT_ICONS: Record<ZoneKind, ZoneIconName> = {
+  web: "monitor",
+  desktop: "laptop",
+  mobile: "phone",
+  chromecast: "tv",
+  sonos: "speaker",
+  linked: "music",
+};
+
+/** The icon a zone shows: its custom icon, else its kind's. */
+export function zoneIconName(zone: Pick<Zone, "icon" | "kind">): ZoneIconName {
+  const icon = zone.icon as ZoneIconName | undefined;
+  return icon && ZONE_ICONS.includes(icon) ? icon : DEFAULT_ICONS[zone.kind];
+}
+
+export const CROSSFADE_CHOICES = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12] as const;
+export const DEFAULT_LEVELING_TARGET_LUFS = -18;
+export const LEVELING_TARGET_RANGE = { min: -30, max: -5 } as const;
+export const LEVELING_ADJUSTMENT_RANGE = { min: -12, max: 12 } as const;
+
+export function levelingModeLabel(mode: ZoneLevelingMode): string {
+  switch (mode) {
+    case "auto":
+      return "Auto";
+    case "track":
+      return "Track";
+    case "album":
+      return "Album";
+    default:
+      return "Off";
+  }
+}
+
+/** What the settings form edits. Volumes are 0..100; `null` is "no limit". */
+export interface ZoneSettingsDraft {
+  name: string;
+  icon: string | null;
+  crossfade_seconds: number;
+  leveling: ZoneLevelingMode;
+  leveling_target_lufs: number;
+  leveling_adjustment_db: number;
+  comfort_volume: number | null;
+  safety_min_volume: number | null;
+  safety_max_volume: number | null;
+  private: boolean;
+}
+
+/** The form's starting values for `zone`. */
+export function zoneSettingsDraft(zone: Zone): ZoneSettingsDraft {
+  const settings = zone.settings;
+  const volume = zone.volume;
+  return {
+    name: zone.name,
+    icon: settings?.icon ?? null,
+    crossfade_seconds: settings?.crossfade_seconds ?? 0,
+    leveling: settings?.leveling ?? "off",
+    leveling_target_lufs:
+      settings?.leveling_target_lufs ?? DEFAULT_LEVELING_TARGET_LUFS,
+    leveling_adjustment_db: settings?.leveling_adjustment_db ?? 0,
+    comfort_volume: volume?.comfort ?? null,
+    safety_min_volume: volume && volume.min > 0 ? volume.min : null,
+    safety_max_volume: volume && volume.max < 100 ? volume.max : null,
+    private: settings?.private ?? false,
+  };
+}
+
+/**
+ * The request for the changes between `initial` and `draft`: unchanged
+ * fields are left out, so saving never touches a name the user did not edit.
+ * Clearing the name resets it to the device's name.
+ */
+export function zoneSettingsPatch(
+  initial: ZoneSettingsDraft,
+  draft: ZoneSettingsDraft,
+): ZoneSettingsPatch {
+  const patch: ZoneSettingsPatch = {};
+  const name = draft.name.trim();
+  if (name !== initial.name.trim()) {
+    if (name) patch.name = name;
+    else patch.reset_name = true;
+  }
+  const keys = [
+    "icon",
+    "crossfade_seconds",
+    "leveling",
+    "leveling_target_lufs",
+    "leveling_adjustment_db",
+    "comfort_volume",
+    "safety_min_volume",
+    "safety_max_volume",
+    "private",
+  ] as const;
+  for (const key of keys) {
+    if (draft[key] !== initial[key]) {
+      (patch as Record<string, unknown>)[key] = draft[key];
+    }
+  }
+  return patch;
+}
+
+/** Problems with a draft, in words, or `null` when it can be saved. */
+export function zoneSettingsProblem(draft: ZoneSettingsDraft): string | null {
+  const min = draft.safety_min_volume ?? 0;
+  const max = draft.safety_max_volume ?? 100;
+  if (min >= max) return "The safety minimum must be below the maximum.";
+  if (
+    draft.comfort_volume !== null &&
+    (draft.comfort_volume < min || draft.comfort_volume > max)
+  ) {
+    return "The comfort limit must sit inside the safety limits.";
+  }
+  return null;
+}
+
+/** Where a zone's volume slider stops (the comfort limit, else the maximum). */
+export function zoneSliderMax(volume: ZoneVolume): number {
+  return Math.min(volume.comfort ?? volume.max, volume.max);
+}
+
+export type LevelBy = "track" | "album";
+
+/**
+ * How the queue item at `index` is leveled; `auto` uses the album while a
+ * neighbour comes from the same album (an album playing in order).
+ */
+export function resolveLevelBy(
+  mode: ZoneLevelingMode,
+  songIds: readonly string[],
+  index: number,
+  albumOf: (songId: string) => string | null | undefined,
+): LevelBy | null {
+  if (mode === "off") return null;
+  if (mode !== "auto") return mode;
+  const id = songIds[index];
+  const album = id ? albumOf(id) : null;
+  if (!album) return "track";
+  const same = (neighbour: string | undefined) =>
+    neighbour !== undefined && albumOf(neighbour) === album;
+  return same(songIds[index - 1]) || same(songIds[index + 1])
+    ? "album"
+    : "track";
+}
+
+/** Same limits as the server's leveling. */
+export const LEVELING_MAX_BOOST_DB = 12;
+export const LEVELING_MAX_CUT_DB = -24;
+export const LEVELING_PEAK_CEILING_DBTP = -1;
+
+/**
+ * Gain (dB) bringing `loudness` to the target plus adjustment, limited so
+ * the true peak stays at or below -1 dBTP. Mirrors the server.
+ */
+export function levelingGainDb(
+  loudness: Loudness,
+  targetLufs: number,
+  adjustmentDb: number,
+): number {
+  const desired = targetLufs - loudness.integrated_lufs + adjustmentDb;
+  const headroom = LEVELING_PEAK_CEILING_DBTP - loudness.true_peak_db;
+  const gain = Math.max(
+    LEVELING_MAX_CUT_DB,
+    Math.min(LEVELING_MAX_BOOST_DB, Math.min(desired, headroom)),
+  );
+  return Math.round(gain * 10) / 10;
 }

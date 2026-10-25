@@ -8,3 +8,13 @@ export function formatPlaybackTime(time: number) {
 export function timelineValueText(currentTime: number, duration: number) {
   return `${formatPlaybackTime(currentTime)} of ${formatPlaybackTime(duration)}`;
 }
+
+/**
+ * The speed the timeline reads times at. Audio presets (slowed, sped up)
+ * only change this device's own playback; a remote zone or a cast session
+ * plays at normal speed, so its times must not be scaled by them.
+ */
+export function timelinePlaybackRate(localRate: number, remote: boolean) {
+  if (remote) return 1;
+  return Number.isFinite(localRate) && localRate > 0 ? localRate : 1;
+}

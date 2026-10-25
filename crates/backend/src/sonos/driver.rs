@@ -698,6 +698,21 @@ impl SonosController {
         Ok(())
     }
 
+    /// Sonos crossfade (fixed length, set per group on the coordinator).
+    pub async fn set_crossfade(&self, coordinator: &str, enabled: bool) -> Result<(), SoapError> {
+        self.call(
+            coordinator,
+            Service::AVTransport,
+            "SetCrossfadeMode",
+            &[
+                ("InstanceID", "0"),
+                ("CrossfadeMode", if enabled { "1" } else { "0" }),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn transport(&self, coordinator: &str, action: Transport) -> Result<(), SoapError> {
         let result = match action {
             Transport::Play => {

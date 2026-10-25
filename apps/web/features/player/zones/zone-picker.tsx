@@ -5,23 +5,21 @@ import {
   groupingPlan,
   orderZones,
   zoneKindLabel,
+  zoneSliderMax,
   zoneStatusLabel,
   type Zone,
-  type ZoneKind,
 } from "@parson/music-sdk";
 import {
   ArrowRightLeft,
-  Cast,
   Check,
-  Laptop,
   Link2,
-  Monitor,
+  Lock,
+  Minus,
   Moon,
   MoreHorizontal,
+  Plus,
   RefreshCw,
   Settings2,
-  Smartphone,
-  Speaker,
   Unlink,
   Volume2,
   VolumeX,
@@ -44,34 +42,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { ZoneIcon } from "./zone-icons";
+import { ZoneSettingsDialog } from "./zone-settings";
 import { useZones } from "./zones-provider";
 
 const SLEEP_CHOICES = [15, 30, 45, 60, 90] as const;
-
-export function ZoneIcon({
-  kind,
-  className = "h-4 w-4",
-}: {
-  kind: ZoneKind;
-  className?: string;
-}) {
-  switch (kind) {
-    case "mobile":
-      return <Smartphone className={className} />;
-    case "desktop":
-      return <Laptop className={className} />;
-    case "chromecast":
-      return <Cast className={className} />;
-    case "sonos":
-      return <Speaker className={className} />;
-    case "linked":
-      return <Link2 className={className} />;
-    default:
-      return <Monitor className={className} />;
-  }
-}
 
 function errorMessage(error: unknown, fallback: string): string {
   const response = (
@@ -87,6 +63,8 @@ function errorMessage(error: unknown, fallback: string): string {
       "Group Chromecast speakers in the Google Home app.",
     end_of_queue: "That was the last track in the queue.",
     sonos_disabled: "Sonos support is turned off on this server.",
+    private_zones_cannot_be_grouped:
+      "Private zones stay out of groups. Turn off Private zone in its settings first.",
   };
   return known[code] ?? code.replaceAll("_", " ");
 }
@@ -95,6 +73,7 @@ function errorMessage(error: unknown, fallback: string): string {
 export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
   const { zones, remoteZone, localZoneId } = useZones();
   const [open, setOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const local = zones.find((zone) => zone.id === localZoneId);
   const current = remoteZone ?? local;
   const label = remoteZone ? remoteZone.name : "This device";
@@ -105,9 +84,16 @@ export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
         className={`group/control relative flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors ${remoteZone ? "bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25" : "text-zinc-400 hover:bg-white/10 hover:text-white"}`}
         data-zone-picker
         onClick={() => setOpen(true)}
+        onContextMenu={(event) => {
+          // Right-click opens the zone's settings, as in Roon.
+          if (!current) return;
+          event.preventDefault();
+          setSettingsOpen(true);
+        }}
+        title="Choose a zone (right-click for zone settings)"
         type="button"
       >
-        <ZoneIcon kind={current?.kind ?? "web"} />
+        <ZoneIcon zone={current ?? { kind: "web" }} />
         {!compact && (
           <span className="hidden max-w-28 truncate lg:inline">{label}</span>
         )}
@@ -119,6 +105,11 @@ export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
         )}
       </button>
       <ZonePickerDialog open={open} onOpenChange={setOpen} />
+      <ZoneSettingsDialog
+        onOpenChange={setSettingsOpen}
+        open={settingsOpen}
+        zone={current ?? null}
+      />
     </>
   );
 }
@@ -365,7 +356,7 @@ function ZoneRow({
           <span
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${zone.status === "playing" ? "bg-emerald-400/15 text-emerald-300" : "bg-white/[0.06] text-zinc-400"}`}
           >
-            <ZoneIcon kind={zone.kind} />
+            <ZoneIcon zone={zone} />
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -373,6 +364,12 @@ function ZoneRow({
                 {zone.name}
               </span>
               {isLocal && <Badge>This device</Badge>}
+              {zone.settings?.private && (
+                <Badge>
+                  <Lock className="mr-0.5 inline h-2.5 w-2.5" />
+                  Private
+                </Badge>
+              )}
               {zone.group &&
                 (zone.group.synced ? (
                   <Badge tone="synced">Synced group</Badge>
@@ -412,7 +409,14 @@ function ZoneRow({
         <ZoneVolumeRow
           label={zone.group ? "Group volume" : "Volume"}
           muted={zone.volume.muted}
-          max={zone.volume.max}
+          max={zoneSliderMax(zone.volume)}
+          onStep={(delta) =>
+            void run(
+              () => zones.send(zone.id, { command: "adjust_volume", delta }),
+              "Could not change volume.",
+            )
+          }
+          step={zone.volume.step}
           onMute={(muted) =>
             void run(
               () => zones.send(zone.id, { command: "set_mute", muted }),
@@ -440,8 +444,20 @@ function ZoneRow({
                   <ZoneVolumeRow
                     dense
                     label={`${member.name} volume`}
-                    max={member.volume.max}
+                    max={zoneSliderMax(member.volume)}
                     muted={member.volume.muted}
+                    onStep={(delta) =>
+                      void run(
+                        () =>
+                          zones.send(zone.id, {
+                            command: "adjust_volume",
+                            delta,
+                            member_id: member.id,
+                          }),
+                        "Could not change volume.",
+                      )
+                    }
+                    step={member.volume.step}
                     onMute={(muted) =>
                       void run(
                         () =>
@@ -499,7 +515,11 @@ function ZoneRow({
             ))}
         </ul>
       )}
-      {editing && <ZoneSettingsForm onDone={() => onEdit(false)} zone={zone} />}
+      <ZoneSettingsDialog
+        onOpenChange={(value) => onEdit(value)}
+        open={editing}
+        zone={zone}
+      />
     </li>
   );
 }
@@ -531,22 +551,31 @@ function ZoneVolumeRow({
   max,
   muted,
   onMute,
+  onStep,
   onVolume,
+  step,
   volume,
 }: {
   dense?: boolean;
   label: string;
+  /** Where the slider stops: the comfort limit, else the safety maximum. */
   max: number;
   muted: boolean;
   onMute: (muted: boolean) => void;
+  /** +/- buttons: may go past the comfort limit, never the safety maximum. */
+  onStep: (delta: number) => void;
   onVolume: (volume: number) => void;
+  step: number;
   volume: number;
 }) {
   const [draft, setDraft] = useState<number | null>(null);
   useEffect(() => setDraft(null), [volume]);
   const shown = draft ?? volume;
+  const aboveComfort = shown > max;
+  const stepButton =
+    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-zinc-500 hover:bg-white/10 hover:text-white";
   return (
-    <div className={`flex items-center gap-2 ${dense ? "" : "mt-2 pl-12"}`}>
+    <div className={`flex items-center gap-1.5 ${dense ? "" : "mt-2 pl-12"}`}>
       <button
         aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-white/10 hover:text-white"
@@ -559,6 +588,14 @@ function ZoneVolumeRow({
           <Volume2 className="h-3.5 w-3.5" />
         )}
       </button>
+      <button
+        aria-label={`Lower ${label}`}
+        className={stepButton}
+        onClick={() => onStep(-Math.max(1, step))}
+        type="button"
+      >
+        <Minus className="h-3 w-3" />
+      </button>
       <Slider
         aria-label={label}
         className="h-7 flex-1 **:data-[slot=slider-range]:bg-white **:data-[slot=slider-thumb]:h-3 **:data-[slot=slider-thumb]:w-3 **:data-[slot=slider-thumb]:border-0 **:data-[slot=slider-thumb]:bg-white **:data-[slot=slider-track]:h-1 **:data-[slot=slider-track]:bg-white/15"
@@ -568,7 +605,22 @@ function ZoneVolumeRow({
         onValueCommit={([value]) => onVolume(Math.min(value ?? 0, max))}
         value={[muted ? 0 : shown]}
       />
-      <span className="w-12 text-right text-[11px] tabular-nums text-zinc-500">
+      <button
+        aria-label={`Raise ${label}`}
+        className={stepButton}
+        onClick={() => onStep(Math.max(1, step))}
+        type="button"
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+      <span
+        className={`w-14 text-right text-[11px] tabular-nums ${aboveComfort ? "text-amber-300" : "text-zinc-500"}`}
+        title={
+          max < 100
+            ? `The slider stops at ${max}; + goes past it up to the safety limit.`
+            : undefined
+        }
+      >
         {muted ? "Muted" : shown}
         {max < 100 && !muted ? `/${max}` : ""}
       </span>
@@ -660,76 +712,5 @@ function ZoneMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function ZoneSettingsForm({
-  onDone,
-  zone,
-}: {
-  onDone: () => void;
-  zone: Zone;
-}) {
-  const zones = useZones();
-  const [name, setName] = useState(zone.name);
-  const [limit, setLimit] = useState(zone.volume?.max ?? 100);
-  return (
-    <form
-      className="mt-3 space-y-3 rounded-lg border border-white/10 p-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void zones
-          .updateSettings(zone.id, {
-            name: name.trim() && name.trim() !== zone.name ? name.trim() : null,
-            max_volume: limit < 100 ? limit : null,
-          })
-          .then(() => {
-            toast.success("Zone settings saved");
-            onDone();
-          })
-          .catch((error) =>
-            toast.error(errorMessage(error, "Could not save settings.")),
-          );
-      }}
-    >
-      <label className="block text-xs text-zinc-400">
-        Zone name
-        <Input
-          className="mt-1 h-9"
-          maxLength={80}
-          onChange={(event) => setName(event.target.value)}
-          value={name}
-        />
-      </label>
-      <label className="block text-xs text-zinc-400">
-        Volume limit · {limit}
-        <Slider
-          aria-label="Volume limit"
-          className="mt-2 h-6"
-          max={100}
-          min={1}
-          onValueChange={([value]) => setLimit(value ?? 100)}
-          value={[limit]}
-        />
-        <span className="mt-1 block text-[11px] text-zinc-600">
-          Remote and in-app volume never goes above this level.
-        </span>
-      </label>
-      <div className="flex justify-end gap-2">
-        <button
-          className="h-8 rounded-full px-3 text-xs text-zinc-400 hover:text-white"
-          onClick={onDone}
-          type="button"
-        >
-          Cancel
-        </button>
-        <button
-          className="h-8 rounded-full bg-white px-3 text-xs font-semibold text-black"
-          type="submit"
-        >
-          Save
-        </button>
-      </div>
-    </form>
   );
 }

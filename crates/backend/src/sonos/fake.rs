@@ -44,6 +44,10 @@ pub struct FakePlayer {
     pub volume: u8,
     pub muted: bool,
     pub play_mode: String,
+    pub crossfade: bool,
+    /// Overrides the reported `TrackDuration`, like a speaker that still
+    /// reports the previous track's length right after a change.
+    pub reported_duration_ms: Option<i64>,
 }
 
 impl FakePlayer {
@@ -180,6 +184,8 @@ impl FakeSonos {
                 volume: 20,
                 muted: false,
                 play_mode: "NORMAL".to_string(),
+                crossfade: false,
+                reported_duration_ms: None,
             });
             let uuid = spec.uuid.to_string();
             let state = household.clone();
@@ -286,6 +292,14 @@ impl FakeSonos {
             subscribers_for(&household, uuid, Service::AVTransport)
         };
         send_notifications(self.household.clone(), self.http.clone(), subscribers);
+    }
+
+    /// Makes the speaker report `duration_ms` as the track length (or the
+    /// queued track's real length again with `None`).
+    pub fn report_duration(&self, uuid: &str, duration_ms: Option<i64>) {
+        let mut household = self.household.lock().unwrap();
+        let index = household.index(uuid).expect("fake player");
+        household.players[index].reported_duration_ms = duration_ms;
     }
 
     /// Simulates the Sonos app starting something Parson did not queue.
@@ -760,6 +774,23 @@ fn dispatch_action(
             household.players[index].play_mode = mode;
             Ok(vec![])
         }
+        (Service::AVTransport, "SetCrossfadeMode") => {
+            household.players[index].crossfade = match argument("CrossfadeMode")?.as_str() {
+                "1" | "true" => true,
+                "0" | "false" => false,
+                _ => return Err(402),
+            };
+            Ok(vec![])
+        }
+        (Service::AVTransport, "GetCrossfadeMode") => Ok(vec![(
+            "CrossfadeMode",
+            if household.players[index].crossfade {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        )]),
         (Service::AVTransport, "GetTransportSettings") => Ok(vec![
             ("PlayMode", household.players[index].play_mode.clone()),
             ("RecQualityMode", "NOT_IMPLEMENTED".to_string()),
@@ -838,7 +869,9 @@ fn dispatch_action(
             } else {
                 (player.transport_uri.clone(), String::new())
             };
-            let duration = track_duration_ms(&metadata);
+            let duration = player
+                .reported_duration_ms
+                .unwrap_or_else(|| track_duration_ms(&metadata));
             Ok(vec![
                 ("Track", player.track.to_string()),
                 ("TrackDuration", format_duration(duration)),

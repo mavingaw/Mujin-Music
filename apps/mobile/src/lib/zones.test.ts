@@ -7,6 +7,8 @@ import {
   mobileRepeatMode,
   zoneRepeatMode,
   zonePollInterval,
+  signedLabel,
+  steppedValue,
   type MobileZoneControls,
 } from "./zones";
 
@@ -108,4 +110,13 @@ test("remote queue management reaches the phone's queue", async () => {
   ]);
   expect(zoneRepeatMode("none")).toBe("off");
   expect(mobileRepeatMode("one")).toBe("one");
+});
+
+test("settings steppers stay inside their range", () => {
+  expect(steppedValue(-18, 1, -30, -5)).toBe(-17);
+  expect(steppedValue(-5, 1, -30, -5)).toBe(-5);
+  expect(steppedValue(2, -5, 0, 100)).toBe(0);
+  expect(signedLabel(2, "dB")).toBe("+2 dB");
+  expect(signedLabel(-3, "dB")).toBe("-3 dB");
+  expect(signedLabel(0, "dB")).toBe("0 dB");
 });

@@ -10,12 +10,37 @@ use crate::api::auth::authenticated_user_id;
 use crate::api::cast::{self, CastZoneSnapshot};
 use crate::library::state::{LibraryCache, LibraryLifecycle};
 use crate::persistence::connection::DbPool;
+use crate::zones::leveling::LevelBy;
 use crate::zones::service::now_ms;
+use crate::zones::service::{StreamLeveling, zone_media_scope};
 use crate::zones::{
-    ClientRegistration, PlaybackSnapshot, RepeatMode, Zone, ZoneCapabilities, ZoneCommand,
-    ZoneError, ZoneEvent, ZoneKind, ZoneNowPlaying, ZoneQueue, ZoneService, ZoneSettings,
-    ZoneSource, ZoneStatus, ZoneVolume,
+    ClientRegistration, PlaybackSnapshot, RepeatMode, VolumeLimits, Zone, ZoneCapabilities,
+    ZoneCommand, ZoneError, ZoneEvent, ZoneKind, ZoneNowPlaying, ZoneQueue, ZoneService,
+    ZoneSettingsPatch, ZoneSettingsView, ZoneSource, ZoneStatus, ZoneVolume,
 };
+
+/// Header a Parson app sends with its own client zone device id, so the
+/// server can show it its private zone (and hide it from everyone else).
+pub const ZONE_DEVICE_HEADER: &str = "x-parson-zone-device";
+/// Most songs one loudness request covers.
+const MAX_LOUDNESS_SONGS: usize = 20;
+/// Unmeasured songs one request waits for; the rest measure in the background.
+const MAX_LOUDNESS_MEASURED_NOW: usize = 2;
+
+fn viewer_device(request: &HttpRequest) -> Option<String> {
+    request
+        .headers()
+        .get(ZONE_DEVICE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| crate::zones::service::client_zone_id(value).is_some())
+        .map(str::to_string)
+}
+
+#[derive(Deserialize)]
+struct LoudnessRequest {
+    song_ids: Vec<String>,
+}
 
 #[derive(Deserialize)]
 struct TransferRequest {
@@ -44,6 +69,24 @@ pub(crate) struct ZoneMediaQuery {
     zone: String,
     expires: i64,
     signature: String,
+    /// Volume leveling (signed with the URL): `track` or `album`.
+    level: Option<String>,
+    target: Option<i8>,
+    adjust: Option<i8>,
+}
+
+impl ZoneMediaQuery {
+    fn leveling(&self) -> Result<Option<StreamLeveling>, ()> {
+        match (&self.level, self.target, self.adjust) {
+            (None, None, None) => Ok(None),
+            (Some(level), Some(target_lufs), Some(adjustment_db)) => Ok(Some(StreamLeveling {
+                by: LevelBy::parse(level).ok_or(())?,
+                target_lufs,
+                adjustment_db,
+            })),
+            _ => Err(()),
+        }
+    }
 }
 
 fn error_response(error: ZoneError) -> HttpResponse {
@@ -114,6 +157,7 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
         kind: ZoneKind::Chromecast,
         ecosystem: "chromecast",
         name: snapshot.receiver_name.clone(),
+        icon: crate::zones::default_zone_icon(ZoneKind::Chromecast).to_string(),
         device: "Chromecast".to_string(),
         status,
         source: ZoneSource::Parson,
@@ -129,7 +173,7 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
         volume: Some(ZoneVolume::new(
             (snapshot.volume.clamp(0.0, 1.0) * 100.0).round() as u8,
             snapshot.muted,
-            None,
+            VolumeLimits::default(),
         )),
         group: None,
         grouped_into: None,
@@ -147,6 +191,7 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
             sleep_timer: false,
         },
         sleep_timer: None,
+        settings: ZoneSettingsView::unsupported(&snapshot.receiver_name),
         notes: vec![
             "Chromecast playback is started from the Parson mobile app; Chromecast groups are made in Google Home.".to_string(),
         ],
@@ -234,9 +279,10 @@ async fn all_zones(
     service: &ZoneService,
     pool: &DbPool,
     user_id: i32,
+    viewer: Option<&str>,
     cache: Option<&LibraryCache>,
 ) -> Vec<Zone> {
-    let mut zones = service.list(user_id, cache);
+    let mut zones = service.list_for(user_id, viewer, cache);
     if let Some(snapshot) = cast_snapshot(pool, user_id).await {
         zones.push(cast_zone(&snapshot, cache));
     }
@@ -255,7 +301,15 @@ async fn list_zones(
         Err(response) => return response,
     };
     let cache = library_cache(&lifecycle).await;
-    let zones = all_zones(&service, pool.get_ref(), user_id, cache.as_deref()).await;
+    let viewer = viewer_device(&request);
+    let zones = all_zones(
+        &service,
+        pool.get_ref(),
+        user_id,
+        viewer.as_deref(),
+        cache.as_deref(),
+    )
+    .await;
     let sonos = service.sonos().map(|sonos| {
         // Rooms, not devices: stereo pair secondaries and satellites are hidden.
         let rooms: usize = sonos.groups().iter().map(|group| group.members.len()).sum();
@@ -385,6 +439,12 @@ async fn transfer(
         Ok(user_id) => user_id,
         Err(response) => return response,
     };
+    let viewer = viewer_device(&request);
+    if !service.visible_to(&form.from, viewer.as_deref())
+        || !service.visible_to(&form.to, viewer.as_deref())
+    {
+        return error_response(ZoneError::NotFound);
+    }
     let cache = library_cache(&lifecycle).await;
     if form.to.starts_with("cast:") {
         return error_response(ZoneError::Unsupported("zone_cannot_receive_transfer"));
@@ -422,7 +482,10 @@ async fn transfer(
     };
     match result {
         Ok(()) => {
-            let zone = service.zone(user_id, &form.to, cache.as_deref());
+            let zone = service
+                .list_for(user_id, viewer.as_deref(), cache.as_deref())
+                .into_iter()
+                .find(|zone| zone.id == form.to);
             HttpResponse::Ok().json(serde_json::json!({ "zone": zone }))
         }
         Err(error) => error_response(error),
@@ -439,6 +502,14 @@ async fn create_group(
         Ok(user_id) => user_id,
         Err(response) => return response,
     };
+    let viewer = viewer_device(&request);
+    if form
+        .zone_ids
+        .iter()
+        .any(|id| !service.visible_to(id, viewer.as_deref()))
+    {
+        return error_response(ZoneError::NotFound);
+    }
     if form.zone_ids.iter().any(|id| id.starts_with("cast:")) {
         return error_response(ZoneError::Unsupported(
             "chromecast_groups_are_made_in_google_home",
@@ -543,6 +614,9 @@ async fn send_command(
     if let Err(code) = command.validate() {
         return error_response(ZoneError::Invalid(code));
     }
+    if !service.visible_to(&zone_id, viewer_device(&request).as_deref()) {
+        return error_response(ZoneError::NotFound);
+    }
     let result = if zone_id.starts_with("cast:") {
         match cast_snapshot(pool.get_ref(), user_id).await {
             Some(snapshot) if format!("cast:{}", snapshot.session_id) == *zone_id => {
@@ -583,20 +657,100 @@ async fn send_command(
 async fn update_settings(
     request: HttpRequest,
     zone_id: web::Path<String>,
-    form: web::Json<ZoneSettings>,
+    form: web::Json<ZoneSettingsPatch>,
     service: web::Data<ZoneService>,
+    lifecycle: web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
     let user_id = match authenticated_user_id(&request) {
         Ok(user_id) => user_id,
         Err(response) => return response,
     };
+    let viewer = viewer_device(&request);
+    let patch = form.into_inner();
+    let cache = if patch.leveling.is_some()
+        || patch.leveling_target_lufs.is_some()
+        || patch.leveling_adjustment_db.is_some()
+    {
+        library_cache(&lifecycle).await
+    } else {
+        None
+    };
     match service
-        .update_settings(user_id, &zone_id, form.into_inner())
+        .update_settings(
+            user_id,
+            &zone_id,
+            patch,
+            viewer.as_deref(),
+            cache.as_deref(),
+        )
         .await
     {
-        Ok(settings) => HttpResponse::Ok().json(settings),
+        Ok(settings) => {
+            let zone = service
+                .list_for(user_id, viewer.as_deref(), None)
+                .into_iter()
+                .find(|zone| zone.id == *zone_id);
+            HttpResponse::Ok().json(serde_json::json!({
+                "settings": settings,
+                "zone": zone,
+            }))
+        }
         Err(error) => error_response(error),
     }
+}
+
+/// Measured loudness for volume leveling in Parson apps. Up to two
+/// unmeasured songs are measured now; the rest are measured in the
+/// background and come back with `null` until then.
+#[post("/loudness")]
+async fn loudness(
+    request: HttpRequest,
+    form: web::Json<LoudnessRequest>,
+    service: web::Data<ZoneService>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    if form.song_ids.is_empty() || form.song_ids.len() > MAX_LOUDNESS_SONGS {
+        return error_response(ZoneError::Invalid("invalid_song_count"));
+    }
+    let Some(cache) = library_cache(&lifecycle).await else {
+        return error_response(ZoneError::Unsupported("library_unavailable"));
+    };
+    let store = service.loudness().clone();
+    let mut measured_now = 0;
+    let mut tracks = serde_json::Map::new();
+    let mut later = Vec::new();
+    for song_id in &form.song_ids {
+        let Some(song) = cache.song(song_id) else {
+            continue;
+        };
+        let path = std::path::Path::new(&song.path);
+        let leveling =
+            if store.cached(song_id, path).is_some() || measured_now < MAX_LOUDNESS_MEASURED_NOW {
+                if store.cached(song_id, path).is_none() {
+                    measured_now += 1;
+                }
+                Some(store.leveling_for(&cache, song_id).await)
+            } else {
+                later.push((song_id.clone(), song.path.clone()));
+                None
+            };
+        tracks.insert(
+            song_id.clone(),
+            serde_json::to_value(leveling).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    let pending = !later.is_empty()
+        || tracks
+            .values()
+            .any(|value| value.is_null() || value["album"].is_null());
+    store.measure_in_background(later);
+    HttpResponse::Ok().json(serde_json::json!({
+        "tracks": tracks,
+        "pending": pending,
+    }))
 }
 
 #[post("/{zone_id}/sleep")]
@@ -610,6 +764,9 @@ async fn sleep_timer(
         Ok(user_id) => user_id,
         Err(response) => return response,
     };
+    if !service.visible_to(&zone_id, viewer_device(&request).as_deref()) {
+        return error_response(ZoneError::NotFound);
+    }
     match service.set_sleep_timer(user_id, &zone_id, form.minutes) {
         Ok(()) => HttpResponse::NoContent().finish(),
         Err(error) => error_response(error),
@@ -617,6 +774,7 @@ async fn sleep_timer(
 }
 
 /// Signed, token-less media for Sonos players (they cannot send cookies).
+/// Leveled URLs carry their (signed) leveling; the server applies the gain.
 pub(crate) async fn zone_media(
     request: HttpRequest,
     song_id: web::Path<String>,
@@ -625,21 +783,38 @@ pub(crate) async fn zone_media(
     lifecycle: web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
     let song_id = song_id.into_inner();
+    let invalid =
+        || HttpResponse::Unauthorized().json(serde_json::json!({"error": "zone_url_invalid"}));
+    let Ok(leveling) = query.leveling() else {
+        return invalid();
+    };
     if query.expires < chrono::Utc::now().timestamp()
         || !cast::verify_media_signature(
-            &format!("zone:{}", query.zone),
+            &zone_media_scope(&query.zone, leveling),
             &song_id,
             query.expires,
             &query.signature,
         )
     {
-        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "zone_url_invalid"}));
+        return invalid();
     }
     if !service.media_allowed(&query.zone, &song_id) {
         return HttpResponse::Unauthorized()
             .json(serde_json::json!({"error": "zone_queue_changed"}));
     }
-    crate::api::library::stream_sonos_compatible(&request, &song_id, &lifecycle).await
+    let gain = match leveling {
+        Some(leveling) => match library_cache(&lifecycle).await {
+            Some(cache) => Some(
+                service
+                    .stream_gain(&cache, &song_id, leveling)
+                    .await
+                    .unwrap_or(0.0),
+            ),
+            None => Some(0.0),
+        },
+        None => None,
+    };
+    crate::api::library::stream_sonos_compatible(&request, &song_id, &lifecycle, gain).await
 }
 
 /// UPnP GENA `NOTIFY` from a Sonos player: refresh that player's group now.
@@ -670,6 +845,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(sonos_discover)
             .service(send_command)
             .service(update_settings)
+            .service(loudness)
             .service(sleep_timer),
     );
 }

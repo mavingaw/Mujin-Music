@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+use super::leveling::{LevelBy, LoudnessStore};
 use super::model::*;
 use crate::library::state::LibraryCache;
 use crate::persistence::connection::DbPool;
@@ -87,12 +88,194 @@ pub struct RegistrationResult {
     pub needs_queue: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+/// Stored per-zone settings, shared by every client.
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ZoneSettings {
+    /// Custom name; `None` uses the device's own name.
+    pub name: Option<String>,
+    /// Custom icon from [`ZONE_ICONS`]; `None` uses the device's icon.
+    pub icon: Option<String>,
+    pub crossfade_seconds: u8,
+    pub leveling: LevelingMode,
+    pub leveling_target_lufs: i8,
+    pub leveling_adjustment_db: i8,
+    pub comfort_volume: Option<u8>,
+    pub safety_min_volume: Option<u8>,
+    pub safety_max_volume: Option<u8>,
+    /// Only the device the zone runs on can see and control it.
+    pub private: bool,
+}
+
+impl Default for ZoneSettings {
+    fn default() -> Self {
+        Self {
+            name: None,
+            icon: None,
+            crossfade_seconds: 0,
+            leveling: LevelingMode::Off,
+            leveling_target_lufs: DEFAULT_LEVELING_TARGET_LUFS,
+            leveling_adjustment_db: 0,
+            comfort_volume: None,
+            safety_min_volume: None,
+            safety_max_volume: None,
+            private: false,
+        }
+    }
+}
+
+impl ZoneSettings {
+    pub fn limits(&self) -> VolumeLimits {
+        VolumeLimits {
+            comfort: self.comfort_volume,
+            safety_min: self.safety_min_volume,
+            safety_max: self.safety_max_volume,
+        }
+    }
+}
+
+/// Distinguishes an absent field (`None`: unchanged) from `null`
+/// (`Some(None)`: cleared).
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// A settings change. Absent fields stay as they are, so a form that leaves
+/// the name alone never resets it; only `reset_name` goes back to the
+/// device's own name.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneSettingsPatch {
+    /// A new custom name (`null` or absent: unchanged).
     #[serde(default)]
     pub name: Option<String>,
+    /// Go back to the device's own name.
     #[serde(default)]
-    pub max_volume: Option<u8>,
+    pub reset_name: bool,
+    /// A custom icon; `null` goes back to the device's icon.
+    #[serde(default, deserialize_with = "nullable")]
+    pub icon: Option<Option<String>>,
+    #[serde(default)]
+    pub crossfade_seconds: Option<u8>,
+    #[serde(default)]
+    pub leveling: Option<LevelingMode>,
+    #[serde(default)]
+    pub leveling_target_lufs: Option<i8>,
+    #[serde(default)]
+    pub leveling_adjustment_db: Option<i8>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub comfort_volume: Option<Option<u8>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub safety_min_volume: Option<Option<u8>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub safety_max_volume: Option<Option<u8>>,
+    /// Older clients: the single volume cap, now the safety maximum.
+    #[serde(default, deserialize_with = "nullable")]
+    pub max_volume: Option<Option<u8>>,
+    #[serde(default)]
+    pub private: Option<bool>,
+}
+
+impl ZoneSettingsPatch {
+    fn touches_volume_limits(&self) -> bool {
+        self.comfort_volume.is_some()
+            || self.safety_min_volume.is_some()
+            || self.safety_max_volume.is_some()
+            || self.max_volume.is_some()
+    }
+
+    fn touches_leveling(&self) -> bool {
+        self.leveling.is_some()
+            || self.leveling_target_lufs.is_some()
+            || self.leveling_adjustment_db.is_some()
+    }
+}
+
+/// Applies `patch` to `current`, validating every field. `default_name` is
+/// the device's own name: choosing it again clears the custom name.
+pub fn apply_settings_patch(
+    current: &ZoneSettings,
+    patch: &ZoneSettingsPatch,
+    default_name: &str,
+) -> Result<ZoneSettings, ZoneError> {
+    let mut next = current.clone();
+    if patch.reset_name && patch.name.is_some() {
+        return Err(ZoneError::Invalid("name_and_reset_name_conflict"));
+    }
+    if patch.reset_name {
+        next.name = None;
+    } else if let Some(name) = &patch.name {
+        let cleaned = clean_label(name, "");
+        if cleaned.is_empty() {
+            return Err(ZoneError::Invalid("zone_name_required"));
+        }
+        next.name = (cleaned != default_name).then_some(cleaned);
+    }
+    if let Some(icon) = &patch.icon {
+        if let Some(icon) = icon
+            && !ZONE_ICONS.contains(&icon.as_str())
+        {
+            return Err(ZoneError::Invalid("unknown_zone_icon"));
+        }
+        next.icon = icon.clone();
+    }
+    if let Some(seconds) = patch.crossfade_seconds {
+        if seconds > CROSSFADE_MAX_SECONDS {
+            return Err(ZoneError::Invalid("invalid_crossfade_seconds"));
+        }
+        next.crossfade_seconds = seconds;
+    }
+    if let Some(mode) = patch.leveling {
+        next.leveling = mode;
+    }
+    if let Some(target) = patch.leveling_target_lufs {
+        if !LEVELING_TARGET_RANGE.contains(&target) {
+            return Err(ZoneError::Invalid("invalid_leveling_target"));
+        }
+        next.leveling_target_lufs = target;
+    }
+    if let Some(adjustment) = patch.leveling_adjustment_db {
+        if !LEVELING_ADJUSTMENT_RANGE.contains(&adjustment) {
+            return Err(ZoneError::Invalid("invalid_leveling_adjustment"));
+        }
+        next.leveling_adjustment_db = adjustment;
+    }
+    let volume = |value: Option<u8>| -> Result<Option<u8>, ZoneError> {
+        match value {
+            Some(level) if level > 100 => Err(ZoneError::Invalid("invalid_volume")),
+            other => Ok(other),
+        }
+    };
+    if let Some(comfort) = patch.comfort_volume {
+        next.comfort_volume = volume(comfort)?;
+    }
+    if let Some(minimum) = patch.safety_min_volume {
+        next.safety_min_volume = volume(minimum)?.filter(|level| *level > 0);
+    }
+    if let Some(maximum) = patch.safety_max_volume.or(patch.max_volume) {
+        next.safety_max_volume = volume(maximum)?.filter(|level| *level < 100);
+    }
+    if next.safety_max_volume == Some(0) {
+        return Err(ZoneError::Invalid("invalid_safety_limits"));
+    }
+    let limits = next.limits();
+    if let (Some(minimum), Some(maximum)) = (next.safety_min_volume, next.safety_max_volume)
+        && minimum >= maximum
+    {
+        return Err(ZoneError::Invalid("invalid_safety_limits"));
+    }
+    if let Some(comfort) = next.comfort_volume
+        && (comfort < limits.min() || comfort > limits.max())
+    {
+        return Err(ZoneError::Invalid("comfort_outside_safety_limits"));
+    }
+    if let Some(private) = patch.private {
+        next.private = private;
+    }
+    Ok(next)
 }
 
 struct ClientZone {
@@ -166,6 +349,8 @@ pub struct ZoneService {
     port: AtomicU16,
     /// How long a sleep timer fades out before pausing.
     sleep_fade: Mutex<Duration>,
+    /// Measured track loudness for volume leveling.
+    loudness: Arc<LoudnessStore>,
 }
 
 /// Fade-out length when a sleep timer pauses mid-track.
@@ -250,6 +435,7 @@ impl ZoneService {
             state: Mutex::new(State::default()),
             events: broadcast::channel(512).0,
             sonos,
+            loudness: Arc::new(LoudnessStore::new(pool.clone())),
             pool,
             port: AtomicU16::new(crate::settings::DEFAULT_PORT),
             sleep_fade: Mutex::new(SLEEP_FADE),
@@ -281,6 +467,10 @@ impl ZoneService {
 
     pub fn sonos(&self) -> Option<&Arc<SonosController>> {
         self.sonos.as_ref()
+    }
+
+    pub fn loudness(&self) -> &Arc<LoudnessStore> {
+        &self.loudness
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ZoneEvent> {
@@ -533,6 +723,29 @@ impl ZoneService {
 
     // ----- listing ------------------------------------------------------
 
+    /// Zones `user_id` sees from the device `viewer` (when the request names
+    /// one). Private zones only show on their own device.
+    pub fn list_for(
+        &self,
+        user_id: i32,
+        viewer: Option<&str>,
+        cache: Option<&LibraryCache>,
+    ) -> Vec<Zone> {
+        let mut zones = self.list(user_id, cache);
+        zones.retain(|zone| self.visible_to(&zone.id, viewer));
+        zones
+    }
+
+    /// Whether the device `viewer` may see and control `zone_id`.
+    pub fn visible_to(&self, zone_id: &str, viewer: Option<&str>) -> bool {
+        let private = self
+            .lock()
+            .settings
+            .get(zone_id)
+            .is_some_and(|settings| settings.private);
+        !private || viewer.and_then(client_zone_id).as_deref() == Some(zone_id)
+    }
+
     /// Every zone `user_id` can see.
     pub fn list(&self, user_id: i32, cache: Option<&LibraryCache>) -> Vec<Zone> {
         let now = now_ms();
@@ -593,11 +806,20 @@ impl ZoneService {
     ) -> Zone {
         let settings = state.settings.get(id).cloned().unwrap_or_default();
         let current = zone.song_ids.get(zone.current_position);
+        let app_player = zone.kind != ZoneKind::Mobile;
+        let mut setting_notes = Vec::new();
+        if !app_player {
+            setting_notes.push(
+                "Crossfade and volume leveling run in the Parson web and desktop apps; the phone app plays tracks back to back at their own level."
+                    .to_string(),
+            );
+        }
         Zone {
             id: id.to_string(),
             kind: zone.kind,
             ecosystem: zone.kind.ecosystem(),
             name: settings.name.clone().unwrap_or_else(|| zone.name.clone()),
+            icon: zone_icon(&settings, zone.kind),
             device: zone.device.clone(),
             status: zone.status,
             source: if current.is_some() {
@@ -620,11 +842,7 @@ impl ZoneService {
                 zone.duration_ms,
             ),
             duration_ms: zone.duration_ms,
-            volume: Some(ZoneVolume::new(
-                zone.volume,
-                zone.muted,
-                settings.max_volume,
-            )),
+            volume: Some(ZoneVolume::new(zone.volume, zone.muted, settings.limits())),
             group: None,
             grouped_into: None,
             capabilities: ZoneCapabilities {
@@ -636,11 +854,22 @@ impl ZoneService {
                 queue_edit: true,
                 repeat: true,
                 shuffle: true,
-                group: true,
+                group: !settings.private,
                 transfer_target: true,
                 sleep_timer: true,
             },
             sleep_timer: sleep_view(state, id),
+            settings: settings_view(
+                &settings,
+                &zone.name,
+                ZoneSettingsSupport {
+                    crossfade: app_player,
+                    leveling: app_player,
+                    volume_limits: true,
+                    private: true,
+                },
+                setting_notes,
+            ),
             notes: Vec::new(),
         }
     }
@@ -704,7 +933,8 @@ impl ZoneService {
                     state
                         .settings
                         .get(&sonos_zone_id(&player.uuid))
-                        .and_then(|settings| settings.max_volume),
+                        .map(ZoneSettings::limits)
+                        .unwrap_or_default(),
                 )),
             })
             .collect();
@@ -727,11 +957,31 @@ impl ZoneService {
                     .to_string(),
             );
         }
+        // The queued track's own length: the speaker's TrackDuration lags
+        // a track change until the next poll.
+        let duration_ms = match source {
+            ZoneSource::None => 0,
+            ZoneSource::Parson => now_playing
+                .as_ref()
+                .map(|now| now.duration_ms)
+                .filter(|duration| *duration > 0)
+                .unwrap_or(group.duration_ms),
+            ZoneSource::External => group.duration_ms,
+        };
+        let mut setting_notes = vec![
+            "Sonos crossfades with its own fixed length: any crossfade time above 0 s turns Sonos crossfade on.".to_string(),
+        ];
+        if settings.leveling != LevelingMode::Off {
+            setting_notes.push(
+                "Parson levels Sonos in the audio it serves (EBU R128, peaks kept under -1 dBTP), starting with the next track.".to_string(),
+            );
+        }
         Zone {
             id,
             kind: ZoneKind::Sonos,
             ecosystem: "sonos",
             name: settings.name.clone().unwrap_or_else(|| group.name.clone()),
+            icon: zone_icon(&settings, ZoneKind::Sonos),
             device: coordinator
                 .map(|player| player.model_name)
                 .unwrap_or_else(|| "Sonos".to_string()),
@@ -751,17 +1001,13 @@ impl ZoneService {
                 group.polled_at_ms,
                 now,
                 group.transport == TransportState::Playing,
-                group.duration_ms,
+                duration_ms,
             ),
-            duration_ms: if source == ZoneSource::None {
-                0
-            } else {
-                group.duration_ms
-            },
+            duration_ms,
             volume: Some(ZoneVolume::new(
                 group.group_volume,
                 group.group_muted,
-                settings.max_volume,
+                settings.limits(),
             )),
             group: (members.len() > 1).then(|| ZoneGroupInfo {
                 id: sonos_zone_id(&group.coordinator),
@@ -784,6 +1030,17 @@ impl ZoneService {
                 sleep_timer: true,
             },
             sleep_timer: sleep_view(state, &sonos_zone_id(&group.coordinator)),
+            settings: settings_view(
+                &settings,
+                &group.name,
+                ZoneSettingsSupport {
+                    crossfade: true,
+                    leveling: true,
+                    volume_limits: true,
+                    private: false,
+                },
+                setting_notes,
+            ),
             notes,
         }
     }
@@ -833,6 +1090,21 @@ impl ZoneService {
                 strip_member(&mut command);
                 return Box::pin(self.command(user_id, member, command, cache)).await;
             }
+            // The group's own limits apply before each member's.
+            let command = match command {
+                ZoneCommand::SetVolume {
+                    volume,
+                    member_id: None,
+                    above_comfort,
+                } => ZoneCommand::SetVolume {
+                    volume: self
+                        .limits(group_id)
+                        .clamp(i16::from(volume), false, above_comfort),
+                    member_id: None,
+                    above_comfort,
+                },
+                other => other,
+            };
             let mut first_error = None;
             for member in members {
                 if let Err(error) =
@@ -906,12 +1178,12 @@ impl ZoneService {
         Ok(())
     }
 
-    fn max_volume(&self, zone_id: &str) -> u8 {
+    fn limits(&self, zone_id: &str) -> VolumeLimits {
         self.lock()
             .settings
             .get(zone_id)
-            .and_then(|settings| settings.max_volume)
-            .unwrap_or(100)
+            .map(ZoneSettings::limits)
+            .unwrap_or_default()
     }
 
     fn clamp_client_command(
@@ -920,11 +1192,16 @@ impl ZoneService {
         zone_id: &str,
         command: ZoneCommand,
     ) -> Result<ZoneCommand, ZoneError> {
-        let limit = self.max_volume(zone_id);
+        let limits = self.limits(zone_id);
         Ok(match command {
-            ZoneCommand::SetVolume { volume, .. } => ZoneCommand::SetVolume {
-                volume: volume.min(limit),
+            ZoneCommand::SetVolume {
+                volume,
+                above_comfort,
+                ..
+            } => ZoneCommand::SetVolume {
+                volume: limits.clamp(i16::from(volume), false, above_comfort),
                 member_id: None,
+                above_comfort: false,
             },
             ZoneCommand::AdjustVolume { delta, .. } => {
                 let current = self
@@ -935,9 +1212,9 @@ impl ZoneService {
                     .map(|zone| zone.volume)
                     .ok_or(ZoneError::NotFound)?;
                 ZoneCommand::SetVolume {
-                    volume: (i16::from(current) + i16::from(delta)).clamp(0, i16::from(limit))
-                        as u8,
+                    volume: limits.clamp(i16::from(current) + i16::from(delta), true, true),
                     member_id: None,
+                    above_comfort: false,
                 }
             }
             ZoneCommand::SetMute { muted, .. } => ZoneCommand::SetMute {
@@ -1031,22 +1308,30 @@ impl ZoneService {
                     .await
                 }
             }
-            ZoneCommand::SetVolume { volume, member_id } => match member_id {
+            ZoneCommand::SetVolume {
+                volume,
+                member_id,
+                above_comfort,
+            } => match member_id {
                 Some(member) => {
                     let member_uuid = member
                         .strip_prefix("sonos:")
                         .filter(|member| group.members.iter().any(|m| m == member))
                         .ok_or(ZoneError::Invalid("member_not_in_group"))?;
-                    let limit = self.max_volume(&member);
+                    let volume =
+                        self.limits(&member)
+                            .clamp(i16::from(volume), false, above_comfort);
                     sonos
-                        .set_player_volume(member_uuid, volume.min(limit))
+                        .set_player_volume(member_uuid, volume)
                         .await
                         .map_err(device)
                 }
                 None => {
-                    let limit = self.max_volume(&zone_id);
+                    let volume =
+                        self.limits(&zone_id)
+                            .clamp(i16::from(volume), false, above_comfort);
                     sonos
-                        .set_group_volume(&coordinator, volume.min(limit))
+                        .set_group_volume(&coordinator, volume)
                         .await
                         .map_err(device)
                 }
@@ -1065,13 +1350,19 @@ impl ZoneService {
                     }
                     None => (group.group_volume, zone_id.clone()),
                 };
-                let limit = self.max_volume(&target_zone);
-                let volume =
-                    (i16::from(current) + i16::from(delta)).clamp(0, i16::from(limit)) as u8;
+                let volume = self.limits(&target_zone).clamp(
+                    i16::from(current) + i16::from(delta),
+                    true,
+                    true,
+                );
                 Box::pin(self.sonos_command(
                     user_id,
                     uuid,
-                    ZoneCommand::SetVolume { volume, member_id },
+                    ZoneCommand::SetVolume {
+                        volume,
+                        member_id,
+                        above_comfort: true,
+                    },
                     cache,
                 ))
                 .await
@@ -1213,7 +1504,7 @@ impl ZoneService {
                     let from = window_start + new_len;
                     if from < end {
                         let tracks =
-                            self.sonos_tracks(sonos, coordinator, &song_ids[from..end], cache)?;
+                            self.sonos_tracks(sonos, coordinator, &song_ids, from..end, cache)?;
                         new_len += tracks.len();
                         commit(new_len);
                         sonos
@@ -1229,7 +1520,8 @@ impl ZoneService {
                     let tracks = self.sonos_tracks(
                         sonos,
                         coordinator,
-                        &song_ids[(current + 1).min(end)..end],
+                        &song_ids,
+                        (current + 1).min(end)..end,
                         cache,
                     )?;
                     new_len = kept + tracks.len();
@@ -1283,34 +1575,93 @@ impl ZoneService {
         Ok(())
     }
 
-    /// Signed URLs and DIDL-Lite for `song_ids` on a Sonos group.
+    /// Signed URLs and DIDL-Lite for `queue[range]` on a Sonos group, with
+    /// the zone's volume leveling in each URL.
     fn sonos_tracks(
         &self,
         sonos: &SonosController,
         coordinator: &str,
-        song_ids: &[String],
+        queue: &[String],
+        range: std::ops::Range<usize>,
         cache: &LibraryCache,
     ) -> Result<Vec<(String, String)>, ZoneError> {
-        if song_ids.is_empty() {
+        if range.is_empty() {
             return Ok(Vec::new());
         }
         let origin = sonos
             .local_origin_for(coordinator, self.port())
             .ok_or_else(|| ZoneError::Device("no network route to the Sonos player".into()))?;
         let expires = chrono::Utc::now().timestamp() + MEDIA_URL_LIFETIME_SECONDS;
-        let media_key = self
-            .lock()
-            .sonos_queues
-            .get(coordinator)
-            .map(|queue| queue.media_key.clone())
-            .unwrap_or_else(|| coordinator.to_string());
-        song_ids
-            .iter()
-            .map(|song_id| {
-                sonos_track(cache, &origin, &media_key, song_id, expires)
+        let (media_key, settings) = {
+            let state = self.lock();
+            (
+                state
+                    .sonos_queues
+                    .get(coordinator)
+                    .map(|queue| queue.media_key.clone())
+                    .unwrap_or_else(|| coordinator.to_string()),
+                state
+                    .settings
+                    .get(&sonos_zone_id(coordinator))
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        };
+        range
+            .map(|index| {
+                let song_id = queue
+                    .get(index)
+                    .ok_or(ZoneError::Invalid("invalid_zone_queue"))?;
+                let leveling = sonos_leveling(&settings, queue, index, cache);
+                sonos_track(cache, &origin, &media_key, song_id, expires, leveling)
                     .ok_or(ZoneError::Invalid("invalid_zone_queue"))
             })
             .collect()
+    }
+
+    /// Re-sends the upcoming part of a Sonos queue (new leveling) without
+    /// touching the playing track.
+    async fn refresh_sonos_upcoming(
+        &self,
+        sonos: &SonosController,
+        coordinator: &str,
+        cache: &LibraryCache,
+    ) -> Result<(), ZoneError> {
+        let device = |error: crate::sonos::soap::SoapError| ZoneError::Device(error.to_string());
+        let _ = sonos.poll_group(coordinator).await;
+        let group = sonos.group_of(coordinator).ok_or(ZoneError::NotFound)?;
+        if !group.track_uri.contains(ZONE_MEDIA_PATH) {
+            return Ok(());
+        }
+        let Some((song_ids, window_start, window_len)) = ({
+            let state = self.lock();
+            state
+                .sonos_queues
+                .get(coordinator)
+                .map(|queue| (queue.song_ids.clone(), queue.window_start, queue.window_len))
+        }) else {
+            return Ok(());
+        };
+        let kept = (group.track_number as usize).clamp(1, window_len.max(1));
+        let end = window_start + window_len;
+        let tracks = self.sonos_tracks(
+            sonos,
+            coordinator,
+            &song_ids,
+            window_start + kept..end,
+            cache,
+        )?;
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        sonos
+            .remove_track_range(coordinator, kept as u32, (window_len - kept) as u32)
+            .await
+            .map_err(device)?;
+        sonos
+            .append_tracks(coordinator, &tracks)
+            .await
+            .map_err(device)
     }
 
     /// Next/previous; reloads the window when the Sonos queue edge is reached.
@@ -1379,12 +1730,36 @@ impl ZoneService {
             .ok_or_else(|| ZoneError::Device("no network route to the Sonos player".into()))?;
         let (window_start, window_len) = sonos_window(song_ids.len(), current_position);
         let expires = chrono::Utc::now().timestamp() + MEDIA_URL_LIFETIME_SECONDS;
-        let tracks: Vec<(String, String)> = song_ids[window_start..window_start + window_len]
-            .iter()
-            .filter_map(|song_id| sonos_track(cache, &origin, coordinator, song_id, expires))
+        let settings = self
+            .lock()
+            .settings
+            .get(&sonos_zone_id(coordinator))
+            .cloned()
+            .unwrap_or_default();
+        let tracks: Vec<(String, String)> = (window_start..window_start + window_len)
+            .filter_map(|index| {
+                let leveling = sonos_leveling(&settings, &song_ids, index, cache);
+                sonos_track(
+                    cache,
+                    &origin,
+                    coordinator,
+                    &song_ids[index],
+                    expires,
+                    leveling,
+                )
+            })
             .collect();
         if tracks.len() != window_len {
             return Err(ZoneError::Invalid("invalid_zone_queue"));
+        }
+        if settings.leveling != LevelingMode::Off {
+            // Measure ahead so the speaker does not wait when it fetches.
+            self.loudness.measure_in_background(
+                song_ids[window_start..window_start + window_len]
+                    .iter()
+                    .filter_map(|id| cache.song(id).map(|song| (id.clone(), song.path.clone())))
+                    .collect(),
+            );
         }
         // A window reload of the same queue keeps its shuffle state.
         let (shuffle, original) = {
@@ -1421,8 +1796,33 @@ impl ZoneService {
                 play,
             )
             .await;
+        if loaded.is_ok()
+            && settings.crossfade_seconds > 0
+            && let Err(error) = sonos.set_crossfade(coordinator, true).await
+        {
+            tracing::warn!(%error, coordinator, "could not turn on Sonos crossfade");
+        }
         self.changed(None);
         loaded.map_err(|error| ZoneError::Device(error.to_string()))
+    }
+
+    /// The leveling gain for a signed Sonos media request, measuring the
+    /// track's loudness first when needed.
+    pub async fn stream_gain(
+        &self,
+        cache: &LibraryCache,
+        song_id: &str,
+        leveling: StreamLeveling,
+    ) -> Option<f32> {
+        self.loudness
+            .gain_for(
+                cache,
+                song_id,
+                leveling.by,
+                leveling.target_lufs,
+                leveling.adjustment_db,
+            )
+            .await
     }
 
     /// Whether a signed Sonos media URL for `key` may stream `song_id`.
@@ -1517,6 +1917,9 @@ impl ZoneService {
                 return Err(ZoneError::Unsupported(
                     "chromecast_groups_are_made_in_google_home",
                 ));
+            }
+            if zone.settings.private {
+                return Err(ZoneError::Unsupported("private_zones_cannot_be_grouped"));
             }
         }
         if unique.iter().all(|id| id.starts_with("sonos:")) {
@@ -1650,34 +2053,73 @@ impl ZoneService {
 
     // ----- settings and sleep timer -------------------------------------
 
+    /// Changes a zone's settings. Only the fields in `patch` change. A zone
+    /// is made private from its own device (`viewer`); tightened volume
+    /// limits apply to the current volume at once, and Sonos crossfade and
+    /// leveling changes reach the speaker (leveling from the next track).
     pub async fn update_settings(
         &self,
         user_id: i32,
         zone_id: &str,
-        settings: ZoneSettings,
+        patch: ZoneSettingsPatch,
+        viewer: Option<&str>,
+        cache: Option<&LibraryCache>,
     ) -> Result<ZoneSettings, ZoneError> {
-        let known = self.zone(user_id, zone_id, None).is_some()
-            || self.lock().linked.contains_key(zone_id)
-            || zone_id
-                .strip_prefix("sonos:")
-                .zip(self.sonos.as_ref())
-                .is_some_and(|(uuid, sonos)| sonos.knows_player(uuid));
-        if !known {
+        if !self.visible_to(zone_id, viewer) {
             return Err(ZoneError::NotFound);
         }
-        let cleaned = ZoneSettings {
-            name: settings
-                .name
-                .map(|name| clean_label(&name, ""))
-                .filter(|name| !name.is_empty()),
-            max_volume: settings.max_volume.map(|volume| volume.clamp(1, 100)),
+        let (default_name, supports) = match self.zone(user_id, zone_id, None) {
+            Some(zone) => (zone.settings.default_name, zone.settings.supports),
+            None => {
+                // A room inside a Sonos group keeps its own name and limits.
+                let room = zone_id
+                    .strip_prefix("sonos:")
+                    .zip(self.sonos.as_ref())
+                    .and_then(|(uuid, sonos)| sonos.player(uuid))
+                    .ok_or(ZoneError::NotFound)?;
+                (
+                    room.room_name,
+                    ZoneSettingsSupport {
+                        volume_limits: true,
+                        ..ZoneSettingsSupport::default()
+                    },
+                )
+            }
         };
-        self.lock()
-            .settings
-            .insert(zone_id.to_string(), cleaned.clone());
+        if patch.crossfade_seconds.is_some() && !supports.crossfade {
+            return Err(ZoneError::Unsupported("crossfade_not_supported_here"));
+        }
+        if patch.touches_leveling() && !supports.leveling {
+            return Err(ZoneError::Unsupported("leveling_not_supported_here"));
+        }
+        if patch.touches_volume_limits() && !supports.volume_limits {
+            return Err(ZoneError::Unsupported("volume_limits_not_supported_here"));
+        }
+        if patch.private.is_some() {
+            if !supports.private {
+                return Err(ZoneError::Unsupported("only_parson_apps_can_be_private"));
+            }
+            if viewer.and_then(client_zone_id).as_deref() != Some(zone_id) {
+                return Err(ZoneError::Unsupported("set_private_on_the_device_itself"));
+            }
+        }
+        let (before, after) = {
+            let mut state = self.lock();
+            let before = state.settings.get(zone_id).cloned().unwrap_or_default();
+            let after = apply_settings_patch(&before, &patch, &default_name)?;
+            state.settings.insert(zone_id.to_string(), after.clone());
+            if after.private {
+                // A private zone leaves any linked group.
+                for group in state.linked.values_mut() {
+                    group.members.retain(|member| member != zone_id);
+                }
+                state.linked.retain(|_, group| group.members.len() >= 2);
+            }
+            (before, after)
+        };
         if let Some(pool) = self.pool.clone() {
             let zone_id = zone_id.to_string();
-            let stored = cleaned.clone();
+            let stored = after.clone();
             let saved = tokio::task::spawn_blocking(move || {
                 let mut connection = pool.get().map_err(|error| error.to_string())?;
                 save_setting(&mut connection, &zone_id, &stored).map_err(|error| error.to_string())
@@ -1687,9 +2129,73 @@ impl ZoneService {
                 tracing::warn!(?saved, "could not persist zone settings");
             }
         }
+        if before.limits() != after.limits() {
+            self.enforce_limits(user_id, zone_id, after.limits()).await;
+        }
+        if let Some(uuid) = zone_id.strip_prefix("sonos:")
+            && let Some(sonos) = self.sonos.clone()
+            && let Some(group) = sonos.group_of(uuid)
+            && group.coordinator == uuid
+        {
+            if (before.crossfade_seconds > 0) != (after.crossfade_seconds > 0)
+                && let Err(error) = sonos.set_crossfade(uuid, after.crossfade_seconds > 0).await
+            {
+                tracing::warn!(%error, uuid, "could not change Sonos crossfade");
+            }
+            let leveling_changed = before.leveling != after.leveling
+                || (after.leveling != LevelingMode::Off
+                    && (before.leveling_target_lufs != after.leveling_target_lufs
+                        || before.leveling_adjustment_db != after.leveling_adjustment_db));
+            if leveling_changed
+                && let Some(cache) = cache
+                && let Err(error) = self.refresh_sonos_upcoming(&sonos, uuid, cache).await
+            {
+                tracing::warn!(%error, uuid, "could not apply leveling to the Sonos queue");
+            }
+        }
         let shared = zone_id.starts_with("sonos:");
         self.changed(if shared { None } else { Some(user_id) });
-        Ok(cleaned)
+        Ok(after)
+    }
+
+    /// Brings a zone's volume back inside tightened safety limits.
+    async fn enforce_limits(&self, user_id: i32, zone_id: &str, limits: VolumeLimits) {
+        let mut moves: Vec<(String, Option<String>, u8)> = Vec::new();
+        if let Some(uuid) = zone_id.strip_prefix("sonos:") {
+            if let Some(player) = self.sonos.as_ref().and_then(|sonos| sonos.player(uuid))
+                && let Some(level) = limits.enforce(player.volume)
+            {
+                let group = self
+                    .sonos
+                    .as_ref()
+                    .and_then(|sonos| sonos.group_of(uuid))
+                    .map(|group| sonos_zone_id(&group.coordinator))
+                    .unwrap_or_else(|| zone_id.to_string());
+                moves.push((group, Some(zone_id.to_string()), level));
+            }
+        } else if let Some(zone) = self.zone(user_id, zone_id, None)
+            && let Some(volume) = &zone.volume
+            && let Some(level) = limits.enforce(volume.level)
+        {
+            moves.push((zone_id.to_string(), None, level));
+        }
+        for (target, member_id, volume) in moves {
+            if let Err(error) = self
+                .command(
+                    user_id,
+                    &target,
+                    ZoneCommand::SetVolume {
+                        volume,
+                        member_id,
+                        above_comfort: true,
+                    },
+                    None,
+                )
+                .await
+            {
+                tracing::warn!(%error, zone_id, "could not apply the new volume limits");
+            }
+        }
     }
 
     pub fn set_sleep_timer(
@@ -1887,6 +2393,7 @@ impl ZoneService {
                             ZoneCommand::SetVolume {
                                 volume,
                                 member_id: member_id.clone(),
+                                above_comfort: true,
                             },
                             None,
                         )
@@ -1910,6 +2417,7 @@ impl ZoneService {
                     ZoneCommand::SetVolume {
                         volume: level,
                         member_id,
+                        above_comfort: true,
                     },
                     None,
                 )
@@ -2056,6 +2564,11 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
         .collect();
     let leader = *members.first()?;
     let settings = state.settings.get(id).cloned().unwrap_or_default();
+    let default_name = members
+        .iter()
+        .map(|zone| zone.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" + ");
     let volumes: Vec<u32> = members
         .iter()
         .filter_map(|zone| zone.volume.as_ref().map(|volume| u32::from(volume.level)))
@@ -2072,13 +2585,11 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
         id: id.to_string(),
         kind: ZoneKind::Linked,
         ecosystem: "linked",
-        name: settings.name.clone().unwrap_or_else(|| {
-            members
-                .iter()
-                .map(|zone| zone.name.as_str())
-                .collect::<Vec<_>>()
-                .join(" + ")
-        }),
+        name: settings
+            .name
+            .clone()
+            .unwrap_or_else(|| default_name.clone()),
+        icon: zone_icon(&settings, ZoneKind::Linked),
         device: format!("{} linked zones", members.len()),
         status: leader.status,
         source: leader.source,
@@ -2088,7 +2599,7 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
         shuffle: leader.shuffle,
         position_ms: leader.position_ms,
         duration_ms: leader.duration_ms,
-        volume: Some(ZoneVolume::new(level, muted, settings.max_volume)),
+        volume: Some(ZoneVolume::new(level, muted, settings.limits())),
         group: Some(ZoneGroupInfo {
             id: id.to_string(),
             synced: false,
@@ -2118,7 +2629,101 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
             sleep_timer: true,
         },
         sleep_timer: sleep_view(state, id),
+        settings: settings_view(
+            &settings,
+            &default_name,
+            ZoneSettingsSupport {
+                crossfade: false,
+                leveling: false,
+                volume_limits: true,
+                private: false,
+            },
+            vec![
+                "Crossfade and volume leveling are set on each zone in the group. A custom group name is forgotten when the group ends."
+                    .to_string(),
+            ],
+        ),
         notes: vec![LINKED_SYNC_NOTE.to_string()],
+    })
+}
+
+fn zone_icon(settings: &ZoneSettings, kind: ZoneKind) -> String {
+    settings
+        .icon
+        .clone()
+        .unwrap_or_else(|| default_zone_icon(kind).to_string())
+}
+
+fn settings_view(
+    settings: &ZoneSettings,
+    default_name: &str,
+    supports: ZoneSettingsSupport,
+    notes: Vec<String>,
+) -> ZoneSettingsView {
+    ZoneSettingsView {
+        default_name: default_name.to_string(),
+        custom_name: settings.name.is_some(),
+        icon: settings.icon.clone(),
+        crossfade_seconds: settings.crossfade_seconds,
+        leveling: settings.leveling,
+        leveling_target_lufs: settings.leveling_target_lufs,
+        leveling_adjustment_db: settings.leveling_adjustment_db,
+        private: settings.private,
+        supports,
+        notes,
+    }
+}
+
+/// Leveling a Sonos zone applies to the track at `index` of its queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamLeveling {
+    pub by: LevelBy,
+    pub target_lufs: i8,
+    pub adjustment_db: i8,
+}
+
+impl StreamLeveling {
+    /// Extra query parameters on a signed media URL.
+    pub fn query(self) -> String {
+        format!(
+            "&level={}&target={}&adjust={}",
+            self.by.as_str(),
+            self.target_lufs,
+            self.adjustment_db
+        )
+    }
+}
+
+/// What a signed zone media URL is signed for: the zone key and, when
+/// leveled, the leveling (so it cannot be changed in the URL).
+pub fn zone_media_scope(media_key: &str, leveling: Option<StreamLeveling>) -> String {
+    match leveling {
+        None => format!("zone:{media_key}"),
+        Some(leveling) => format!(
+            "zone:{media_key};level={};target={};adjust={}",
+            leveling.by.as_str(),
+            leveling.target_lufs,
+            leveling.adjustment_db
+        ),
+    }
+}
+
+fn sonos_leveling(
+    settings: &ZoneSettings,
+    queue: &[String],
+    index: usize,
+    cache: &LibraryCache,
+) -> Option<StreamLeveling> {
+    let by = super::leveling::resolve_mode(settings.leveling, queue, index, |song_id| {
+        cache
+            .song_map
+            .get(song_id)
+            .map(|(_, album_id)| album_id.clone())
+    })?;
+    Some(StreamLeveling {
+        by,
+        target_lufs: settings.leveling_target_lufs,
+        adjustment_db: settings.leveling_adjustment_db,
     })
 }
 
@@ -2129,19 +2734,25 @@ fn sonos_track(
     media_key: &str,
     song_id: &str,
     expires: i64,
+    leveling: Option<StreamLeveling>,
 ) -> Option<(String, String)> {
     let song = cache.song(song_id)?;
     let album = cache
         .song_map
         .get(song_id)
         .and_then(|(_, album_id)| cache.album(album_id));
-    let plan = crate::api::library::sonos_stream_plan(song);
+    let plan = if leveling.is_some() {
+        crate::api::library::sonos_leveled_stream_plan(song)
+    } else {
+        crate::api::library::sonos_stream_plan(song)
+    };
     let signature =
-        crate::api::cast::sign_media_url(&format!("zone:{media_key}"), song_id, expires);
+        crate::api::cast::sign_media_url(&zone_media_scope(media_key, leveling), song_id, expires);
     let uri = format!(
-        "{origin}{ZONE_MEDIA_PATH}{}/stream?zone={}&expires={expires}&signature={signature}",
+        "{origin}{ZONE_MEDIA_PATH}{}/stream?zone={}&expires={expires}&signature={signature}{}",
         crate::api::cast::encoded(song_id),
         crate::api::cast::encoded(media_key),
+        leveling.map(StreamLeveling::query).unwrap_or_default(),
     );
     let album_art_uri = album
         .filter(|album| !album.cover_url.trim().is_empty())
@@ -2173,24 +2784,63 @@ struct SettingRow {
     zone_id: String,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
     name: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    icon: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    crossfade_seconds: i32,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    leveling: String,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    leveling_target_lufs: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    leveling_adjustment_db: i32,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
-    max_volume: Option<i32>,
+    comfort_volume: Option<i32>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
+    safety_min_volume: Option<i32>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
+    safety_max_volume: Option<i32>,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    private: i32,
 }
 
 fn load_settings(
     connection: &mut diesel::sqlite::SqliteConnection,
 ) -> Result<HashMap<String, ZoneSettings>, diesel::result::Error> {
     use diesel::RunQueryDsl;
-    let rows = diesel::sql_query("SELECT zone_id, name, max_volume FROM zone_setting")
-        .load::<SettingRow>(connection)?;
+    let rows = diesel::sql_query(
+        "SELECT zone_id, name, icon, crossfade_seconds, leveling, leveling_target_lufs,
+                leveling_adjustment_db, comfort_volume, safety_min_volume, safety_max_volume,
+                private
+         FROM zone_setting",
+    )
+    .load::<SettingRow>(connection)?;
+    let level = |value: Option<i32>| value.and_then(|level| u8::try_from(level).ok());
     Ok(rows
         .into_iter()
         .map(|row| {
+            let defaults = ZoneSettings::default();
             (
                 row.zone_id,
                 ZoneSettings {
                     name: row.name,
-                    max_volume: row.max_volume.and_then(|volume| u8::try_from(volume).ok()),
+                    icon: row.icon.filter(|icon| ZONE_ICONS.contains(&icon.as_str())),
+                    crossfade_seconds: u8::try_from(row.crossfade_seconds)
+                        .unwrap_or(0)
+                        .min(CROSSFADE_MAX_SECONDS),
+                    leveling: LevelingMode::parse(&row.leveling).unwrap_or_default(),
+                    leveling_target_lufs: i8::try_from(row.leveling_target_lufs)
+                        .ok()
+                        .filter(|target| LEVELING_TARGET_RANGE.contains(target))
+                        .unwrap_or(defaults.leveling_target_lufs),
+                    leveling_adjustment_db: i8::try_from(row.leveling_adjustment_db)
+                        .ok()
+                        .filter(|adjustment| LEVELING_ADJUSTMENT_RANGE.contains(adjustment))
+                        .unwrap_or(0),
+                    comfort_volume: level(row.comfort_volume),
+                    safety_min_volume: level(row.safety_min_volume),
+                    safety_max_volume: level(row.safety_max_volume),
+                    private: row.private != 0,
                 },
             )
         })
@@ -2205,14 +2855,30 @@ fn save_setting(
     use diesel::RunQueryDsl;
     use diesel::sql_types::{Integer, Nullable, Text};
     diesel::sql_query(
-        "INSERT INTO zone_setting (zone_id, name, max_volume, updated_at)
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-         ON CONFLICT(zone_id) DO UPDATE SET name = excluded.name,
-             max_volume = excluded.max_volume, updated_at = CURRENT_TIMESTAMP",
+        "INSERT INTO zone_setting (zone_id, name, icon, crossfade_seconds, leveling,
+             leveling_target_lufs, leveling_adjustment_db, comfort_volume, safety_min_volume,
+             safety_max_volume, private, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(zone_id) DO UPDATE SET name = excluded.name, icon = excluded.icon,
+             crossfade_seconds = excluded.crossfade_seconds, leveling = excluded.leveling,
+             leveling_target_lufs = excluded.leveling_target_lufs,
+             leveling_adjustment_db = excluded.leveling_adjustment_db,
+             comfort_volume = excluded.comfort_volume,
+             safety_min_volume = excluded.safety_min_volume,
+             safety_max_volume = excluded.safety_max_volume, private = excluded.private,
+             updated_at = CURRENT_TIMESTAMP",
     )
     .bind::<Text, _>(zone_id)
     .bind::<Nullable<Text>, _>(settings.name.as_deref())
-    .bind::<Nullable<Integer>, _>(settings.max_volume.map(i32::from))
+    .bind::<Nullable<Text>, _>(settings.icon.as_deref())
+    .bind::<Integer, _>(i32::from(settings.crossfade_seconds))
+    .bind::<Text, _>(settings.leveling.as_str())
+    .bind::<Integer, _>(i32::from(settings.leveling_target_lufs))
+    .bind::<Integer, _>(i32::from(settings.leveling_adjustment_db))
+    .bind::<Nullable<Integer>, _>(settings.comfort_volume.map(i32::from))
+    .bind::<Nullable<Integer>, _>(settings.safety_min_volume.map(i32::from))
+    .bind::<Nullable<Integer>, _>(settings.safety_max_volume.map(i32::from))
+    .bind::<Integer, _>(i32::from(settings.private))
     .execute(connection)?;
     Ok(())
 }

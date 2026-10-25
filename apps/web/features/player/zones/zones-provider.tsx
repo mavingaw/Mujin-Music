@@ -4,8 +4,12 @@ import {
   discoverSonos,
   getSongInfos,
   getZoneEventsURL,
+  getZoneLoudness,
   getZones,
   groupZones,
+  levelingGainDb,
+  resolveLevelBy,
+  setZoneViewerDevice,
   reportClientZone,
   sendZoneCommand,
   setZoneSleepTimer,
@@ -17,6 +21,7 @@ import {
   type Zone,
   type ZoneCommand,
   type ZoneList,
+  type ZoneSettingsPatch,
   type ZoneSocketMessage,
 } from "@parson/music-sdk";
 import type { LibrarySong } from "@parson/music-sdk/types";
@@ -33,6 +38,7 @@ import {
 } from "react";
 import { useSession } from "@/features/account/session-provider";
 import { hasDesktopBridge } from "@/lib/desktop/bridge";
+import { levelingFactor } from "../crossfade";
 import { usePlayer } from "../player-api";
 import {
   applyZoneCommand,
@@ -67,10 +73,10 @@ type ZonesContextValue = {
   group: (zoneIds: string[]) => Promise<string>;
   ungroup: (groupId: string, memberId?: string) => Promise<void>;
   setSleepTimer: (zoneId: string, minutes: number | null) => Promise<void>;
-  updateSettings: (
-    zoneId: string,
-    settings: { name?: string | null; max_volume?: number | null },
-  ) => Promise<void>;
+  /** Changes only the fields in `patch`. */
+  updateSettings: (zoneId: string, patch: ZoneSettingsPatch) => Promise<void>;
+  /** This device's zone. */
+  localZone: Zone | null;
   rescanSonos: () => Promise<void>;
   busy: boolean;
   error: unknown;
@@ -94,9 +100,13 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
   const signedIn = Boolean(session?.sub);
   const player = usePlayer();
   const queryClient = useQueryClient();
-  const [deviceId] = useState(() =>
-    typeof window === "undefined" ? "" : readOrCreateDeviceId(),
-  );
+  const [deviceId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const id = readOrCreateDeviceId();
+    // Zone requests name this device so its private zone stays visible.
+    setZoneViewerDevice(id);
+    return id;
+  });
   const [localZoneId, setLocalZoneId] = useState<string | null>(null);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(() =>
     typeof window === "undefined" ? null : readSelectedZone(),
@@ -394,15 +404,89 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
     return zones.find((zone) => zone.id === selectedZoneId) ?? null;
   }, [localZoneId, selectedZoneId, zones]);
 
-  // Enforce this zone's volume limit on the local player too.
-  const localLimit = zones.find((zone) => zone.id === localZoneId)?.volume?.max;
+  const localZone = useMemo(
+    () => zones.find((zone) => zone.id === localZoneId) ?? null,
+    [localZoneId, zones],
+  );
+
+  // Enforce this zone's safety limits on the local player too.
+  const localMin = localZone?.volume?.min;
+  const localMax = localZone?.volume?.max;
   useEffect(() => {
-    if (localLimit !== undefined && localLimit < 100) {
-      if (player.volume * 100 > localLimit + 0.5) {
-        player.setAudioVolume(localLimit);
-      }
+    const percent = player.volume * 100;
+    if (localMax !== undefined && percent > localMax + 0.5) {
+      player.setAudioVolume(localMax);
+    } else if (
+      localMin !== undefined &&
+      localMin > 0 &&
+      percent < localMin - 0.5
+    ) {
+      player.setAudioVolume(localMin);
     }
-  }, [localLimit, player, player.volume]);
+  }, [localMax, localMin, player, player.volume]);
+
+  // Crossfade and volume leveling from this zone's settings.
+  const localSettings = localZone?.settings;
+  const crossfadeSeconds = localSettings?.supports.crossfade
+    ? localSettings.crossfade_seconds
+    : 0;
+  const leveling =
+    localSettings?.supports.leveling && localSettings.leveling !== "off"
+      ? localSettings
+      : null;
+  const queueSongIds = useMemo(
+    () => player.queue.map((item) => item.song.id),
+    [player.queue],
+  );
+  const currentIndex = queueSongIds.indexOf(player.song.id);
+  const loudnessIds = leveling
+    ? [player.song.id, queueSongIds[currentIndex + 1]].filter(
+        (id): id is string => Boolean(id),
+      )
+    : [];
+  const loudness = useQuery({
+    queryKey: ["zone-loudness", loudnessIds.join(",")],
+    queryFn: () => getZoneLoudness(loudnessIds),
+    enabled: signedIn && loudnessIds.length > 0,
+    staleTime: Infinity,
+    // Album loudness appears once the whole album is measured.
+    refetchInterval: (state) => (state.state.data?.pending ? 4_000 : false),
+  }).data;
+  const levelingGain = useMemo(() => {
+    if (!leveling || !player.song.id) return null;
+    const measured = loudness?.tracks[player.song.id];
+    if (!measured) return null;
+    const by = resolveLevelBy(
+      leveling.leveling,
+      queueSongIds,
+      Math.max(currentIndex, 0),
+      (songId) =>
+        player.queue.find((item) => item.song.id === songId)?.album.id ?? null,
+    );
+    const source =
+      by === "album" ? (measured.album ?? measured.track) : measured.track;
+    return source
+      ? levelingGainDb(
+          source,
+          leveling.leveling_target_lufs,
+          leveling.leveling_adjustment_db,
+        )
+      : null;
+  }, [
+    currentIndex,
+    leveling,
+    loudness,
+    player.queue,
+    player.song.id,
+    queueSongIds,
+  ]);
+  const { setOutputSettings } = player;
+  useEffect(() => {
+    setOutputSettings({
+      crossfadeSeconds,
+      levelingFactor: levelingFactor(levelingGain),
+    });
+  }, [crossfadeSeconds, levelingGain, setOutputSettings]);
 
   const value = useMemo<ZonesContextValue>(
     () => ({
@@ -435,9 +519,10 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       setSleepTimer: async (zoneId, minutes) => {
         await run(() => setZoneSleepTimer(zoneId, minutes));
       },
-      updateSettings: async (zoneId, settings) => {
-        await run(() => updateZoneSettings(zoneId, settings));
+      updateSettings: async (zoneId, patch) => {
+        await run(() => updateZoneSettings(zoneId, patch));
       },
+      localZone,
       rescanSonos: async () => {
         await run(() => discoverSonos());
       },
@@ -447,6 +532,7 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
     [
       action.error,
       action.isPending,
+      localZone,
       localZoneId,
       query.data?.sonos,
       query.dataUpdatedAt,

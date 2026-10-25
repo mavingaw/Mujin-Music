@@ -1704,6 +1704,12 @@ fn transcode_cache_path_for(
     if format != TranscodeFormat::Mp3 {
         hasher.update(format.extension().as_bytes());
     }
+    if let TranscodeFormat::SonosFlac { gain_tenths_db, .. } = format
+        && gain_tenths_db != 0
+    {
+        hasher.update(b"gain");
+        hasher.update(gain_tenths_db.to_le_bytes());
+    }
     if let Ok(metadata) = std::fs::metadata(path) {
         hasher.update(metadata.len().to_le_bytes());
         if let Ok(modified) = metadata.modified()
@@ -1732,7 +1738,12 @@ enum TranscodeFormat {
     Mp3,
     /// FLAC at 48 kHz-family or 44.1 kHz-family rate and at most 24 bits,
     /// the most Sonos players accept.
-    SonosFlac { sample_rate: u32, bit_depth: u8 },
+    SonosFlac {
+        sample_rate: u32,
+        bit_depth: u8,
+        /// Volume leveling gain in tenths of a dB (0: none).
+        gain_tenths_db: i16,
+    },
 }
 
 impl TranscodeFormat {
@@ -1809,6 +1820,28 @@ pub(crate) fn sonos_stream_plan(song: &crate::domain::Song) -> SonosStreamPlan {
                 bit_depth.clamp(16, 24),
             )),
         },
+    }
+}
+
+/// How a leveled song reaches a Sonos player: always converted (so the gain
+/// can be applied) to FLAC within 48 kHz/24-bit at the source's rate family.
+pub(crate) fn sonos_leveled_stream_plan(song: &crate::domain::Song) -> SonosStreamPlan {
+    let sample_rate = song
+        .audio
+        .as_ref()
+        .and_then(|audio| audio.sample_rate)
+        .unwrap_or(44_100);
+    SonosStreamPlan {
+        mime_type: "audio/flac",
+        convert_to: Some((
+            if sample_rate.is_multiple_of(11_025) {
+                44_100
+            } else {
+                48_000
+            },
+            // 24 bits keep the resolution a gain change would otherwise lose.
+            24,
+        )),
     }
 }
 
@@ -2346,8 +2379,15 @@ async fn stream_cached_transcode(
         TranscodeFormat::SonosFlac {
             sample_rate,
             bit_depth,
+            gain_tenths_db,
         } => {
             let sample_format = if bit_depth > 16 { "s32" } else { "s16" };
+            if gain_tenths_db != 0 && audio_effect.ffmpeg_filter().is_none() {
+                command.args([
+                    "-af",
+                    &format!("volume={:.1}dB", f32::from(gain_tenths_db) / 10.0),
+                ]);
+            }
             command
                 .args(["-vn", "-c:a", "flac", "-ar"])
                 .arg(sample_rate.to_string())
@@ -2660,17 +2700,26 @@ async fn stream_song_profile(
 }
 
 /// Streams Sonos-compatible audio: the original file when Sonos plays it
-/// natively, else FLAC within 48 kHz/24-bit.
+/// natively, else FLAC within 48 kHz/24-bit. Leveled audio (`gain_db` is
+/// set, even to 0) is always converted, as its DIDL-Lite promised FLAC.
 pub(crate) async fn stream_sonos_compatible(
     req: &HttpRequest,
     song_key: &str,
     lifecycle: &web::Data<LibraryLifecycle>,
+    gain_db: Option<f32>,
 ) -> HttpResponse {
-    let plan = lifecycle
-        .cache()
-        .await
-        .ok()
-        .and_then(|cache| cache.song(song_key).map(sonos_stream_plan));
+    let gain_tenths_db = gain_db
+        .map(|gain| (gain * 10.0).round().clamp(-480.0, 240.0) as i16)
+        .unwrap_or(0);
+    let plan = lifecycle.cache().await.ok().and_then(|cache| {
+        cache.song(song_key).map(|song| {
+            if gain_db.is_some() {
+                sonos_leveled_stream_plan(song)
+            } else {
+                sonos_stream_plan(song)
+            }
+        })
+    });
     let Some(plan) = plan else {
         return not_found("Song not found.", "song_not_found");
     };
@@ -2684,13 +2733,14 @@ pub(crate) async fn stream_sonos_compatible(
             let format = TranscodeFormat::SonosFlac {
                 sample_rate,
                 bit_depth,
+                gain_tenths_db,
             };
             let cache_path = transcode_cache_path_for(&song_id, &song_path, 0, format);
             stream_cached_transcode(
                 req,
                 &song_path,
                 &cache_path,
-                &format!("{song_id}-sonos-{sample_rate}-{bit_depth}"),
+                &format!("{song_id}-sonos-{sample_rate}-{bit_depth}-{gain_tenths_db}"),
                 0,
                 StreamAudioEffect::None,
                 format,
