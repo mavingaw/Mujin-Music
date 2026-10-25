@@ -159,13 +159,269 @@ pub const WIKIDATA_KEY: &str = "wikidata";
 /// artist's image. Internal, like [`WIKIDATA_KEY`].
 pub const COMMONS_IMAGE_KEY: &str = "commons_image";
 
-/// The MusicBrainz-linked Commons photo, used when Wikidata has none.
-fn commons_fallback(profile: &ProfileRow) -> Option<String> {
+/// The profile key holding the Wikipedia article MusicBrainz links
+/// directly (`{"language", "title"}`). Internal.
+pub const WIKIPEDIA_KEY: &str = "wikipedia_link";
+/// The profile key holding the Commons file the Wikipedia article shows as
+/// its page image. Internal.
+pub const PAGE_IMAGE_KEY: &str = "page_image";
+/// Profile keys that are bookkeeping for later stages, never facts.
+pub const INTERNAL_KEYS: [&str; 4] = [
+    WIKIDATA_KEY,
+    COMMONS_IMAGE_KEY,
+    WIKIPEDIA_KEY,
+    PAGE_IMAGE_KEY,
+];
+
+fn profile_value(profile: &ProfileRow) -> Value {
     serde_json::from_str::<Value>(&profile.profile_json)
-        .ok()?
-        .get(COMMONS_IMAGE_KEY)?
+        .ok()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+fn profile_text(profile: &ProfileRow, key: &str) -> Option<String> {
+    profile_value(profile)
+        .get(key)?
         .as_str()
         .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// The MusicBrainz-linked Commons photo, used when Wikidata has none.
+fn commons_fallback(profile: &ProfileRow) -> Option<String> {
+    profile_text(profile, COMMONS_IMAGE_KEY)
+}
+
+/// The Wikipedia article MusicBrainz links, as `(language, title)`.
+fn musicbrainz_article(profile: &ProfileRow) -> Option<(String, String)> {
+    let value = profile_value(profile);
+    let link = value.get(WIKIPEDIA_KEY)?;
+    let language = link.get("language")?.as_str()?;
+    let title = link.get("title")?.as_str()?;
+    (wiki::valid_language(language) && !title.trim().is_empty())
+        .then(|| (language.to_string(), title.to_string()))
+}
+
+fn wikipedia_link_json(link: &Option<(String, String)>) -> Value {
+    match link {
+        Some((language, title)) => json!({"language": language, "title": title}),
+        None => Value::Null,
+    }
+}
+
+/// The Commons files that may be an artist's photo, best first: Wikidata's
+/// P18 image, the image MusicBrainz links, the Wikipedia page image.
+fn photo_candidates(profile: &ProfileRow) -> Vec<String> {
+    let mut files = Vec::new();
+    for file in [
+        wikidata_links(profile).image,
+        commons_fallback(profile),
+        profile_text(profile, PAGE_IMAGE_KEY),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    files
+}
+
+/// Where the Wikipedia stage may find an entity's article.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArticleCandidate {
+    pub language: String,
+    pub title: String,
+    /// Named by Wikidata, MusicBrainz or the genre tree, so only a
+    /// disambiguation page is refused. A guessed title must prove itself.
+    pub linked: bool,
+}
+
+/// The names the Wikipedia stage may guess an article title from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntityNames {
+    pub name: String,
+    /// An album's artist.
+    pub artist: Option<String>,
+}
+
+fn push_candidate(candidates: &mut Vec<ArticleCandidate>, candidate: ArticleCandidate) {
+    if !candidates
+        .iter()
+        .any(|known| known.language == candidate.language && known.title == candidate.title)
+    {
+        candidates.push(candidate);
+    }
+}
+
+/// Articles to try, in order: the one Wikidata names in the preferred
+/// language, the one MusicBrainz links, then (albums and artists only)
+/// titles guessed the way Wikipedia names articles, which are accepted only
+/// when the page proves to be about this entity.
+pub fn article_candidates(
+    entity_type: &str,
+    profile: &ProfileRow,
+    names: &EntityNames,
+) -> Vec<ArticleCandidate> {
+    let mut candidates = Vec::new();
+    let linked = |(language, title): (String, String)| ArticleCandidate {
+        language,
+        title,
+        linked: true,
+    };
+    if let Some(article) = wikidata_links(profile).article {
+        push_candidate(&mut candidates, linked(article));
+    }
+    if let Some(article) = musicbrainz_article(profile) {
+        push_candidate(&mut candidates, linked(article));
+    }
+    let name = names.name.trim();
+    if name.is_empty() || name.chars().count() > 200 {
+        return candidates;
+    }
+    let guesses = match entity_type {
+        "album" => {
+            // Most albums have the bare title; namesakes are told apart
+            // as "Blue (Joni Mitchell album)".
+            let mut titles = vec![name.to_string()];
+            if let Some(artist) = names.artist.as_deref().map(str::trim)
+                && !artist.is_empty()
+                && !mb::is_placeholder_artist(artist)
+            {
+                titles.push(format!("{name} ({artist} album)"));
+            }
+            titles.push(format!("{name} (album)"));
+            titles
+        }
+        "artist" => ["", " (band)", " (musician)", " (composer)", " (singer)"]
+            .iter()
+            .map(|suffix| format!("{name}{suffix}"))
+            .collect(),
+        _ => Vec::new(),
+    };
+    for title in guesses {
+        push_candidate(
+            &mut candidates,
+            ArticleCandidate {
+                language: "en".into(),
+                title,
+                linked: false,
+            },
+        );
+    }
+    candidates
+}
+
+const MUSIC_WORDS: [&str; 36] = [
+    "music",
+    "band",
+    "singer",
+    "songwriter",
+    "composer",
+    "rapper",
+    "conductor",
+    "pianist",
+    "guitarist",
+    "violinist",
+    "cellist",
+    "drummer",
+    "bassist",
+    "saxophonist",
+    "trumpeter",
+    "organist",
+    "soprano",
+    "tenor",
+    "baritone",
+    "mezzo",
+    "contralto",
+    "orchestra",
+    "ensemble",
+    "choir",
+    "quartet",
+    "trio",
+    "duo",
+    "group",
+    "dj",
+    "producer",
+    "vocalist",
+    "harpist",
+    "percussionist",
+    "clarinetist",
+    "flautist",
+    "trombonist",
+];
+
+fn mentions(haystack: &str, needle: &str) -> bool {
+    let haystack = normalize_artist_identity(haystack);
+    let needle = normalize_artist_identity(needle);
+    !needle.is_empty() && format!(" {haystack} ").contains(&format!(" {needle} "))
+}
+
+/// Whether a summary is the article for this entity. A linked article is
+/// trusted unless it is a disambiguation page; a guessed one must carry the
+/// Wikidata item MusicBrainz names or, when there is none, read like an
+/// album by this artist or a musician of this name.
+pub fn accepts_article(
+    summary: &wiki::WikipediaSummary,
+    candidate: &ArticleCandidate,
+    wikidata_id: Option<&str>,
+    entity_type: &str,
+    names: &EntityNames,
+) -> bool {
+    if summary.disambiguation || summary.extract.trim().is_empty() {
+        return false;
+    }
+    if candidate.linked {
+        return true;
+    }
+    if let Some(expected) = wikidata_id {
+        return summary.wikibase_item.as_deref() == Some(expected);
+    }
+    let description = summary
+        .description
+        .clone()
+        .unwrap_or_default()
+        .to_lowercase();
+    let first_sentence = summary
+        .extract
+        .split(". ")
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    match entity_type {
+        "album" => {
+            let about = format!("{description} {first_sentence}");
+            let album_like = [
+                "album",
+                " ep ",
+                "ep by",
+                "soundtrack",
+                "mixtape",
+                "compilation",
+            ]
+            .iter()
+            .any(|word| format!(" {about} ").contains(word));
+            let artist = names.artist.as_deref().unwrap_or_default();
+            album_like && mentions(&about, artist)
+        }
+        "artist" => {
+            let base = summary
+                .title
+                .split(" (")
+                .next()
+                .unwrap_or(&summary.title)
+                .to_string();
+            let same_name =
+                normalize_artist_identity(&base) == normalize_artist_identity(&names.name);
+            let musical = description
+                .split(|character: char| !character.is_alphanumeric())
+                .any(|word| MUSIC_WORDS.iter().any(|music| word.starts_with(music)));
+            same_name && musical
+        }
+        _ => false,
+    }
 }
 
 pub fn images_directory() -> PathBuf {
@@ -273,6 +529,18 @@ impl<F: Fetch> Enricher<F> {
         Ok(Ok(json_body(&response)))
     }
 
+    /// A text body (HTML or wikitext); `Ok(None)` for a missing page.
+    async fn get_text(&self, url: &str) -> Result<Result<Option<String>, Outcome>, BoxError> {
+        let response = self.fetch.get(url, MAX_JSON_BYTES).await?;
+        if let Some(outcome) = transient(&response) {
+            return Ok(Err(outcome));
+        }
+        Ok(Ok(response
+            .is_success()
+            .then(|| String::from_utf8(response.body).ok())
+            .flatten()))
+    }
+
     /// The MusicBrainz stage for an album: the release, its credits, works
     /// and the release group's Wikidata item. Text comes later from the
     /// Wikidata and Wikipedia queues.
@@ -344,11 +612,13 @@ impl<F: Fetch> Enricher<F> {
         };
 
         let mut wikidata_id = None;
+        let mut wikipedia = None;
         let mut genres = Vec::new();
         if let Some(group) = &release.release_group_mbid {
             match self.get_json(&mb::release_group_lookup_url(group)).await? {
                 Ok(Some(body)) => {
                     wikidata_id = mb::wikidata_relation(&body);
+                    wikipedia = mb::wikipedia_relation(&body);
                     genres = mb::parse_genres(&body);
                 }
                 Ok(None) => {}
@@ -366,6 +636,15 @@ impl<F: Fetch> Enricher<F> {
         let credits = album_credit_rows(album, &release);
         let links = artist_links(album, &release);
         let (works, work_links) = album_work_rows(album, &release);
+        // The pieces on the album (not their movements) get their own text
+        // from the work's Wikipedia link: the background a classical album
+        // usually lacks.
+        let pieces = works
+            .iter()
+            .filter(|work| work.parent_mbid.is_none())
+            .map(|work| work.mbid.clone())
+            .take(MAX_WORKS_PER_ALBUM)
+            .collect::<Vec<_>>();
         let profile = ProfileRow {
             musicbrainz_id: Some(release.mbid.clone()),
             release_group_mbid: release.release_group_mbid.clone(),
@@ -383,6 +662,9 @@ impl<F: Fetch> Enricher<F> {
                 "labels": release.labels.iter().map(|(name, catalog_number)| json!({
                     "name": name, "catalog_number": catalog_number
                 })).collect::<Vec<_>>(),
+                "title": album.title,
+                "artist": album.artist_name,
+                WIKIPEDIA_KEY: wikipedia_link_json(&wikipedia),
             })
             .to_string(),
         };
@@ -396,15 +678,62 @@ impl<F: Fetch> Enricher<F> {
             for (artist_id, mbid) in &links {
                 store::link_artist_mbid(connection, artist_id, mbid)?;
             }
-            queue_wikidata(connection, "album", &album_id, linked)
+            for piece in &pieces {
+                store::queue_stage_once(connection, Stage::Musicbrainz, "work", piece)?;
+            }
+            queue_text_stages(connection, "album", &album_id, linked)
         })
         .await?;
         Ok(Outcome::Done)
     }
 
-    /// The MusicBrainz stage for an artist: who they are and their Wikidata
-    /// item. The biography and photo come from the later queues.
-    pub async fn resolve_artist(&self, artist: &ArtistInput) -> Result<Outcome, BoxError> {
+    /// The MusicBrainz stage for a work: its Wikipedia and Wikidata links.
+    pub async fn resolve_work(&self, mbid: &str) -> Result<Outcome, BoxError> {
+        if !mb::is_mbid(mbid) {
+            return Ok(Outcome::Skipped("not a MusicBrainz work".into()));
+        }
+        let links = match self.get_json(&mb::work_lookup_url(mbid)).await? {
+            Ok(Some(body)) => mb::parse_work_links(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(links) = links else {
+            return Ok(Outcome::Skipped(
+                "the MusicBrainz work was not found".into(),
+            ));
+        };
+        if links.wikidata_id.is_none() && links.wikipedia.is_none() {
+            return Ok(Outcome::Skipped(
+                "the work has no Wikipedia or Wikidata link".into(),
+            ));
+        }
+        let profile = ProfileRow {
+            musicbrainz_id: Some(links.mbid.clone()),
+            release_group_mbid: None,
+            wikidata_id: links.wikidata_id.clone(),
+            profile_json: json!({
+                "title": links.title,
+                WIKIPEDIA_KEY: wikipedia_link_json(&links.wikipedia),
+            })
+            .to_string(),
+        };
+        let mbid = mbid.to_string();
+        db(&self.pool, move |connection| {
+            let linked = profile.wikidata_id.is_some();
+            store::save_profile(connection, "work", &mbid, &profile)?;
+            queue_text_stages(connection, "work", &mbid, linked)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The MusicBrainz stage for an artist: who they are, their Wikipedia
+    /// and Wikidata links and the photo MusicBrainz links.
+    pub async fn resolve_artist(
+        &self,
+        artist: &ArtistInput,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
         if artist.name.trim().is_empty() {
             return Ok(Outcome::Skipped("the artist has no name".into()));
         }
@@ -485,19 +814,21 @@ impl<F: Fetch> Enricher<F> {
                 "end": profile.end,
                 "disambiguation": profile.disambiguation,
                 COMMONS_IMAGE_KEY: profile.image_file,
+                WIKIPEDIA_KEY: wikipedia_link_json(&profile.wikipedia),
             })
             .to_string(),
         };
         let artist_id = artist.id.clone();
         let genres = profile.genres.clone();
-        let image_fallback = profile.image_file.is_some();
+        let photo = profile.image_file.is_some() && settings.artist_images;
         db(&self.pool, move |connection| {
             let linked = row.wikidata_id.is_some();
             store::save_profile(connection, "artist", &artist_id, &row)?;
             store::replace_genre_links(connection, "artist", &artist_id, "musicbrainz", &genres)?;
-            queue_wikidata(connection, "artist", &artist_id, linked)?;
-            if !linked && image_fallback {
-                // No Wikidata item, but MusicBrainz links a Commons photo.
+            queue_text_stages(connection, "artist", &artist_id, linked)?;
+            if photo {
+                // MusicBrainz links a Commons photo: no need to wait for
+                // Wikidata or Wikipedia to name one.
                 store::queue_stage(connection, Stage::Commons, "artist", &artist_id)?;
             }
             Ok(())
@@ -506,17 +837,15 @@ impl<F: Fetch> Enricher<F> {
         Ok(Outcome::Done)
     }
 
-    /// The Wikidata stage: the Wikipedia article in the preferred language,
-    /// life dates and the P18 image, then the Wikipedia and Commons queues.
+    /// The Wikidata stage: an article in the preferred language, life dates
+    /// and the P18 image. It enriches what the Wikipedia stage found and
+    /// queues that stage again only when it names a different article.
     pub async fn wikidata_stage(
         &self,
         entity_type: &str,
         entity_id: &str,
         settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
-        if entity_type == "genre" {
-            return self.genre_wikidata_stage(entity_id, settings).await;
-        }
         let Some(mut profile) = self.profile(entity_type, entity_id).await? else {
             return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
         };
@@ -536,12 +865,9 @@ impl<F: Fetch> Enricher<F> {
         };
         let article = entity.article(&settings.language);
         let image = (entity_type == "artist")
-            .then(|| entity.image.clone().or_else(|| commons_fallback(&profile)))
+            .then(|| entity.image.clone())
             .flatten();
-        let mut facts = serde_json::from_str::<Value>(&profile.profile_json)
-            .ok()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
+        let mut facts = profile_value(&profile);
         if entity_type == "artist" {
             if let Some(begin) = entity.born.clone().or(entity.formed.clone()) {
                 facts["begin"] = json!(begin);
@@ -558,19 +884,23 @@ impl<F: Fetch> Enricher<F> {
         profile.profile_json = facts.to_string();
         let entity_type = entity_type.to_string();
         let entity_id = entity_id.to_string();
-        let wants_image = image.is_some() && settings.artist_images;
+        let photos = settings.artist_images && entity_type == "artist";
         db(&self.pool, move |connection| {
             store::save_profile(connection, &entity_type, &entity_id, &profile)?;
-            if article.is_some() {
+            let texts = store::load_texts(connection, &entity_type, &entity_id)?;
+            let current = texts
+                .first()
+                .map(|text| (text.language.clone(), text.title.clone()));
+            if let Some(article) = &article
+                && current.as_ref() != Some(article)
+            {
                 store::queue_stage(connection, Stage::Wikipedia, &entity_type, &entity_id)?;
-            } else {
-                store::replace_texts(connection, &entity_type, &entity_id, &[])?;
-                store::drop_stage(connection, Stage::Wikipedia, &entity_type, &entity_id)?;
             }
-            if wants_image {
-                store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
-            } else {
-                store::drop_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
+            if photos && let Some(file) = &image {
+                let stored = store::load_image(connection, &entity_type, &entity_id)?;
+                if stored.is_none_or(|stored| stored.page_url != wiki::commons_page_url(file)) {
+                    store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
+                }
             }
             Ok(())
         })
@@ -578,69 +908,175 @@ impl<F: Fetch> Enricher<F> {
         Ok(Outcome::Done)
     }
 
-    /// The Wikipedia stage: an artist biography, or an album's background
-    /// and critical reception, with CC BY-SA attribution.
+    /// The names an entity's article may be guessed from.
+    async fn entity_names(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        profile: &ProfileRow,
+    ) -> Result<EntityNames, BoxError> {
+        let value = profile_value(profile);
+        let text = |key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|text| !text.trim().is_empty())
+        };
+        let mut names = EntityNames {
+            name: text(if entity_type == "artist" {
+                "name"
+            } else {
+                "title"
+            })
+            .unwrap_or_default(),
+            artist: text("artist"),
+        };
+        if names.name.is_empty() {
+            let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+            names = db(&self.pool, move |connection| {
+                store::entity_names(connection, &entity_type, &entity_id)
+            })
+            .await?
+            .map(|(name, artist)| EntityNames { name, artist })
+            .unwrap_or_default();
+        }
+        Ok(names)
+    }
+
+    /// The Wikipedia stage: an artist biography, an album's background and
+    /// critical reception, or a work's or genre's About text, with CC BY-SA
+    /// attribution. The article comes from the link MusicBrainz (or the
+    /// genre tree) gives, the one Wikidata named, or a title Wikipedia
+    /// confirms through the article's Wikidata item. It never waits for the
+    /// Wikidata stage, and it reads Wikipedia's cached REST pages.
     pub async fn wikipedia_stage(
         &self,
         entity_type: &str,
         entity_id: &str,
+        settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
-        let Some(profile) = self.profile(entity_type, entity_id).await? else {
-            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
-        };
-        let Some((language, title)) = wikidata_links(&profile).article else {
-            return Ok(Outcome::Skipped("no Wikipedia article".into()));
-        };
-        let article = match self
-            .get_json(&wiki::wikipedia_extract_url(&language, &title))
-            .await?
-        {
-            Ok(Some(body)) => wiki::parse_wikipedia_extract(&body),
-            Ok(None) => None,
-            Err(outcome) => return Ok(outcome),
-        };
-        let Some(article) = article else {
-            return Ok(Outcome::Skipped(
-                "the Wikipedia article was not found".into(),
-            ));
-        };
-        let mut texts = Vec::new();
-        if entity_type == "genre" {
-            texts.push(wikipedia_text(
-                "background",
-                &language,
-                &article,
-                &article.lead,
-            ));
-        } else if entity_type == "artist" {
-            texts.push(wikipedia_text(
-                "biography",
-                &language,
-                &article,
-                &article.lead,
-            ));
+        let stored = self.profile(entity_type, entity_id).await?;
+        let (profile, names, mut candidates) = if entity_type == "genre" {
+            let Some(node) = super::genres::by_slug(entity_id) else {
+                return Ok(Outcome::Skipped("not a known genre".into()));
+            };
+            let profile = stored.unwrap_or_else(|| ProfileRow {
+                profile_json: json!({"name": node.name}).to_string(),
+                ..ProfileRow::default()
+            });
+            let mut candidates = article_candidates("genre", &profile, &EntityNames::default());
+            push_candidate(
+                &mut candidates,
+                ArticleCandidate {
+                    language: "en".into(),
+                    title: node.wikipedia.to_string(),
+                    linked: true,
+                },
+            );
+            (profile, EntityNames::default(), candidates)
         } else {
-            texts.push(wikipedia_text(
-                "background",
-                &language,
-                &article,
-                &article.lead,
-            ));
-            if let Some(reception) = &article.reception {
-                texts.push(wikipedia_text("reception", &language, &article, reception));
+            let Some(profile) = stored else {
+                return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+            };
+            let names = self.entity_names(entity_type, entity_id, &profile).await?;
+            let candidates = article_candidates(entity_type, &profile, &names);
+            (profile, names, candidates)
+        };
+        candidates.retain(|candidate| wiki::valid_language(&candidate.language));
+        let mut found = None;
+        let mut retry = None;
+        for candidate in &candidates {
+            let page = match self.read_article(candidate).await? {
+                Ok(Some(page)) => page,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            if accepts_article(
+                &page.page.summary,
+                candidate,
+                profile.wikidata_id.as_deref(),
+                entity_type,
+                &names,
+            ) {
+                retry = page.busy;
+                found = Some((candidate.language.clone(), page.page));
+                break;
             }
         }
+        let Some((language, page)) = found else {
+            return Ok(Outcome::Skipped(if profile.wikidata_id.is_some() {
+                "no Wikipedia article yet; Wikidata may name one".into()
+            } else {
+                "no Wikipedia article found".into()
+            }));
+        };
+        let summary = page.summary;
+        let article = wiki::WikipediaArticle {
+            title: summary.title.clone(),
+            url: summary.url.clone(),
+            lead: if page.lead.trim().is_empty() {
+                wiki::tidy_text(&[summary.extract.as_str()])
+            } else {
+                page.lead
+            },
+            reception: page.reception,
+        };
+        let mut texts = vec![wikipedia_text(
+            if entity_type == "artist" {
+                "biography"
+            } else {
+                "background"
+            },
+            &language,
+            &article,
+            &article.lead,
+        )];
+        if entity_type == "album"
+            && let Some(reception) = &article.reception
+        {
+            texts.push(wikipedia_text("reception", &language, &article, reception));
+        }
+
+        let mut row = profile.clone();
+        let mut value = profile_value(&row);
+        value[PAGE_IMAGE_KEY] = json!(summary.commons_image);
+        row.profile_json = value.to_string();
+        let learned_item = row.wikidata_id.is_none() && summary.wikibase_item.is_some();
+        if learned_item {
+            row.wikidata_id = summary.wikibase_item.clone();
+        }
+        // Wikidata adds dates, a P18 photo and the article in the preferred
+        // language; for a genre only the language matters.
+        let wants_wikidata =
+            learned_item && (entity_type != "genre" || language != settings.language);
+        let photo = entity_type == "artist" && settings.artist_images;
         let entity_type = entity_type.to_string();
         let entity_id = entity_id.to_string();
         db(&self.pool, move |connection| {
-            store::replace_texts(connection, &entity_type, &entity_id, &texts)
+            store::save_profile(connection, &entity_type, &entity_id, &row)?;
+            store::replace_texts(connection, &entity_type, &entity_id, &texts)?;
+            if wants_wikidata {
+                store::queue_stage(connection, Stage::Wikidata, &entity_type, &entity_id)?;
+            }
+            if photo
+                && !photo_candidates(&row).is_empty()
+                && store::load_image(connection, &entity_type, &entity_id)?.is_none()
+                && store::task_status(connection, Stage::Commons, &entity_type, &entity_id)?
+                    .as_deref()
+                    != Some("pending")
+            {
+                store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
+            }
+            Ok(())
         })
         .await?;
-        Ok(Outcome::Done)
+        Ok(retry.unwrap_or(Outcome::Done))
     }
 
     /// The Commons stage: the artist's freely licensed photo, cached under
-    /// the data directory.
+    /// the data directory. Wikidata's image, the one MusicBrainz links and
+    /// the Wikipedia page image are tried in that order.
     pub async fn commons_stage(
         &self,
         entity_type: &str,
@@ -653,76 +1089,46 @@ impl<F: Fetch> Enricher<F> {
         let Some(profile) = self.profile(entity_type, entity_id).await? else {
             return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
         };
-        let Some(file) = wikidata_links(&profile)
-            .image
-            .or_else(|| commons_fallback(&profile))
-        else {
-            return Ok(Outcome::Skipped("no Wikidata or MusicBrainz image".into()));
-        };
-        let image = match self.download_image(entity_id, &file).await? {
-            Ok(Some(image)) => image,
-            Ok(None) => {
-                return Ok(Outcome::Skipped(
-                    "no freely licensed photo on Commons".into(),
-                ));
-            }
-            Err(outcome) => return Ok(outcome),
-        };
-        let entity_id = entity_id.to_string();
-        db(&self.pool, move |connection| {
-            store::save_image(connection, "artist", &entity_id, &image)
-        })
-        .await?;
-        Ok(Outcome::Done)
+        let files = photo_candidates(&profile);
+        if files.is_empty() {
+            return Ok(Outcome::Skipped(
+                "no Wikidata, MusicBrainz or Wikipedia image".into(),
+            ));
+        }
+        for file in files {
+            let image = match self.commons_license(&file).await? {
+                Ok(Some(image)) => image,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            let image = match self.download_image(entity_id, image).await? {
+                Ok(Some(image)) => image,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            let entity_id = entity_id.to_string();
+            db(&self.pool, move |connection| {
+                store::save_image(connection, "artist", &entity_id, &image)
+            })
+            .await?;
+            return Ok(Outcome::Done);
+        }
+        Ok(Outcome::Skipped(
+            "no freely licensed photo on Commons".into(),
+        ))
     }
 
-    /// The Wikidata stage for a genre: the item behind the genre's English
-    /// Wikipedia article, and the article in the preferred language.
+    /// The Wikidata stage for a genre: the article in the preferred
+    /// language, through the item the Wikipedia stage found.
     pub async fn genre_wikidata_stage(
         &self,
         slug: &str,
         settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
-        let Some(node) = super::genres::by_slug(slug) else {
+        if super::genres::by_slug(slug).is_none() {
             return Ok(Outcome::Skipped("not a known genre".into()));
-        };
-        let entity = match self
-            .get_json(&wiki::wikidata_by_article_url(node.wikipedia))
-            .await?
-        {
-            Ok(Some(body)) => wiki::parse_wikidata_entity(&body),
-            Ok(None) => None,
-            Err(outcome) => return Ok(outcome),
-        };
-        let Some(entity) = entity.filter(|entity| mb::is_wikidata_id(&entity.id)) else {
-            return Ok(Outcome::Skipped("no Wikidata item for the genre".into()));
-        };
-        let article = entity.article(&settings.language);
-        let profile = ProfileRow {
-            musicbrainz_id: None,
-            release_group_mbid: None,
-            wikidata_id: Some(entity.id.clone()),
-            profile_json: json!({
-                "name": node.name,
-                WIKIDATA_KEY: {
-                    "article_language": article.as_ref().map(|(language, _)| language),
-                    "article_title": article.as_ref().map(|(_, title)| title),
-                },
-            })
-            .to_string(),
-        };
-        let slug = slug.to_string();
-        db(&self.pool, move |connection| {
-            store::save_profile(connection, "genre", &slug, &profile)?;
-            if article.is_some() {
-                store::queue_stage(connection, Stage::Wikipedia, "genre", &slug)
-            } else {
-                store::replace_texts(connection, "genre", &slug, &[])?;
-                store::drop_stage(connection, Stage::Wikipedia, "genre", &slug)
-            }
-        })
-        .await?;
-        Ok(Outcome::Done)
+        }
+        self.wikidata_stage("genre", slug, settings).await
     }
 
     async fn profile(
@@ -758,6 +1164,7 @@ impl<F: Fetch> Enricher<F> {
                     )),
                 }
             }
+            (Stage::Musicbrainz, "work") => self.resolve_work(&task.entity_id).await,
             (Stage::Musicbrainz, _) => {
                 let artist_id = task.entity_id.clone();
                 match db(&self.pool, move |connection| {
@@ -766,10 +1173,13 @@ impl<F: Fetch> Enricher<F> {
                 .await?
                 {
                     Some(name) => {
-                        self.resolve_artist(&ArtistInput {
-                            id: task.entity_id.clone(),
-                            name,
-                        })
+                        self.resolve_artist(
+                            &ArtistInput {
+                                id: task.entity_id.clone(),
+                                name,
+                            },
+                            settings,
+                        )
                         .await
                     }
                     None => Ok(Outcome::Skipped(
@@ -777,12 +1187,16 @@ impl<F: Fetch> Enricher<F> {
                     )),
                 }
             }
+            (Stage::Wikidata, "genre") => {
+                self.genre_wikidata_stage(&task.entity_id, settings).await
+            }
             (Stage::Wikidata, entity_type) => {
                 self.wikidata_stage(entity_type, &task.entity_id, settings)
                     .await
             }
             (Stage::Wikipedia, entity_type) => {
-                self.wikipedia_stage(entity_type, &task.entity_id).await
+                self.wikipedia_stage(entity_type, &task.entity_id, settings)
+                    .await
             }
             (Stage::Commons, entity_type) => {
                 self.commons_stage(entity_type, &task.entity_id, settings)
@@ -849,54 +1263,147 @@ impl<F: Fetch> Enricher<F> {
         artist: &ArtistInput,
         settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
-        let outcome = self.resolve_artist(artist).await?;
+        let outcome = self.resolve_artist(artist, settings).await?;
         if outcome != Outcome::Done {
             return Ok(outcome);
         }
         self.later_stages("artist", &artist.id, settings).await
     }
 
+    /// Runs the queued later stages of one entity until none is pending
+    /// (a stage may queue another, e.g. Wikidata naming a new article), and
+    /// returns the first busy answer.
     #[cfg(test)]
-    async fn later_stages(
+    pub async fn later_stages(
         &self,
         entity_type: &str,
         entity_id: &str,
         settings: &EnrichmentSettings,
     ) -> Result<Outcome, BoxError> {
         let mut result = Outcome::Done;
-        for stage in &Stage::ALL[1..] {
-            let queued = {
-                let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
-                let stage = *stage;
+        let mut busy = std::collections::HashSet::new();
+        for _ in 0..4 {
+            let mut ran = false;
+            for stage in &Stage::ALL[1..] {
+                if busy.contains(stage) {
+                    continue;
+                }
+                let queued = {
+                    let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+                    let stage = *stage;
+                    db(&self.pool, move |connection| {
+                        Ok(
+                            store::task_status(connection, stage, &entity_type, &entity_id)?
+                                .as_deref()
+                                == Some("pending"),
+                        )
+                    })
+                    .await?
+                };
+                if !queued {
+                    continue;
+                }
+                ran = true;
+                let task = Task {
+                    id: 0,
+                    entity_type: entity_type.to_string(),
+                    entity_id: entity_id.to_string(),
+                    attempts: 0,
+                };
+                let outcome = self.run_task(*stage, &task, settings, None).await?;
+                let (entity_type, entity_id, stage, recorded) = (
+                    entity_type.to_string(),
+                    entity_id.to_string(),
+                    *stage,
+                    outcome.clone(),
+                );
                 db(&self.pool, move |connection| {
-                    Ok(
-                        store::task_status(connection, stage, &entity_type, &entity_id)?.as_deref()
-                            == Some("pending"),
-                    )
+                    store::finish_stage(connection, stage, &entity_type, &entity_id, &recorded)
                 })
-                .await?
-            };
-            if !queued {
-                continue;
+                .await?;
+                if let Outcome::Retry(_) = outcome {
+                    busy.insert(stage);
+                    if result == Outcome::Done {
+                        result = outcome;
+                    }
+                }
             }
-            let outcome = match stage {
-                Stage::Wikidata => {
-                    self.wikidata_stage(entity_type, entity_id, settings)
-                        .await?
-                }
-                Stage::Wikipedia => self.wikipedia_stage(entity_type, entity_id).await?,
-                _ => self.commons_stage(entity_type, entity_id, settings).await?,
-            };
-            if let Outcome::Retry(_) = outcome {
-                if result == Outcome::Done {
-                    result = outcome;
-                }
-                if *stage == Stage::Wikidata {
-                    break;
-                }
+            if !ran {
+                break;
             }
         }
         Ok(result)
+    }
+
+    /// One candidate article: the page itself (lead, reception, Wikidata
+    /// item and photo in one cached response), or the REST summary when the
+    /// page is busy. A summary-only result is marked `busy` so the full text
+    /// is fetched again later, without pausing the queue.
+    async fn read_article(
+        &self,
+        candidate: &ArticleCandidate,
+    ) -> Result<Result<Option<ReadArticle>, Outcome>, BoxError> {
+        let busy = match self
+            .get_text(&wiki::wikipedia_page_url(
+                &candidate.language,
+                &candidate.title,
+            ))
+            .await?
+        {
+            Ok(Some(html)) => {
+                return Ok(Ok(
+                    wiki::parse_article_page(&html).map(|page| ReadArticle { page, busy: None })
+                ));
+            }
+            Ok(None) => return Ok(Ok(None)),
+            Err(outcome) => outcome,
+        };
+        match self
+            .get_json(&wiki::wikipedia_summary_url(
+                &candidate.language,
+                &candidate.title,
+            ))
+            .await?
+        {
+            Ok(Some(body)) => Ok(Ok(wiki::parse_wikipedia_summary(&body).map(|summary| {
+                ReadArticle {
+                    page: wiki::ArticlePage {
+                        lead: wiki::tidy_text(&[summary.extract.as_str()]),
+                        summary,
+                        reception: None,
+                    },
+                    busy: Some(Outcome::Retry(format!(
+                        "kept the summary; the full article answered {}",
+                        match &busy {
+                            Outcome::Retry(error) => error.as_str(),
+                            _ => "busy",
+                        }
+                    ))),
+                }
+            }))),
+            // The page was busy, so a missing summary proves nothing: try
+            // again later, pausing the Wikipedia queue.
+            Ok(None) | Err(_) => Ok(Err(busy)),
+        }
+    }
+
+    /// The license and author of a Commons file, from its description
+    /// page's wikitext (cached), or from the Action API when that page
+    /// cannot be read. A busy Commons is an `Err(outcome)`.
+    async fn commons_license(
+        &self,
+        file: &str,
+    ) -> Result<Result<Option<wiki::CommonsImage>, Outcome>, BoxError> {
+        match self.get_text(&wiki::commons_wikitext_url(file)).await? {
+            Ok(Some(wikitext)) => return Ok(Ok(wiki::parse_commons_wikitext(file, &wikitext))),
+            Ok(None) => {}
+            Err(outcome) => return Ok(Err(outcome)),
+        }
+        match self.get_json(&wiki::commons_image_info_url(file)).await? {
+            Ok(Some(body)) => Ok(Ok(wiki::parse_commons_image(&body))),
+            Ok(None) => Ok(Ok(None)),
+            Err(outcome) => Ok(Err(outcome)),
+        }
     }
 
     /// Downloads a freely licensed Commons image. A busy Commons is an
@@ -904,16 +1411,8 @@ impl<F: Fetch> Enricher<F> {
     async fn download_image(
         &self,
         artist_id: &str,
-        file: &str,
+        image: wiki::CommonsImage,
     ) -> Result<Result<Option<ImageRow>, Outcome>, BoxError> {
-        let body = match self.get_json(&wiki::commons_image_info_url(file)).await? {
-            Ok(Some(body)) => body,
-            Ok(None) => return Ok(Ok(None)),
-            Err(outcome) => return Ok(Err(outcome)),
-        };
-        let Some(image) = wiki::parse_commons_image(&body) else {
-            return Ok(Ok(None));
-        };
         let Some(file_name) = image_file_name("artist", artist_id, &image.mime_type) else {
             return Ok(Ok(None));
         };
@@ -937,19 +1436,30 @@ impl<F: Fetch> Enricher<F> {
     }
 }
 
-/// Queues the Wikidata stage when MusicBrainz linked an item; otherwise
-/// clears text and photo lookups that no longer apply.
-fn queue_wikidata(
+/// An article as the Wikipedia stage read it.
+struct ReadArticle {
+    page: wiki::ArticlePage,
+    /// Set when only the summary could be read.
+    busy: Option<Outcome>,
+}
+
+/// At most this many pieces per album are looked up for their own text.
+const MAX_WORKS_PER_ALBUM: usize = 6;
+
+/// After MusicBrainz: the Wikipedia stage always (it finds the article from
+/// the MusicBrainz link or by title), and the Wikidata stage when there is
+/// an item, which only enriches.
+fn queue_text_stages(
     connection: &mut SqliteConnection,
     entity_type: &str,
     entity_id: &str,
     linked: bool,
 ) -> diesel::QueryResult<()> {
+    store::queue_stage(connection, Stage::Wikipedia, entity_type, entity_id)?;
     if linked {
         store::queue_stage(connection, Stage::Wikidata, entity_type, entity_id)
     } else {
-        store::replace_texts(connection, entity_type, entity_id, &[])?;
-        drop_later_stages(connection, entity_type, entity_id)
+        store::drop_stage(connection, Stage::Wikidata, entity_type, entity_id)
     }
 }
 
@@ -1406,6 +1916,68 @@ mod tests {
         }
     }
 
+    /// A Wikipedia REST summary as the API returns it.
+    pub(super) fn summary(
+        title: &str,
+        item: Option<&str>,
+        description: &str,
+        extract: &str,
+        image: Option<&str>,
+    ) -> Value {
+        let path = title.replace(' ', "_");
+        serde_json::json!({
+            "type": "standard",
+            "title": title,
+            "titles": {"canonical": path, "normalized": title},
+            "wikibase_item": item,
+            "description": description,
+            "extract": extract,
+            "originalimage": image.map(|source| serde_json::json!({"source": source})),
+            "content_urls": {"desktop": {"page": format!("https://en.wikipedia.org/wiki/{path}")}}
+        })
+    }
+
+    /// A desktop Wikipedia page as browsers get it: page config with the
+    /// Wikidata item, canonical link, page image, a short description whose
+    /// Parsoid attributes hold a `>`, an infobox and a reference to skip,
+    /// titled sections and the page chrome after the article.
+    pub(super) fn page(
+        title: &str,
+        item: Option<&str>,
+        description: &str,
+        lead: &str,
+        sections: &[(&str, &str)],
+        image: Option<&str>,
+    ) -> Vec<u8> {
+        let path = title.replace(' ', "_");
+        let item = item.map_or(String::new(), |item| {
+            format!(",\"wgWikibaseItemId\":\"{item}\"")
+        });
+        let image = image.map_or(String::new(), |image| {
+            format!(
+                "<meta property=\"og:image\" content=\"{image}?utm_source=x&amp;utm_content=y\">"
+            )
+        });
+        let mut html = format!(
+            "<!DOCTYPE html><html><head><script>RLCONF={{\"wgCategories\":[\"Articles with short description\"]{item}}};</script>\
+             <link rel=\"canonical\" href=\"https://en.wikipedia.org/wiki/{path}\">{image}</head><body>\
+             <div id=\"mw-content-text\"><div class=\"mw-content-ltr mw-parser-output\" lang=\"en\">\
+             <div class=\"shortdescription nomobile\" style=\"display:none\" data-mw='{{\"wt\":\"a&lt;ref>b\"}}'>{description}</div>\
+             <table class=\"infobox\"><tbody><tr><td><p>Infobox</p></td></tr></tbody></table>\
+             <p>{lead}<sup class=\"reference\"><a>[1]</a></sup></p>"
+        );
+        for (heading, body) in sections {
+            html.push_str(&format!(
+                "<div class=\"mw-heading mw-heading2\"><h2 id=\"x\">{heading}</h2></div><p>{body}</p>"
+            ));
+        }
+        html.push_str(
+            "</div></div><div class=\"printfooter\">Retrieved from</div>\
+             <div id=\"catlinks\"><p>Categories</p></div><h2>Navigation menu</h2></body></html>",
+        );
+        html.into_bytes()
+    }
+
     fn mock() -> MockFetch {
         MockFetch::default()
             .json(
@@ -1440,11 +2012,19 @@ mod tests {
                 &wiki::wikidata_entity_url("Q731473"),
                 serde_json::json!({"entities": {"Q731473": {"sitelinks": {"enwiki": {"title": "Kind of Blue"}}, "claims": {}}}}),
             )
-            .json(
-                &wiki::wikipedia_extract_url("en", "Kind of Blue"),
-                serde_json::json!({"query": {"pages": [{"title": "Kind of Blue",
-                    "fullurl": "https://en.wikipedia.org/wiki/Kind_of_Blue",
-                    "extract": "Kind of Blue is a 1959 album.\n\n== Reception ==\nWidely acclaimed."}]}}),
+            // The release group links Wikidata only; Wikipedia confirms the
+            // guessed title through the article's Wikidata item.
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Kind of Blue"),
+                "text/html",
+                &page(
+                    "Kind of Blue",
+                    Some("Q731473"),
+                    "1959 studio album by Miles Davis",
+                    "Kind of Blue is a 1959 album by Miles Davis.",
+                    &[("Background", "Davis had..."), ("Reception", "Widely acclaimed.")],
+                    Some("https://upload.wikimedia.org/wikipedia/en/1/10/Kind_of_Blue_cover.jpg"),
+                ),
             )
     }
 
@@ -1469,7 +2049,10 @@ mod tests {
         assert_eq!(outcome, Outcome::Done);
         let requests = enricher.fetch.requested();
         assert!(requests.iter().all(|url| url.starts_with("https://")));
+        // Search, release, release group; the article page (no Action
+        // API); then Wikidata, which names the same article.
         assert_eq!(requests.len(), 5);
+        assert!(!requests.iter().any(|url| url.contains("/w/api.php")));
 
         let mut connection = pool.get().unwrap();
         let texts = store::load_texts(&mut connection, "album", "album-1").unwrap();
@@ -1479,6 +2062,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(kinds, ["background", "reception"]);
         assert_eq!(texts[1].body, "Widely acclaimed.");
+        assert_eq!(
+            texts[0].body,
+            "Kind of Blue is a 1959 album by Miles Davis."
+        );
+        assert_eq!(texts[0].url, "https://en.wikipedia.org/wiki/Kind_of_Blue");
         assert_eq!(texts[0].license, "CC BY-SA 4.0");
         let credits = store::album_credits(&mut connection, "album-1").unwrap();
         let summary = credits
@@ -1593,22 +2181,24 @@ mod tests {
                     "claims": {"P18": [{"mainsnak": {"datavalue": {"value": "Miles Davis.jpg"}}}],
                                "P570": [{"mainsnak": {"datavalue": {"value": {"time": "+1991-09-28T00:00:00Z", "precision": 11}}}}]}}}}),
             )
-            .json(
-                &wiki::wikipedia_extract_url("en", "Miles Davis"),
-                serde_json::json!({"query": {"pages": [{"title": "Miles Davis",
-                    "fullurl": "https://en.wikipedia.org/wiki/Miles_Davis",
-                    "extract": "Miles Dewey Davis III was an American trumpeter."}]}}),
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Miles Davis"),
+                "text/html",
+                &page(
+                    "Miles Davis",
+                    Some("Q93341"),
+                    "American jazz trumpeter (1926–1991)",
+                    "Miles Dewey Davis III was an American trumpeter.",
+                    &[],
+                    None,
+                ),
             )
-            .json(
-                &wiki::commons_image_info_url("Miles Davis.jpg"),
-                serde_json::json!({"query": {"pages": [{"imageinfo": [{
-                    "thumburl": "https://upload.wikimedia.org/thumb/miles.jpg",
-                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Miles_Davis.jpg",
-                    "mime": "image/jpeg",
-                    "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 2.0"}, "Artist": {"value": "Tom Palumbo"}}
-                }]}]}}),
+            .bytes(
+                &wiki::commons_wikitext_url("Miles Davis.jpg"),
+                "text/plain",
+                b"{{Information\n|description={{en|Miles Davis}}\n|author=[[User:Tom|Tom Palumbo]]\n}}\n{{cc-by-sa-2.0}}",
             )
-            .bytes("https://upload.wikimedia.org/thumb/miles.jpg", "image/jpeg", &jpeg);
+            .bytes(&wiki::commons_thumbnail_url("Miles Davis.jpg"), "image/jpeg", &jpeg);
         let enricher = Enricher {
             fetch,
             pool: pool.clone(),
@@ -1644,6 +2234,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(image.author, "Tom Palumbo");
+        assert_eq!(image.license, "CC BY-SA 2.0");
+        assert_eq!(
+            image.page_url,
+            "https://commons.wikimedia.org/wiki/File:Miles_Davis.jpg"
+        );
         assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
         std::fs::remove_dir_all(images).unwrap();
     }
@@ -1651,7 +2246,7 @@ mod tests {
     #[tokio::test]
     async fn busy_wikipedia_keeps_musicbrainz_results_and_retries_the_text() {
         let pool = migrated_memory_pool();
-        let fetch = mock().status(&wiki::wikipedia_extract_url("en", "Kind of Blue"), 429);
+        let fetch = mock().status(&wiki::wikipedia_page_url("en", "Kind of Blue"), 429);
         let enricher = Enricher {
             fetch,
             pool: pool.clone(),
@@ -1680,6 +2275,47 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        drop(connection);
+
+        // When only the page is busy, the REST summary's lead is kept at
+        // once and the full text is asked for again later, without pausing
+        // the Wikipedia queue for everyone else.
+        let fetch = mock()
+            .status(&wiki::wikipedia_page_url("en", "Kind of Blue"), 429)
+            .json(
+                &wiki::wikipedia_summary_url("en", "Kind of Blue"),
+                summary(
+                    "Kind of Blue",
+                    Some("Q731473"),
+                    "1959 studio album by Miles Davis",
+                    "Kind of Blue is a 1959 album.",
+                    None,
+                ),
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let Outcome::Retry(error) = enricher
+            .wikipedia_stage("album", "album-1", &settings)
+            .await
+            .unwrap()
+        else {
+            panic!("the full text is still wanted");
+        };
+        assert_eq!(
+            next_throttle(Duration::ZERO, &Outcome::Retry(error)),
+            Duration::ZERO
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "album", "album-1").unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].body, "Kind of Blue is a 1959 album.");
     }
 
     const KARAJAN_RELEASE: &str = "77777777-7777-4777-8777-777777777777";
@@ -1777,7 +2413,12 @@ mod tests {
         assert_eq!(outcome, Outcome::Done);
         // No search: the administrator's choice is looked up directly.
         assert_eq!(
-            enricher.fetch.requested(),
+            enricher
+                .fetch
+                .requested()
+                .into_iter()
+                .filter(|url| url.contains("musicbrainz.org"))
+                .collect::<Vec<_>>(),
             [mb::release_lookup_url(KARAJAN_RELEASE)]
         );
         let mut connection = pool.get().unwrap();
@@ -2052,14 +2693,13 @@ mod tests {
                     serde_json::json!({"entities": {item: {"sitelinks": {"enwiki": {"title": name}},
                         "claims": {"P18": [{"mainsnak": {"datavalue": {"value": file}}}]}}}}),
                 )
-                .json(
-                    &wiki::wikipedia_extract_url("en", name),
-                    serde_json::json!({"query": {"pages": [{"title": name,
-                        "fullurl": format!("https://en.wikipedia.org/wiki/{}", name.replace(' ', "_")),
-                        "extract": format!("{name} was a musician.")}]}}),
+                .bytes(
+                    &wiki::wikipedia_page_url("en", name),
+                    "text/html",
+                    &page(name, Some(item), "musician", &format!("{name} was a musician."), &[], None),
                 )
                 // Commons is rate limiting this client.
-                .status(&wiki::commons_image_info_url(&file), 429);
+                .status(&wiki::commons_wikitext_url(&file), 429);
         }
         fetch
     }
@@ -2239,7 +2879,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn musicbrainz_genres_are_kept_and_genre_pages_get_text_through_wikidata() {
+    async fn musicbrainz_genres_are_kept_and_genre_pages_get_text_from_wikipedia() {
         let pool = migrated_memory_pool();
         let fetch = mock()
             .json(
@@ -2250,20 +2890,17 @@ mod tests {
                     "genres": [{"name": "modal jazz", "count": 5}, {"name": "jazz", "count": 2}]
                 }),
             )
-            .json(
-                &wiki::wikidata_by_article_url("Modal jazz"),
-                serde_json::json!({"entities": {"Q845831": {"id": "Q845831",
-                    "sitelinks": {"enwiki": {"site": "enwiki", "title": "Modal jazz"}}}}}),
-            )
-            .json(
-                &wiki::wikipedia_extract_url("en", "Modal jazz"),
-                serde_json::json!({"query": {"pages": [{"title": "Modal jazz",
-                    "fullurl": "https://en.wikipedia.org/wiki/Modal_jazz",
-                    "extract": "Modal jazz is jazz that uses musical modes."}]}}),
-            )
-            .json(
-                &wiki::wikidata_by_article_url("Jazz"),
-                serde_json::json!({"entities": {"-1": {"site": "enwiki", "title": "Jazz", "missing": ""}}}),
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Modal jazz"),
+                "text/html",
+                &page(
+                    "Modal jazz",
+                    Some("Q845831"),
+                    "jazz that uses musical modes",
+                    "Modal jazz is jazz that uses musical modes.",
+                    &[],
+                    None,
+                ),
             );
         let enricher = Enricher {
             fetch,
@@ -2294,14 +2931,14 @@ mod tests {
             let state = store::task_state(&mut connection, "genre", "modal-jazz")
                 .unwrap()
                 .unwrap();
+            // Genres go straight to the Wikipedia article the genre tree names.
             assert_eq!(
                 (state.status.as_str(), state.stage.as_str()),
-                ("pending", "wikidata")
+                ("pending", "wikipedia")
             );
         }
-        // Genre tasks run before albums and artists in the Wikidata queue.
         let Step::Ran(task, _) = enricher
-            .step(Stage::Wikidata, &settings, None, &Backoffs::default())
+            .step(Stage::Wikipedia, &settings, None, &Backoffs::default())
             .await
             .unwrap()
         else {
@@ -2310,32 +2947,33 @@ mod tests {
         assert_eq!(task.entity_type, "genre");
         assert_eq!(
             enricher
-                .wikidata_stage("genre", "modal-jazz", &settings)
-                .await
-                .unwrap(),
-            Outcome::Done
-        );
-        assert_eq!(
-            enricher
-                .wikipedia_stage("genre", "modal-jazz")
+                .wikipedia_stage("genre", "modal-jazz", &settings)
                 .await
                 .unwrap(),
             Outcome::Done
         );
         assert!(matches!(
             enricher
-                .wikidata_stage("genre", "jazz", &settings)
+                .wikipedia_stage("genre", "jazz", &settings)
                 .await
                 .unwrap(),
             Outcome::Skipped(_)
         ));
         assert!(matches!(
             enricher
-                .wikidata_stage("genre", "not-a-genre", &settings)
+                .wikipedia_stage("genre", "not-a-genre", &settings)
                 .await
                 .unwrap(),
             Outcome::Skipped(_)
         ));
+        // English is the preferred language, so Wikidata is not asked.
+        assert!(
+            !enricher
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains("wbgetentities") || url.contains("Q845831"))
+        );
         let mut connection = pool.get().unwrap();
         let texts = store::load_texts(&mut connection, "genre", "modal-jazz").unwrap();
         assert_eq!(texts.len(), 1);
@@ -2406,5 +3044,380 @@ mod tests {
             .unwrap();
         assert!(profile.profile_json.contains(COMMONS_IMAGE_KEY));
         std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[tokio::test]
+    async fn biographies_and_photos_do_not_wait_for_a_busy_wikidata() {
+        const SIMONE: &str = "a1b2c3d4-0000-4000-8000-000000000001";
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = MockFetch::default()
+            .json(
+                &mb::artist_search_url("Nina Simone"),
+                serde_json::json!({"artists": [{"id": SIMONE, "name": "Nina Simone", "score": 100}]}),
+            )
+            .json(
+                &mb::artist_lookup_url(SIMONE),
+                serde_json::json!({"id": SIMONE, "name": "Nina Simone", "type": "Person",
+                    "relations": [
+                        {"type": "wikidata", "url": {"resource": "https://www.wikidata.org/wiki/Q187119"}},
+                        {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Nina_Simone"}}
+                    ]}),
+            )
+            // Wikidata is refusing this client.
+            .status(&wiki::wikidata_entity_url("Q187119"), 429)
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Nina Simone"),
+                "text/html",
+                &page(
+                    "Nina Simone",
+                    Some("Q187119"),
+                    "American singer and pianist (1933–2003)",
+                    "Eunice Kathleen Waymon, known as Nina Simone, was an American singer, songwriter and pianist.",
+                    &[("Early life", "Simone was born in Tryon.")],
+                    Some("https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Nina_Simone_1965.jpg/330px-Nina_Simone_1965.jpg"),
+                ),
+            )
+            .bytes(
+                &wiki::commons_wikitext_url("Nina Simone 1965.jpg"),
+                "text/plain",
+                b"{{Information\n|Author=Ron Kroon / Anefo\n}}\n== {{int:license-header}} ==\n{{cc-zero}}",
+            )
+            .bytes(
+                &wiki::commons_thumbnail_url("Nina Simone 1965.jpg"),
+                "image/jpeg",
+                &jpeg,
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let artist = ArtistInput {
+            id: "artist-simone".into(),
+            name: "Nina Simone".into(),
+        };
+        assert_eq!(
+            enricher.enrich_artist(&artist, &settings).await.unwrap(),
+            Outcome::Retry("HTTP 429".into())
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "artist", "artist-simone").unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].kind, "biography");
+        assert!(texts[0].body.starts_with("Eunice Kathleen Waymon"));
+        assert!(!texts[0].body.contains("Tryon"), "only the lead is kept");
+        assert!(!texts[0].body.contains("[1]"), "references are dropped");
+        assert!(!texts[0].body.contains("Infobox"));
+        let image = store::load_image(&mut connection, "artist", "artist-simone")
+            .unwrap()
+            .expect("the Wikipedia page image, licensed on Commons");
+        assert_eq!(image.license, "CC0");
+        assert_eq!(image.author, "Ron Kroon / Anefo");
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        // Wikidata is still asked later, only to enrich.
+        assert_eq!(
+            store::task_status(&mut connection, Stage::Wikidata, "artist", "artist-simone")
+                .unwrap()
+                .as_deref(),
+            Some("pending")
+        );
+        assert!(
+            !enricher
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains("/w/api.php"))
+        );
+        // The bookkeeping keys never show as facts.
+        let profile = store::load_profile(&mut connection, "artist", "artist-simone")
+            .unwrap()
+            .unwrap();
+        assert!(profile.profile_json.contains(WIKIPEDIA_KEY));
+        assert!(profile.profile_json.contains(PAGE_IMAGE_KEY));
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[test]
+    fn guessed_article_titles_must_prove_they_are_about_the_entity() {
+        let album = EntityNames {
+            name: "Nevermind".into(),
+            artist: Some("Nirvana".into()),
+        };
+        let guess = |title: &str| ArticleCandidate {
+            language: "en".into(),
+            title: title.into(),
+            linked: false,
+        };
+        let nevermind = wiki::WikipediaSummary {
+            title: "Nevermind".into(),
+            url: "https://en.wikipedia.org/wiki/Nevermind".into(),
+            extract: "Nevermind is the second studio album by Nirvana.".into(),
+            wikibase_item: Some("Q178327".into()),
+            description: Some("1991 studio album by Nirvana".into()),
+            ..Default::default()
+        };
+        // Without a Wikidata item to compare, the page must read like an
+        // album by this artist.
+        assert!(accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            None,
+            "album",
+            &album
+        ));
+        assert!(!accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            None,
+            "album",
+            &EntityNames {
+                name: "Nevermind".into(),
+                artist: Some("Someone Else".into()),
+            }
+        ));
+        // With one, only the same item is accepted.
+        assert!(accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            Some("Q178327"),
+            "album",
+            &album
+        ));
+        assert!(!accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            Some("Q1"),
+            "album",
+            &album
+        ));
+        let disambiguation = wiki::WikipediaSummary {
+            disambiguation: true,
+            ..nevermind.clone()
+        };
+        assert!(!accepts_article(
+            &disambiguation,
+            &guess("Nevermind"),
+            None,
+            "album",
+            &album
+        ));
+        // A linked article is trusted.
+        let linked = ArticleCandidate {
+            linked: true,
+            ..guess("Nevermind")
+        };
+        assert!(accepts_article(
+            &nevermind,
+            &linked,
+            Some("Q1"),
+            "album",
+            &album
+        ));
+
+        let genesis = EntityNames {
+            name: "Genesis".into(),
+            artist: None,
+        };
+        let book = wiki::WikipediaSummary {
+            title: "Book of Genesis".into(),
+            extract: "The Book of Genesis is the first book of the Bible.".into(),
+            description: Some("first book of the Bible".into()),
+            ..Default::default()
+        };
+        assert!(!accepts_article(
+            &book,
+            &guess("Genesis"),
+            None,
+            "artist",
+            &genesis
+        ));
+        let band = wiki::WikipediaSummary {
+            title: "Genesis (band)".into(),
+            extract: "Genesis are an English rock band.".into(),
+            description: Some("English rock band".into()),
+            ..Default::default()
+        };
+        assert!(accepts_article(
+            &band,
+            &guess("Genesis (band)"),
+            None,
+            "artist",
+            &genesis
+        ));
+
+        // Guesses follow the links, and a placeholder artist is never used.
+        let profile = ProfileRow {
+            profile_json: serde_json::json!({
+                WIKIPEDIA_KEY: {"language": "en", "title": "Nevermind"}
+            })
+            .to_string(),
+            ..ProfileRow::default()
+        };
+        let titles = article_candidates("album", &profile, &album)
+            .into_iter()
+            .map(|candidate| (candidate.title, candidate.linked))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            [
+                ("Nevermind".to_string(), true),
+                ("Nevermind (Nirvana album)".to_string(), false),
+                ("Nevermind (album)".to_string(), false),
+            ]
+        );
+        let unknown = EntityNames {
+            name: "Greatest Hits".into(),
+            artist: Some("Unknown Artist".into()),
+        };
+        assert!(
+            article_candidates("album", &ProfileRow::default(), &unknown)
+                .iter()
+                .all(|candidate| !candidate.title.contains("Unknown"))
+        );
+        // Works use only their links.
+        assert!(
+            article_candidates(
+                "work",
+                &ProfileRow::default(),
+                &EntityNames {
+                    name: "Symphony No. 9".into(),
+                    artist: None
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn classical_albums_get_their_pieces_text_from_work_links() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::set_identification(
+                &mut connection,
+                "karajan-9",
+                Some((KARAJAN_RELEASE, "Symphonie Nr. 9", "Beethoven")),
+                None,
+            )
+            .unwrap();
+        }
+        let ninth = "Symphony No. 9 (Beethoven)";
+        let enricher = Enricher {
+            fetch: MockFetch::default()
+                .json(&mb::release_lookup_url(KARAJAN_RELEASE), karajan_release())
+                .json(
+                    &mb::work_lookup_url(SYMPHONY),
+                    serde_json::json!({"id": SYMPHONY, "title": "Symphony no. 9 in D minor, op. 125",
+                        "relations": [
+                            {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Symphony_No._9_(Beethoven)"}},
+                            {"type": "wikidata", "url": {"resource": "https://www.wikidata.org/wiki/Q190125"}}
+                        ]}),
+                )
+                .bytes(
+                    &wiki::wikipedia_page_url("en", ninth),
+                    "text/html",
+                    &page(
+                        ninth,
+                        Some("Q190125"),
+                        "symphony by Ludwig van Beethoven",
+                        "The Symphony No. 9 in D minor, Op. 125 is a choral symphony, the final complete symphony by Ludwig van Beethoven.",
+                        &[("Reception", "It is regarded as one of the greatest works.")],
+                        None,
+                    ),
+                ),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher
+                .enrich_album(&karajan_album(), &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        {
+            let mut connection = pool.get().unwrap();
+            // The piece is queued for its own lookup; its movements are not.
+            assert_eq!(
+                store::task_status(&mut connection, Stage::Musicbrainz, "work", SYMPHONY)
+                    .unwrap()
+                    .as_deref(),
+                Some("pending")
+            );
+            assert_eq!(
+                store::task_status(&mut connection, Stage::Musicbrainz, "work", MOVEMENT_ONE)
+                    .unwrap(),
+                None
+            );
+            // Once the album's own lookup is recorded, the piece is next.
+            store::finish_stage(
+                &mut connection,
+                Stage::Musicbrainz,
+                "album",
+                "karajan-9",
+                &Outcome::Done,
+            )
+            .unwrap();
+            let task = store::next_stage_task(&mut connection, Stage::Musicbrainz)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (task.entity_type.as_str(), task.entity_id.as_str()),
+                ("work", SYMPHONY)
+            );
+        }
+        let task = Task {
+            id: 0,
+            entity_type: "work".into(),
+            entity_id: SYMPHONY.into(),
+            attempts: 0,
+        };
+        assert_eq!(
+            enricher
+                .run_task(Stage::Musicbrainz, &task, &settings, None)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        // Wikidata answers 404 here; the text does not depend on it.
+        assert_eq!(
+            enricher
+                .later_stages("work", SYMPHONY, &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let about = store::work_background(&mut connection, SYMPHONY)
+            .unwrap()
+            .expect("the work's Wikipedia lead");
+        assert!(about.body.starts_with("The Symphony No. 9 in D minor"));
+        assert_eq!(
+            about.url,
+            "https://en.wikipedia.org/wiki/Symphony_No._9_(Beethoven)"
+        );
+        // A work's reception is not stored as an album review.
+        assert_eq!(
+            store::load_texts(&mut connection, "work", SYMPHONY)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store::load_texts(&mut connection, "album", "karajan-9")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

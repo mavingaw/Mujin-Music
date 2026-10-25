@@ -85,6 +85,9 @@ pub struct WorkPage {
     pub parts: Vec<WorkSummary>,
     pub recordings: Vec<Recording>,
     pub url: String,
+    /// About the work, from the Wikipedia article MusicBrainz links (a
+    /// movement shows its piece's text), with CC BY-SA attribution.
+    pub about: Option<store::EditorialText>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -446,6 +449,7 @@ struct WorkData {
     parts: Vec<WorkRow>,
     links: Vec<TrackWorkRow>,
     external: HashMap<String, Vec<CreditRow>>,
+    about: Option<store::EditorialText>,
 }
 
 fn load_work_data(
@@ -475,6 +479,12 @@ fn load_work_data(
         let rows = store::album_credits(connection, &album_id)?;
         external.insert(album_id, rows);
     }
+    let mut about = store::work_background(connection, &work.mbid)?;
+    if about.is_none()
+        && let Some(parent) = &parent
+    {
+        about = store::work_background(connection, &parent.mbid)?;
+    }
     Ok(Some(WorkData {
         work,
         parent,
@@ -482,6 +492,7 @@ fn load_work_data(
         parts,
         links,
         external,
+        about,
     }))
 }
 
@@ -551,6 +562,7 @@ pub async fn get_work(
             .collect(),
         recordings,
         url: format!("https://musicbrainz.org/work/{mbid}"),
+        about: data.about,
     })
 }
 
@@ -1156,6 +1168,56 @@ mod tests {
                 .and_then(|composer| composer.artist_id.as_deref()),
             Some("beethoven")
         );
+    }
+
+    #[test]
+    fn a_movement_page_shows_its_piece_about_text() {
+        let pool = crate::persistence::connection::migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        let works = vec![
+            work(SYMPHONY, "Symphony No. 9 in D minor, Op. 125", None, None),
+            work(
+                "m1",
+                "Symphony No. 9 in D minor, Op. 125: I. Allegro",
+                Some(SYMPHONY),
+                Some(1),
+            ),
+        ];
+        store::replace_album_works(
+            &mut connection,
+            "k-album",
+            &works,
+            &[link("k1", "k-album", "m1")],
+        )
+        .unwrap();
+        assert!(
+            load_work_data(&mut connection, "m1")
+                .unwrap()
+                .unwrap()
+                .about
+                .is_none()
+        );
+        let text = store::EditorialText {
+            kind: "background".into(),
+            source: "wikipedia".into(),
+            language: "en".into(),
+            title: "Symphony No. 9 (Beethoven)".into(),
+            body: "The Symphony No. 9 is a choral symphony.".into(),
+            url: "https://en.wikipedia.org/wiki/Symphony_No._9_(Beethoven)".into(),
+            license: "CC BY-SA 4.0".into(),
+            license_url: "https://creativecommons.org/licenses/by-sa/4.0/".into(),
+        };
+        store::replace_texts(
+            &mut connection,
+            "work",
+            SYMPHONY,
+            std::slice::from_ref(&text),
+        )
+        .unwrap();
+        for mbid in [SYMPHONY, "m1"] {
+            let data = load_work_data(&mut connection, mbid).unwrap().unwrap();
+            assert_eq!(data.about.as_ref(), Some(&text), "{mbid}");
+        }
     }
 
     #[test]

@@ -1,7 +1,11 @@
 "use client";
 
 import type { LibraryAlbum } from "@parson/music-sdk";
-import { enrichmentWaitingLabel } from "@parson/music-sdk";
+import {
+  albumTextPanels,
+  enrichmentWaitingLabel,
+  workHref,
+} from "@parson/music-sdk";
 import type { AlbumAbout } from "@parson/music-sdk/types";
 import Link from "next/link";
 import { useState } from "react";
@@ -11,8 +15,6 @@ import {
   albumFormat,
   formatPartialDate,
 } from "@/features/library/credits/credit-roles";
-
-type Panel = "review" | "background" | "note";
 
 function formatLength(seconds: number) {
   const minutes = Math.max(1, Math.round(seconds / 60));
@@ -91,20 +93,19 @@ export function AlbumAboutSection({
   /** Opens "Identify album" (administrators). */
   onIdentify?: () => void;
 }) {
-  const panels: { key: Panel; label: string }[] = [
-    about?.review ? { key: "review" as const, label: "Review" } : null,
-    about?.background ? { key: "background" as const, label: "About" } : null,
-    { key: "note" as const, label: about?.note ? "Your note" : "Add a note" },
-  ].filter((panel): panel is { key: Panel; label: string } => Boolean(panel));
-  const [selected, setSelected] = useState<Panel | null>(null);
+  const textPanels = albumTextPanels(about);
+  const panels: { key: string; label: string }[] = [
+    ...textPanels.map(({ key, label }) => ({ key, label })),
+    { key: "note", label: about?.note ? "Your note" : "Add a note" },
+  ];
+  const [selected, setSelected] = useState<string | null>(null);
   const active =
     panels.find((panel) => panel.key === selected)?.key ??
     panels[0]?.key ??
     "note";
+  const activeText = textPanels.find((panel) => panel.key === active);
   const facts = albumFacts(album, about);
-  const hasEditorial = Boolean(
-    about?.review || about?.background || about?.note,
-  );
+  const hasEditorial = Boolean(textPanels.length || about?.note);
 
   return (
     <section
@@ -135,11 +136,21 @@ export function AlbumAboutSection({
           ))}
         </div>
         <div role="tabpanel">
-          {active === "review" && about?.review && (
-            <EditorialText key="review" text={about.review} />
-          )}
-          {active === "background" && about?.background && (
-            <EditorialText key="background" text={about.background} />
+          {activeText && (
+            <div className="space-y-3">
+              {activeText.workMbid && (
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                  About the piece ·{" "}
+                  <Link
+                    className="text-zinc-300 normal-case tracking-normal underline-offset-2 hover:text-white hover:underline"
+                    href={workHref(activeText.workMbid)}
+                  >
+                    {activeText.workTitle}
+                  </Link>
+                </p>
+              )}
+              <EditorialText key={activeText.key} text={activeText.text} />
+            </div>
           )}
           {active === "note" && (
             <div className="space-y-4">

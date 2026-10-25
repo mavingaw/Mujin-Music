@@ -1,5 +1,7 @@
 import type {
+  AlbumAbout,
   ComposerWork,
+  EditorialText,
   PersonRef,
   TrackWork,
   WorkRecording,
@@ -270,4 +272,46 @@ export function trackWorkTarget(works: readonly TrackWork[] | undefined) {
   const first = works?.[0];
   if (!first) return null;
   return first.parent ?? first.work;
+}
+
+/** One tab of an album's text switcher. */
+export interface AlbumTextPanel {
+  key: string;
+  label: string;
+  text: EditorialText;
+  /** The piece the text is about, for a link to its page. */
+  workMbid?: string;
+  workTitle?: string;
+}
+
+/**
+ * The album's text tabs, Roon's Review / About switcher: the Wikipedia
+ * reception section, the album's own article and then the articles of the
+ * pieces on it (what a classical album has when the release has no
+ * article). A piece's article that is also the album's is not repeated.
+ */
+export function albumTextPanels(
+  about:
+    Pick<AlbumAbout, "review" | "background" | "work_texts"> | null | undefined,
+): AlbumTextPanel[] {
+  if (!about) return [];
+  const panels: AlbumTextPanel[] = [];
+  if (about.review)
+    panels.push({ key: "review", label: "Review", text: about.review });
+  if (about.background)
+    panels.push({ key: "background", label: "About", text: about.background });
+  const works = (about.work_texts ?? []).filter(
+    (work) => work.text.url !== about.background?.url,
+  );
+  for (const work of works) {
+    panels.push({
+      key: `work:${work.work_mbid}`,
+      label:
+        works.length === 1 && !about.background ? "About the work" : work.title,
+      text: work.text,
+      workMbid: work.work_mbid,
+      workTitle: work.title,
+    });
+  }
+  return panels;
 }
