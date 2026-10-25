@@ -22,6 +22,7 @@ import { usePlayer } from "@/features/player/player-context";
 import getBaseURL from "@/lib/api/server-url";
 import { defaultCover } from "@/lib/images/default-cover";
 import {
+  composerFacts,
   decodeFocus,
   emptyFocus,
   encodeFocus,
@@ -53,6 +54,7 @@ import {
   Pause,
   Play,
   Plus,
+  ScrollText,
   UserRound,
 } from "lucide-react";
 import Image from "next/image";
@@ -70,6 +72,7 @@ import {
   usesFocusEndpoint,
 } from "./focus/focus-state";
 import { usePlayFocus } from "./focus/use-play-focus";
+import CompositionList from "./composition-list";
 import { composerInitials, composerSummary } from "./composer-summary";
 import { uniqueById } from "./library-items";
 import {
@@ -80,7 +83,14 @@ import {
 } from "./library-view-primitives";
 
 const PAGE_SIZE = 100;
-const views = ["albums", "songs", "artists", "composers", "playlists"] as const;
+const views = [
+  "albums",
+  "songs",
+  "artists",
+  "composers",
+  "compositions",
+  "playlists",
+] as const;
 type LibraryView = (typeof views)[number];
 
 type FocusedAlbum = LibraryCatalogAlbum & { quality?: string | null };
@@ -293,6 +303,12 @@ export default function LibraryOverview() {
             onClick={() => selectView("composers")}
           />
           <LibraryTab
+            active={view === "compositions"}
+            icon={<ScrollText />}
+            label="Compositions"
+            onClick={() => selectView("compositions")}
+          />
+          <LibraryTab
             active={view === "playlists"}
             icon={<ListMusic />}
             label="Playlists"
@@ -312,6 +328,7 @@ export default function LibraryOverview() {
             canPlay={
               view === "albums" ||
               view === "songs" ||
+              view === "compositions" ||
               (view === "artists" && focusActive)
             }
             onCreateSmartPlaylist={() => setSmartOpen(true)}
@@ -378,6 +395,13 @@ export default function LibraryOverview() {
           loadingMore={active.isFetchingNextPage}
           onClearFocus={clearFocus}
           onLoadMore={() => void active.fetchNextPage()}
+        />
+      )}
+      {view === "compositions" && (
+        <CompositionList
+          emptyBody="Compositions appear when your files carry COMPOSER or WORK tags."
+          focus={focus}
+          onClear={clearFocus}
         />
       )}
       {view === "playlists" && (
@@ -755,8 +779,10 @@ function ComposersView({
               <h2 className="truncate text-sm font-semibold text-zinc-100 group-hover:text-white">
                 {composer.name}
               </h2>
-              <p className="mt-1 text-xs text-zinc-500">
-                {composerSummary(composer)}
+              <p className="mt-1 truncate text-xs text-zinc-500">
+                {[composerFacts(composer), composerSummary(composer)]
+                  .filter(Boolean)
+                  .join(" · ")}
               </p>
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600 transition-colors group-hover:text-white" />

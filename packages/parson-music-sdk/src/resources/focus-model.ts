@@ -13,11 +13,12 @@ import type {
   FocusQuery,
   FocusSort,
   QualityTier,
+  WorkFacts,
 } from "./focus";
 
 export type FilterState = "include" | "exclude" | null;
 
-const RANGE_FACETS = new Set(["year", "sample_rate", "bit_depth"]);
+const RANGE_FACETS = new Set(["year", "composed", "sample_rate", "bit_depth"]);
 
 export function emptyFocus(entity: FocusEntity = "albums"): FocusQuery {
   return { entity, filters: [] };
@@ -37,6 +38,14 @@ export function composerScope(
   name?: string | null,
 ): FocusCriterion {
   return { facet: "credit", role: "composer", artist_id: artistId, name };
+}
+
+/** The scope criterion for one work's recordings. */
+export function workScope(
+  workId: string,
+  name?: string | null,
+): FocusCriterion {
+  return { facet: "work", work_id: workId, name };
 }
 
 /** The scope criterion for one album's tracks. */
@@ -63,7 +72,15 @@ export function filterKey(criterion: FocusCriterion): string {
     case "format":
     case "label":
     case "release_type":
+    case "form":
+    case "instrumentation":
+    case "period":
+    case "nationality":
       return `${criterion.facet}:${normalizedKey(criterion.value)}`;
+    case "composed":
+      return "composed";
+    case "work":
+      return `work:${criterion.work_id}`;
     case "quality":
       return `quality:${criterion.value}`;
     case "year":
@@ -113,6 +130,7 @@ export function filterState(
 function rangeOf(criterion: FocusCriterion): [number | null, number | null] {
   switch (criterion.facet) {
     case "year":
+    case "composed":
       return [criterion.from ?? null, criterion.to ?? null];
     case "sample_rate":
     case "bit_depth":
@@ -265,12 +283,30 @@ export const CREDIT_ROLE_LABELS: Record<string, [string, string]> = {
   engineer: ["Engineer", "Engineering"],
 };
 
+function yearRangeLabel(
+  from: number | null | undefined,
+  to: number | null | undefined,
+): string {
+  if (from != null && to != null && from % 10 === 0 && to === from + 9) {
+    return `${from}s`;
+  }
+  return rangeLabel(from, to, String);
+}
+
 /** The text on a filter chip. */
 export function criterionLabel(filter: FocusFilter): string {
   switch (filter.facet) {
     case "genre":
     case "label":
+    case "form":
+    case "instrumentation":
+    case "period":
+    case "nationality":
       return filter.value;
+    case "composed":
+      return `Composed ${yearRangeLabel(filter.from, filter.to)}`;
+    case "work":
+      return filter.name || "Composition";
     case "release_type":
       return titleCase(filter.value);
     case "format":
@@ -278,15 +314,7 @@ export function criterionLabel(filter: FocusFilter): string {
     case "quality":
       return qualityLabel(filter.value);
     case "year":
-      if (
-        filter.from != null &&
-        filter.to != null &&
-        filter.from % 10 === 0 &&
-        filter.to === filter.from + 9
-      ) {
-        return `${filter.from}s`;
-      }
-      return rangeLabel(filter.from, filter.to, String);
+      return yearRangeLabel(filter.from, filter.to);
     case "sample_rate":
       return rangeLabel(filter.min, filter.max, sampleRateLabel);
     case "bit_depth":
@@ -339,6 +367,16 @@ export function focusSummary(query: FocusQuery): string {
 
 export function facetTitle(facet: Pick<Facet, "key" | "role">): string {
   switch (facet.key) {
+    case "form":
+      return "Form";
+    case "instrumentation":
+      return "Instrumentation";
+    case "period":
+      return "Period";
+    case "composed":
+      return "Composition date";
+    case "nationality":
+      return "Nationality";
     case "genre":
       return "Genres";
     case "year":
@@ -374,6 +412,15 @@ export function criterionForFacetValue(
   value: FacetValue,
 ): FocusCriterion {
   switch (facet.key) {
+    case "form":
+    case "instrumentation":
+    case "period":
+    case "nationality":
+      return { facet: facet.key, value: value.value };
+    case "composed": {
+      const year = Number(value.value);
+      return { facet: "composed", from: year, to: year };
+    }
     case "genre":
       return { facet: "genre", value: value.label };
     case "year": {
@@ -476,8 +523,16 @@ export function decadesFromYears(values: FacetValue[]): DecadeBucket[] {
   );
 }
 
-export function decadeCriterion(decade: number): FocusCriterion {
-  return { facet: "year", from: decade, to: decade + 9 };
+export function decadeCriterion(
+  decade: number,
+  facet: "year" | "composed" = "year",
+): FocusCriterion {
+  return { facet, from: decade, to: decade + 9 };
+}
+
+/** Whether a facet is a year histogram (release or composition date). */
+export function isYearFacet(key: FacetKey): key is "year" | "composed" {
+  return key === "year" || key === "composed";
 }
 
 export interface SortOption {
@@ -520,7 +575,18 @@ export const SORT_OPTIONS: Record<FocusEntity, SortOption[]> = {
   ],
   composers: [
     { value: "title", label: "Name" },
+    { value: "release_date", label: "Chronological" },
     { value: "track_count", label: "Tracks composed" },
+    { value: "date_added", label: "Date added" },
+    { value: "most_played", label: "Most played" },
+    { value: "last_played", label: "Recently played" },
+    { value: "random", label: "Random" },
+  ],
+  compositions: [
+    { value: "title", label: "Title" },
+    { value: "artist", label: "Composer" },
+    { value: "release_date", label: "Composition date" },
+    { value: "track_count", label: "Recordings" },
     { value: "date_added", label: "Date added" },
     { value: "most_played", label: "Most played" },
     { value: "last_played", label: "Recently played" },
@@ -565,6 +631,11 @@ export function withEntity(query: FocusQuery, entity: FocusEntity): FocusQuery {
 }
 
 const FACETS: FacetKey[] = [
+  "form",
+  "instrumentation",
+  "period",
+  "composed",
+  "nationality",
   "genre",
   "year",
   "format",
@@ -589,6 +660,7 @@ function isCriterion(value: unknown): value is FocusFilter {
       facet === "liked" ||
       facet === "played" ||
       facet === "album" ||
+      facet === "work" ||
       facet === "added_within")
   );
 }
@@ -634,10 +706,22 @@ export function decodeFocus(
 }
 
 /** Facet columns in panel order, with credit roles that have values. */
-export function visibleFacets(facets: Facet[], entity: FocusEntity): Facet[] {
+export function visibleFacets(
+  facets: Facet[],
+  entity: FocusEntity,
+  options: { composerScoped?: boolean; query?: FocusQuery } = {},
+): Facet[] {
+  const { query } = options;
   return facets
     .map((facet) => {
-      const values = facet.values.filter((value) => value.count > 0);
+      // Values with an active filter stay so an exclusion can be cleared
+      // where it was set, and the column does not vanish under the pointer.
+      const values = facet.values.filter(
+        (value) =>
+          value.count > 0 ||
+          (query !== undefined &&
+            facetValueState(query, facet, value) !== null),
+      );
       return {
         ...facet,
         values,
@@ -661,9 +745,25 @@ export function visibleFacets(facets: Facet[], entity: FocusEntity): Facet[] {
         return false;
       }
       if (entity === "artists" && facet.key === "artist") return false;
-      // Inside a composer's works the composer column only repeats them.
-      if (entity === "composers" && facet.key === "credit") {
+      // The composer column only repeats the composers being browsed.
+      if (
+        (entity === "composers" || options.composerScoped) &&
+        facet.key === "credit"
+      ) {
         return facet.role !== "composer";
+      }
+      // One composer's works share their nationality.
+      if (options.composerScoped && facet.key === "nationality") return false;
+      // Works are browsed by their own facts, not album genres and dates.
+      if (
+        entity === "compositions" &&
+        (facet.key === "genre" ||
+          facet.key === "year" ||
+          facet.key === "artist" ||
+          facet.key === "label" ||
+          facet.key === "release_type")
+      ) {
+        return false;
       }
       return true;
     });
@@ -687,6 +787,7 @@ const NOUNS: Record<FocusEntity, [string, string]> = {
   songs: ["song", "songs"],
   artists: ["artist", "artists"],
   composers: ["composer", "composers"],
+  compositions: ["composition", "compositions"],
 };
 
 export function entityNoun(entity: FocusEntity, count: number): string {
@@ -720,6 +821,7 @@ export function usesFocusEndpoint(query: FocusQuery): boolean {
   return (
     isFocused(query) ||
     query.entity === "composers" ||
+    query.entity === "compositions" ||
     Boolean(query.scope?.length) ||
     Boolean(query.sort && query.sort !== defaultSortFor(query.entity)) ||
     Boolean(query.direction)
@@ -748,4 +850,38 @@ export function focusedAlbumTracks<T extends { id: string }>(
   }
   const keep = new Set(focusedIds);
   return tracks.filter((track) => keep.has(track.id));
+}
+
+/**
+ * One line about a work, Roon style: "Symphony for Orchestra · Composed
+ * 1812". The specific scoring ("Violin & Orchestra") wins over the
+ * instrumentation category when known.
+ */
+export function workDescription(work: WorkFacts): string {
+  const scoring = work.scoring || work.instrumentation;
+  const shape = work.form
+    ? scoring
+      ? `${work.form} for ${scoring}`
+      : work.form
+    : (scoring ?? null);
+  return [shape, work.composedYear ? `Composed ${work.composedYear}` : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** A composer's nationality, period and life dates, e.g. "German · Classical · 1770–1827". */
+export function composerFacts(composer: {
+  nationality?: string | null;
+  period?: string | null;
+  birthYear?: number | null;
+  deathYear?: number | null;
+}): string {
+  const life = composer.birthYear
+    ? composer.deathYear
+      ? `${composer.birthYear}–${composer.deathYear}`
+      : `b. ${composer.birthYear}`
+    : null;
+  return [composer.nationality, composer.period, life]
+    .filter(Boolean)
+    .join(" · ");
 }

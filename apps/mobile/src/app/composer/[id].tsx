@@ -1,5 +1,6 @@
 import {
   clearedFocus,
+  composerFacts,
   composerScope,
   focusCountLabel,
   getFocusCompositions,
@@ -8,12 +9,11 @@ import {
   isFocused,
   scopedFocus,
   withEntity,
-  type Composition,
   type FocusQuery,
 } from "@parson/music-sdk";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, ChevronDown, Play } from "lucide-react-native";
+import { ArrowLeft } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -26,22 +26,14 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
+import { CompositionItem } from "@/components/composition-item";
 import { FocusSheet } from "@/components/focus-sheet";
 import { LibraryFocusBar } from "@/components/library-focus-bar";
 import { Screen } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
-import { recordingCaption, recordingSongs } from "@/lib/library-focus";
 import { immediateBorderlessPressFeedback } from "@/lib/press-feedback";
-import { usePlayer } from "@/providers/player-provider";
 
 type Tab = "discography" | "compositions";
-
-function durationLabel(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "";
-  const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60);
-  return `${minutes}:${rest < 10 ? "0" : ""}${rest}`;
-}
 
 export default function ComposerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -72,7 +64,10 @@ export default function ComposerScreen() {
   });
   const selectTab = (next: Tab) => {
     setTab(next);
-    setFocus(withEntity(query, next === "compositions" ? "songs" : "albums"));
+    // Compositions are focused by work facts: form, instrumentation, period.
+    setFocus(
+      withEntity(query, next === "compositions" ? "compositions" : "albums"),
+    );
   };
   if (person.isPending)
     return (
@@ -124,8 +119,13 @@ export default function ComposerScreen() {
         <View style={styles.hero}>
           <Text style={styles.kicker}>COMPOSER</Text>
           <Text style={styles.title}>{person.data.name}</Text>
+          {person.data.composer && composerFacts(person.data.composer) ? (
+            <Text style={styles.facts}>
+              {composerFacts(person.data.composer)}
+            </Text>
+          ) : null}
           {person.data.composer ? (
-            <Text style={styles.muted}>
+            <Text style={styles.summary}>
               {person.data.composer.workCount} compositions ·{" "}
               {person.data.composer.albumCount} albums
             </Text>
@@ -196,6 +196,7 @@ export default function ComposerScreen() {
             ) : (
               compositions.data?.compositions.map((composition) => (
                 <CompositionItem
+                  composerId={id}
                   composition={composition}
                   key={composition.key}
                 />
@@ -212,95 +213,6 @@ export default function ComposerScreen() {
         />
       </SafeAreaView>
     </Screen>
-  );
-}
-
-function CompositionItem({ composition }: { composition: Composition }) {
-  const player = usePlayer();
-  const [open, setOpen] = useState(false);
-  const first = composition.recordings[0];
-  const play = (index: number) => {
-    const recording = composition.recordings[index];
-    if (!recording) return;
-    const songs = recordingSongs(recording);
-    if (songs[0]) player.playSong(songs[0], songs);
-  };
-  return (
-    <View style={styles.composition}>
-      <View style={styles.compositionRow}>
-        <Pressable
-          accessibilityLabel={`Play ${composition.title}`}
-          accessibilityRole="button"
-          disabled={!first}
-          hitSlop={8}
-          onPress={() => play(0)}
-          style={styles.playSmall}
-        >
-          <Play color="black" fill="black" size={14} />
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ expanded: open }}
-          onPress={() => setOpen((value) => !value)}
-          style={styles.compositionMain}
-        >
-          <View style={{ flex: 1 }}>
-            <Text numberOfLines={2} style={styles.name}>
-              {composition.title}
-            </Text>
-            <Text numberOfLines={1} style={styles.meta}>
-              {composition.recordings.length}{" "}
-              {composition.recordings.length === 1 ? "recording" : "recordings"}
-              {composition.movementCount > 1
-                ? ` · ${composition.movementCount} movements`
-                : ""}
-            </Text>
-          </View>
-          <ChevronDown
-            color={palette.secondary}
-            size={18}
-            style={open ? { transform: [{ rotate: "180deg" }] } : undefined}
-          />
-        </Pressable>
-      </View>
-      {open
-        ? composition.recordings.map((recording, index) => (
-            <Pressable
-              accessibilityLabel={`Play ${recording.albumName ?? "recording"}`}
-              accessibilityRole="button"
-              key={`${recording.albumId ?? "loose"}-${index}`}
-              onPress={() => play(index)}
-              style={styles.recording}
-            >
-              <Artwork path={recording.coverPath ?? ""} size={44} />
-              <View style={{ flex: 1 }}>
-                <Text numberOfLines={1} style={styles.recordingName}>
-                  {recording.albumName ?? "Single track"}
-                </Text>
-                <Text numberOfLines={1} style={styles.meta}>
-                  {recordingCaption(recording)}
-                </Text>
-                {recording.tracks.length > 1
-                  ? recording.tracks.map((track, trackIndex) => (
-                      <Text
-                        key={track.id}
-                        numberOfLines={1}
-                        style={styles.movement}
-                      >
-                        {track.movementNumber ?? trackIndex + 1}.{" "}
-                        {track.movement ?? track.title}{" "}
-                        {durationLabel(track.durationSeconds)}
-                      </Text>
-                    ))
-                  : null}
-              </View>
-              <Text style={styles.meta}>
-                {durationLabel(recording.durationSeconds)}
-              </Text>
-            </Pressable>
-          ))
-        : null}
-    </View>
   );
 }
 
@@ -322,6 +234,8 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   muted: { color: palette.secondary, textAlign: "center" },
+  facts: { color: "white", fontSize: 14, fontWeight: "600", marginBottom: 2 },
+  summary: { color: palette.secondary },
   center: {
     flex: 1,
     alignItems: "center",
@@ -358,36 +272,4 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 2 },
-  composition: {
-    borderBottomColor: palette.elevated,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-  },
-  compositionRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  compositionMain: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    minHeight: 44,
-  },
-  playSmall: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "white",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  name: { color: "white", fontWeight: "700", fontSize: 15 },
-  recording: {
-    flexDirection: "row",
-    gap: 12,
-    alignItems: "flex-start",
-    paddingVertical: 10,
-    paddingLeft: 44,
-  },
-  recordingName: { color: "white", fontWeight: "600" },
-  movement: { color: palette.muted, fontSize: 12, marginTop: 2 },
 });

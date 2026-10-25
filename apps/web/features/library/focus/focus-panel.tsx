@@ -16,6 +16,7 @@ import {
   facetValueState,
   filterState,
   getFocusFacets,
+  isYearFacet,
   setFilter,
   toggleFacetValue,
   visibleFacets,
@@ -26,10 +27,50 @@ import {
 } from "@parson/music-sdk";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Minus, Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { facetQueryKey } from "./focus-state";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  anchoredScrollLeft,
+  facetQueryKey,
+  scrollAnchor,
+  type ColumnBox,
+} from "./focus-state";
 
 const COLUMN_VALUES = 6;
+
+interface ScrollAnchor {
+  /** The first column at least partly visible. */
+  key: string;
+  /** Its left edge relative to the visible area, in pixels. */
+  offset: number;
+}
+
+/**
+ * Where each panel was scrolled, by browser and scope, so a click that
+ * changes, adds or removes columns (or remounts the panel) keeps the same
+ * columns under the pointer instead of jumping.
+ */
+const scrollMemory = new Map<string, ScrollAnchor>();
+
+function columnKey(facet: Facet) {
+  return `${facet.key}:${facet.role ?? ""}`;
+}
+
+function columnBoxes(node: HTMLElement): ColumnBox[] {
+  return Array.from(
+    node.querySelectorAll<HTMLElement>("[data-focus-column]"),
+  ).map((column) => ({
+    key: column.dataset.focusColumn ?? "",
+    left: column.offsetLeft,
+    width: column.offsetWidth,
+  }));
+}
 
 export default function FocusPanel({
   query,
@@ -48,10 +89,42 @@ export default function FocusPanel({
   const [more, setMore] = useState<Facet | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
-  const columns = useMemo(
-    () => visibleFacets(facets.data?.facets ?? [], query.entity),
-    [facets.data, query.entity],
+  const composerScoped = Boolean(
+    query.scope?.some(
+      (criterion) =>
+        criterion.facet === "credit" && criterion.role === "composer",
+    ),
   );
+  const columns = useMemo(
+    () =>
+      visibleFacets(facets.data?.facets ?? [], query.entity, {
+        composerScoped,
+        query,
+      }),
+    [facets.data, query, composerScoped],
+  );
+  const memoryKey = `${query.entity}:${JSON.stringify(query.scope ?? [])}`;
+
+  const rememberAnchor = useCallback(() => {
+    const node = scroller.current;
+    if (!node) return;
+    const anchor = scrollAnchor(columnBoxes(node), node.scrollLeft);
+    if (anchor) scrollMemory.set(memoryKey, anchor);
+  }, [memoryKey]);
+
+  // Restore the anchor column's position after columns change or the panel
+  // mounts, without the smooth scrolling used by the arrows.
+  useLayoutEffect(() => {
+    const node = scroller.current;
+    const anchor = scrollMemory.get(memoryKey);
+    if (!node || !anchor) return;
+    const left = anchoredScrollLeft(columnBoxes(node), anchor);
+    if (left === null || Math.abs(node.scrollLeft - left) < 1) return;
+    const behavior = node.style.scrollBehavior;
+    node.style.scrollBehavior = "auto";
+    node.scrollLeft = left;
+    node.style.scrollBehavior = behavior;
+  }, [columns, memoryKey]);
 
   useEffect(() => {
     const node = scroller.current;
@@ -61,15 +134,19 @@ export default function FocusPanel({
         start: node.scrollLeft <= 4,
         end: node.scrollLeft + node.clientWidth >= node.scrollWidth - 4,
       });
+    const onScroll = () => {
+      update();
+      rememberAnchor();
+    };
     update();
-    node.addEventListener("scroll", update, { passive: true });
+    node.addEventListener("scroll", onScroll, { passive: true });
     const observer = new ResizeObserver(update);
     observer.observe(node);
     return () => {
-      node.removeEventListener("scroll", update);
+      node.removeEventListener("scroll", onScroll);
       observer.disconnect();
     };
-  }, [columns.length]);
+  }, [columns.length, rememberAnchor]);
 
   const page = (direction: 1 | -1) => {
     const node = scroller.current;
@@ -148,13 +225,20 @@ export default function FocusPanel({
             ref={scroller}
           >
             {columns.map((facet) => (
-              <FacetColumn
-                facet={facet}
-                key={`${facet.key}:${facet.role ?? ""}`}
-                onMore={() => setMore(facet)}
-                query={query}
-                setQuery={setQuery}
-              />
+              <div
+                className="min-w-0"
+                data-focus-column={columnKey(facet)}
+                key={columnKey(facet)}
+                // A click inside a column pins that column in place.
+                onPointerDownCapture={rememberAnchor}
+              >
+                <FacetColumn
+                  facet={facet}
+                  onMore={() => setMore(facet)}
+                  query={query}
+                  setQuery={setQuery}
+                />
+              </div>
             ))}
           </div>
           {!edges.start && (
@@ -252,7 +336,7 @@ function FacetColumn({
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
 }) {
-  if (facet.key === "year") {
+  if (isYearFacet(facet.key)) {
     return (
       <YearColumn
         facet={facet}
@@ -304,6 +388,7 @@ function YearColumn({
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
 }) {
+  const yearKey = facet.key === "composed" ? "composed" : "year";
   const decades = decadesFromYears(facet.values);
   const max = Math.max(1, ...facet.values.map((value) => value.count));
   const years = facet.values.map((value) => Number(value.value));
@@ -344,9 +429,14 @@ function YearColumn({
               count={bucket.count}
               label={`${bucket.decade}s`}
               onClick={() =>
-                setQuery(cycleFilter(query, decadeCriterion(bucket.decade)))
+                setQuery(
+                  cycleFilter(query, decadeCriterion(bucket.decade, yearKey)),
+                )
               }
-              state={filterState(query, decadeCriterion(bucket.decade))}
+              state={filterState(
+                query,
+                decadeCriterion(bucket.decade, yearKey),
+              )}
             />
           </li>
         ))}
@@ -386,15 +476,15 @@ function FacetMoreDialog({
 
   // A range facet lists every year the other filters allow, so the range
   // can be widened as well as narrowed.
-  const base =
-    facet?.key === "year"
-      ? {
-          ...facetBaseQuery(query),
-          filters: facetBaseQuery(query).filters.filter(
-            (filter) => filter.facet !== "year",
-          ),
-        }
-      : facetBaseQuery(query);
+  const yearFacet = facet && isYearFacet(facet.key) ? facet.key : null;
+  const base = yearFacet
+    ? {
+        ...facetBaseQuery(query),
+        filters: facetBaseQuery(query).filters.filter(
+          (filter) => filter.facet !== yearFacet,
+        ),
+      }
+    : facetBaseQuery(query);
   const values = useQuery({
     enabled: Boolean(facet),
     queryKey: [
@@ -409,7 +499,7 @@ function FacetMoreDialog({
     queryFn: () =>
       getFocusFacets(base, {
         only: facet ? [facet.key] : [],
-        search: facet?.key === "year" ? undefined : debounced,
+        search: yearFacet ? undefined : debounced,
         limit: 200,
       }),
     placeholderData: keepPreviousData,
@@ -427,9 +517,10 @@ function FacetMoreDialog({
         <DialogHeader>
           <DialogTitle>{facet ? facetTitle(facet) : ""}</DialogTitle>
         </DialogHeader>
-        {facet?.key === "year" ? (
+        {facet && yearFacet ? (
           <YearRange
             facet={loaded ?? facet}
+            facetKey={yearFacet}
             key={loaded ? "loaded" : "initial"}
             query={query}
             setQuery={setQuery}
@@ -479,17 +570,19 @@ function FacetMoreDialog({
 
 function YearRange({
   facet,
+  facetKey,
   query,
   setQuery,
 }: {
   facet: Facet;
+  facetKey: "year" | "composed";
   query: FocusQuery;
   setQuery: (query: FocusQuery) => void;
 }) {
   const years = facet.values.map((value) => Number(value.value));
   const first = Math.min(...years);
   const last = Math.max(...years);
-  const current = query.filters.find((filter) => filter.facet === "year");
+  const current = query.filters.find((filter) => filter.facet === facetKey);
   const [from, setFrom] = useState(
     String(current && "from" in current && current.from ? current.from : first),
   );
@@ -578,7 +671,7 @@ function YearRange({
               setQuery({
                 ...query,
                 filters: query.filters.filter(
-                  (filter) => filter.facet !== "year",
+                  (filter) => filter.facet !== facetKey,
                 ),
               })
             }
@@ -592,7 +685,11 @@ function YearRange({
           disabled={!valid}
           onClick={() =>
             setQuery(
-              setFilter(query, { facet: "year", from: fromYear, to: toYear }),
+              setFilter(query, {
+                facet: facetKey,
+                from: fromYear,
+                to: toYear,
+              }),
             )
           }
           type="button"

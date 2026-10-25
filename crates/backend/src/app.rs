@@ -11,8 +11,8 @@ use serde::Serialize;
 use crate::domain::AudioProperties;
 use crate::library::focus::{
     FacetRequest, FocusComposer, FocusCompositions, FocusEntity, FocusFacets, FocusPerson,
-    FocusQuery, MAX_PAGE_SIZE, composer_rows, focus_compositions, focus_facets, focus_ids,
-    focus_person, library_total,
+    FocusQuery, FocusWork, MAX_PAGE_SIZE, composer_rows, focus_compositions, focus_facets,
+    focus_ids, focus_person, library_total, work_rows,
 };
 use crate::library::identity::normalize_artist_identity;
 use crate::library::indexer::{
@@ -275,6 +275,7 @@ pub struct LocalFocusPage {
     pub songs: Vec<LocalFocusSong>,
     pub artists: Vec<LocalCatalogArtist>,
     pub composers: Vec<FocusComposer>,
+    pub compositions: Vec<FocusWork>,
 }
 
 /// Quality tier of one file: `hires`, `cd` (lossless up to 48 kHz/16-bit)
@@ -380,6 +381,7 @@ pub fn hydrate_focus_page(
         songs: Vec::new(),
         artists: Vec::new(),
         composers: Vec::new(),
+        compositions: Vec::new(),
     };
     match entity {
         FocusEntity::Albums => {
@@ -394,9 +396,10 @@ pub fn hydrate_focus_page(
                 .filter_map(|id| focus_artist(cache, id))
                 .collect();
         }
-        // Composer rows come from the catalog tables (contributor-only
-        // people are not in the cache); `LocalApp::focus` fills them in.
-        FocusEntity::Composers => {}
+        // Composer and work rows come from the catalog tables
+        // (contributor-only people are not in the cache); `LocalApp::focus`
+        // fills them in.
+        FocusEntity::Composers | FocusEntity::Compositions => {}
     }
     page
 }
@@ -645,7 +648,7 @@ impl LocalApp {
         let pool = self.database.clone();
         let entity = query.entity;
         let limit = limit.clamp(1, MAX_PAGE_SIZE);
-        let (focused, unfiltered, composers) = tokio::task::spawn_blocking(move || {
+        let (focused, unfiltered, (composers, works)) = tokio::task::spawn_blocking(move || {
             let mut connection = pool.get()?;
             let focused = focus_ids(&mut connection, &query, user_id, offset, limit)?;
             let unfiltered = library_total(&mut connection, &query)?;
@@ -654,7 +657,12 @@ impl LocalApp {
             } else {
                 Vec::new()
             };
-            Ok::<_, AppError>((focused, unfiltered, composers))
+            let works = if query.entity == FocusEntity::Compositions {
+                work_rows(&mut connection, &focused.ids)?
+            } else {
+                Vec::new()
+            };
+            Ok::<_, AppError>((focused, unfiltered, (composers, works)))
         })
         .await
         .map_err(|error| format!("The focus task stopped unexpectedly: {error}"))??;
@@ -667,6 +675,7 @@ impl LocalApp {
             offset,
         );
         page.composers = composers;
+        page.compositions = works;
         Ok(page)
     }
 

@@ -2,6 +2,7 @@
 
 import { usePageTitle } from "@/components/app/title-metadata";
 import AlbumCard from "@/features/library/album-card";
+import CompositionList from "@/features/library/composition-list";
 import {
   composerInitials,
   composerSummary,
@@ -11,37 +12,27 @@ import EntityPageState from "@/features/library/entity-page-state";
 import FocusBar from "@/features/library/focus/focus-bar";
 import FocusPanel from "@/features/library/focus/focus-panel";
 import {
-  compositionSummary,
   focusCountLabel,
   focusQueryKey,
   qualityBadgeLabel,
-  recordingQueue,
 } from "@/features/library/focus/focus-state";
 import SmartPlaylistDialog from "@/features/library/focus/smart-playlist-dialog";
-import {
-  usePlayFocus,
-  usePlayQueue,
-} from "@/features/library/focus/use-play-focus";
+import { usePlayFocus } from "@/features/library/focus/use-play-focus";
 import { uniqueById } from "@/features/library/library-items";
 import {
   InfiniteLoad,
   LibraryMessage,
-  formatDuration,
 } from "@/features/library/library-view-primitives";
-import getBaseURL from "@/lib/api/server-url";
 import { cn } from "@/lib/cn";
-import { defaultCover } from "@/lib/images/default-cover";
 import {
   clearedFocus,
+  composerFacts,
   composerScope,
-  getFocusCompositions,
   getFocusPage,
   getFocusPerson,
   isFocused,
   scopedFocus,
   withEntity,
-  type Composition,
-  type CompositionRecording,
   type FocusQuery,
 } from "@parson/music-sdk";
 import {
@@ -49,9 +40,7 @@ import {
   useInfiniteQuery,
   useQuery,
 } from "@tanstack/react-query";
-import { ChevronDown, Disc3, Feather, ListMusic, Play } from "lucide-react";
-import Image from "next/image";
-import Link from "next/link";
+import { Disc3, Feather, ListMusic } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
@@ -59,7 +48,7 @@ const PAGE_SIZE = 100;
 type ComposerTab = "discography" | "compositions";
 
 function entityFor(tab: ComposerTab) {
-  return tab === "compositions" ? "songs" : "albums";
+  return tab === "compositions" ? "compositions" : "albums";
 }
 
 export default function ComposerDetails() {
@@ -129,7 +118,12 @@ export default function ComposerDetails() {
           <h1 className="mt-1 truncate text-3xl font-semibold text-white sm:text-4xl">
             {person.data.name}
           </h1>
-          <p className="mt-1.5 text-sm text-zinc-400">
+          {composer && composerFacts(composer) && (
+            <p className="mt-1.5 text-sm font-medium text-zinc-300">
+              {composerFacts(composer)}
+            </p>
+          )}
+          <p className="mt-1 text-sm text-zinc-400">
             {[
               composer ? composerSummary(composer) : null,
               personRoles(person.data),
@@ -184,8 +178,9 @@ export default function ComposerDetails() {
           onClear={() => setFocus(clearedFocus(focus))}
         />
       ) : (
-        <Compositions
+        <CompositionList
           composerId={id}
+          emptyBody="No tracks credit this composer yet."
           focus={focus}
           onClear={() => setFocus(clearedFocus(focus))}
         />
@@ -301,221 +296,6 @@ function Discography({
         loading={pages.isFetchingNextPage}
         onLoadMore={() => void pages.fetchNextPage()}
       />
-    </div>
-  );
-}
-
-function Compositions({
-  composerId,
-  focus,
-  onClear,
-}: {
-  composerId: string;
-  focus: FocusQuery;
-  onClear: () => void;
-}) {
-  const compositions = useQuery({
-    queryKey: ["library", "focus", "compositions", focusQueryKey(focus)],
-    queryFn: () => getFocusCompositions(focus),
-    placeholderData: keepPreviousData,
-  });
-  const [open, setOpen] = useState<string | null>(null);
-  const data = compositions.data;
-  if (compositions.isPending && !data) return null;
-  if (compositions.isError && !data) {
-    return (
-      <LibraryMessage
-        action="Try again"
-        onAction={() => void compositions.refetch()}
-        title="Compositions could not be loaded"
-      />
-    );
-  }
-  if (!data?.compositions.length && isFocused(focus)) {
-    return <FocusEmpty onClear={onClear} />;
-  }
-  if (!data?.compositions.length) {
-    return (
-      <LibraryMessage
-        title="No compositions"
-        body="No tracks credit this composer yet."
-      />
-    );
-  }
-  return (
-    <div className="space-y-4">
-      <p aria-live="polite" className="text-sm tabular-nums text-zinc-500">
-        {data.total.toLocaleString("en-US")}{" "}
-        {data.total === 1 ? "composition" : "compositions"} ·{" "}
-        {data.trackTotal.toLocaleString("en-US")}{" "}
-        {data.trackTotal === 1 ? "track" : "tracks"}
-        {data.truncated && " (first 5,000 tracks)"}
-      </p>
-      <ul className="overflow-hidden rounded-xl border border-white/8">
-        {data.compositions.map((composition) => (
-          <CompositionRow
-            composerId={composerId}
-            composition={composition}
-            expanded={open === composition.key}
-            key={composition.key}
-            onToggle={() =>
-              setOpen((current) =>
-                current === composition.key ? null : composition.key,
-              )
-            }
-          />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function CompositionRow({
-  composerId,
-  composition,
-  expanded,
-  onToggle,
-}: {
-  composerId: string;
-  composition: Composition;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const playQueue = usePlayQueue();
-  const first = composition.recordings[0];
-  const others = composition.composers.filter(
-    (composer) => composer.id !== composerId,
-  );
-  return (
-    <li className="border-b border-white/6 last:border-0">
-      <div className="flex items-center gap-2 px-3 py-2 hover:bg-white/[0.035] sm:px-4">
-        <button
-          aria-label={`Play ${composition.title}`}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-zinc-400 hover:bg-white/10 hover:text-white"
-          disabled={!first}
-          onClick={() => first && playQueue(recordingQueue(first), false)}
-          type="button"
-        >
-          <Play className="h-4 w-4 fill-current" />
-        </button>
-        <button
-          aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-3 py-1.5 text-left"
-          onClick={onToggle}
-          type="button"
-        >
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold text-zinc-100">
-              {composition.title}
-            </span>
-            <span className="mt-0.5 block truncate text-xs text-zinc-500">
-              {compositionSummary(composition)}
-              {others.length > 0 &&
-                ` · with ${others.map((composer) => composer.name).join(", ")}`}
-            </span>
-          </span>
-          <span className="hidden text-xs tabular-nums text-zinc-500 sm:block">
-            {first ? formatDuration(first.durationSeconds) : ""}
-          </span>
-          <ChevronDown
-            className={cn(
-              "h-4 w-4 shrink-0 text-zinc-500 transition-transform",
-              expanded && "rotate-180",
-            )}
-          />
-        </button>
-      </div>
-      {expanded && (
-        <div className="space-y-3 border-t border-white/6 bg-black/20 px-3 py-3 sm:px-4">
-          {composition.recordings.map((recording, index) => (
-            <RecordingRow
-              key={`${recording.albumId ?? "loose"}-${index}`}
-              onPlay={() => playQueue(recordingQueue(recording), false)}
-              recording={recording}
-            />
-          ))}
-        </div>
-      )}
-    </li>
-  );
-}
-
-function RecordingRow({
-  onPlay,
-  recording,
-}: {
-  onPlay: () => void;
-  recording: CompositionRecording;
-}) {
-  const cover = recording.coverPath
-    ? `${getBaseURL()}/media/images/${encodeURIComponent(recording.coverPath)}`
-    : defaultCover;
-  const movements = recording.tracks.length > 1;
-  return (
-    <div className="rounded-lg border border-white/6 bg-white/[0.02] p-3">
-      <div className="flex items-center gap-3">
-        <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md bg-zinc-900">
-          <Image
-            alt=""
-            className="object-cover"
-            fill
-            sizes="48px"
-            src={cover}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          {recording.albumId ? (
-            <Link
-              className="block truncate text-sm font-medium text-zinc-100 hover:underline"
-              href={`/album?id=${recording.albumId}`}
-            >
-              {recording.albumName}
-            </Link>
-          ) : (
-            <span className="block truncate text-sm text-zinc-300">
-              {recording.albumName ?? "Single track"}
-            </span>
-          )}
-          <p className="truncate text-xs text-zinc-500">
-            {[
-              recording.performers.length
-                ? recording.performers.join(", ")
-                : recording.artistName,
-              recording.releaseYear,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-        </div>
-        <span className="text-xs tabular-nums text-zinc-500">
-          {formatDuration(recording.durationSeconds)}
-        </span>
-        <button
-          aria-label={`Play ${recording.albumName ?? "recording"}`}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-black hover:bg-zinc-200"
-          onClick={onPlay}
-          type="button"
-        >
-          <Play className="h-3.5 w-3.5 fill-current" />
-        </button>
-      </div>
-      {movements && (
-        <ol className="mt-2 space-y-0.5 pl-15 text-xs text-zinc-400">
-          {recording.tracks.map((track, index) => (
-            <li className="flex gap-3" key={track.id}>
-              <span className="w-5 shrink-0 text-right tabular-nums text-zinc-600">
-                {track.movementNumber ?? index + 1}
-              </span>
-              <span className="min-w-0 flex-1 truncate">
-                {track.movement ?? track.title}
-              </span>
-              <span className="tabular-nums text-zinc-600">
-                {formatDuration(track.durationSeconds)}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
     </div>
   );
 }

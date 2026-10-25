@@ -7,7 +7,8 @@ import type {
 } from "./library";
 
 /** The library browser a focus applies to. */
-export type FocusEntity = "albums" | "songs" | "artists" | "composers";
+export type FocusEntity =
+  "albums" | "songs" | "artists" | "composers" | "compositions";
 
 /** Audio quality tiers derived from codec, sample rate and bit depth. */
 export type QualityTier = "hires" | "lossless" | "cd" | "lossy";
@@ -57,7 +58,19 @@ export type FocusCriterion =
   | { facet: "source"; root_id: number; name?: string | null }
   | { facet: "liked" }
   | { facet: "played" }
-  | { facet: "added_within"; days: number };
+  | { facet: "added_within"; days: number }
+  /** Work form: Symphony, Sonata, Concerto, String Quartet, Song, ... */
+  | { facet: "form"; value: string }
+  /** Instrumentation: Orchestra, Solo Keyboard, Keyboard Trio, ... */
+  | { facet: "instrumentation"; value: string }
+  /** Musical period; a composer's own period in the Composers browser. */
+  | { facet: "period"; value: string }
+  /** Year of composition. */
+  | { facet: "composed"; from?: number | null; to?: number | null }
+  /** Nationality of a composer. */
+  | { facet: "nationality"; value: string }
+  /** The recordings of one work. */
+  | { facet: "work"; work_id: string; name?: string | null };
 
 /** A criterion that either keeps (include) or removes (exclude) matches. */
 export type FocusFilter = FocusCriterion & { exclude?: boolean };
@@ -112,9 +125,37 @@ export interface FocusComposer {
   id: string;
   name: string;
   trackCount: number;
-  /** Distinct compositions (tagged works, or titles without one). */
+  /** Distinct compositions they wrote. */
   workCount: number;
   albumCount: number;
+  birthYear?: number | null;
+  deathYear?: number | null;
+  nationality?: string | null;
+  period?: string | null;
+}
+
+/** Facts about a work, shared by browser rows and grouped compositions. */
+export interface WorkFacts {
+  form?: string | null;
+  /** Facet category: Orchestra, Solo Keyboard, Keyboard Trio, ... */
+  instrumentation?: string | null;
+  /** Specific scoring when known, e.g. "Violin & Orchestra". */
+  scoring?: string | null;
+  composedYear?: number | null;
+  period?: string | null;
+}
+
+/** A row in the Compositions browser. */
+export interface FocusWork extends WorkFacts {
+  id: string;
+  title: string;
+  composers: NamedRef[];
+  /** Albums holding a recording of the work. */
+  recordingCount: number;
+  trackCount: number;
+  /** Whether the title comes from a WORK tag or MusicBrainz. */
+  tagged: boolean;
+  musicbrainzWorkId?: string | null;
 }
 
 export interface FocusPage {
@@ -128,6 +169,7 @@ export interface FocusPage {
   songs: FocusSong[];
   artists: LibraryCatalogArtist[];
   composers?: FocusComposer[];
+  compositions?: FocusWork[];
 }
 
 export interface NamedRef {
@@ -159,10 +201,11 @@ export interface CompositionRecording {
   tracks: CompositionTrack[];
 }
 
-export interface Composition {
+export interface Composition extends WorkFacts {
+  /** The work id. */
   key: string;
   title: string;
-  /** Whether the title comes from a WORK tag. */
+  /** Whether the title comes from a WORK tag or MusicBrainz. */
   tagged: boolean;
   composers: NamedRef[];
   movementCount: number;
@@ -190,6 +233,11 @@ export interface FocusPerson {
 }
 
 export type FacetKey =
+  | "form"
+  | "instrumentation"
+  | "period"
+  | "composed"
+  | "nationality"
   | "genre"
   | "year"
   | "format"

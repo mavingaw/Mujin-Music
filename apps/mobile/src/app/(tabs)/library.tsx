@@ -1,4 +1,5 @@
 import {
+  composerFacts,
   emptyFocus,
   focusCountLabel,
   getFocusPage,
@@ -55,6 +56,7 @@ import {
 import { useSession } from "@/providers/session-provider";
 import { usePlayer } from "@/providers/player-provider";
 import { PlaylistCover } from "@/components/playlist-cover";
+import { WorkRow } from "@/components/composition-item";
 import { FocusSheet } from "@/components/focus-sheet";
 import { LibraryFocusBar } from "@/components/library-focus-bar";
 import {
@@ -191,6 +193,7 @@ export default function LibraryScreen() {
     ? focusPages.flatMap((page) => page.artists)
     : (artists.data?.pages.flat() ?? []);
   const composerItems = focusPages.flatMap((page) => page.composers ?? []);
+  const workItems = focusPages.flatMap((page) => page.compositions ?? []);
   const lastFocusPage = focusPages.at(-1);
   const lastCatalogPage = catalogPages.at(-1);
   const focusCount = focusActive
@@ -230,6 +233,7 @@ export default function LibraryScreen() {
     (section === "songs" && songItems.length === 0) ||
     (section === "artists" && artistItems.length === 0) ||
     (section === "composers" && composerItems.length === 0) ||
+    (section === "compositions" && workItems.length === 0) ||
     (section === "liked" && likedSongs.length === 0);
   const retry = () => {
     if (focusActive) void focused.refetch();
@@ -289,6 +293,7 @@ export default function LibraryScreen() {
                   "liked",
                   "artists",
                   "composers",
+                  "compositions",
                   "playlists",
                 ]) as readonly Section[]
           ).map((value) => (
@@ -487,17 +492,24 @@ export default function LibraryScreen() {
                     <Text numberOfLines={1} style={styles.name}>
                       {composer.name}
                     </Text>
-                    <Text style={styles.meta}>
-                      Composer • {composer.workCount}{" "}
-                      {composer.workCount === 1
-                        ? "composition"
-                        : "compositions"}{" "}
-                      • {composer.albumCount}{" "}
-                      {composer.albumCount === 1 ? "album" : "albums"}
+                    <Text numberOfLines={1} style={styles.meta}>
+                      {[
+                        composerFacts(composer) || "Composer",
+                        `${composer.workCount} ${
+                          composer.workCount === 1
+                            ? "composition"
+                            : "compositions"
+                        }`,
+                        `${composer.albumCount} ${
+                          composer.albumCount === 1 ? "album" : "albums"
+                        }`,
+                      ].join(" • ")}
                     </Text>
                   </View>
                 </Pressable>
               ))}
+            {section === "compositions" &&
+              workItems.map((work) => <WorkRow key={work.id} work={work} />)}
             {section === "liked" &&
               likedSongs.map((song) => (
                 <View key={song.id}>
