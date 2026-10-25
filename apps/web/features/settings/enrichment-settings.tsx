@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  enrichmentStageLine,
   getEnrichment,
   updateEnrichment,
   type EnrichmentSettings as Settings,
@@ -34,7 +35,9 @@ export default function EnrichmentSettings() {
     queryKey: ["metadata-enrichment"],
     queryFn: getEnrichment,
     refetchInterval: (query) =>
-      query.state.data?.enabled && query.state.data.counts.pending > 0
+      query.state.data?.enabled &&
+      (query.state.data.counts.pending > 0 ||
+        query.state.data.stages?.some((stage) => stage.counts.pending > 0))
         ? 10_000
         : false,
   });
@@ -86,7 +89,8 @@ export default function EnrichmentSettings() {
           When on, the server sends album titles, artist names and MusicBrainz
           ids to{" "}
           {(data?.sources ?? ["musicbrainz.org", "wikipedia.org"]).join(", ")}.
-          MusicBrainz is asked at most once a second. Nothing about your
+          MusicBrainz is asked at most once a second, and each service has its
+          own queue, so a busy one never holds up the others. Nothing about your
           listening is sent.
         </p>
         {data?.enabled && (
@@ -99,6 +103,26 @@ export default function EnrichmentSettings() {
                     : ""
                 }${data.counts.failed ? `, ${data.counts.failed.toLocaleString()} failed` : ""}.`}
           </p>
+        )}
+        {data?.enabled && data.stages && data.stages.length > 0 && (
+          <ul
+            aria-label="Lookup queues"
+            className="grid gap-1.5 text-xs text-zinc-500"
+          >
+            {data.stages.map((stage) => {
+              const line = enrichmentStageLine(stage);
+              return (
+                <li className="flex flex-wrap gap-x-2" key={stage.stage}>
+                  <span className="font-medium text-zinc-300">
+                    {line.label}
+                  </span>
+                  <span className={line.busy ? "text-amber-300/90" : ""}>
+                    {line.detail}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         )}
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
           <label className="flex items-center gap-2 text-zinc-300">

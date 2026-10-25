@@ -1,6 +1,7 @@
 import {
   creditRoleLabel,
   creditRolesLabel,
+  enrichmentWaitingLabel,
   getAlbumInfos,
   getArtistAbout,
   getArtistCredits,
@@ -26,6 +27,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
+import { PersonAvatar } from "@/components/person-avatar";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { EditorialBlock, NoteBlock } from "@/components/credits";
@@ -190,11 +192,17 @@ export default function ArtistScreen() {
             {portrait ? (
               <Artwork
                 path={portrait}
-                rounded={70}
+                rounded={80}
+                size={160}
+                style={styles.portrait}
+              />
+            ) : (
+              <PersonAvatar
+                name={data.name}
                 size={140}
                 style={styles.portrait}
               />
-            ) : null}
+            )}
             {contributor ? (
               <Text style={styles.kicker}>Contributor</Text>
             ) : null}
@@ -246,6 +254,13 @@ export default function ArtistScreen() {
               <SectionTitle>Biography</SectionTitle>
               <EditorialBlock text={about.data.biography} />
             </View>
+          ) : null}
+          {!about.data?.biography &&
+          tab !== "credits" &&
+          enrichmentWaitingLabel(about.data?.enrichment.task, "artist") ? (
+            <Text style={styles.waiting}>
+              {enrichmentWaitingLabel(about.data?.enrichment.task, "artist")}
+            </Text>
           ) : null}
           {works.data?.works.length ? (
             <View>
@@ -360,6 +375,13 @@ const styles = StyleSheet.create({
   nav: { height: 48, paddingHorizontal: 20, justifyContent: "center" },
   hero: { alignItems: "center", paddingHorizontal: 20, paddingBottom: 28 },
   portrait: { marginBottom: 20 },
+  waiting: {
+    color: palette.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 18,
+  },
   title: {
     color: "white",
     fontSize: 34,

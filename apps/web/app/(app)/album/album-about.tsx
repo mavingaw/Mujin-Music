@@ -1,6 +1,7 @@
 "use client";
 
 import type { LibraryAlbum } from "@parson/music-sdk";
+import { enrichmentWaitingLabel } from "@parson/music-sdk";
 import type { AlbumAbout } from "@parson/music-sdk/types";
 import Link from "next/link";
 import { useState } from "react";
@@ -161,6 +162,13 @@ export function AlbumAboutSection({
                   )}
                 </p>
               )}
+              {!hasEditorial &&
+                about?.enrichment.enabled &&
+                about.enrichment.task?.status === "pending" && (
+                  <p className="text-sm leading-6 text-zinc-500">
+                    {enrichmentWaitingLabel(about.enrichment.task, "album")}
+                  </p>
+                )}
               {isAdmin &&
                 onIdentify &&
                 about?.enrichment.enabled &&

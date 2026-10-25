@@ -7,7 +7,6 @@ use diesel::sqlite::SqliteConnection;
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_KEY: &str = "enrichment";
-pub const PROVIDER: &str = "musicbrainz";
 pub const MAX_ATTEMPTS: i32 = 5;
 pub const MAX_NOTE_CHARS: usize = 20_000;
 
@@ -89,12 +88,17 @@ pub struct TaskCounts {
     pub failed: i64,
 }
 
+/// Progress of the MusicBrainz stage, which every album and artist passes.
 pub fn task_counts(connection: &mut SqliteConnection) -> QueryResult<TaskCounts> {
+    stage_counts(connection, Stage::Musicbrainz)
+}
+
+pub fn stage_counts(connection: &mut SqliteConnection, stage: Stage) -> QueryResult<TaskCounts> {
     let rows = diesel::sql_query(
         "SELECT status, COUNT(*) AS count FROM metadata_task
          WHERE provider = ? AND entity_type IN ('album', 'artist') GROUP BY status",
     )
-    .bind::<Text, _>(PROVIDER)
+    .bind::<Text, _>(stage.provider())
     .load::<CountRow>(connection)?;
     let mut counts = TaskCounts::default();
     for row in rows {
@@ -111,14 +115,138 @@ pub fn task_counts(connection: &mut SqliteConnection) -> QueryResult<TaskCounts>
 /// Queues every album and artist that has no task yet. The indexer queues
 /// tasks after a full scan; this covers libraries indexed before enrichment
 /// existed and artists only known from credits.
+///
+/// SQLite reads `ON CONFLICT` after a bare `SELECT ... FROM table` as the
+/// start of a join constraint ("near DO: syntax error"), so the compound
+/// select is wrapped and given an explicit `WHERE true`.
 pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
-    diesel::sql_query(
+    let queued = diesel::sql_query(
         "INSERT INTO metadata_task (provider, entity_type, entity_id)
-         SELECT 'musicbrainz', 'album', id FROM album_entity
-         UNION SELECT 'musicbrainz', 'artist', id FROM artist_entity
+         SELECT 'musicbrainz', entity_type, entity_id FROM (
+             SELECT 'album' AS entity_type, id AS entity_id FROM album_entity
+             UNION SELECT 'artist', id FROM artist_entity
+         ) WHERE true
          ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
     )
-    .execute(connection)
+    .execute(connection)?;
+    // Items matched before lookups were split into stages still need their
+    // Wikidata stage (and through it the biography and photo).
+    let linked = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT 'wikidata', entity_type, entity_id FROM editorial_profile
+         WHERE wikidata_id IS NOT NULL
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    Ok(queued + linked)
+}
+
+/// The enrichment stages. Each one talks to a single host and has its own
+/// queue (`metadata_task.provider`) and its own back-off, so a busy
+/// Wikimedia Commons never holds back MusicBrainz or Wikipedia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    /// Resolve the album or artist and its credits on MusicBrainz.
+    Musicbrainz,
+    /// Read sitelinks, life dates and the P18 image from Wikidata.
+    Wikidata,
+    /// Fetch the biography, background and reception text.
+    Wikipedia,
+    /// Download the licensed artist photo from Wikimedia Commons.
+    Commons,
+}
+
+impl Stage {
+    pub const ALL: [Stage; 4] = [
+        Stage::Musicbrainz,
+        Stage::Wikidata,
+        Stage::Wikipedia,
+        Stage::Commons,
+    ];
+
+    /// The `metadata_task.provider` value for the stage's queue.
+    pub fn provider(self) -> &'static str {
+        match self {
+            Stage::Musicbrainz => "musicbrainz",
+            Stage::Wikidata => "wikidata",
+            Stage::Wikipedia => "wikipedia",
+            Stage::Commons => "commons",
+        }
+    }
+
+    /// The host whose back-off applies to the stage.
+    pub fn host(self) -> &'static str {
+        match self {
+            Stage::Musicbrainz => "musicbrainz.org",
+            Stage::Wikidata => "wikidata.org",
+            Stage::Wikipedia => "wikipedia.org",
+            Stage::Commons => "commons.wikimedia.org",
+        }
+    }
+
+    pub fn from_provider(provider: &str) -> Option<Stage> {
+        Stage::ALL
+            .into_iter()
+            .find(|stage| stage.provider() == provider)
+    }
+}
+
+/// Queues (or re-queues) a later stage for an entity once the stage before
+/// it produced what it needs.
+pub fn queue_stage(
+    connection: &mut SqliteConnection,
+    stage: Stage,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<()> {
+    diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id) VALUES (?, ?, ?)
+         ON CONFLICT(provider, entity_type, entity_id) DO UPDATE SET
+             status = 'pending', attempts = 0, last_error = NULL, not_before = NULL,
+             updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind::<Text, _>(stage.provider())
+    .bind::<Text, _>(entity_type)
+    .bind::<Text, _>(entity_id)
+    .execute(connection)?;
+    Ok(())
+}
+
+/// The status of one stage's task for an entity.
+pub fn task_status(
+    connection: &mut SqliteConnection,
+    stage: Stage,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<Option<String>> {
+    let mut rows = diesel::sql_query(
+        "SELECT status AS value FROM metadata_task
+         WHERE provider = ? AND entity_type = ? AND entity_id = ?",
+    )
+    .bind::<Text, _>(stage.provider())
+    .bind::<Text, _>(entity_type)
+    .bind::<Text, _>(entity_id)
+    .load::<ValueRow>(connection)?;
+    Ok(rows.pop().map(|row| row.value))
+}
+
+/// Removes a later stage that no longer applies (no Wikidata item, no
+/// article, no photo).
+pub fn drop_stage(
+    connection: &mut SqliteConnection,
+    stage: Stage,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<()> {
+    diesel::sql_query(
+        "DELETE FROM metadata_task WHERE provider = ? AND entity_type = ? AND entity_id = ?",
+    )
+    .bind::<Text, _>(stage.provider())
+    .bind::<Text, _>(entity_type)
+    .bind::<Text, _>(entity_id)
+    .execute(connection)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
@@ -133,23 +261,35 @@ pub struct Task {
     pub attempts: i32,
 }
 
-/// The next due task: albums first (their releases name the artists'
-/// MusicBrainz ids), then artists. Track tasks are covered by their album.
+/// The next due MusicBrainz task: albums first (their releases name the
+/// artists' MusicBrainz ids), then artists. Track tasks are covered by their
+/// album.
 pub fn next_task(connection: &mut SqliteConnection) -> QueryResult<Option<Task>> {
-    diesel::sql_query(
-        "UPDATE metadata_task SET status = 'skipped', last_error = 'covered by the album',
-                updated_at = CURRENT_TIMESTAMP
-         WHERE provider = 'musicbrainz' AND entity_type = 'track' AND status = 'pending'",
-    )
-    .execute(connection)?;
+    next_stage_task(connection, Stage::Musicbrainz)
+}
+
+/// The next due task in one stage's queue.
+pub fn next_stage_task(
+    connection: &mut SqliteConnection,
+    stage: Stage,
+) -> QueryResult<Option<Task>> {
+    if stage == Stage::Musicbrainz {
+        diesel::sql_query(
+            "UPDATE metadata_task SET status = 'skipped', last_error = 'covered by the album',
+                    updated_at = CURRENT_TIMESTAMP
+             WHERE provider = 'musicbrainz' AND entity_type = 'track' AND status = 'pending'",
+        )
+        .execute(connection)?;
+    }
     let mut tasks = diesel::sql_query(
         "SELECT id, entity_type, entity_id, attempts FROM metadata_task
-         WHERE provider = 'musicbrainz' AND status = 'pending'
+         WHERE provider = ? AND status = 'pending'
            AND entity_type IN ('album', 'artist')
            AND (not_before IS NULL OR not_before <= CURRENT_TIMESTAMP)
          ORDER BY CASE entity_type WHEN 'album' THEN 0 ELSE 1 END, attempts, id
          LIMIT 1",
     )
+    .bind::<Text, _>(stage.provider())
     .load::<Task>(connection)?;
     Ok(tasks.pop())
 }
@@ -221,21 +361,72 @@ pub struct TaskState {
     pub last_error: Option<String>,
     #[diesel(sql_type = Text)]
     pub updated_at: String,
+    /// The stage still at work (`musicbrainz`, `wikidata`, `wikipedia` or
+    /// `commons`), so a page can say what it is waiting for.
+    #[diesel(sql_type = Text)]
+    pub stage: String,
 }
 
+/// Where an entity's lookup stands across all stages: the MusicBrainz state
+/// until that finished, then the first later stage still pending or failed.
 pub fn task_state(
     connection: &mut SqliteConnection,
     entity_type: &str,
     entity_id: &str,
 ) -> QueryResult<Option<TaskState>> {
-    let mut rows = diesel::sql_query(
-        "SELECT status, last_error, CAST(updated_at AS TEXT) AS updated_at FROM metadata_task
-         WHERE provider = 'musicbrainz' AND entity_type = ? AND entity_id = ?",
+    let rows = diesel::sql_query(
+        "SELECT status, last_error, CAST(updated_at AS TEXT) AS updated_at, provider AS stage
+         FROM metadata_task WHERE entity_type = ? AND entity_id = ?",
     )
     .bind::<Text, _>(entity_type)
     .bind::<Text, _>(entity_id)
     .load::<TaskState>(connection)?;
-    Ok(rows.pop())
+    let by_stage = |stage: Stage| rows.iter().find(|row| row.stage == stage.provider());
+    let Some(first) = by_stage(Stage::Musicbrainz) else {
+        return Ok(None);
+    };
+    if first.status != "done" {
+        return Ok(Some(first.clone()));
+    }
+    Ok(Stage::ALL[1..]
+        .iter()
+        .filter_map(|stage| by_stage(*stage))
+        .find(|row| row.status == "pending")
+        .or_else(|| {
+            Stage::ALL[1..]
+                .iter()
+                .filter_map(|stage| by_stage(*stage))
+                .find(|row| row.status == "failed")
+        })
+        .unwrap_or(first)
+        .clone()
+        .into())
+}
+
+/// Artists among `ids` that have a stored photo.
+pub fn artists_with_images(
+    connection: &mut SqliteConnection,
+    ids: &[String],
+) -> QueryResult<std::collections::HashSet<String>> {
+    let mut found = std::collections::HashSet::new();
+    for chunk in ids.chunks(400) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let query = format!(
+            "SELECT entity_id AS value FROM editorial_image
+             WHERE entity_type = 'artist' AND entity_id IN ({placeholders})"
+        );
+        let mut statement = diesel::sql_query(query).into_boxed::<diesel::sqlite::Sqlite>();
+        for id in chunk {
+            statement = statement.bind::<Text, _>(id.clone());
+        }
+        found.extend(
+            statement
+                .load::<ValueRow>(connection)?
+                .into_iter()
+                .map(|row| row.value),
+        );
+    }
+    Ok(found)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, QueryableByName)]
@@ -1024,6 +1215,139 @@ mod tests {
                 .status,
             "skipped"
         );
+    }
+
+    #[test]
+    fn seeding_queues_library_items_once_without_a_syntax_error() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        connection
+            .batch_execute(
+                "INSERT INTO artist_entity (id, name, normalized_name) VALUES
+                   ('beethoven', 'Ludwig van Beethoven', 'ludwig van beethoven'),
+                   ('karajan', 'Herbert von Karajan', 'herbert von karajan');
+                 INSERT INTO album_entity (id, title, normalized_title) VALUES
+                   ('ninth', 'Symphony No. 9', 'symphony no 9');
+                 INSERT INTO metadata_task (provider, entity_type, entity_id, status)
+                   VALUES ('musicbrainz', 'artist', 'karajan', 'done');",
+            )
+            .unwrap();
+        // Karajan already has a task; Beethoven and the album are new.
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 2);
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 0);
+        let counts = task_counts(&mut connection).unwrap();
+        assert_eq!((counts.pending, counts.done), (2, 1));
+        assert_eq!(
+            next_task(&mut connection)
+                .unwrap()
+                .map(|task| task.entity_id),
+            Some("ninth".into())
+        );
+        // An artist matched by an earlier version gets its Wikidata stage.
+        save_profile(
+            &mut connection,
+            "artist",
+            "karajan",
+            &ProfileRow {
+                wikidata_id: Some("Q78491".into()),
+                ..ProfileRow::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 1);
+        assert_eq!(
+            next_stage_task(&mut connection, Stage::Wikidata)
+                .unwrap()
+                .map(|task| task.entity_id),
+            Some("karajan".into())
+        );
+    }
+
+    #[test]
+    fn each_stage_has_its_own_queue_and_the_state_names_the_waiting_stage() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        refresh_entity(&mut connection, "artist", "a1").unwrap();
+        let task = next_task(&mut connection).unwrap().unwrap();
+        assert_eq!(
+            task_state(&mut connection, "artist", "a1")
+                .unwrap()
+                .unwrap()
+                .stage,
+            "musicbrainz"
+        );
+        finish_task(&mut connection, &task, &Outcome::Done).unwrap();
+        queue_stage(&mut connection, Stage::Wikipedia, "artist", "a1").unwrap();
+        queue_stage(&mut connection, Stage::Commons, "artist", "a1").unwrap();
+        assert_eq!(next_task(&mut connection).unwrap(), None);
+        let state = task_state(&mut connection, "artist", "a1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (state.status.as_str(), state.stage.as_str()),
+            ("pending", "wikipedia")
+        );
+
+        // A busy Commons does not stop the Wikipedia queue.
+        let photo = next_stage_task(&mut connection, Stage::Commons)
+            .unwrap()
+            .unwrap();
+        finish_task(&mut connection, &photo, &Outcome::Retry("HTTP 429".into())).unwrap();
+        assert_eq!(
+            next_stage_task(&mut connection, Stage::Commons).unwrap(),
+            None
+        );
+        let text = next_stage_task(&mut connection, Stage::Wikipedia)
+            .unwrap()
+            .unwrap();
+        assert_eq!(text.entity_id, "a1");
+        finish_task(&mut connection, &text, &Outcome::Done).unwrap();
+        let state = task_state(&mut connection, "artist", "a1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (state.status.as_str(), state.stage.as_str()),
+            ("pending", "commons")
+        );
+        assert_eq!(
+            stage_counts(&mut connection, Stage::Wikipedia)
+                .unwrap()
+                .done,
+            1
+        );
+        drop_stage(&mut connection, Stage::Commons, "artist", "a1").unwrap();
+        assert_eq!(
+            task_state(&mut connection, "artist", "a1")
+                .unwrap()
+                .unwrap()
+                .stage,
+            "musicbrainz"
+        );
+        assert_eq!(Stage::from_provider("commons"), Some(Stage::Commons));
+    }
+
+    #[test]
+    fn photos_are_found_for_credited_people() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        save_image(
+            &mut connection,
+            "artist",
+            "kleiber",
+            &ImageRow {
+                file_name: "artist-kleiber.jpg".into(),
+                mime_type: "image/jpeg".into(),
+                source_url: "https://upload.wikimedia.org/k.jpg".into(),
+                page_url: "https://commons.wikimedia.org/wiki/File:K.jpg".into(),
+                author: "Unknown".into(),
+                license: "CC BY-SA 3.0".into(),
+                license_url: None,
+            },
+        )
+        .unwrap();
+        let found =
+            artists_with_images(&mut connection, &["kleiber".into(), "nobody".into()]).unwrap();
+        assert_eq!(found.into_iter().collect::<Vec<_>>(), ["kleiber"]);
     }
 
     fn work(mbid: &str, title: &str, parent: Option<&str>, position: Option<i64>) -> WorkRow {

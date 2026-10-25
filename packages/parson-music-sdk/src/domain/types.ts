@@ -392,6 +392,9 @@ export interface AboutCredit {
   instrument: string | null;
   track_ids: string[];
   sources: CreditSource[];
+  /** The person's cached photo, relative to the API base
+   * (`/artists/{id}/image`), when there is one. */
+  image_url?: string | null;
 }
 
 /** Licensed text (Wikipedia, CC BY-SA 4.0) stored with its attribution. */
@@ -428,10 +431,24 @@ export interface UserNote {
   updated_at: string;
 }
 
+/** The lookup stages; each has its own queue and back-off. */
+export type EnrichmentStage =
+  "musicbrainz" | "wikidata" | "wikipedia" | "commons";
+
 export interface EnrichmentTaskState {
   status: "pending" | "done" | "skipped" | "failed" | (string & {});
   last_error: string | null;
   updated_at: string;
+  /** The stage still at work, so a page can say what it waits for. */
+  stage?: EnrichmentStage | (string & {});
+}
+
+export interface EnrichmentStageStatus {
+  stage: EnrichmentStage;
+  host: string;
+  counts: { pending: number; done: number; skipped: number; failed: number };
+  /** Seconds until a busy host is asked again; 0 when it is not paused. */
+  paused_seconds: number;
 }
 
 export interface EnrichmentStatus {
@@ -544,6 +561,8 @@ export interface EnrichmentOverview extends EnrichmentSettings {
   counts: { pending: number; done: number; skipped: number; failed: number };
   /** Hosts enrichment contacts when enabled. */
   sources: string[];
+  /** Each stage's queue; older servers leave this out. */
+  stages?: EnrichmentStageStatus[];
 }
 
 /** A person on a work or recording. `artist_id` is a local artist id,

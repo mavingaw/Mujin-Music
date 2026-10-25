@@ -1,9 +1,10 @@
 //! The background enrichment worker. It consumes `metadata_task` rows only
 //! while the administrator has turned enrichment on.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use diesel::sqlite::SqliteConnection;
 use serde_json::{Value, json};
@@ -12,7 +13,7 @@ use tokio::sync::Notify;
 use super::fetch::{BoxError, Fetch, FetchResponse, HttpFetch, MAX_IMAGE_BYTES, MAX_JSON_BYTES};
 use super::musicbrainz as mb;
 use super::store::{
-    self, CreditRow, EditorialText, EnrichmentSettings, ImageRow, Outcome, ProfileRow,
+    self, CreditRow, EditorialText, EnrichmentSettings, ImageRow, Outcome, ProfileRow, Stage, Task,
     TrackWorkRow, WorkRow,
 };
 use super::wikimedia as wiki;
@@ -26,9 +27,10 @@ const IDLE_POLL: Duration = Duration::from_secs(60);
 const MIN_THROTTLE: Duration = Duration::from_secs(30);
 const MAX_THROTTLE: Duration = Duration::from_secs(15 * 60);
 
-/// How long the whole worker pauses after a service said it is overloaded
-/// (MusicBrainz answers 503 when a client goes over its rate limit). Doubles
-/// on each consecutive refusal and resets after a success.
+/// How long one host's queue pauses after that host said it is overloaded
+/// (MusicBrainz answers 503 when a client goes over its rate limit,
+/// Wikimedia answers 429). Doubles on each consecutive refusal and resets
+/// after a success.
 pub fn next_throttle(current: Duration, outcome: &Outcome) -> Duration {
     match outcome {
         Outcome::Retry(error) if error == "HTTP 429" || error == "HTTP 503" => {
@@ -39,11 +41,120 @@ pub fn next_throttle(current: Duration, outcome: &Outcome) -> Duration {
     }
 }
 
-/// Wakes the worker when settings change or an entity is refreshed.
-pub fn wake() -> &'static Notify {
-    static WAKE: std::sync::OnceLock<Notify> = std::sync::OnceLock::new();
-    WAKE.get_or_init(Notify::new)
+#[derive(Debug, Clone, Copy, Default)]
+struct HostBackoff {
+    delay: Duration,
+    until: Option<Instant>,
 }
+
+/// A separate back-off for each host. A 429 from Wikimedia Commons pauses
+/// only the Commons queue; MusicBrainz, Wikidata and Wikipedia carry on.
+#[derive(Debug, Default)]
+pub struct Backoffs {
+    hosts: Mutex<HashMap<Stage, HostBackoff>>,
+}
+
+impl Backoffs {
+    /// Records a stage's outcome and returns how long its queue now pauses.
+    pub fn record(&self, stage: Stage, outcome: &Outcome, now: Instant) -> Duration {
+        let mut hosts = self.hosts.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = hosts.entry(stage).or_default();
+        entry.delay = next_throttle(entry.delay, outcome);
+        let busy =
+            matches!(outcome, Outcome::Retry(error) if error == "HTTP 429" || error == "HTTP 503");
+        entry.until = match (busy, entry.delay.is_zero()) {
+            (true, false) => Some(now + entry.delay),
+            (_, true) => None,
+            (false, false) => entry.until,
+        };
+        if busy { entry.delay } else { Duration::ZERO }
+    }
+
+    /// How much longer the stage's host is paused.
+    pub fn paused_for(&self, stage: Stage, now: Instant) -> Duration {
+        let hosts = self.hosts.lock().unwrap_or_else(|error| error.into_inner());
+        hosts
+            .get(&stage)
+            .and_then(|entry| entry.until)
+            .map(|until| until.saturating_duration_since(now))
+            .unwrap_or_default()
+    }
+}
+
+/// The worker's back-offs, shared with the settings API so it can show
+/// which service is busy.
+pub fn backoffs() -> &'static Backoffs {
+    static BACKOFFS: std::sync::OnceLock<Backoffs> = std::sync::OnceLock::new();
+    BACKOFFS.get_or_init(Backoffs::default)
+}
+
+/// One wake-up signal per stage queue.
+pub struct Wake {
+    stages: [Notify; 4],
+}
+
+impl Wake {
+    /// Wakes every stage (settings changed, an entity was refreshed, or a
+    /// stage queued work for the next one).
+    pub fn notify_all(&self) {
+        for notify in &self.stages {
+            notify.notify_one();
+        }
+    }
+
+    fn stage(&self, stage: Stage) -> &Notify {
+        let index = Stage::ALL
+            .iter()
+            .position(|candidate| *candidate == stage)
+            .unwrap_or(0);
+        &self.stages[index]
+    }
+}
+
+/// Wakes the worker when settings change or an entity is refreshed.
+pub fn wake() -> &'static Wake {
+    static WAKE: std::sync::OnceLock<Wake> = std::sync::OnceLock::new();
+    WAKE.get_or_init(|| Wake {
+        stages: [Notify::new(), Notify::new(), Notify::new(), Notify::new()],
+    })
+}
+
+/// What one turn of a stage's queue did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// The host is backing off for this long.
+    Paused(Duration),
+    /// Nothing is due in this queue.
+    Idle,
+    /// A task ran.
+    Ran(Task, Outcome),
+}
+
+/// What the Wikidata stage stored for the later stages.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WikidataLinks {
+    article: Option<(String, String)>,
+    image: Option<String>,
+}
+
+fn wikidata_links(profile: &ProfileRow) -> WikidataLinks {
+    let value = serde_json::from_str::<Value>(&profile.profile_json).unwrap_or_default();
+    let wikidata = value.get(WIKIDATA_KEY);
+    let text = |key: &str| {
+        wikidata
+            .and_then(|links| links.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    WikidataLinks {
+        article: text("article_language").zip(text("article_title")),
+        image: text("image"),
+    }
+}
+
+/// The profile key holding what Wikidata linked to. It is internal and is
+/// not shown as a fact.
+pub const WIKIDATA_KEY: &str = "wikidata";
 
 pub fn images_directory() -> PathBuf {
     data_path(&["Editorial", "Images"])
@@ -150,53 +261,10 @@ impl<F: Fetch> Enricher<F> {
         Ok(Ok(json_body(&response)))
     }
 
-    /// Wikidata item -> Wikipedia article in the preferred language.
-    async fn wikipedia(
-        &self,
-        wikidata_id: &str,
-        language: &str,
-    ) -> Result<
-        Result<
-            (
-                Option<wiki::WikidataEntity>,
-                Option<(String, wiki::WikipediaArticle)>,
-            ),
-            Outcome,
-        >,
-        BoxError,
-    > {
-        let entity = match self
-            .get_json(&wiki::wikidata_entity_url(wikidata_id))
-            .await?
-        {
-            Ok(Some(body)) => wiki::parse_wikidata_entity(&body),
-            Ok(None) => None,
-            Err(outcome) => return Ok(Err(outcome)),
-        };
-        let Some((article_language, title)) =
-            entity.as_ref().and_then(|entity| entity.article(language))
-        else {
-            return Ok(Ok((entity, None)));
-        };
-        let article = match self
-            .get_json(&wiki::wikipedia_extract_url(&article_language, &title))
-            .await?
-        {
-            Ok(Some(body)) => wiki::parse_wikipedia_extract(&body),
-            Ok(None) => None,
-            Err(outcome) => return Ok(Err(outcome)),
-        };
-        Ok(Ok((
-            entity,
-            article.map(|article| (article_language, article)),
-        )))
-    }
-
-    pub async fn enrich_album(
-        &self,
-        album: &AlbumInput,
-        settings: &EnrichmentSettings,
-    ) -> Result<Outcome, BoxError> {
+    /// The MusicBrainz stage for an album: the release, its credits, works
+    /// and the release group's Wikidata item. Text comes later from the
+    /// Wikidata and Wikipedia queues.
+    pub async fn resolve_album(&self, album: &AlbumInput) -> Result<Outcome, BoxError> {
         let album_id = album.id.clone();
         let identified = db(&self.pool, move |connection| {
             store::load_identification(connection, &album_id)
@@ -216,7 +284,8 @@ impl<F: Fetch> Enricher<F> {
                     // person can say which release this is.
                     let album_id = album.id.clone();
                     db(&self.pool, move |connection| {
-                        store::clear_editorial(connection, "album", &album_id)
+                        store::clear_editorial(connection, "album", &album_id)?;
+                        drop_later_stages(connection, "album", &album_id)
                     })
                     .await?;
                     return Ok(Outcome::Skipped(
@@ -270,31 +339,6 @@ impl<F: Fetch> Enricher<F> {
                 Err(outcome) => return Ok(outcome),
             }
         }
-        // Wikimedia may be busy while MusicBrainz answered; keep what
-        // MusicBrainz gave and retry the text later.
-        let mut texts = Some(Vec::new());
-        let mut deferred = None;
-        if let Some(wikidata_id) = &wikidata_id {
-            match self.wikipedia(wikidata_id, &settings.language).await? {
-                Ok((_, Some((language, article)))) => {
-                    let texts = texts.get_or_insert_with(Vec::new);
-                    texts.push(wikipedia_text(
-                        "background",
-                        &language,
-                        &article,
-                        &article.lead,
-                    ));
-                    if let Some(reception) = &article.reception {
-                        texts.push(wikipedia_text("reception", &language, &article, reception));
-                    }
-                }
-                Ok((_, None)) => {}
-                Err(outcome) => {
-                    texts = None;
-                    deferred = Some(outcome);
-                }
-            }
-        }
 
         let trusted = identified.as_deref() == Some(release.mbid.as_str())
             || album.musicbrainz_id.as_deref() == Some(release.mbid.as_str());
@@ -328,26 +372,22 @@ impl<F: Fetch> Enricher<F> {
         };
         let album_id = album.id.clone();
         db(&self.pool, move |connection| {
+            let linked = profile.wikidata_id.is_some();
             store::save_profile(connection, "album", &album_id, &profile)?;
-            if let Some(texts) = &texts {
-                store::replace_texts(connection, "album", &album_id, texts)?;
-            }
             store::replace_album_credits(connection, &album_id, "musicbrainz", &credits)?;
             store::replace_album_works(connection, &album_id, &works, &work_links)?;
             for (artist_id, mbid) in &links {
                 store::link_artist_mbid(connection, artist_id, mbid)?;
             }
-            Ok(())
+            queue_wikidata(connection, "album", &album_id, linked)
         })
         .await?;
-        Ok(deferred.unwrap_or(Outcome::Done))
+        Ok(Outcome::Done)
     }
 
-    pub async fn enrich_artist(
-        &self,
-        artist: &ArtistInput,
-        settings: &EnrichmentSettings,
-    ) -> Result<Outcome, BoxError> {
+    /// The MusicBrainz stage for an artist: who they are and their Wikidata
+    /// item. The biography and photo come from the later queues.
+    pub async fn resolve_artist(&self, artist: &ArtistInput) -> Result<Outcome, BoxError> {
         if artist.name.trim().is_empty() {
             return Ok(Outcome::Skipped("the artist has no name".into()));
         }
@@ -356,7 +396,8 @@ impl<F: Fetch> Enricher<F> {
             // Drop anything an earlier version matched for this name.
             let artist_id = artist.id.clone();
             db(&self.pool, move |connection| {
-                store::clear_editorial(connection, "artist", &artist_id)
+                store::clear_editorial(connection, "artist", &artist_id)?;
+                drop_later_stages(connection, "artist", &artist_id)
             })
             .await?;
             return Ok(Outcome::Skipped(format!(
@@ -414,45 +455,6 @@ impl<F: Fetch> Enricher<F> {
             ));
         };
 
-        let mut texts = Some(Vec::new());
-        let mut entity = None;
-        let mut deferred = None;
-        if let Some(wikidata_id) = &profile.wikidata_id {
-            match self.wikipedia(wikidata_id, &settings.language).await? {
-                Ok((found, article)) => {
-                    entity = found;
-                    if let Some((language, article)) = article {
-                        texts.get_or_insert_with(Vec::new).push(wikipedia_text(
-                            "biography",
-                            &language,
-                            &article,
-                            &article.lead,
-                        ));
-                    }
-                }
-                Err(outcome) => {
-                    texts = None;
-                    deferred = Some(outcome);
-                }
-            }
-        }
-
-        let image = match (&entity, settings.artist_images) {
-            (
-                Some(wiki::WikidataEntity {
-                    image: Some(file), ..
-                }),
-                true,
-            ) => match self.download_image(&artist.id, file).await? {
-                Ok(image) => image,
-                Err(outcome) => {
-                    deferred.get_or_insert(outcome);
-                    None
-                }
-            },
-            _ => None,
-        };
-
         let row = ProfileRow {
             musicbrainz_id: Some(profile.mbid.clone()),
             release_group_mbid: None,
@@ -462,25 +464,351 @@ impl<F: Fetch> Enricher<F> {
                 "kind": profile.kind,
                 "area": profile.area,
                 "begin_area": profile.begin_area,
-                "begin": entity.as_ref().and_then(|entity| entity.born.clone().or(entity.formed.clone())).or(profile.begin.clone()),
-                "end": entity.as_ref().and_then(|entity| entity.died.clone().or(entity.dissolved.clone())).or(profile.end.clone()),
+                "begin": profile.begin,
+                "end": profile.end,
                 "disambiguation": profile.disambiguation,
             })
             .to_string(),
         };
         let artist_id = artist.id.clone();
         db(&self.pool, move |connection| {
+            let linked = row.wikidata_id.is_some();
             store::save_profile(connection, "artist", &artist_id, &row)?;
-            if let Some(texts) = &texts {
-                store::replace_texts(connection, "artist", &artist_id, texts)?;
+            queue_wikidata(connection, "artist", &artist_id, linked)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The Wikidata stage: the Wikipedia article in the preferred language,
+    /// life dates and the P18 image, then the Wikipedia and Commons queues.
+    pub async fn wikidata_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(mut profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(wikidata_id) = profile.wikidata_id.clone() else {
+            return Ok(Outcome::Skipped("no Wikidata item".into()));
+        };
+        let entity = match self
+            .get_json(&wiki::wikidata_entity_url(&wikidata_id))
+            .await?
+        {
+            Ok(Some(body)) => wiki::parse_wikidata_entity(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(entity) = entity else {
+            return Ok(Outcome::Skipped("the Wikidata item was not found".into()));
+        };
+        let article = entity.article(&settings.language);
+        let image = (entity_type == "artist")
+            .then(|| entity.image.clone())
+            .flatten();
+        let mut facts = serde_json::from_str::<Value>(&profile.profile_json)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        if entity_type == "artist" {
+            if let Some(begin) = entity.born.clone().or(entity.formed.clone()) {
+                facts["begin"] = json!(begin);
             }
-            if let Some(image) = &image {
-                store::save_image(connection, "artist", &artist_id, image)?;
+            if let Some(end) = entity.died.clone().or(entity.dissolved.clone()) {
+                facts["end"] = json!(end);
+            }
+        }
+        facts[WIKIDATA_KEY] = json!({
+            "article_language": article.as_ref().map(|(language, _)| language),
+            "article_title": article.as_ref().map(|(_, title)| title),
+            "image": image,
+        });
+        profile.profile_json = facts.to_string();
+        let entity_type = entity_type.to_string();
+        let entity_id = entity_id.to_string();
+        let wants_image = image.is_some() && settings.artist_images;
+        db(&self.pool, move |connection| {
+            store::save_profile(connection, &entity_type, &entity_id, &profile)?;
+            if article.is_some() {
+                store::queue_stage(connection, Stage::Wikipedia, &entity_type, &entity_id)?;
+            } else {
+                store::replace_texts(connection, &entity_type, &entity_id, &[])?;
+                store::drop_stage(connection, Stage::Wikipedia, &entity_type, &entity_id)?;
+            }
+            if wants_image {
+                store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
+            } else {
+                store::drop_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
             }
             Ok(())
         })
         .await?;
-        Ok(deferred.unwrap_or(Outcome::Done))
+        Ok(Outcome::Done)
+    }
+
+    /// The Wikipedia stage: an artist biography, or an album's background
+    /// and critical reception, with CC BY-SA attribution.
+    pub async fn wikipedia_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Outcome, BoxError> {
+        let Some(profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some((language, title)) = wikidata_links(&profile).article else {
+            return Ok(Outcome::Skipped("no Wikipedia article".into()));
+        };
+        let article = match self
+            .get_json(&wiki::wikipedia_extract_url(&language, &title))
+            .await?
+        {
+            Ok(Some(body)) => wiki::parse_wikipedia_extract(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(article) = article else {
+            return Ok(Outcome::Skipped(
+                "the Wikipedia article was not found".into(),
+            ));
+        };
+        let mut texts = Vec::new();
+        if entity_type == "artist" {
+            texts.push(wikipedia_text(
+                "biography",
+                &language,
+                &article,
+                &article.lead,
+            ));
+        } else {
+            texts.push(wikipedia_text(
+                "background",
+                &language,
+                &article,
+                &article.lead,
+            ));
+            if let Some(reception) = &article.reception {
+                texts.push(wikipedia_text("reception", &language, &article, reception));
+            }
+        }
+        let entity_type = entity_type.to_string();
+        let entity_id = entity_id.to_string();
+        db(&self.pool, move |connection| {
+            store::replace_texts(connection, &entity_type, &entity_id, &texts)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The Commons stage: the artist's freely licensed photo, cached under
+    /// the data directory.
+    pub async fn commons_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if entity_type != "artist" || !settings.artist_images {
+            return Ok(Outcome::Skipped("artist photos are off".into()));
+        }
+        let Some(profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(file) = wikidata_links(&profile).image else {
+            return Ok(Outcome::Skipped("no Wikidata image".into()));
+        };
+        let image = match self.download_image(entity_id, &file).await? {
+            Ok(Some(image)) => image,
+            Ok(None) => {
+                return Ok(Outcome::Skipped(
+                    "no freely licensed photo on Commons".into(),
+                ));
+            }
+            Err(outcome) => return Ok(outcome),
+        };
+        let entity_id = entity_id.to_string();
+        db(&self.pool, move |connection| {
+            store::save_image(connection, "artist", &entity_id, &image)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    async fn profile(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Option<ProfileRow>, BoxError> {
+        let entity_type = entity_type.to_string();
+        let entity_id = entity_id.to_string();
+        db(&self.pool, move |connection| {
+            store::load_profile(connection, &entity_type, &entity_id)
+        })
+        .await
+    }
+
+    /// Runs one stage for one task.
+    pub async fn run_task(
+        &self,
+        stage: Stage,
+        task: &Task,
+        settings: &EnrichmentSettings,
+        cache: Option<&crate::library::state::LibraryCache>,
+    ) -> Result<Outcome, BoxError> {
+        match (stage, task.entity_type.as_str()) {
+            (Stage::Musicbrainz, "album") => {
+                let Some(cache) = cache else {
+                    return Ok(Outcome::Retry("the library is not ready".into()));
+                };
+                match album_input(cache, &task.entity_id) {
+                    Some(input) => self.resolve_album(&input).await,
+                    None => Ok(Outcome::Skipped(
+                        "the album is no longer in the library".into(),
+                    )),
+                }
+            }
+            (Stage::Musicbrainz, _) => {
+                let artist_id = task.entity_id.clone();
+                match db(&self.pool, move |connection| {
+                    store::artist_name(connection, &artist_id)
+                })
+                .await?
+                {
+                    Some(name) => {
+                        self.resolve_artist(&ArtistInput {
+                            id: task.entity_id.clone(),
+                            name,
+                        })
+                        .await
+                    }
+                    None => Ok(Outcome::Skipped(
+                        "the artist is no longer in the library".into(),
+                    )),
+                }
+            }
+            (Stage::Wikidata, entity_type) => {
+                self.wikidata_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
+            (Stage::Wikipedia, entity_type) => {
+                self.wikipedia_stage(entity_type, &task.entity_id).await
+            }
+            (Stage::Commons, entity_type) => {
+                self.commons_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
+        }
+    }
+
+    /// One turn of a stage's queue: nothing while its host backs off,
+    /// otherwise the next due task, recorded with its outcome. Other
+    /// stages are never held back by this one.
+    pub async fn step(
+        &self,
+        stage: Stage,
+        settings: &EnrichmentSettings,
+        cache: Option<&crate::library::state::LibraryCache>,
+        backoffs: &Backoffs,
+    ) -> Result<Step, BoxError> {
+        let paused = backoffs.paused_for(stage, Instant::now());
+        if !paused.is_zero() {
+            return Ok(Step::Paused(paused));
+        }
+        let Some(task) = db(&self.pool, move |connection| {
+            store::next_stage_task(connection, stage)
+        })
+        .await?
+        else {
+            return Ok(Step::Idle);
+        };
+        let outcome = self
+            .run_task(stage, &task, settings, cache)
+            .await
+            .unwrap_or_else(|error| Outcome::Retry(error.to_string()));
+        backoffs.record(stage, &outcome, Instant::now());
+        let finished = task.clone();
+        let recorded = outcome.clone();
+        db(&self.pool, move |connection| {
+            store::finish_task(connection, &finished, &recorded)
+        })
+        .await?;
+        Ok(Step::Ran(task, outcome))
+    }
+
+    /// Every stage for one album in order, as the queues would run them.
+    /// The first busy service's answer is returned; earlier stages' results
+    /// are kept.
+    #[cfg(test)]
+    pub async fn enrich_album(
+        &self,
+        album: &AlbumInput,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let outcome = self.resolve_album(album).await?;
+        if outcome != Outcome::Done {
+            return Ok(outcome);
+        }
+        self.later_stages("album", &album.id, settings).await
+    }
+
+    /// Every stage for one artist in order, as the queues would run them.
+    #[cfg(test)]
+    pub async fn enrich_artist(
+        &self,
+        artist: &ArtistInput,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let outcome = self.resolve_artist(artist).await?;
+        if outcome != Outcome::Done {
+            return Ok(outcome);
+        }
+        self.later_stages("artist", &artist.id, settings).await
+    }
+
+    #[cfg(test)]
+    async fn later_stages(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let mut result = Outcome::Done;
+        for stage in &Stage::ALL[1..] {
+            let queued = {
+                let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+                let stage = *stage;
+                db(&self.pool, move |connection| {
+                    Ok(
+                        store::task_status(connection, stage, &entity_type, &entity_id)?.as_deref()
+                            == Some("pending"),
+                    )
+                })
+                .await?
+            };
+            if !queued {
+                continue;
+            }
+            let outcome = match stage {
+                Stage::Wikidata => {
+                    self.wikidata_stage(entity_type, entity_id, settings)
+                        .await?
+                }
+                Stage::Wikipedia => self.wikipedia_stage(entity_type, entity_id).await?,
+                _ => self.commons_stage(entity_type, entity_id, settings).await?,
+            };
+            if let Outcome::Retry(_) = outcome {
+                if result == Outcome::Done {
+                    result = outcome;
+                }
+                if *stage == Stage::Wikidata {
+                    break;
+                }
+            }
+        }
+        Ok(result)
     }
 
     /// Downloads a freely licensed Commons image. A busy Commons is an
@@ -519,6 +847,33 @@ impl<F: Fetch> Enricher<F> {
             license_url: image.license_url,
         })))
     }
+}
+
+/// Queues the Wikidata stage when MusicBrainz linked an item; otherwise
+/// clears text and photo lookups that no longer apply.
+fn queue_wikidata(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+    linked: bool,
+) -> diesel::QueryResult<()> {
+    if linked {
+        store::queue_stage(connection, Stage::Wikidata, entity_type, entity_id)
+    } else {
+        store::replace_texts(connection, entity_type, entity_id, &[])?;
+        drop_later_stages(connection, entity_type, entity_id)
+    }
+}
+
+fn drop_later_stages(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+) -> diesel::QueryResult<()> {
+    for stage in &Stage::ALL[1..] {
+        store::drop_stage(connection, *stage, entity_type, entity_id)?;
+    }
+    Ok(())
 }
 
 async fn write_atomically(directory: &Path, file_name: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -823,33 +1178,59 @@ fn album_input(cache: &crate::library::state::LibraryCache, album_id: &str) -> O
 }
 
 /// Runs forever, sleeping while enrichment is off or the library is not
-/// ready. Spawned once by the server.
+/// ready. Spawned once by the server; each stage gets its own queue loop so
+/// a busy host only pauses its own work.
 pub async fn run(pool: DbPool, library: Arc<LibraryLifecycle>) {
     let enricher = match HttpFetch::new() {
-        Ok(fetch) => Enricher {
+        Ok(fetch) => Arc::new(Enricher {
             fetch,
             pool: pool.clone(),
             images: images_directory(),
-        },
+        }),
         Err(error) => {
             tracing::error!(%error, "metadata enrichment client could not start");
             return;
         }
     };
+    let mut stages = tokio::task::JoinSet::new();
+    for stage in Stage::ALL {
+        stages.spawn(run_stage(
+            stage,
+            pool.clone(),
+            library.clone(),
+            enricher.clone(),
+        ));
+    }
+    while stages.join_next().await.is_some() {}
+}
+
+async fn run_stage(
+    stage: Stage,
+    pool: DbPool,
+    library: Arc<LibraryLifecycle>,
+    enricher: Arc<Enricher<HttpFetch>>,
+) {
+    let signal = wake().stage(stage);
     let mut seeded = false;
-    let mut throttle = Duration::ZERO;
     loop {
         let settings = db(&pool, store::load_settings).await.unwrap_or_default();
         if !settings.enabled {
             seeded = false;
-            let _ = tokio::time::timeout(IDLE_POLL, wake().notified()).await;
+            let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
             continue;
         }
-        let Ok(cache) = library.cache().await else {
-            let _ = tokio::time::timeout(IDLE_POLL, wake().notified()).await;
-            continue;
+        let cache = if stage == Stage::Musicbrainz {
+            match library.cache().await {
+                Ok(cache) => Some(cache),
+                Err(_) => {
+                    let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
+                    continue;
+                }
+            }
+        } else {
+            None
         };
-        if !seeded {
+        if stage == Stage::Musicbrainz && !seeded {
             match db(&pool, store::seed_tasks).await {
                 Ok(queued) if queued > 0 => tracing::info!(queued, "queued metadata enrichment"),
                 Ok(_) => {}
@@ -857,66 +1238,38 @@ pub async fn run(pool: DbPool, library: Arc<LibraryLifecycle>) {
             }
             seeded = true;
         }
-        let task = match db(&pool, store::next_task).await {
-            Ok(Some(task)) => task,
-            Ok(None) => {
-                let _ = tokio::time::timeout(IDLE_POLL, wake().notified()).await;
-                continue;
+        match enricher
+            .step(stage, &settings, cache.as_deref(), backoffs())
+            .await
+        {
+            Ok(Step::Paused(pause)) => {
+                tracing::info!(
+                    host = stage.host(),
+                    seconds = pause.as_secs(),
+                    "metadata service is busy; pausing its queue"
+                );
+                tokio::time::sleep(pause).await;
             }
-            Err(error) => {
-                tracing::warn!(%error, "could not read metadata tasks");
-                tokio::time::sleep(IDLE_POLL).await;
-                continue;
+            Ok(Step::Idle) => {
+                let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
             }
-        };
-        let result = match task.entity_type.as_str() {
-            "album" => match album_input(&cache, &task.entity_id) {
-                Some(input) => enricher.enrich_album(&input, &settings).await,
-                None => Ok(Outcome::Skipped(
-                    "the album is no longer in the library".into(),
-                )),
-            },
-            _ => {
-                let artist_id = task.entity_id.clone();
-                match db(&pool, move |connection| {
-                    store::artist_name(connection, &artist_id)
-                })
-                .await
-                {
-                    Ok(Some(name)) => {
-                        let input = ArtistInput {
-                            id: task.entity_id.clone(),
-                            name,
-                        };
-                        enricher.enrich_artist(&input, &settings).await
-                    }
-                    Ok(None) => Ok(Outcome::Skipped(
-                        "the artist is no longer in the library".into(),
-                    )),
-                    Err(error) => Err(error),
+            Ok(Step::Ran(task, outcome)) => {
+                match &outcome {
+                    Outcome::Retry(error) => tracing::debug!(
+                        stage = stage.provider(),
+                        entity = %task.entity_id,
+                        %error,
+                        "metadata enrichment will retry"
+                    ),
+                    // A finished stage may have queued the next one.
+                    Outcome::Done => wake().notify_all(),
+                    Outcome::Skipped(_) => {}
                 }
             }
-        };
-        let outcome = result.unwrap_or_else(|error| Outcome::Retry(error.to_string()));
-        if let Outcome::Retry(error) = &outcome {
-            tracing::debug!(entity = %task.entity_id, %error, "metadata enrichment will retry");
-        }
-        throttle = next_throttle(throttle, &outcome);
-        let finished = task.clone();
-        if let Err(error) = db(&pool, move |connection| {
-            store::finish_task(connection, &finished, &outcome)
-        })
-        .await
-        {
-            tracing::warn!(%error, "could not record a metadata task result");
-            tokio::time::sleep(IDLE_POLL).await;
-        }
-        if !throttle.is_zero() {
-            tracing::info!(
-                seconds = throttle.as_secs(),
-                "metadata services are busy; pausing enrichment"
-            );
-            let _ = tokio::time::timeout(throttle, wake().notified()).await;
+            Err(error) => {
+                tracing::warn!(stage = stage.provider(), %error, "metadata enrichment step failed");
+                tokio::time::sleep(IDLE_POLL).await;
+            }
         }
     }
 }
@@ -1569,6 +1922,198 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, Outcome::Skipped(_)));
         assert_eq!(enricher.fetch.requested().len(), 1);
+    }
+
+    const KARAJAN: &str = "d2ced2f1-6b58-47cf-ae87-5943e2ab6d99";
+    const KLEIBER: &str = "a6a3e7e4-4b0a-4a59-8b8a-8a0c8b3f6c11";
+
+    /// Three conductors and composers whose photos live on Commons.
+    fn classical_people() -> [(&'static str, &'static str, &'static str, &'static str); 3] {
+        [
+            ("beethoven", "Ludwig van Beethoven", BEETHOVEN, "Q255"),
+            ("karajan", "Herbert von Karajan", KARAJAN, "Q78491"),
+            ("kleiber", "Carlos Kleiber", KLEIBER, "Q57640"),
+        ]
+    }
+
+    fn classical_mock() -> MockFetch {
+        let mut fetch = MockFetch::default();
+        for (_, name, mbid, item) in classical_people() {
+            let file = format!("{name}.jpg");
+            fetch = fetch
+                .json(
+                    &mb::artist_search_url(name),
+                    serde_json::json!({"artists": [{"id": mbid, "name": name, "score": 100}]}),
+                )
+                .json(
+                    &mb::artist_lookup_url(mbid),
+                    serde_json::json!({"id": mbid, "name": name, "type": "Person",
+                        "relations": [{"type": "wikidata",
+                            "url": {"resource": format!("https://www.wikidata.org/wiki/{item}")}}]}),
+                )
+                .json(
+                    &wiki::wikidata_entity_url(item),
+                    serde_json::json!({"entities": {item: {"sitelinks": {"enwiki": {"title": name}},
+                        "claims": {"P18": [{"mainsnak": {"datavalue": {"value": file}}}]}}}}),
+                )
+                .json(
+                    &wiki::wikipedia_extract_url("en", name),
+                    serde_json::json!({"query": {"pages": [{"title": name,
+                        "fullurl": format!("https://en.wikipedia.org/wiki/{}", name.replace(' ', "_")),
+                        "extract": format!("{name} was a musician.")}]}}),
+                )
+                // Commons is rate limiting this client.
+                .status(&wiki::commons_image_info_url(&file), 429);
+        }
+        fetch
+    }
+
+    /// Runs every stage's queue in turn, as the worker's loops do, until
+    /// no queue has anything it may run.
+    async fn drain(
+        enricher: &Enricher<MockFetch>,
+        settings: &EnrichmentSettings,
+        backoffs: &Backoffs,
+    ) -> Vec<(Stage, String, Outcome)> {
+        let mut ran = Vec::new();
+        loop {
+            let mut progressed = false;
+            for stage in Stage::ALL {
+                if let Step::Ran(task, outcome) = enricher
+                    .step(stage, settings, None, backoffs)
+                    .await
+                    .unwrap()
+                {
+                    ran.push((stage, task.entity_id, outcome));
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                return ran;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_busy_commons_does_not_hold_back_biographies() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            for (id, name, _, _) in classical_people() {
+                diesel::RunQueryDsl::execute(
+                    diesel::sql_query(
+                        "INSERT INTO artist_entity (id, name, normalized_name) VALUES (?, ?, ?)",
+                    )
+                    .bind::<diesel::sql_types::Text, _>(id)
+                    .bind::<diesel::sql_types::Text, _>(name)
+                    .bind::<diesel::sql_types::Text, _>(name.to_lowercase()),
+                    &mut connection,
+                )
+                .unwrap();
+            }
+            assert_eq!(store::seed_tasks(&mut connection).unwrap(), 3);
+        }
+        let enricher = Enricher {
+            fetch: classical_mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let backoffs = Backoffs::default();
+        let ran = drain(&enricher, &settings, &backoffs).await;
+
+        // Beethoven's photo request was refused first...
+        assert_eq!(
+            ran.iter()
+                .filter(|(stage, _, _)| *stage == Stage::Commons)
+                .collect::<Vec<_>>(),
+            [&(
+                Stage::Commons,
+                "beethoven".to_string(),
+                Outcome::Retry("HTTP 429".into())
+            )]
+        );
+        let now = Instant::now();
+        assert!(!backoffs.paused_for(Stage::Commons, now).is_zero());
+        for stage in [Stage::Musicbrainz, Stage::Wikidata, Stage::Wikipedia] {
+            assert!(backoffs.paused_for(stage, now).is_zero(), "{stage:?}");
+        }
+        // ...yet every biography arrived, and Commons was asked only once.
+        let mut connection = pool.get().unwrap();
+        for (id, name, _, _) in classical_people() {
+            let texts = store::load_texts(&mut connection, "artist", id).unwrap();
+            assert_eq!(texts.len(), 1, "{name}");
+            assert_eq!(texts[0].kind, "biography");
+            assert_eq!(texts[0].body, format!("{name} was a musician."));
+            assert_eq!(texts[0].license, "CC BY-SA 4.0");
+            let state = store::task_state(&mut connection, "artist", id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (state.status.as_str(), state.stage.as_str()),
+                ("pending", "commons")
+            );
+        }
+        let requests = enricher.fetch.requested();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|url| url.contains("commons.wikimedia.org"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|url| url.contains("musicbrainz.org"))
+                .count(),
+            6
+        );
+        assert_eq!(
+            store::stage_counts(&mut connection, Stage::Commons)
+                .unwrap()
+                .pending,
+            3
+        );
+        // The photo lookup is internal and never shown as a fact.
+        let profile = store::load_profile(&mut connection, "artist", "karajan")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            wikidata_links(&profile).image.as_deref(),
+            Some("Herbert von Karajan.jpg")
+        );
+    }
+
+    #[test]
+    fn each_host_backs_off_on_its_own() {
+        let backoffs = Backoffs::default();
+        let now = Instant::now();
+        let busy = Outcome::Retry("HTTP 429".into());
+        assert_eq!(backoffs.record(Stage::Commons, &busy, now), MIN_THROTTLE);
+        assert_eq!(backoffs.paused_for(Stage::Commons, now), MIN_THROTTLE);
+        assert!(backoffs.paused_for(Stage::Wikipedia, now).is_zero());
+        assert!(backoffs.paused_for(Stage::Musicbrainz, now).is_zero());
+        // A second refusal doubles only Commons' pause.
+        assert_eq!(
+            backoffs.record(Stage::Commons, &busy, now),
+            MIN_THROTTLE * 2
+        );
+        assert_eq!(
+            backoffs.record(Stage::Musicbrainz, &Outcome::Done, now),
+            Duration::ZERO
+        );
+        // The pause runs out, and a success resets it.
+        assert!(
+            backoffs
+                .paused_for(Stage::Commons, now + MIN_THROTTLE * 2)
+                .is_zero()
+        );
+        backoffs.record(Stage::Commons, &Outcome::Done, now);
+        assert!(backoffs.paused_for(Stage::Commons, now).is_zero());
     }
 
     #[test]

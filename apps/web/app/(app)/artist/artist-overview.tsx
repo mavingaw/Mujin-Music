@@ -1,6 +1,7 @@
 "use client";
 
 import type { ArtistAbout } from "@parson/music-sdk/types";
+import { enrichmentWaitingLabel } from "@parson/music-sdk";
 import Link from "next/link";
 import { EditorialText } from "@/features/library/credits/editorial-text";
 import { NoteEditor } from "@/features/library/credits/note-editor";
@@ -29,7 +30,7 @@ export function ArtistOverview({
             <p className="text-sm leading-6 text-zinc-500">
               {about.enrichment.enabled ? (
                 about.enrichment.task?.status === "pending" ? (
-                  "Parson is still looking this artist up."
+                  enrichmentWaitingLabel(about.enrichment.task, "artist")
                 ) : (
                   "No biography was found for this artist."
                 )
