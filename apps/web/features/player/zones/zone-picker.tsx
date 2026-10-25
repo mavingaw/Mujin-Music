@@ -1,25 +1,34 @@
 "use client";
 
 import {
+  anyZonePlaying,
+  deviceVolumeLabel,
+  dspSummary,
+  isDspActive,
   sleepTimerLabel,
   groupingPlan,
   orderZones,
   zoneKindLabel,
+  zoneQualityLabel,
   zoneSliderMax,
   zoneStatusLabel,
   type Zone,
 } from "@parson/music-sdk";
 import {
   ArrowRightLeft,
+  AudioLines,
   Check,
+  Cpu,
   Link2,
   Lock,
   Minus,
   Moon,
   MoreHorizontal,
+  Pause,
   Plus,
   RefreshCw,
   Settings2,
+  SlidersHorizontal,
   Unlink,
   Volume2,
   VolumeX,
@@ -65,6 +74,10 @@ function errorMessage(error: unknown, fallback: string): string {
     sonos_disabled: "Sonos support is turned off on this server.",
     private_zones_cannot_be_grouped:
       "Private zones stay out of groups. Turn off Private zone in its settings first.",
+    fixed_volume:
+      "This zone has fixed volume. Set the level on the amplifier, or choose another volume mode in Device setup.",
+    library_not_ready: "The library is still loading. Try again shortly.",
+    zone_device_error: "The device did not respond.",
   };
   return known[code] ?? code.replaceAll("_", " ");
 }
@@ -125,6 +138,8 @@ export function ZonePickerDialog({
   const [grouping, setGrouping] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
+  const [editFocus, setEditFocus] = useState<"dsp" | "device" | undefined>();
+  const [pausing, setPausing] = useState(false);
   const ordered = useMemo(
     () => orderZones(zones.zones, zones.localZoneId),
     [zones.localZoneId, zones.zones],
@@ -177,6 +192,41 @@ export function ZonePickerDialog({
               <Link2 className="h-3.5 w-3.5" />
               {grouping ? "Cancel grouping" : "Group zones"}
             </button>
+            <button
+              aria-label="Pause all zones"
+              className="flex h-8 items-center gap-1.5 rounded-full border border-white/15 px-3 text-xs text-zinc-300 hover:bg-white/10 disabled:opacity-40"
+              disabled={pausing || !anyZonePlaying(ordered)}
+              onClick={() =>
+                void run(async () => {
+                  setPausing(true);
+                  try {
+                    const paused = await zones.pauseAll();
+                    toast.success(
+                      paused === 1 ? "Paused 1 zone" : `Paused ${paused} zones`,
+                    );
+                  } finally {
+                    setPausing(false);
+                  }
+                }, "Could not pause every zone.")
+              }
+              type="button"
+            >
+              <Pause className="h-3.5 w-3.5" />
+              Pause all
+            </button>
+            {zones.outputs?.upnp.enabled && (
+              <button
+                className="flex h-8 items-center gap-1.5 rounded-full border border-white/15 px-3 text-xs text-zinc-300 hover:bg-white/10 disabled:opacity-50"
+                disabled={zones.busy}
+                onClick={() =>
+                  void run(zones.rescanOutputs, "Looking for renderers failed.")
+                }
+                type="button"
+              >
+                <AudioLines className="h-3.5 w-3.5" />
+                Find renderers
+              </button>
+            )}
             {zones.sonos?.enabled && (
               <button
                 className="flex h-8 items-center gap-1.5 rounded-full border border-white/15 px-3 text-xs text-zinc-300 hover:bg-white/10 disabled:opacity-50"
@@ -217,7 +267,11 @@ export function ZonePickerDialog({
                       : current.filter((id) => id !== zone.id),
                   )
                 }
-                onEdit={(value) => setEditing(value ? zone.id : null)}
+                editFocus={editFocus}
+                onEdit={(value, focus) => {
+                  setEditFocus(focus);
+                  setEditing(value ? zone.id : null);
+                }}
                 onSelect={() => {
                   zones.selectZone(zone.id);
                   onOpenChange(false);
@@ -279,22 +333,44 @@ export function ZonePickerDialog({
 }
 
 function ZoneFooterNotes() {
-  const { sonos } = useZones();
-  if (!sonos) return null;
+  const { sonos, outputs } = useZones();
+  if (!sonos && !outputs) return null;
+  const devices = outputs?.devices;
+  const upnp = outputs?.upnp;
   return (
-    <p className="border-t border-white/10 px-5 py-3 text-[11px] leading-4 text-zinc-500">
-      {sonos.enabled
-        ? sonos.players
-          ? `${sonos.players} Sonos ${sonos.players === 1 ? "room" : "rooms"} on this network. Stereo pairs count as one room.`
-          : "No Sonos found. Sonos must be on the same network as the Parson server, and the server must accept connections from it (UDP 1900 for discovery and the server port for audio)."
-        : "Sonos support is turned off on this server (PARSON_SONOS=off)."}
-    </p>
+    <div className="space-y-1 border-t border-white/10 px-5 py-3 text-[11px] leading-4 text-zinc-500">
+      {sonos && (
+        <p>
+          {sonos.enabled
+            ? sonos.players
+              ? `${sonos.players} Sonos ${sonos.players === 1 ? "room" : "rooms"} on this network. Stereo pairs count as one room.`
+              : "No Sonos found. Sonos must be on the same network as the Parson server, and the server must accept connections from it (UDP 1900 for discovery and the server port for audio)."
+            : "Sonos support is turned off on this server (PARSON_SONOS=off)."}
+        </p>
+      )}
+      {upnp?.enabled && (
+        <p>
+          {upnp.renderers
+            ? `${upnp.renderers} UPnP/DLNA ${upnp.renderers === 1 ? "renderer" : "renderers"} found.`
+            : "No UPnP/DLNA renderers found yet. They need to be on the server's network (UDP 1900)."}
+        </p>
+      )}
+      {devices && (
+        <p>
+          {devices.enabled && devices.backend
+            ? `${devices.devices} audio ${devices.devices === 1 ? "device" : "devices"} on the server's computer (${devices.backend}). Each one is its own zone.`
+            : (devices.note ??
+              "Audio devices of this computer show as zones in the Parson desktop app.")}
+        </p>
+      )}
+    </div>
   );
 }
 
 function ZoneRow({
   active,
   checked,
+  editFocus,
   editing,
   grouping,
   isLocal,
@@ -307,11 +383,12 @@ function ZoneRow({
 }: {
   active: boolean;
   checked: boolean;
+  editFocus?: "dsp" | "device";
   editing: boolean;
   grouping: boolean;
   isLocal: boolean;
   onCheck: (value: boolean) => void;
-  onEdit: (value: boolean) => void;
+  onEdit: (value: boolean, focus?: "dsp" | "device") => void;
   onSelect: () => void;
   onTransfer?: () => void;
   run: (task: () => Promise<unknown>, failure: string) => Promise<void>;
@@ -333,6 +410,9 @@ function ZoneRow({
       ? `Sonos · ${zone.group.members.length} rooms`
       : zone.device || zoneKindLabel(zone.kind);
   const groupable = zone.capabilities.group && zone.kind !== "linked";
+  const quality = zoneQualityLabel(zone);
+  const dspOn = isDspActive(zone.settings?.dsp);
+  const deviceVolume = deviceVolumeLabel(zone.volume);
   return (
     <li
       className={`rounded-xl border px-3 py-2.5 ${active ? "border-white/25 bg-white/[0.06]" : "border-white/[0.06] hover:border-white/15"} ${zone.grouped_into ? "ml-6" : ""}`}
@@ -376,6 +456,12 @@ function ZoneRow({
                 ) : (
                   <Badge tone="linked">Linked · not sample-synced</Badge>
                 ))}
+              {quality && (
+                <Badge tone={quality === "Bit-perfect" ? "synced" : "linked"}>
+                  {quality}
+                </Badge>
+              )}
+              {dspOn && <Badge>DSP</Badge>}
               {active && <Check className="h-3.5 w-3.5 text-white" />}
             </span>
             <span className="block truncate text-xs text-zinc-400">
@@ -402,7 +488,11 @@ function ZoneRow({
           </button>
         )}
         {!grouping && (
-          <ZoneMenu onEdit={() => onEdit(!editing)} run={run} zone={zone} />
+          <ZoneMenu
+            onEdit={(focus) => onEdit(!editing, focus)}
+            run={run}
+            zone={zone}
+          />
         )}
       </div>
       {!grouping && zone.volume && zone.capabilities.volume && (
@@ -431,6 +521,11 @@ function ZoneRow({
           }
           volume={zone.volume.level}
         />
+      )}
+      {!grouping && deviceVolume && (
+        <p className="mt-1 pl-12 text-[11px] tabular-nums text-zinc-600">
+          {deviceVolume}
+        </p>
       )}
       {!grouping && zone.group && zone.group.members.length > 1 && (
         <div className="mt-2 space-y-1 border-l border-white/10 pl-3">
@@ -504,6 +599,15 @@ function ZoneRow({
           </p>
         </div>
       )}
+      {!grouping && active && zone.output?.stream && (
+        <p className="mt-2 text-[11px] leading-4 text-zinc-400">
+          {[
+            zone.output.stream.source,
+            ...zone.output.stream.steps,
+            zone.output.stream.output,
+          ].join(" → ")}
+        </p>
+      )}
       {!grouping && active && zone.notes.length > 0 && (
         <ul className="mt-2 space-y-1">
           {zone.notes
@@ -516,6 +620,7 @@ function ZoneRow({
         </ul>
       )}
       <ZoneSettingsDialog
+        focus={editFocus}
         onOpenChange={(value) => onEdit(value)}
         open={editing}
         zone={zone}
@@ -633,7 +738,7 @@ function ZoneMenu({
   run,
   zone,
 }: {
-  onEdit: () => void;
+  onEdit: (focus?: "dsp" | "device") => void;
   run: (task: () => Promise<unknown>, failure: string) => Promise<void>;
   zone: Zone;
 }) {
@@ -683,9 +788,23 @@ function ZoneMenu({
             <DropdownMenuSeparator />
           </>
         )}
-        <DropdownMenuItem onSelect={onEdit}>
+        <DropdownMenuItem onSelect={() => onEdit()}>
           <Settings2 className="h-4 w-4" /> Zone settings
         </DropdownMenuItem>
+        {zone.settings?.supports.dsp && (
+          <DropdownMenuItem onSelect={() => onEdit("dsp")}>
+            <SlidersHorizontal className="h-4 w-4" /> DSP
+            <span className="ml-auto max-w-24 truncate text-[11px] text-zinc-500">
+              {dspSummary(zone.settings.dsp)}
+            </span>
+          </DropdownMenuItem>
+        )}
+        {(zone.settings?.supports.exclusive ||
+          zone.settings?.supports.max_format) && (
+          <DropdownMenuItem onSelect={() => onEdit("device")}>
+            <Cpu className="h-4 w-4" /> Device setup
+          </DropdownMenuItem>
+        )}
         {zone.group && (
           <DropdownMenuItem
             onSelect={() =>

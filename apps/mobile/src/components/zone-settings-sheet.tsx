@@ -2,8 +2,13 @@ import {
   CROSSFADE_CHOICES,
   LEVELING_ADJUSTMENT_RANGE,
   LEVELING_TARGET_RANGE,
+  SAMPLE_RATE_CHOICES,
   ZONE_ICONS,
+  deviceVolumeLabel,
+  dspSummary,
+  formatSampleRate,
   levelingModeLabel,
+  volumeModeLabel,
   zoneIconName,
   zoneSettingsDraft,
   zoneSettingsPatch,
@@ -11,7 +16,9 @@ import {
   type Zone,
   type ZoneIconName,
   type ZoneLevelingMode,
+  type ZoneDsp,
   type ZoneSettingsDraft,
+  type ZoneVolumeMode,
 } from "@parson/music-sdk";
 import {
   AudioWaveform,
@@ -136,6 +143,10 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
   const changed = Object.keys(patch).length > 0;
   const problem = zoneSettingsProblem(draft);
   const isThisPhone = zone.id === zones.localZoneId;
+  const updateDsp = (change: Partial<ZoneDsp>) =>
+    update({ dsp: { ...draft.dsp, ...change } });
+  const volumeModes = supports?.volume_modes ?? [];
+  const stream = zone.output?.stream;
   const defaultName = zone.settings?.default_name ?? zone.name;
   const min = draft.safety_min_volume ?? 0;
   const max = draft.safety_max_volume ?? 100;
@@ -343,10 +354,152 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
             <View style={styles.inline}>
               <Text style={styles.rowTitle}>Device range</Text>
               <Text style={styles.note}>
-                {zone.volume?.device_min ?? 0}–{zone.volume?.device_max ?? 100}{" "}
-                · reported by the device
+                {deviceVolumeLabel(zone.volume) ??
+                  `${zone.volume?.device_min ?? 0}–${zone.volume?.device_max ?? 100} · reported by the device`}
               </Text>
             </View>
+          </Section>
+        ) : null}
+
+        {supports?.dsp ? (
+          <Section title="DSP">
+            <View style={styles.switchRow}>
+              <View style={styles.switchText}>
+                <Text style={styles.rowTitle}>Use DSP</Text>
+                <Text style={styles.note}>{dspSummary(draft.dsp)}</Text>
+              </View>
+              <Switch
+                accessibilityLabel="DSP enabled"
+                onValueChange={(enabled) => updateDsp({ enabled })}
+                value={draft.dsp.enabled}
+              />
+            </View>
+            {draft.dsp.enabled ? (
+              <>
+                <Stepper
+                  label="Bass"
+                  onChange={(bass_db) => updateDsp({ bass_db })}
+                  range={{ min: -12, max: 12 }}
+                  text={signedLabel(draft.dsp.bass_db, "dB")}
+                  value={draft.dsp.bass_db}
+                />
+                <Stepper
+                  label="Treble"
+                  onChange={(treble_db) => updateDsp({ treble_db })}
+                  range={{ min: -12, max: 12 }}
+                  text={signedLabel(draft.dsp.treble_db, "dB")}
+                  value={draft.dsp.treble_db}
+                />
+                <Stepper
+                  label="Preamp"
+                  onChange={(preamp_db) => updateDsp({ preamp_db })}
+                  range={{ min: -24, max: 0 }}
+                  text={signedLabel(draft.dsp.preamp_db, "dB")}
+                  value={draft.dsp.preamp_db}
+                />
+                <View style={styles.switchRow}>
+                  <Text style={styles.rowTitle}>Headphone crossfeed</Text>
+                  <Switch
+                    accessibilityLabel="Headphone crossfeed"
+                    onValueChange={(crossfeed) => updateDsp({ crossfeed })}
+                    value={draft.dsp.crossfeed}
+                  />
+                </View>
+              </>
+            ) : null}
+          </Section>
+        ) : null}
+
+        {supports?.exclusive ||
+        supports?.max_format ||
+        volumeModes.length > 1 ? (
+          <Section title="Device setup">
+            {supports?.exclusive ? (
+              <View style={styles.switchRow}>
+                <View style={styles.switchText}>
+                  <Text style={styles.rowTitle}>Exclusive mode</Text>
+                  <Text style={styles.note}>
+                    Bit-perfect: the device runs at each file&apos;s own rate
+                    and depth, and other apps wait.
+                  </Text>
+                </View>
+                <Switch
+                  accessibilityLabel="Exclusive mode"
+                  onValueChange={(exclusive) => update({ exclusive })}
+                  value={draft.exclusive}
+                />
+              </View>
+            ) : null}
+            {volumeModes.length > 1 ? (
+              <>
+                <Text style={[styles.label, styles.spaced]}>
+                  Volume control
+                </Text>
+                <Chips
+                  onSelect={(value) =>
+                    update({ volume_mode: value as ZoneVolumeMode })
+                  }
+                  options={volumeModes.map((mode) => ({
+                    value: mode,
+                    label: volumeModeLabel(mode).split(" (")[0]!,
+                  }))}
+                  selected={draft.volume_mode}
+                />
+                <Text style={styles.note}>
+                  {volumeModeLabel(draft.volume_mode)}
+                </Text>
+              </>
+            ) : null}
+            {supports?.max_format ? (
+              <>
+                <Text style={[styles.label, styles.spaced]}>
+                  Max sample rate
+                </Text>
+                <Chips
+                  onSelect={(value) =>
+                    update({
+                      max_sample_rate: value === "none" ? null : Number(value),
+                    })
+                  }
+                  options={[
+                    { value: "none", label: "Device max" },
+                    ...SAMPLE_RATE_CHOICES.map((rate) => ({
+                      value: String(rate),
+                      label: formatSampleRate(rate),
+                    })),
+                  ]}
+                  selected={
+                    draft.max_sample_rate === null
+                      ? "none"
+                      : String(draft.max_sample_rate)
+                  }
+                />
+              </>
+            ) : null}
+          </Section>
+        ) : null}
+
+        {zone.output ? (
+          <Section title="Signal path">
+            <Text style={styles.note}>{zone.output.note}</Text>
+            {stream ? (
+              <>
+                <Text
+                  style={[
+                    styles.rowTitle,
+                    styles.spaced,
+                    { color: stream.bit_perfect ? palette.success : "#fbbf24" },
+                  ]}
+                >
+                  {stream.bit_perfect ? "Bit-perfect" : "Processed"}
+                </Text>
+                {[stream.source, ...stream.steps, stream.output].map((step) => (
+                  <Text key={step} style={styles.note}>
+                    {step}
+                  </Text>
+                ))}
+              </>
+            ) : null}
           </Section>
         ) : null}
 

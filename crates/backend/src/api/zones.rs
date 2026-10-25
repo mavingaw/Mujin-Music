@@ -9,14 +9,15 @@ use serde::Deserialize;
 use crate::api::auth::authenticated_user_id;
 use crate::api::cast::{self, CastZoneSnapshot};
 use crate::library::state::{LibraryCache, LibraryLifecycle};
+use crate::outputs::FormatLimits;
 use crate::persistence::connection::DbPool;
 use crate::zones::leveling::LevelBy;
 use crate::zones::service::now_ms;
 use crate::zones::service::{StreamLeveling, zone_media_scope};
 use crate::zones::{
-    ClientRegistration, PlaybackSnapshot, RepeatMode, VolumeLimits, Zone, ZoneCapabilities,
-    ZoneCommand, ZoneError, ZoneEvent, ZoneKind, ZoneNowPlaying, ZoneQueue, ZoneService,
-    ZoneSettingsPatch, ZoneSettingsView, ZoneSource, ZoneStatus, ZoneVolume,
+    ClientRegistration, PlaybackSnapshot, RepeatMode, Viewer, VolumeLimits, Zone, ZoneCapabilities,
+    ZoneCommand, ZoneError, ZoneEvent, ZoneKind, ZoneNowPlaying, ZoneOutputInfo, ZoneQueue,
+    ZoneService, ZoneSettingsPatch, ZoneSettingsView, ZoneSource, ZoneStatus, ZoneVolume,
 };
 
 /// Header a Parson app sends with its own client zone device id, so the
@@ -27,14 +28,35 @@ const MAX_LOUDNESS_SONGS: usize = 20;
 /// Unmeasured songs one request waits for; the rest measure in the background.
 const MAX_LOUDNESS_MEASURED_NOW: usize = 2;
 
-fn viewer_device(request: &HttpRequest) -> Option<String> {
-    request
-        .headers()
-        .get(ZONE_DEVICE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| crate::zones::service::client_zone_id(value).is_some())
-        .map(str::to_string)
+/// Who sent a request: the app's zone device and whether it came from
+/// this computer (private audio-device zones only show there).
+struct RequestViewer {
+    device: Option<String>,
+    local: bool,
+}
+
+impl RequestViewer {
+    fn view(&self) -> Viewer<'_> {
+        Viewer {
+            device: self.device.as_deref(),
+            local: self.local,
+        }
+    }
+}
+
+fn viewer_device(request: &HttpRequest) -> RequestViewer {
+    RequestViewer {
+        device: request
+            .headers()
+            .get(ZONE_DEVICE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| crate::zones::service::client_zone_id(value).is_some())
+            .map(str::to_string),
+        local: request
+            .peer_addr()
+            .is_some_and(|address| address.ip().is_loopback()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -192,8 +214,18 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
         },
         sleep_timer: None,
         settings: ZoneSettingsView::unsupported(&snapshot.receiver_name),
+        output: Some(ZoneOutputInfo {
+            max_sample_rate: FormatLimits::CHROMECAST.max_sample_rate,
+            max_bit_depth: FormatLimits::CHROMECAST.max_bit_depth,
+            formats: FormatLimits::CHROMECAST.formats(),
+            note: FormatLimits::CHROMECAST.note("Chromecast"),
+            exclusive: None,
+            volume_mode: None,
+            stream: None,
+        }),
         notes: vec![
-            "Chromecast playback is started from the Parson mobile app; Chromecast groups are made in Google Home.".to_string(),
+            FormatLimits::CHROMECAST.note("Chromecast"),
+            "Chromecast playback is started from the Parson mobile app; Chromecast groups are made in Google Home and show up as their own zone.".to_string(),
         ],
     }
 }
@@ -279,7 +311,7 @@ async fn all_zones(
     service: &ZoneService,
     pool: &DbPool,
     user_id: i32,
-    viewer: Option<&str>,
+    viewer: Viewer<'_>,
     cache: Option<&LibraryCache>,
 ) -> Vec<Zone> {
     let mut zones = service.list_for(user_id, viewer, cache);
@@ -306,7 +338,7 @@ async fn list_zones(
         &service,
         pool.get_ref(),
         user_id,
-        viewer.as_deref(),
+        viewer.view(),
         cache.as_deref(),
     )
     .await;
@@ -323,6 +355,10 @@ async fn list_zones(
         "zones": zones,
         "server_time_ms": now_ms(),
         "sonos": sonos.unwrap_or_else(|| serde_json::json!({"enabled": false, "players": 0, "last_error": null})),
+        "outputs": service
+            .outputs()
+            .map(|outputs| outputs.status())
+            .unwrap_or_else(|| crate::outputs::Outputs::default().status()),
     }))
 }
 
@@ -440,8 +476,8 @@ async fn transfer(
         Err(response) => return response,
     };
     let viewer = viewer_device(&request);
-    if !service.visible_to(&form.from, viewer.as_deref())
-        || !service.visible_to(&form.to, viewer.as_deref())
+    if !service.visible_to(&form.from, viewer.view())
+        || !service.visible_to(&form.to, viewer.view())
     {
         return error_response(ZoneError::NotFound);
     }
@@ -483,7 +519,7 @@ async fn transfer(
     match result {
         Ok(()) => {
             let zone = service
-                .list_for(user_id, viewer.as_deref(), cache.as_deref())
+                .list_for(user_id, viewer.view(), cache.as_deref())
                 .into_iter()
                 .find(|zone| zone.id == form.to);
             HttpResponse::Ok().json(serde_json::json!({ "zone": zone }))
@@ -506,7 +542,7 @@ async fn create_group(
     if form
         .zone_ids
         .iter()
-        .any(|id| !service.visible_to(id, viewer.as_deref()))
+        .any(|id| !service.visible_to(id, viewer.view()))
     {
         return error_response(ZoneError::NotFound);
     }
@@ -597,6 +633,54 @@ async fn sonos_discover(request: HttpRequest, service: web::Data<ZoneService>) -
     }
 }
 
+/// Roon's "Pause all": pauses every playing zone this viewer can see.
+#[post("/pause-all")]
+async fn pause_all(
+    request: HttpRequest,
+    service: web::Data<ZoneService>,
+    pool: web::Data<DbPool>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(user_id) => user_id,
+        Err(response) => return response,
+    };
+    let viewer = viewer_device(&request);
+    let cache = library_cache(&lifecycle).await;
+    let mut paused = service
+        .pause_all(user_id, viewer.view(), cache.as_deref())
+        .await;
+    if let Some(snapshot) = cast_snapshot(pool.get_ref(), user_id).await
+        && snapshot.playing
+    {
+        let pool = pool.get_ref().clone();
+        let paused_cast =
+            web::block(move || cast_command(&pool, user_id, &snapshot, &ZoneCommand::Pause))
+                .await
+                .is_ok_and(|result| result.is_ok());
+        if paused_cast {
+            paused += 1;
+        }
+    }
+    HttpResponse::Ok().json(serde_json::json!({ "paused": paused }))
+}
+
+/// Looks for UPnP renderers and audio devices now.
+#[post("/outputs/discover")]
+async fn outputs_discover(request: HttpRequest, service: web::Data<ZoneService>) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    let Some(outputs) = service.outputs().cloned() else {
+        return HttpResponse::Ok().json(crate::outputs::Outputs::default().status());
+    };
+    outputs.discover().await;
+    for renderer in outputs.renderers() {
+        renderer.poll().await;
+    }
+    HttpResponse::Ok().json(outputs.status())
+}
+
 #[post("/{zone_id}/commands")]
 async fn send_command(
     request: HttpRequest,
@@ -614,7 +698,7 @@ async fn send_command(
     if let Err(code) = command.validate() {
         return error_response(ZoneError::Invalid(code));
     }
-    if !service.visible_to(&zone_id, viewer_device(&request).as_deref()) {
+    if !service.visible_to(&zone_id, viewer_device(&request).view()) {
         return error_response(ZoneError::NotFound);
     }
     let result = if zone_id.starts_with("cast:") {
@@ -676,18 +760,12 @@ async fn update_settings(
         None
     };
     match service
-        .update_settings(
-            user_id,
-            &zone_id,
-            patch,
-            viewer.as_deref(),
-            cache.as_deref(),
-        )
+        .update_settings(user_id, &zone_id, patch, viewer.view(), cache.as_deref())
         .await
     {
         Ok(settings) => {
             let zone = service
-                .list_for(user_id, viewer.as_deref(), None)
+                .list_for(user_id, viewer.view(), None)
                 .into_iter()
                 .find(|zone| zone.id == *zone_id);
             HttpResponse::Ok().json(serde_json::json!({
@@ -764,7 +842,7 @@ async fn sleep_timer(
         Ok(user_id) => user_id,
         Err(response) => return response,
     };
-    if !service.visible_to(&zone_id, viewer_device(&request).as_deref()) {
+    if !service.visible_to(&zone_id, viewer_device(&request).view()) {
         return error_response(ZoneError::NotFound);
     }
     match service.set_sleep_timer(user_id, &zone_id, form.minutes) {
@@ -817,6 +895,61 @@ pub(crate) async fn zone_media(
     crate::api::library::stream_sonos_compatible(&request, &song_id, &lifecycle, gain).await
 }
 
+#[derive(Deserialize)]
+pub(crate) struct RenderMediaQuery {
+    zone: String,
+    expires: i64,
+    signature: String,
+}
+
+/// Signed media for UPnP renderers: the zone's format limits, leveling and
+/// DSP decide whether the original file or a conversion is served.
+pub(crate) async fn render_media(
+    request: HttpRequest,
+    song_id: web::Path<String>,
+    query: web::Query<RenderMediaQuery>,
+    service: web::Data<ZoneService>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    let song_id = song_id.into_inner();
+    if query.expires < chrono::Utc::now().timestamp()
+        || !cast::verify_media_signature(
+            &crate::zones::service::render_scope(&query.zone),
+            &song_id,
+            query.expires,
+            &query.signature,
+        )
+    {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "zone_url_invalid"}));
+    }
+    let Some(cache) = library_cache(&lifecycle).await else {
+        return HttpResponse::ServiceUnavailable()
+            .json(serde_json::json!({"error": "library_unavailable"}));
+    };
+    let Some(stream) = service.hosted_stream(&query.zone, &song_id, &cache) else {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"error": "zone_queue_changed"}));
+    };
+    let gain = match stream.leveling {
+        Some(leveling) => Some(
+            service
+                .stream_gain(&cache, &song_id, leveling)
+                .await
+                .unwrap_or(0.0),
+        ),
+        None => None,
+    };
+    crate::api::library::stream_renderer_compatible(
+        &request,
+        &song_id,
+        &lifecycle,
+        stream.limits,
+        gain,
+        stream.dsp,
+    )
+    .await
+}
+
 /// UPnP GENA `NOTIFY` from a Sonos player: refresh that player's group now.
 pub(crate) async fn sonos_notify(
     uuid: web::Path<String>,
@@ -843,6 +976,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(delete_group)
             .service(sonos_status)
             .service(sonos_discover)
+            .service(pause_all)
+            .service(outputs_discover)
             .service(send_command)
             .service(update_settings)
             .service(loudness)
@@ -855,6 +990,14 @@ pub fn configure_device_routes(cfg: &mut web::ServiceConfig) {
     cfg.route(
         "/api/v1/zones/media/{song}/stream",
         web::get().to(zone_media),
+    )
+    .route(
+        "/api/v1/zones/render/{song}/stream",
+        web::get().to(render_media),
+    )
+    .route(
+        "/api/v1/zones/render/{song}/stream",
+        web::head().to(render_media),
     )
     .route(
         "/api/v1/zones/media/{song}/stream",

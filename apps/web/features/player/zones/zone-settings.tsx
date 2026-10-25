@@ -1,22 +1,31 @@
 "use client";
 
 import {
+  BIT_DEPTH_CHOICES,
   CROSSFADE_CHOICES,
   LEVELING_ADJUSTMENT_RANGE,
   LEVELING_TARGET_RANGE,
+  SAMPLE_RATE_CHOICES,
   ZONE_ICONS,
+  deviceVolumeLabel,
+  dspEffectivePreamp,
+  dspSummary,
+  formatSampleRate,
   levelingModeLabel,
+  volumeModeLabel,
   zoneIconName,
   zoneKindLabel,
   zoneSettingsDraft,
   zoneSettingsPatch,
   zoneSettingsProblem,
   type Zone,
+  type ZoneDsp,
   type ZoneLevelingMode,
   type ZoneSettingsDraft,
+  type ZoneVolumeMode,
 } from "@parson/music-sdk";
-import { Lock, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { BadgeCheck, Lock, RotateCcw, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -64,16 +73,27 @@ export function errorText(error: unknown, fallback: string): string {
       "The comfort limit must sit inside the safety limits.",
     invalid_safety_limits: "The safety minimum must be below the maximum.",
     zone_name_required: "Give the zone a name.",
+    dsp_not_supported_here: "DSP is not available on this zone.",
+    exclusive_mode_is_for_audio_devices:
+      "Exclusive mode is for audio devices of this computer.",
+    volume_mode_not_supported_here: "This zone cannot use that volume mode.",
+    max_format_not_supported_here:
+      "This zone does not take a maximum sample rate.",
+    fixed_volume:
+      "This zone has fixed volume. Change it on the amplifier, or pick another volume mode in Device setup.",
   };
   return (code && known[code]) || (code ? code.replaceAll("_", " ") : fallback);
 }
 
 /** Roon-style Zone settings: name, icon, crossfade, leveling, volume limits and privacy. */
 export function ZoneSettingsDialog({
+  focus,
   open,
   onOpenChange,
   zone,
 }: {
+  /** Section to scroll to (the picker's DSP and Device setup entries). */
+  focus?: "dsp" | "device";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   zone: Zone | null;
@@ -83,6 +103,7 @@ export function ZoneSettingsDialog({
       <DialogContent className="max-w-lg gap-0 p-0 sm:p-0">
         {zone && (
           <ZoneSettingsForm
+            focus={focus}
             key={zone.id}
             onDone={() => onOpenChange(false)}
             zone={zone}
@@ -94,12 +115,21 @@ export function ZoneSettingsDialog({
 }
 
 function ZoneSettingsForm({
+  focus,
   onDone,
   zone,
 }: {
+  focus?: "dsp" | "device";
   onDone: () => void;
   zone: Zone;
 }) {
+  const dspRef = useRef<HTMLDivElement>(null);
+  const deviceRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const target =
+      focus === "dsp" ? dspRef : focus === "device" ? deviceRef : null;
+    target?.current?.scrollIntoView({ block: "start" });
+  }, [focus]);
   const zones = useZones();
   const initial = useMemo(() => zoneSettingsDraft(zone), [zone]);
   const [draft, setDraft] = useState<ZoneSettingsDraft>(initial);
@@ -120,10 +150,21 @@ function ZoneSettingsForm({
     volume_limits: Boolean(zone.volume),
     private: false,
   };
+  const volumeModes = supports.volume_modes ?? [];
+  const hasDeviceSetup =
+    Boolean(supports.exclusive) ||
+    Boolean(supports.max_format) ||
+    volumeModes.length > 1;
+  const updateDsp = (change: Partial<ZoneDsp>) =>
+    update({ dsp: { ...draft.dsp, ...change } });
+  // Audio devices are made private from the computer they are attached to;
+  // the server checks.
+  const canMakePrivate = isThisDeviceZone(zone, zones.localZoneId);
   const patch = zoneSettingsPatch(initial, draft);
   const changed = Object.keys(patch).length > 0;
   const problem = zoneSettingsProblem(draft);
   const isThisDevice = zone.id === zones.localZoneId;
+  const deviceVolume = deviceVolumeLabel(zone.volume);
   const defaultName = settings?.default_name ?? zone.name;
   const safetyMin = draft.safety_min_volume ?? 0;
   const safetyMax = draft.safety_max_volume ?? 100;
@@ -382,28 +423,207 @@ function ZoneSettingsForm({
                   />
                 </div>
               </div>
-              <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-zinc-200">Device range</span>
-                <span className="text-xs tabular-nums text-zinc-500">
-                  {zone.volume?.device_min ?? 0}–
-                  {zone.volume?.device_max ?? 100}
-                  {" · reported by the device"}
+                <span className="text-right text-xs tabular-nums text-zinc-500">
+                  {deviceVolume ??
+                    `${zone.volume?.device_min ?? 0}–${zone.volume?.device_max ?? 100} · reported by the device`}
                 </span>
               </div>
             </div>
           </Section>
         )}
 
+        {supports.dsp && (
+          <div ref={dspRef}>
+            <Section title="DSP">
+              <label className="flex items-center gap-2 text-sm text-zinc-200">
+                <Checkbox
+                  aria-label="DSP enabled"
+                  checked={draft.dsp.enabled}
+                  onCheckedChange={(value) =>
+                    updateDsp({ enabled: value === true })
+                  }
+                />
+                Use DSP on this zone
+              </label>
+              <div
+                className={`space-y-3 rounded-lg border border-white/[0.06] p-3 ${draft.dsp.enabled ? "" : "opacity-50"}`}
+              >
+                <SliderRow
+                  label="Bass"
+                  max={12}
+                  min={-12}
+                  onChange={(value) => updateDsp({ bass_db: value })}
+                  signed
+                  unit="dB"
+                  value={draft.dsp.bass_db}
+                />
+                <SliderRow
+                  label="Treble"
+                  max={12}
+                  min={-12}
+                  onChange={(value) => updateDsp({ treble_db: value })}
+                  signed
+                  unit="dB"
+                  value={draft.dsp.treble_db}
+                />
+                <SliderRow
+                  label="Preamp"
+                  max={0}
+                  min={-24}
+                  onChange={(value) => updateDsp({ preamp_db: value })}
+                  unit="dB"
+                  value={draft.dsp.preamp_db}
+                />
+                <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <Checkbox
+                    aria-label="Headphone crossfeed"
+                    checked={draft.dsp.crossfeed}
+                    onCheckedChange={(value) =>
+                      updateDsp({ crossfeed: value === true })
+                    }
+                  />
+                  Headphone crossfeed
+                </label>
+                <p className="text-[11px] leading-4 text-zinc-500">
+                  Bass is a shelf at 100 Hz, treble at 10 kHz. Headroom: the
+                  level drops by the largest boost (
+                  {dspEffectivePreamp(draft.dsp)} dB now) so EQ never clips.
+                  Now: {dspSummary(draft.dsp)}.
+                </p>
+              </div>
+            </Section>
+          </div>
+        )}
+
+        {hasDeviceSetup && (
+          <div ref={deviceRef}>
+            <Section title="Device setup">
+              {supports.exclusive && (
+                <label className="flex items-start gap-2 text-sm text-zinc-200">
+                  <Checkbox
+                    aria-label="Exclusive mode"
+                    checked={draft.exclusive}
+                    className="mt-0.5"
+                    onCheckedChange={(value) =>
+                      update({ exclusive: value === true })
+                    }
+                  />
+                  <span>
+                    Exclusive mode (bit-perfect)
+                    <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">
+                      Opens the device directly at each file&apos;s own sample
+                      rate and bit depth. Other apps cannot use it while Parson
+                      plays.
+                    </span>
+                  </span>
+                </label>
+              )}
+              {volumeModes.length > 1 && (
+                <Row label="Volume control">
+                  <Select
+                    onValueChange={(value) =>
+                      update({ volume_mode: value as ZoneVolumeMode })
+                    }
+                    value={draft.volume_mode}
+                  >
+                    <SelectTrigger
+                      aria-label="Volume control"
+                      className="h-9 w-64"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {volumeModes.map((mode) => (
+                        <SelectItem key={mode} value={mode}>
+                          {volumeModeLabel(mode)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Row>
+              )}
+              {supports.max_format && (
+                <>
+                  <Row label="Max sample rate">
+                    <Select
+                      onValueChange={(value) =>
+                        update({
+                          max_sample_rate:
+                            value === "none" ? null : Number(value),
+                        })
+                      }
+                      value={
+                        draft.max_sample_rate === null
+                          ? "none"
+                          : String(draft.max_sample_rate)
+                      }
+                    >
+                      <SelectTrigger
+                        aria-label="Max sample rate"
+                        className="h-9 w-44"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Device maximum</SelectItem>
+                        {SAMPLE_RATE_CHOICES.map((rate) => (
+                          <SelectItem key={rate} value={String(rate)}>
+                            {formatSampleRate(rate)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Row>
+                  <Row label="Max bit depth">
+                    <Select
+                      onValueChange={(value) =>
+                        update({
+                          max_bit_depth:
+                            value === "none" ? null : Number(value),
+                        })
+                      }
+                      value={
+                        draft.max_bit_depth === null
+                          ? "none"
+                          : String(draft.max_bit_depth)
+                      }
+                    >
+                      <SelectTrigger
+                        aria-label="Max bit depth"
+                        className="h-9 w-44"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Device maximum</SelectItem>
+                        {BIT_DEPTH_CHOICES.map((depth) => (
+                          <SelectItem key={depth} value={String(depth)}>
+                            {depth}-bit
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Row>
+                </>
+              )}
+            </Section>
+          </div>
+        )}
+
+        {zone.output && <SignalPath zone={zone} />}
+
         {supports.private && (
           <Section title="Privacy">
             <label
-              className={`flex items-start gap-2 text-sm ${isThisDevice ? "text-zinc-200" : "text-zinc-500"}`}
+              className={`flex items-start gap-2 text-sm ${canMakePrivate ? "text-zinc-200" : "text-zinc-500"}`}
             >
               <Checkbox
                 aria-label="Private zone"
                 checked={draft.private}
                 className="mt-0.5"
-                disabled={!isThisDevice}
+                disabled={!canMakePrivate}
                 onCheckedChange={(value) => update({ private: value === true })}
               />
               <span>
@@ -411,9 +631,11 @@ function ZoneSettingsForm({
                   <Lock className="h-3.5 w-3.5" /> Private zone
                 </span>
                 <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">
-                  {isThisDevice
-                    ? "Only this device sees and controls this zone. Other remotes cannot see it, and it stays out of groups."
-                    : "Set this on the device the zone runs on."}
+                  {zone.kind === "device"
+                    ? "Only the computer this device is attached to sees and controls it. Remotes cannot see it, and it stays out of groups."
+                    : isThisDevice
+                      ? "Only this device sees and controls this zone. Other remotes cannot see it, and it stays out of groups."
+                      : "Set this on the device the zone runs on."}
                 </span>
               </span>
             </label>
@@ -452,6 +674,49 @@ function ZoneSettingsForm({
         </div>
       </div>
     </form>
+  );
+}
+
+function isThisDeviceZone(zone: Zone, localZoneId: string | null): boolean {
+  return zone.kind === "device" || zone.id === localZoneId;
+}
+
+/** Format limits and the playing track's path from file to device. */
+export function SignalPath({ zone }: { zone: Zone }) {
+  const output = zone.output;
+  if (!output) return null;
+  const stream = output.stream;
+  return (
+    <Section title="Signal path">
+      <p className="text-[11px] leading-4 text-zinc-400">{output.note}</p>
+      {stream ? (
+        <div className="rounded-lg border border-white/[0.06] p-3 text-xs">
+          <p
+            className={`mb-2 flex items-center gap-1.5 font-medium ${stream.bit_perfect ? "text-emerald-300" : "text-amber-300"}`}
+          >
+            {stream.bit_perfect ? (
+              <BadgeCheck className="h-3.5 w-3.5" />
+            ) : (
+              <TriangleAlert className="h-3.5 w-3.5" />
+            )}
+            {stream.bit_perfect ? "Bit-perfect" : "Processed"}
+          </p>
+          <ol className="space-y-1 border-l border-white/10 pl-3 text-zinc-300">
+            <li>{stream.source}</li>
+            {stream.steps.map((step) => (
+              <li className="text-zinc-400" key={step}>
+                {step}
+              </li>
+            ))}
+            <li>{stream.output}</li>
+          </ol>
+        </div>
+      ) : (
+        <p className="text-[11px] text-zinc-600">
+          Nothing is playing here right now.
+        </p>
+      )}
+    </Section>
   );
 }
 

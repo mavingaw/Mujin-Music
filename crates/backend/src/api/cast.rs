@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::OnceLock;
 
 use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
@@ -244,20 +243,6 @@ pub(crate) fn encoded(value: &str) -> String {
     utf8_percent_encode(value, URL_COMPONENT).to_string()
 }
 
-fn cast_content_type(path: &str) -> &'static str {
-    match Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("mp3") => "audio/mpeg",
-        Some("aac") => "audio/aac",
-        Some("m4a") | Some("mp4") => "audio/mp4",
-        _ => "audio/mpeg",
-    }
-}
-
 fn valid_receiver_field(value: &str) -> bool {
     !value.trim().is_empty()
         && value.trim() == value
@@ -377,7 +362,12 @@ fn hydrate_response(
                 album: album.name.clone(),
                 artwork_url,
                 media_url,
-                content_type: cast_content_type(&song.path),
+                content_type: crate::api::library::renderer_stream_plan(
+                    song,
+                    crate::outputs::FormatLimits::CHROMECAST,
+                    false,
+                )
+                .mime_type,
                 duration_ms: (song.duration.max(0.0) * 1_000.0).round() as i64,
             })
         })

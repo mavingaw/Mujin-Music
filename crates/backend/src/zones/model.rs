@@ -23,6 +23,11 @@ pub enum ZoneKind {
     Mobile,
     Chromecast,
     Sonos,
+    /// A UPnP/DLNA media renderer on the network.
+    Upnp,
+    /// An audio output (USB DAC, built-in, HDMI) of the machine running the
+    /// Parson server, normally the desktop app's own computer.
+    Device,
     Linked,
 }
 
@@ -33,8 +38,15 @@ impl ZoneKind {
             Self::Web | Self::Desktop | Self::Mobile => "parson",
             Self::Chromecast => "chromecast",
             Self::Sonos => "sonos",
+            Self::Upnp => "upnp",
+            Self::Device => "device",
             Self::Linked => "linked",
         }
+    }
+
+    /// Zones whose queue the server holds and plays track by track.
+    pub fn is_hosted(self) -> bool {
+        matches!(self, Self::Upnp | Self::Device)
     }
 
     pub fn is_client(self) -> bool {
@@ -174,6 +186,26 @@ pub struct ZoneVolume {
     pub device_min: u8,
     pub device_max: u8,
     pub step: u8,
+    /// The device's own volume scale, when it reports one (a DAC's mixer in
+    /// dB, a renderer's 0..30 steps).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_range: Option<DeviceVolumeRange>,
+}
+
+/// A volume scale as the device reports it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeviceVolumeRange {
+    pub min: f32,
+    pub max: f32,
+    pub step: f32,
+    /// `dB` or `steps`.
+    pub unit: &'static str,
+    /// The device changes its own gain (a DAC mixer, a renderer's
+    /// amplifier), so the samples Parson sends stay untouched.
+    pub hardware: bool,
+    /// The device's current value on this scale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<f32>,
 }
 
 impl ZoneVolume {
@@ -187,6 +219,7 @@ impl ZoneVolume {
             device_min: 0,
             device_max: 100,
             step: 2,
+            device_range: None,
         }
     }
 }
@@ -259,6 +292,176 @@ pub struct ZoneSettingsSupport {
     pub volume_limits: bool,
     /// Only Parson apps can be private (they belong to one device).
     pub private: bool,
+    /// Per-zone DSP (preamp, bass, treble, headphone crossfeed).
+    pub dsp: bool,
+    /// Exclusive (bit-perfect) access to an audio device.
+    pub exclusive: bool,
+    /// Volume modes this zone can use; empty when fixed by the device.
+    pub volume_modes: Vec<VolumeMode>,
+    /// A maximum sample rate and bit depth can be set (device setup).
+    pub max_format: bool,
+}
+
+/// How a server-driven zone changes volume.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeMode {
+    /// The device's own volume control (a DAC mixer or the renderer's
+    /// amplifier): samples stay bit-perfect.
+    #[default]
+    Hardware,
+    /// Parson scales the samples: works everywhere, not bit-perfect.
+    Software,
+    /// No volume control: bit-perfect, set the volume on the amplifier.
+    Fixed,
+}
+
+impl VolumeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hardware => "hardware",
+            Self::Software => "software",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hardware" => Some(Self::Hardware),
+            "software" => Some(Self::Software),
+            "fixed" => Some(Self::Fixed),
+            _ => None,
+        }
+    }
+}
+
+/// Sample rates a maximum can be set to.
+pub const SAMPLE_RATE_CHOICES: &[u32] = &[
+    44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000,
+];
+pub const BIT_DEPTH_CHOICES: &[u8] = &[16, 24, 32];
+pub const DSP_GAIN_RANGE: std::ops::RangeInclusive<i8> = -12..=12;
+pub const DSP_PREAMP_RANGE: std::ops::RangeInclusive<i8> = -24..=0;
+
+/// Per-zone DSP, applied server-side for zones the server plays (devices,
+/// UPnP renderers) and by the web and desktop apps for their own zone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ZoneDsp {
+    pub enabled: bool,
+    /// Extra attenuation in dB (0 or less).
+    pub preamp_db: i8,
+    /// Low shelf at 100 Hz, in dB.
+    pub bass_db: i8,
+    /// High shelf at 10 kHz, in dB.
+    pub treble_db: i8,
+    /// Headphone crossfeed (Bauer-style) for less extreme stereo.
+    pub crossfeed: bool,
+}
+
+impl ZoneDsp {
+    /// Whether any processing happens.
+    pub fn is_active(&self) -> bool {
+        self.enabled
+            && (self.preamp_db != 0 || self.bass_db != 0 || self.treble_db != 0 || self.crossfeed)
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !DSP_PREAMP_RANGE.contains(&self.preamp_db) {
+            return Err("invalid_dsp_preamp");
+        }
+        if !DSP_GAIN_RANGE.contains(&self.bass_db) || !DSP_GAIN_RANGE.contains(&self.treble_db) {
+            return Err("invalid_dsp_gain");
+        }
+        Ok(())
+    }
+
+    /// Headroom management: the level drops by the largest boost so EQ
+    /// never clips, unless the preamp already lowers it further.
+    pub fn effective_preamp_db(&self) -> i8 {
+        let boost = self.bass_db.max(self.treble_db).max(0);
+        self.preamp_db.min(-boost)
+    }
+
+    /// The ffmpeg filter chain, or `None` when nothing is processed.
+    pub fn ffmpeg_filter(&self) -> Option<String> {
+        if !self.is_active() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        let preamp = self.effective_preamp_db();
+        if preamp != 0 {
+            parts.push(format!("volume={preamp}dB"));
+        }
+        if self.bass_db != 0 {
+            parts.push(format!("bass=g={}:f=100:t=q:w=0.707", self.bass_db));
+        }
+        if self.treble_db != 0 {
+            parts.push(format!("treble=g={}:f=10000:t=q:w=0.707", self.treble_db));
+        }
+        if self.crossfeed {
+            parts.push("crossfeed=strength=0.3:range=0.5".to_string());
+        }
+        Some(parts.join(","))
+    }
+
+    /// Short description for signal paths, e.g. `Bass +3 dB, Crossfeed`.
+    pub fn summary(&self) -> String {
+        let signed = |value: i8| {
+            if value > 0 {
+                format!("+{value}")
+            } else {
+                format!("\u{2212}{}", value.unsigned_abs())
+            }
+        };
+        let mut parts = Vec::new();
+        let preamp = self.effective_preamp_db();
+        if preamp != 0 {
+            parts.push(format!("Preamp {} dB", signed(preamp)));
+        }
+        if self.bass_db != 0 {
+            parts.push(format!("Bass {} dB", signed(self.bass_db)));
+        }
+        if self.treble_db != 0 {
+            parts.push(format!("Treble {} dB", signed(self.treble_db)));
+        }
+        if self.crossfeed {
+            parts.push("Crossfeed".to_string());
+        }
+        parts.join(", ")
+    }
+}
+
+/// What a zone can play natively, and what happens to everything else.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneOutputInfo {
+    pub max_sample_rate: u32,
+    pub max_bit_depth: u8,
+    /// Formats played as-is, e.g. `FLAC`, `MP3`.
+    pub formats: Vec<&'static str>,
+    /// "Plays up to X kHz/Y-bit, converts the rest" in words.
+    pub note: String,
+    /// Device zones: exclusive (bit-perfect) access.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclusive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_mode: Option<VolumeMode>,
+    /// The track playing now, from file to device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<ZoneStreamInfo>,
+}
+
+/// The signal path of the playing track.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneStreamInfo {
+    /// e.g. `FLAC 96 kHz/24-bit`.
+    pub source: String,
+    /// e.g. `96 kHz/24-bit to Topping E30 (exclusive)`.
+    pub output: String,
+    /// Nothing between the file and the device changed a sample.
+    pub bit_perfect: bool,
+    /// Processing on the way, e.g. `Converted to 48 kHz`, `Volume leveling`.
+    pub steps: Vec<String>,
 }
 
 /// A zone's settings as clients show them.
@@ -275,6 +478,11 @@ pub struct ZoneSettingsView {
     pub leveling_target_lufs: i8,
     pub leveling_adjustment_db: i8,
     pub private: bool,
+    pub dsp: ZoneDsp,
+    pub exclusive: bool,
+    pub volume_mode: VolumeMode,
+    pub max_sample_rate: Option<u32>,
+    pub max_bit_depth: Option<u8>,
     pub supports: ZoneSettingsSupport,
     /// How the settings apply on this kind of zone.
     pub notes: Vec<String>,
@@ -291,6 +499,11 @@ impl ZoneSettingsView {
             leveling_target_lufs: DEFAULT_LEVELING_TARGET_LUFS,
             leveling_adjustment_db: 0,
             private: false,
+            dsp: ZoneDsp::default(),
+            exclusive: false,
+            volume_mode: VolumeMode::Hardware,
+            max_sample_rate: None,
+            max_bit_depth: None,
             supports: ZoneSettingsSupport::default(),
             notes: Vec::new(),
         }
@@ -305,6 +518,8 @@ pub fn default_zone_icon(kind: ZoneKind) -> &'static str {
         ZoneKind::Mobile => "phone",
         ZoneKind::Chromecast => "tv",
         ZoneKind::Sonos => "speaker",
+        ZoneKind::Upnp => "radio",
+        ZoneKind::Device => "amplifier",
         ZoneKind::Linked => "music",
     }
 }
@@ -397,6 +612,8 @@ pub struct Zone {
     pub capabilities: ZoneCapabilities,
     pub sleep_timer: Option<ZoneSleepTimer>,
     pub settings: ZoneSettingsView,
+    /// Format limits and the signal path of the playing track.
+    pub output: Option<ZoneOutputInfo>,
     /// Format limits or other facts worth showing, e.g. Sonos conversions.
     pub notes: Vec<String>,
 }

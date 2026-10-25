@@ -4,6 +4,7 @@ import {
   getZones,
   groupZones,
   reportClientZone,
+  pauseAllZones,
   sendZoneCommand,
   setZoneViewerDevice,
   transferZone,
@@ -58,6 +59,8 @@ type ZonesValue = {
   updateSettings: (zoneId: string, patch: ZoneSettingsPatch) => Promise<void>;
   setSheetOpen: (open: boolean) => void;
   refresh: () => void;
+  /** Pauses every playing zone (Roon's "Pause all"); returns how many. */
+  pauseAll: () => Promise<number>;
 };
 
 const ZonesContext = createContext<ZonesValue | null>(null);
@@ -283,6 +286,11 @@ export function ZonesProvider({ children }: PropsWithChildren) {
       },
       setSheetOpen,
       refresh,
+      pauseAll: async () => {
+        const { paused } = await pauseAllZones();
+        refresh();
+        return paused;
+      },
     }),
     [localZoneId, query.dataUpdatedAt, refresh, report, selectedZone, zones],
   );

@@ -395,7 +395,7 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
                 max_volume: Some(Some(40)),
                 ..ZoneSettingsPatch::default()
             },
-            None,
+            super::Viewer::default(),
             None,
         )
         .await
@@ -465,7 +465,7 @@ async fn sonos_zones_play_transfer_group_and_follow_events_end_to_end() {
                 safety_max_volume: Some(None),
                 ..ZoneSettingsPatch::default()
             },
-            None,
+            super::Viewer::default(),
             None,
         )
         .await
@@ -1425,7 +1425,7 @@ async fn sonos_volume_limits_crossfade_and_leveling_reach_the_speaker() {
         let cache = &cache;
         async move {
             service
-                .update_settings(USER, &zone_id, patch, None, Some(cache))
+                .update_settings(USER, &zone_id, patch, super::Viewer::default(), Some(cache))
                 .await
         }
     };
@@ -1625,7 +1625,7 @@ async fn leveled_sonos_stream_reaches_the_target_loudness() {
                 leveling: Some(LevelingMode::Track),
                 ..ZoneSettingsPatch::default()
             },
-            None,
+            super::Viewer::default(),
             Some(&cache),
         )
         .await
@@ -1935,7 +1935,7 @@ fn zone_settings_persist_across_restarts() {
                     safety_max_volume: Some(Some(70)),
                     ..ZoneSettingsPatch::default()
                 },
-                None,
+                super::Viewer::default(),
                 None,
             )
             .await

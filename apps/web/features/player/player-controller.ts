@@ -3,6 +3,7 @@
 import {
   createPlaybackQueue,
   nextRepeatMode,
+  type ZoneDsp,
   type ZoneRepeatMode,
 } from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
@@ -579,7 +580,11 @@ export function usePlayerController() {
   const crossfadeStartedFor = useRef("");
   const crossfadeSettings = useRef(0);
   const setZoneOutput = useCallback(
-    (settings: { crossfadeSeconds: number; levelingFactor: number }) => {
+    (settings: {
+      crossfadeSeconds: number;
+      levelingFactor: number;
+      dsp?: ZoneDsp | null;
+    }) => {
       crossfadeSettings.current = settings.crossfadeSeconds;
       setOutputSettings(settings);
     },

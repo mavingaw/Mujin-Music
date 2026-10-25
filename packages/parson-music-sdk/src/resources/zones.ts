@@ -3,11 +3,63 @@ import api, { getApiWebSocketURL } from "../core/http";
 /**
  * Zones are every place music can play: each running Parson app (web,
  * desktop, mobile), an active Chromecast session, each Sonos room or group,
- * and linked groups of zones. The server keeps the list; clients register
- * themselves, pick a zone to control, transfer queues and group zones.
+ * each UPnP/DLNA renderer, each audio device (USB DAC, built-in, HDMI) of
+ * the computer running the server, and linked groups of zones. The server
+ * keeps the list; clients register themselves, pick a zone to control,
+ * transfer queues and group zones.
  */
 export type ZoneKind =
-  "web" | "desktop" | "mobile" | "chromecast" | "sonos" | "linked";
+  | "web"
+  | "desktop"
+  | "mobile"
+  | "chromecast"
+  | "sonos"
+  | "upnp"
+  | "device"
+  | "linked";
+
+/** How a server-driven zone changes volume. */
+export type ZoneVolumeMode = "hardware" | "software" | "fixed";
+
+/** A volume scale as the device reports it (a DAC mixer in dB, 0..30 steps). */
+export interface DeviceVolumeRange {
+  min: number;
+  max: number;
+  step: number;
+  unit: "dB" | "steps";
+  /** The device changes its own gain: samples stay untouched. */
+  hardware: boolean;
+  current?: number | null;
+}
+
+/** Per-zone DSP: preamp, bass/treble shelves and headphone crossfeed. */
+export interface ZoneDsp {
+  enabled: boolean;
+  preamp_db: number;
+  bass_db: number;
+  treble_db: number;
+  crossfeed: boolean;
+}
+
+/** Signal path of the playing track, from file to device. */
+export interface ZoneStreamInfo {
+  source: string;
+  output: string;
+  bit_perfect: boolean;
+  steps: string[];
+}
+
+/** What a zone plays as-is and what happens to everything else. */
+export interface ZoneOutputInfo {
+  max_sample_rate: number;
+  max_bit_depth: number;
+  formats: string[];
+  /** "Plays up to X kHz/Y-bit, converts the rest" in words. */
+  note: string;
+  exclusive?: boolean;
+  volume_mode?: ZoneVolumeMode;
+  stream?: ZoneStreamInfo;
+}
 
 export type ZoneStatus =
   "playing" | "paused" | "buffering" | "stopped" | "idle" | "unavailable";
@@ -30,6 +82,8 @@ export interface ZoneVolume {
   device_min?: number;
   device_max?: number;
   step: number;
+  /** The device's own scale, when it reports one. */
+  device_range?: DeviceVolumeRange;
 }
 
 /** Roon's volume leveling: `auto` levels by album while an album plays in order. */
@@ -47,11 +101,21 @@ export interface ZoneSettingsView {
   leveling_adjustment_db: number;
   /** Only the device the zone runs on sees and controls it. */
   private: boolean;
+  dsp?: ZoneDsp;
+  /** Audio devices: exclusive (bit-perfect) access. */
+  exclusive?: boolean;
+  volume_mode?: ZoneVolumeMode;
+  max_sample_rate?: number | null;
+  max_bit_depth?: number | null;
   supports: {
     crossfade: boolean;
     leveling: boolean;
     volume_limits: boolean;
     private: boolean;
+    dsp?: boolean;
+    exclusive?: boolean;
+    volume_modes?: ZoneVolumeMode[];
+    max_format?: boolean;
   };
   notes: string[];
 }
@@ -72,6 +136,11 @@ export interface ZoneSettingsPatch {
   safety_min_volume?: number | null;
   safety_max_volume?: number | null;
   private?: boolean;
+  dsp?: ZoneDsp;
+  exclusive?: boolean;
+  volume_mode?: ZoneVolumeMode;
+  max_sample_rate?: number | null;
+  max_bit_depth?: number | null;
 }
 
 export interface ZoneGroupMember {
@@ -118,7 +187,7 @@ export interface ZoneNowPlaying {
 export interface Zone {
   id: string;
   kind: ZoneKind;
-  ecosystem: "parson" | "chromecast" | "sonos" | "linked";
+  ecosystem: "parson" | "chromecast" | "sonos" | "upnp" | "device" | "linked";
   name: string;
   /** Icon name from `ZONE_ICONS` (custom or the device's). */
   icon?: string;
@@ -143,13 +212,27 @@ export interface Zone {
     fading: boolean;
   } | null;
   settings?: ZoneSettingsView;
+  /** Format limits and the signal path (Sonos, Chromecast, UPnP, devices). */
+  output?: ZoneOutputInfo | null;
   notes: string[];
+}
+
+export interface ZoneOutputsStatus {
+  upnp: { enabled: boolean; renderers: number; last_error: string | null };
+  devices: {
+    enabled: boolean;
+    /** `ALSA`, `Simulated`, or `null` when unavailable. */
+    backend: string | null;
+    devices: number;
+    note: string | null;
+  };
 }
 
 export interface ZoneList {
   zones: Zone[];
   server_time_ms: number;
   sonos: { enabled: boolean; players: number; last_error: string | null };
+  outputs?: ZoneOutputsStatus;
 }
 
 export type ZoneCommand =
@@ -367,6 +450,26 @@ export async function setZoneSleepTimer(
   await api.post(`${zonePath(zoneId)}/sleep`, { minutes }, zoneRequest({}));
 }
 
+/** Pauses every playing zone this app can see (Roon's "Pause all"). */
+export async function pauseAllZones(): Promise<{ paused: number }> {
+  const response = await api.post<{ paused: number }>(
+    "/zones/pause-all",
+    {},
+    zoneRequest({ timeout: 15_000 }),
+  );
+  return response.data;
+}
+
+/** Looks for UPnP renderers and audio devices now. */
+export async function discoverOutputs(): Promise<ZoneOutputsStatus> {
+  const response = await api.post<ZoneOutputsStatus>(
+    "/zones/outputs/discover",
+    {},
+    { timeout: 20_000 },
+  );
+  return response.data;
+}
+
 export async function discoverSonos(): Promise<{
   players: number;
   last_error?: string;
@@ -385,12 +488,17 @@ const KIND_ORDER: Record<ZoneKind, number> = {
   web: 1,
   desktop: 1,
   mobile: 1,
-  linked: 2,
-  sonos: 3,
-  chromecast: 4,
+  device: 2,
+  linked: 3,
+  sonos: 4,
+  upnp: 5,
+  chromecast: 6,
 };
 
-/** Zones ordered for a picker: this device first, then apps, groups, Sonos, Cast. */
+/**
+ * Zones ordered for a picker: this device first, then apps, this
+ * computer's audio devices, groups, Sonos, UPnP renderers, Cast.
+ */
 export function orderZones(zones: Zone[], localZoneId?: string | null): Zone[] {
   return [...zones].sort((left, right) => {
     if (left.id === localZoneId) return -1;
@@ -412,9 +520,102 @@ export function zoneKindLabel(kind: ZoneKind): string {
       return "Chromecast";
     case "sonos":
       return "Sonos";
+    case "upnp":
+      return "UPnP/DLNA renderer";
+    case "device":
+      return "Audio device";
     case "linked":
       return "Linked zones";
   }
+}
+
+/** Whether pressing "Pause all" would pause anything. */
+export function anyZonePlaying(zones: Zone[]): boolean {
+  return zones.some(
+    (zone) =>
+      !zone.grouped_into &&
+      zone.capabilities.transport &&
+      (zone.status === "playing" || zone.status === "buffering"),
+  );
+}
+
+/** `96 kHz`, `44.1 kHz`. */
+export function formatSampleRate(rate: number): string {
+  if (rate % 1000 === 0) return `${rate / 1000} kHz`;
+  return `${(Math.round(rate / 100) / 10).toFixed(1)} kHz`;
+}
+
+const signed = (value: number) =>
+  value > 0 ? `+${value}` : value < 0 ? `\u2212${Math.abs(value)}` : "0";
+
+/** Headroom management: the level drops by the largest boost. */
+export function dspEffectivePreamp(dsp: ZoneDsp): number {
+  const boost = Math.max(dsp.bass_db, dsp.treble_db, 0);
+  return Math.min(dsp.preamp_db, -boost);
+}
+
+export function isDspActive(dsp: ZoneDsp | null | undefined): boolean {
+  return Boolean(
+    dsp?.enabled &&
+    (dsp.preamp_db !== 0 ||
+      dsp.bass_db !== 0 ||
+      dsp.treble_db !== 0 ||
+      dsp.crossfeed),
+  );
+}
+
+/** Short DSP description, matching the server's signal path wording. */
+export function dspSummary(dsp: ZoneDsp | null | undefined): string {
+  if (!dsp || !isDspActive(dsp)) return "Off";
+  const parts: string[] = [];
+  const preamp = dspEffectivePreamp(dsp);
+  if (preamp !== 0) parts.push(`Preamp ${signed(preamp)} dB`);
+  if (dsp.bass_db !== 0) parts.push(`Bass ${signed(dsp.bass_db)} dB`);
+  if (dsp.treble_db !== 0) parts.push(`Treble ${signed(dsp.treble_db)} dB`);
+  if (dsp.crossfeed) parts.push("Crossfeed");
+  return parts.join(", ");
+}
+
+export const DEFAULT_ZONE_DSP: ZoneDsp = {
+  enabled: false,
+  preamp_db: 0,
+  bass_db: 0,
+  treble_db: 0,
+  crossfeed: false,
+};
+
+export function volumeModeLabel(mode: ZoneVolumeMode): string {
+  switch (mode) {
+    case "hardware":
+      return "Device volume (bit-perfect)";
+    case "software":
+      return "Parson volume (not bit-perfect)";
+    case "fixed":
+      return "Fixed volume (set it on the amplifier)";
+  }
+}
+
+/** The device's own reading, e.g. `-16.0 dB` or `15 of 30`. */
+export function deviceVolumeLabel(volume: ZoneVolume | null): string | null {
+  const range = volume?.device_range;
+  if (!range) return null;
+  const current = range.current;
+  if (range.unit === "dB") {
+    const span = `${range.min.toFixed(1)} to ${range.max.toFixed(1)} dB`;
+    return current === null || current === undefined
+      ? `Device range ${span}`
+      : `${current.toFixed(1)} dB on the device (${span})`;
+  }
+  return current === null || current === undefined
+    ? `Device range ${range.min}-${range.max}`
+    : `${current} of ${range.max} on the device`;
+}
+
+/** A one-line quality badge: `Bit-perfect`, `Converted`, or `null`. */
+export function zoneQualityLabel(zone: Zone): string | null {
+  const stream = zone.output?.stream;
+  if (!stream) return null;
+  return stream.bit_perfect ? "Bit-perfect" : "Converted";
 }
 
 export function zoneStatusLabel(zone: Zone): string {
@@ -642,6 +843,8 @@ const DEFAULT_ICONS: Record<ZoneKind, ZoneIconName> = {
   mobile: "phone",
   chromecast: "tv",
   sonos: "speaker",
+  upnp: "radio",
+  device: "amplifier",
   linked: "music",
 };
 
@@ -681,6 +884,11 @@ export interface ZoneSettingsDraft {
   safety_min_volume: number | null;
   safety_max_volume: number | null;
   private: boolean;
+  dsp: ZoneDsp;
+  exclusive: boolean;
+  volume_mode: ZoneVolumeMode;
+  max_sample_rate: number | null;
+  max_bit_depth: number | null;
 }
 
 /** The form's starting values for `zone`. */
@@ -699,8 +907,18 @@ export function zoneSettingsDraft(zone: Zone): ZoneSettingsDraft {
     safety_min_volume: volume && volume.min > 0 ? volume.min : null,
     safety_max_volume: volume && volume.max < 100 ? volume.max : null,
     private: settings?.private ?? false,
+    dsp: { ...DEFAULT_ZONE_DSP, ...settings?.dsp },
+    exclusive: settings?.exclusive ?? true,
+    volume_mode: settings?.volume_mode ?? "hardware",
+    max_sample_rate: settings?.max_sample_rate ?? null,
+    max_bit_depth: settings?.max_bit_depth ?? null,
   };
 }
+
+export const SAMPLE_RATE_CHOICES = [
+  44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000,
+] as const;
+export const BIT_DEPTH_CHOICES = [16, 24, 32] as const;
 
 /**
  * The request for the changes between `initial` and `draft`: unchanged
@@ -727,11 +945,25 @@ export function zoneSettingsPatch(
     "safety_min_volume",
     "safety_max_volume",
     "private",
+    "exclusive",
+    "volume_mode",
+    "max_sample_rate",
+    "max_bit_depth",
   ] as const;
   for (const key of keys) {
     if (draft[key] !== initial[key]) {
       (patch as Record<string, unknown>)[key] = draft[key];
     }
+  }
+  const dspKeys = [
+    "enabled",
+    "preamp_db",
+    "bass_db",
+    "treble_db",
+    "crossfeed",
+  ] as const;
+  if (dspKeys.some((key) => draft.dsp[key] !== initial.dsp[key])) {
+    patch.dsp = { ...draft.dsp };
   }
   return patch;
 }

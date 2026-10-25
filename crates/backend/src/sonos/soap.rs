@@ -96,9 +96,14 @@ impl std::error::Error for SoapError {}
 
 /// Builds the SOAP envelope for `action` with ordered `arguments`.
 pub fn envelope(service: Service, action: &str, arguments: &[(&str, &str)]) -> String {
+    envelope_for(service.urn(), action, arguments)
+}
+
+/// Builds the SOAP envelope for `action` on the service type `urn`.
+pub fn envelope_for(urn: &str, action: &str, arguments: &[(&str, &str)]) -> String {
     let mut body = String::with_capacity(256);
     body.push_str(r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>"#);
-    body.push_str(&format!(r#"<u:{action} xmlns:u="{}">"#, service.urn()));
+    body.push_str(&format!(r#"<u:{action} xmlns:u="{urn}">"#));
     for (name, value) in arguments {
         body.push_str(&format!("<{name}>{}</{name}>", escape(value)));
     }
@@ -206,12 +211,30 @@ impl SoapClient {
         action: &str,
         arguments: &[(&str, &str)],
     ) -> Result<HashMap<String, String>, SoapError> {
+        self.call_at(
+            &format!("{base_url}{}", service.control_path()),
+            service.urn(),
+            action,
+            arguments,
+        )
+        .await
+    }
+
+    /// Calls `action` on the service type `urn` at its full control URL
+    /// (generic UPnP devices publish their own control paths).
+    pub async fn call_at(
+        &self,
+        control_url: &str,
+        urn: &str,
+        action: &str,
+        arguments: &[(&str, &str)],
+    ) -> Result<HashMap<String, String>, SoapError> {
         let response = self
             .http
-            .post(format!("{base_url}{}", service.control_path()))
+            .post(control_url)
             .header("Content-Type", "text/xml; charset=\"utf-8\"")
-            .header("SOAPACTION", soap_action_header(service, action))
-            .body(envelope(service, action, arguments))
+            .header("SOAPACTION", format!("\"{urn}#{action}\""))
+            .body(envelope_for(urn, action, arguments))
             .send()
             .await
             .map_err(|error| SoapError::Transport(error.to_string()))?;
