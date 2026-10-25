@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
@@ -50,6 +51,7 @@ export function FullscreenPlayer({
   cover,
   currentTime,
   duration,
+  formatBadge,
   readPosition,
   isPlaying,
   looping,
@@ -94,6 +96,8 @@ export function FullscreenPlayer({
   cover: string;
   currentTime: number;
   duration: number;
+  /** Format chip and signal path for the playing track. */
+  formatBadge?: ReactNode;
   readPosition?: () => number;
   isPlaying: boolean;
   looping: boolean;
@@ -309,6 +313,9 @@ export function FullscreenPlayer({
                         onNavigate={onClose}
                       />
                     </p>
+                    {formatBadge ? (
+                      <div className="mt-3 flex">{formatBadge}</div>
+                    ) : null}
                   </div>
                 </div>
               )}

@@ -55,6 +55,7 @@ import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { SongRow } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
+import { FormatChip } from "@/components/format-chip";
 import {
   playerAudioPresets,
   usePlayer,
@@ -202,6 +203,7 @@ function NowPlayingPanel({
           >
             {song.artist}
           </Text>
+          <FormatChip audio={song.audio} path={song.path} />
         </View>
         <Pressable
           {...immediateBorderlessPressFeedback}

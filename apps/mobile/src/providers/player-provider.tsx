@@ -48,6 +48,7 @@ import {
   lockScreenArtworkUrl,
   streamUrl,
 } from "@/lib/runtime";
+import { devicePlaybackCapabilities } from "@/lib/device-playback";
 import { downloadedSongUri, hydrateDownloads } from "@/lib/downloads";
 import { shouldRestartFinishedTrack } from "@/lib/playback-state";
 import { playableQueueSongs } from "@/lib/playback-queue";
@@ -768,7 +769,9 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       return {
         artworkUrl,
         // Native decoding expects a decoded path, not an Expo file URI.
-        uri: local ? decodeURI(local) : streamUrl(song.id, bitrate),
+        uri: local
+          ? decodeURI(local)
+          : streamUrl(song.id, bitrate, devicePlaybackCapabilities()),
         headers: local ? undefined : await freshAuthorizationHeaders(),
       };
     },

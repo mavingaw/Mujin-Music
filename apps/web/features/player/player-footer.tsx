@@ -18,6 +18,8 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
+import { FormatBadge } from "./format-badge";
+import type { AudioProperties } from "@parson/music-sdk/types";
 import {
   ActionButton,
   PlaybackControls,
@@ -32,8 +34,11 @@ export function PlayerFooter({
   artistId,
   artistName,
   artistCredits,
+  audio,
   audioPreset,
   audioPresets,
+  bitrate,
+  casting,
   cover,
   currentTime,
   duration,
@@ -66,8 +71,11 @@ export function PlayerFooter({
   artistId: string;
   artistName: string;
   artistCredits: TrackArtistCreditPart[];
+  audio?: AudioProperties | null;
   audioPreset: AudioPresetId;
   audioPresets: readonly AudioPreset[];
+  bitrate: number;
+  casting: boolean;
   cover: string;
   currentTime: number;
   duration: number;
@@ -116,6 +124,15 @@ export function PlayerFooter({
           <TrackInfo
             albumId={albumId}
             artistCredits={artistCredits}
+            audio={audio}
+            bitrate={bitrate}
+            casting={casting}
+            presetLabel={
+              audioPreset === "original"
+                ? null
+                : (audioPresets.find((preset) => preset.id === audioPreset)
+                    ?.label ?? null)
+            }
             cover={cover}
             songId={songId}
             title={title}
@@ -216,14 +233,22 @@ export function PlayerFooter({
 function TrackInfo({
   albumId,
   artistCredits,
+  audio,
+  bitrate,
+  casting,
   cover,
+  presetLabel,
   title,
   explicit,
   songId,
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
+  audio?: AudioProperties | null;
+  bitrate: number;
+  casting: boolean;
   cover: string;
+  presetLabel: string | null;
   title: string;
   explicit: boolean;
   songId: string;
@@ -248,6 +273,15 @@ function TrackInfo({
         <span className="block truncate text-xs text-zinc-400">
           {explicit && <ExplicitBadge />}
           <ArtistCreditLinks credits={artistCredits} />
+        </span>
+        <span className="relative z-30 mt-1 hidden md:flex">
+          <FormatBadge
+            audio={audio}
+            bitrate={bitrate}
+            casting={casting}
+            presetLabel={presetLabel}
+            songId={songId}
+          />
         </span>
       </div>
       <FavoriteButton songId={songId} songName={title} />

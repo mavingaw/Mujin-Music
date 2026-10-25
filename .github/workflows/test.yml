@@ -40,7 +40,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxml2-utils nasm
+          sudo apt-get install -y libxml2-utils nasm ffmpeg
       - name: Install JavaScript dependencies
         run: bun install --frozen-lockfile
       - name: Check repository formatting
