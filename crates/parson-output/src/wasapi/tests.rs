@@ -343,3 +343,16 @@ fn unplugged_endpoints_disappear() {
     };
     assert!(backend.open(&id, format, true).is_err());
 }
+
+#[test]
+fn render_buffers_are_filled_only_with_exactly_their_size() {
+    // 441 stereo 24-bit frames: 2,646 bytes, nothing more or less.
+    assert!(super::render_fits(441, 6, 2_646));
+    assert!(
+        !super::render_fits(441, 6, 2_647),
+        "one byte past the buffer"
+    );
+    assert!(!super::render_fits(441, 6, 2_640), "a short write");
+    assert!(!super::render_fits(441, 0, 0), "no format yet");
+    assert!(!super::render_fits(u32::MAX, usize::MAX, 0), "no overflow");
+}

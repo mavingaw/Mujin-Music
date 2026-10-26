@@ -8,7 +8,7 @@
 #![allow(non_snake_case, clippy::upper_case_acronyms)]
 
 use std::ffi::c_void;
-use std::ptr::{null, null_mut};
+use std::ptr::{NonNull, null, null_mut};
 
 use super::{
     E_NOTFOUND, Endpoint, EndpointVolume, HResult, ShareMode, WasapiApi, WasapiBackend,
@@ -320,8 +320,10 @@ struct IAudioEndpointVolumeVtbl {
     GetVolumeRange: unsafe extern "system" fn(*mut c_void, *mut f32, *mut f32, *mut f32) -> HRESULT,
 }
 
-/// An owned COM interface pointer.
-struct Com(*mut c_void);
+/// An owned, non-null COM interface pointer: it holds one reference,
+/// released exactly once when it drops, so the object stays alive (and its
+/// vtable readable) for as long as the `Com` exists.
+struct Com(NonNull<c_void>);
 
 // SAFETY: the MMDevice and audio-client objects are free-threaded, and
 // every thread that touches them has joined the multithreaded apartment.
@@ -329,23 +331,56 @@ unsafe impl Send for Com {}
 unsafe impl Sync for Com {}
 
 impl Com {
+    /// Takes ownership of an interface pointer a COM call returned. A call
+    /// that succeeds without setting its out pointer is refused here
+    /// (`E_POINTER`) rather than dereferenced later.
+    fn from_raw(pointer: *mut c_void) -> Result<Self, HResult> {
+        NonNull::new(pointer).map(Self).ok_or(E_POINTER)
+    }
+
+    fn as_ptr(&self) -> *mut c_void {
+        self.0.as_ptr()
+    }
+
     /// The object's vtable as `T`.
     ///
     /// # Safety
     /// `T` must be the vtable layout of the interface this pointer holds.
     unsafe fn vtable<T>(&self) -> &T {
-        // SAFETY: a COM object starts with a pointer to its vtable.
-        unsafe { &**(self.0 as *const *const T) }
+        // SAFETY: the pointer is non-null and owns a live reference (see
+        // the type), and a COM object starts with a pointer to its vtable,
+        // which lives as long as the object.
+        unsafe { &**(self.as_ptr() as *const *const T) }
     }
 }
 
 impl Drop for Com {
     fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: every interface starts with IUnknown.
-            unsafe { (self.vtable::<IUnknownVtbl>().Release)(self.0) };
-        }
+        // SAFETY: every interface starts with IUnknown; this releases the
+        // one reference `from_raw` took over.
+        unsafe { (self.vtable::<IUnknownVtbl>().Release)(self.as_ptr()) };
     }
+}
+
+/// `E_POINTER`: a call returned success without its out pointer.
+const E_POINTER: HResult = 0x8000_4003_u32 as i32;
+/// Longest wide string read from a COM out parameter (device ids and
+/// names are far shorter); a missing terminator stops here.
+const MAX_WIDE_CHARS: usize = 32 * 1024;
+
+/// Length of a NUL-terminated UTF-16 string, at most [`MAX_WIDE_CHARS`].
+///
+/// # Safety
+/// `pointer` must be non-null and point to a NUL-terminated UTF-16 string
+/// (or to at least `MAX_WIDE_CHARS` readable units).
+unsafe fn wide_length(pointer: *const u16) -> usize {
+    let mut length = 0;
+    // SAFETY: the caller guarantees the units up to the terminator (or the
+    // cap) are readable.
+    while length < MAX_WIDE_CHARS && unsafe { *pointer.add(length) } != 0 {
+        length += 1;
+    }
+    length
 }
 
 fn check(hr: HRESULT) -> Result<(), HResult> {
@@ -380,12 +415,10 @@ unsafe fn take_wide(pointer: *mut u16) -> String {
     if pointer.is_null() {
         return String::new();
     }
-    // SAFETY: NUL-terminated per the contract.
+    // SAFETY: NUL-terminated per the contract; the slice stops before the
+    // terminator.
     let text = unsafe {
-        let mut length = 0;
-        while *pointer.add(length) != 0 {
-            length += 1;
-        }
+        let length = wide_length(pointer);
         String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length))
     };
     // SAFETY: allocated by COM for us to free.
@@ -415,7 +448,7 @@ pub fn load() -> Result<WasapiBackend<ComWasapi>, String> {
         return Err(format!("WASAPI is unavailable: {}", super::describe(hr)));
     }
     Ok(WasapiBackend::new(ComWasapi {
-        enumerator: Com(enumerator),
+        enumerator: Com::from_raw(enumerator).map_err(super::describe)?,
     }))
 }
 
@@ -429,13 +462,10 @@ impl ComWasapi {
             (self
                 .enumerator
                 .vtable::<IMMDeviceEnumeratorVtbl>()
-                .GetDevice)(self.enumerator.0, id.as_ptr(), &mut device)
+                .GetDevice)(self.enumerator.as_ptr(), id.as_ptr(), &mut device)
         };
         check(hr)?;
-        if device.is_null() {
-            return Err(E_NOTFOUND);
-        }
-        Ok(Com(device))
+        Com::from_raw(device).map_err(|_| E_NOTFOUND)
     }
 
     fn activate_on(device: &Com, iid: &GUID) -> Result<Com, HResult> {
@@ -443,7 +473,7 @@ impl ComWasapi {
         // SAFETY: an IMMDevice, a valid IID, no activation parameters.
         let hr = unsafe {
             (device.vtable::<IMMDeviceVtbl>().Activate)(
-                device.0,
+                device.as_ptr(),
                 iid,
                 CLSCTX_ALL,
                 null(),
@@ -451,7 +481,7 @@ impl ComWasapi {
             )
         };
         check(hr)?;
-        Ok(Com(object))
+        Com::from_raw(object)
     }
 
     fn string_property(store: &Com, key: &PROPERTYKEY) -> String {
@@ -461,17 +491,16 @@ impl ComWasapi {
             data: [0; 2],
         };
         // SAFETY: an IPropertyStore, a valid key, an out PROPVARIANT.
-        let hr =
-            unsafe { (store.vtable::<IPropertyStoreVtbl>().GetValue)(store.0, key, &mut value) };
+        let hr = unsafe {
+            (store.vtable::<IPropertyStoreVtbl>().GetValue)(store.as_ptr(), key, &mut value)
+        };
         let mut text = String::new();
         if hr >= 0 && value.vt == VT_LPWSTR && value.data[0] != 0 {
             let pointer = value.data[0] as *const u16;
-            // SAFETY: a VT_LPWSTR holds a NUL-terminated wide string.
+            // SAFETY: a VT_LPWSTR holds a non-null (checked above),
+            // NUL-terminated wide string.
             text = unsafe {
-                let mut length = 0;
-                while *pointer.add(length) != 0 {
-                    length += 1;
-                }
+                let length = wide_length(pointer);
                 String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length))
             };
         }
@@ -483,15 +512,21 @@ impl ComWasapi {
     fn mix_format(client: &Com) -> Option<WaveFormat> {
         let mut pointer: *mut c_void = null_mut();
         // SAFETY: an IAudioClient and an out pointer.
-        let hr =
-            unsafe { (client.vtable::<IAudioClientVtbl>().GetMixFormat)(client.0, &mut pointer) };
+        let hr = unsafe {
+            (client.vtable::<IAudioClientVtbl>().GetMixFormat)(client.as_ptr(), &mut pointer)
+        };
         if hr < 0 || pointer.is_null() {
             return None;
         }
-        // SAFETY: GetMixFormat returns at least a WAVEFORMATEX.
+        // SAFETY: the pointer is non-null (checked above) and GetMixFormat
+        // returns at least a WAVEFORMATEX, which is read before it is freed.
         let format = unsafe { std::ptr::read_unaligned(pointer as *const WAVEFORMATEX) };
-        let valid_bits = if format.wFormatTag == WAVE_FORMAT_EXTENSIBLE && format.cbSize >= 22 {
-            // SAFETY: an extensible format carries the extra fields.
+        let extensible = size_of::<WAVEFORMATEXTENSIBLE>() - size_of::<WAVEFORMATEX>();
+        let valid_bits = if format.wFormatTag == WAVE_FORMAT_EXTENSIBLE
+            && usize::from(format.cbSize) >= extensible
+        {
+            // SAFETY: `cbSize` says the extra fields of an extensible
+            // format follow the header, so the whole struct is readable.
             unsafe { std::ptr::read_unaligned(pointer as *const WAVEFORMATEXTENSIBLE) }
                 .wValidBitsPerSample
         } else {
@@ -520,18 +555,21 @@ impl WasapiApi for ComWasapi {
                 .enumerator
                 .vtable::<IMMDeviceEnumeratorVtbl>()
                 .EnumAudioEndpoints)(
-                self.enumerator.0,
+                self.enumerator.as_ptr(),
                 E_RENDER,
                 DEVICE_STATE_ACTIVE,
                 &mut collection,
             )
         };
         check(hr)?;
-        let collection = Com(collection);
+        let collection = Com::from_raw(collection)?;
         let mut count = 0;
         // SAFETY: an IMMDeviceCollection.
         check(unsafe {
-            (collection.vtable::<IMMDeviceCollectionVtbl>().GetCount)(collection.0, &mut count)
+            (collection.vtable::<IMMDeviceCollectionVtbl>().GetCount)(
+                collection.as_ptr(),
+                &mut count,
+            )
         })?;
         let mut endpoints = Vec::new();
         for index in 0..count {
@@ -539,18 +577,20 @@ impl WasapiApi for ComWasapi {
             // SAFETY: index < count.
             let hr = unsafe {
                 (collection.vtable::<IMMDeviceCollectionVtbl>().Item)(
-                    collection.0,
+                    collection.as_ptr(),
                     index,
                     &mut device,
                 )
             };
-            if hr < 0 || device.is_null() {
+            if hr < 0 {
                 continue;
             }
-            let device = Com(device);
+            let Ok(device) = Com::from_raw(device) else {
+                continue;
+            };
             let mut id = null_mut();
             // SAFETY: an IMMDevice and an out string.
-            if unsafe { (device.vtable::<IMMDeviceVtbl>().GetId)(device.0, &mut id) } < 0 {
+            if unsafe { (device.vtable::<IMMDeviceVtbl>().GetId)(device.as_ptr(), &mut id) } < 0 {
                 continue;
             }
             // SAFETY: GetId returns a CoTaskMem string.
@@ -559,12 +599,13 @@ impl WasapiApi for ComWasapi {
             // SAFETY: an IMMDevice and an out pointer.
             let (name, adapter) = if unsafe {
                 (device.vtable::<IMMDeviceVtbl>().OpenPropertyStore)(
-                    device.0, STGM_READ, &mut store,
+                    device.as_ptr(),
+                    STGM_READ,
+                    &mut store,
                 )
             } >= 0
-                && !store.is_null()
+                && let Ok(store) = Com::from_raw(store)
             {
-                let store = Com(store);
                 (
                     Self::string_property(&store, &PKEY_DEVICE_FRIENDLY_NAME),
                     Self::string_property(&store, &PKEY_DEVICE_INTERFACE_FRIENDLY_NAME),
@@ -605,7 +646,7 @@ impl WasapiApi for ComWasapi {
         // SAFETY: an IAudioClient, a valid WAVEFORMATEXTENSIBLE.
         let hr = unsafe {
             (client.vtable::<IAudioClientVtbl>().IsFormatSupported)(
-                client.0,
+                client.as_ptr(),
                 share,
                 (&wave as *const WAVEFORMATEXTENSIBLE).cast(),
                 out,
@@ -626,9 +667,9 @@ impl WasapiApi for ComWasapi {
         let (mut min_db, mut max_db, mut step_db) = (0.0, 0.0, 0.0);
         // SAFETY: an IAudioEndpointVolume and out values.
         unsafe {
-            check((table.QueryHardwareSupport)(volume.0, &mut support))?;
+            check((table.QueryHardwareSupport)(volume.as_ptr(), &mut support))?;
             check((table.GetVolumeRange)(
-                volume.0,
+                volume.as_ptr(),
                 &mut min_db,
                 &mut max_db,
                 &mut step_db,
@@ -649,7 +690,7 @@ impl WasapiApi for ComWasapi {
         check(unsafe {
             (volume
                 .vtable::<IAudioEndpointVolumeVtbl>()
-                .SetMasterVolumeLevel)(volume.0, db, null())
+                .SetMasterVolumeLevel)(volume.as_ptr(), db, null())
         })
     }
 
@@ -659,7 +700,7 @@ impl WasapiApi for ComWasapi {
         // SAFETY: an IAudioEndpointVolume; no event context.
         check(unsafe {
             (volume.vtable::<IAudioEndpointVolumeVtbl>().SetMute)(
-                volume.0,
+                volume.as_ptr(),
                 i32::from(muted),
                 null(),
             )
@@ -674,6 +715,7 @@ impl WasapiApi for ComWasapi {
             clock: None,
             clock_frequency: 0,
             sample_rate: 0,
+            block_align: 0,
             event: None,
         })
     }
@@ -696,6 +738,8 @@ pub struct ComClient {
     clock: Option<Com>,
     clock_frequency: u64,
     sample_rate: u32,
+    /// Bytes per frame of the initialised format.
+    block_align: usize,
     event: Option<Event>,
 }
 
@@ -711,8 +755,8 @@ impl ComClient {
     fn service(&self, iid: &GUID) -> Result<Com, HResult> {
         let mut object = null_mut();
         // SAFETY: an initialised IAudioClient and a valid IID.
-        check(unsafe { (self.table().GetService)(self.client.0, iid, &mut object) })?;
-        Ok(Com(object))
+        check(unsafe { (self.table().GetService)(self.client.as_ptr(), iid, &mut object) })?;
+        Com::from_raw(object)
     }
 }
 
@@ -722,7 +766,7 @@ impl WasapiClient for ComClient {
         let (mut default, mut minimum) = (0, 0);
         // SAFETY: an IAudioClient and out values.
         check(unsafe {
-            (self.table().GetDevicePeriod)(self.client.0, &mut default, &mut minimum)
+            (self.table().GetDevicePeriod)(self.client.as_ptr(), &mut default, &mut minimum)
         })?;
         Ok((default, minimum))
     }
@@ -750,7 +794,7 @@ impl WasapiClient for ComClient {
         // SAFETY: an IAudioClient and a valid WAVEFORMATEXTENSIBLE.
         check(unsafe {
             (self.table().Initialize)(
-                self.client.0,
+                self.client.as_ptr(),
                 share,
                 flags,
                 buffer_hns,
@@ -767,32 +811,33 @@ impl WasapiClient for ComClient {
             }
             self.event = Some(Event(event));
             // SAFETY: an initialised client and a valid event.
-            check(unsafe { (self.table().SetEventHandle)(self.client.0, event) })?;
+            check(unsafe { (self.table().SetEventHandle)(self.client.as_ptr(), event) })?;
         }
         self.render = Some(self.service(&IID_IAUDIO_RENDER_CLIENT)?);
         let clock = self.service(&IID_IAUDIO_CLOCK)?;
         let mut frequency = 0;
         // SAFETY: an IAudioClock and an out value.
         check(unsafe {
-            (clock.vtable::<IAudioClockVtbl>().GetFrequency)(clock.0, &mut frequency)
+            (clock.vtable::<IAudioClockVtbl>().GetFrequency)(clock.as_ptr(), &mut frequency)
         })?;
         self.clock_frequency = frequency.max(1);
         self.clock = Some(clock);
         self.sample_rate = format.sample_rate;
+        self.block_align = format.block_align();
         Ok(())
     }
 
     fn buffer_frames(&self) -> Result<u32, HResult> {
         let mut frames = 0;
         // SAFETY: an IAudioClient (valid even after a not-aligned failure).
-        check(unsafe { (self.table().GetBufferSize)(self.client.0, &mut frames) })?;
+        check(unsafe { (self.table().GetBufferSize)(self.client.as_ptr(), &mut frames) })?;
         Ok(frames)
     }
 
     fn padding_frames(&self) -> Result<u32, HResult> {
         let mut frames = 0;
         // SAFETY: an initialised IAudioClient.
-        check(unsafe { (self.table().GetCurrentPadding)(self.client.0, &mut frames) })?;
+        check(unsafe { (self.table().GetCurrentPadding)(self.client.as_ptr(), &mut frames) })?;
         Ok(frames)
     }
 
@@ -810,33 +855,47 @@ impl WasapiClient for ComClient {
             .render
             .as_ref()
             .ok_or(super::AUDCLNT_E_NOT_INITIALIZED)?;
+        // The buffer GetBuffer hands out holds exactly `frames` frames:
+        // refuse data of any other size before asking for it.
+        if !super::render_fits(frames, self.block_align, data.len()) {
+            return Err(super::E_INVALIDARG);
+        }
+        // SAFETY: `render` is an IAudioRenderClient (see `Com`).
         let table = unsafe { render.vtable::<IAudioRenderClientVtbl>() };
         let mut buffer: *mut u8 = null_mut();
-        // SAFETY: an IAudioRenderClient; the buffer it returns holds
-        // `frames` frames, which is `data.len()` bytes.
+        // SAFETY: an IAudioRenderClient and an out pointer.
+        check(unsafe { (table.GetBuffer)(render.as_ptr(), frames, &mut buffer) })?;
+        let Some(buffer) = NonNull::new(buffer) else {
+            // Hand the (missing) buffer back so the client stays usable.
+            // SAFETY: GetBuffer succeeded, so ReleaseBuffer is due.
+            unsafe { (table.ReleaseBuffer)(render.as_ptr(), 0, 0) };
+            return Err(E_POINTER);
+        };
+        // SAFETY: the buffer holds `frames * block_align` bytes, which is
+        // `data.len()` (checked above), and stays valid until ReleaseBuffer;
+        // nothing touches it after that call.
         unsafe {
-            check((table.GetBuffer)(render.0, frames, &mut buffer))?;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), buffer, data.len());
-            check((table.ReleaseBuffer)(render.0, frames, 0))
+            std::ptr::copy_nonoverlapping(data.as_ptr(), buffer.as_ptr(), data.len());
+            check((table.ReleaseBuffer)(render.as_ptr(), frames, 0))
         }
     }
 
     fn start(&mut self) -> Result<(), HResult> {
         ensure_com();
         // SAFETY: an initialised IAudioClient.
-        check(unsafe { (self.table().Start)(self.client.0) })
+        check(unsafe { (self.table().Start)(self.client.as_ptr()) })
     }
 
     fn stop(&mut self) -> Result<(), HResult> {
         ensure_com();
         // SAFETY: an initialised IAudioClient.
-        check(unsafe { (self.table().Stop)(self.client.0) })
+        check(unsafe { (self.table().Stop)(self.client.as_ptr()) })
     }
 
     fn reset(&mut self) -> Result<(), HResult> {
         ensure_com();
         // SAFETY: an initialised, stopped IAudioClient.
-        check(unsafe { (self.table().Reset)(self.client.0) })
+        check(unsafe { (self.table().Reset)(self.client.as_ptr()) })
     }
 
     fn position_frames(&self) -> Result<u64, HResult> {
@@ -847,7 +906,11 @@ impl WasapiClient for ComClient {
         let mut position = 0;
         // SAFETY: an IAudioClock; the QPC out value is optional.
         check(unsafe {
-            (clock.vtable::<IAudioClockVtbl>().GetPosition)(clock.0, &mut position, null_mut())
+            (clock.vtable::<IAudioClockVtbl>().GetPosition)(
+                clock.as_ptr(),
+                &mut position,
+                null_mut(),
+            )
         })?;
         Ok(
             (u128::from(position) * u128::from(self.sample_rate) / u128::from(self.clock_frequency))

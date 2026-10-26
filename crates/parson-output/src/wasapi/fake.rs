@@ -466,8 +466,8 @@ impl WasapiClient for FakeClient {
         let queued = self.queued();
         let speed = self.speed;
         let stream = self.stream.as_mut().ok_or(AUDCLNT_E_NOT_INITIALIZED)?;
-        let block = stream.format.block_align();
-        if data.len() != frames as usize * block {
+        // The same contract the real client checks before GetBuffer.
+        if !super::render_fits(frames, stream.format.block_align(), data.len()) {
             return Err(E_INVALIDARG);
         }
         match (stream.mode, stream.event_driven) {

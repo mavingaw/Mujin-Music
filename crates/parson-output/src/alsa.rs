@@ -444,32 +444,49 @@ fn enumerate(api: &Api) -> Vec<CardDevice> {
 fn enumerate_config_pcms(api: &Api) -> Vec<(String, Option<String>)> {
     let mut found = Vec::new();
     let mut hints: *mut *mut c_void = std::ptr::null_mut();
-    // SAFETY: libasound fills `hints` with a NULL-terminated array that is
-    // freed below; each hint string it returns is malloc'd and taken.
-    unsafe {
-        if (api.snd_device_name_hint)(-1, c"pcm".as_ptr(), &mut hints) < 0 || hints.is_null() {
-            return found;
-        }
-        let mut cursor = hints;
-        while !(*cursor).is_null() {
-            let hint = *cursor;
-            let name = take_string((api.snd_device_name_get_hint)(hint, c"NAME".as_ptr()));
-            let description = take_string((api.snd_device_name_get_hint)(hint, c"DESC".as_ptr()));
-            let ioid = take_string((api.snd_device_name_get_hint)(hint, c"IOID".as_ptr()));
-            if let Some(name) = name
-                && listable_config_pcm(&name, ioid.as_deref())
-            {
-                let description = description
-                    .and_then(|text| text.lines().next().map(str::trim).map(str::to_string))
-                    .filter(|text| !text.is_empty());
-                found.push((name, description));
-            }
-            cursor = cursor.add(1);
-        }
-        (api.snd_device_name_free_hint)(hints);
+    // SAFETY: a valid interface name and out pointer.
+    if unsafe { (api.snd_device_name_hint)(-1, c"pcm".as_ptr(), &mut hints) } < 0 {
+        return found;
     }
+    let Some(hints) = std::ptr::NonNull::new(hints) else {
+        return found;
+    };
+    for index in 0..MAX_PCM_HINTS {
+        // SAFETY: on success libasound returns a non-null array of hints
+        // ended by a NULL entry (checked above and on every step); reading
+        // stops at that terminator, so no entry past it is touched. The cap
+        // only guards against a library that forgets the terminator.
+        let hint = unsafe { *hints.as_ptr().add(index) };
+        if hint.is_null() {
+            break;
+        }
+        // SAFETY: `hint` is a live entry of the array; each string libasound
+        // returns for it is malloc'd, NUL-terminated and taken (freed) here.
+        let (name, description, ioid) = unsafe {
+            (
+                take_string((api.snd_device_name_get_hint)(hint, c"NAME".as_ptr())),
+                take_string((api.snd_device_name_get_hint)(hint, c"DESC".as_ptr())),
+                take_string((api.snd_device_name_get_hint)(hint, c"IOID".as_ptr())),
+            )
+        };
+        if let Some(name) = name
+            && listable_config_pcm(&name, ioid.as_deref())
+        {
+            let description = description
+                .and_then(|text| text.lines().next().map(str::trim).map(str::to_string))
+                .filter(|text| !text.is_empty());
+            found.push((name, description));
+        }
+    }
+    // SAFETY: frees the array `snd_device_name_hint` allocated, once, after
+    // the last use of its entries.
+    unsafe { (api.snd_device_name_free_hint)(hints.as_ptr()) };
     found
 }
+
+/// Most configured PCMs read from the hint list (a real configuration has
+/// a few dozen).
+const MAX_PCM_HINTS: usize = 4_096;
 
 /// The chain libasound built for an open, configured PCM.
 ///
@@ -1079,6 +1096,23 @@ mod tests {
         if let Some(backend) = AlsaBackend::load() {
             for device in backend.devices() {
                 assert!(device.id.starts_with("alsa:") || device.is_alsa_config_pcm());
+            }
+        }
+    }
+
+    #[test]
+    fn configured_pcm_hints_are_read_up_to_their_terminator() {
+        // The hint array is walked to its NULL terminator and freed once,
+        // twice in a row (a double free or a read past the terminator
+        // would corrupt the heap here), and every entry yields a name.
+        if let Some(api) = api() {
+            let first = enumerate_config_pcms(api);
+            let again = enumerate_config_pcms(api);
+            assert_eq!(first, again, "the walk is stable");
+            assert!(first.len() < MAX_PCM_HINTS);
+            for (name, description) in first {
+                assert!(!name.is_empty());
+                assert!(description.is_none_or(|text| !text.is_empty()));
             }
         }
     }
