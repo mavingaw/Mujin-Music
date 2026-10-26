@@ -3426,19 +3426,9 @@ fn conversion_cache_path(song_id: &str, path: &Path, delivery: &Delivery) -> Opt
     Some(mp3_style.with_extension(extension))
 }
 
-fn read_dsd_stream(path: &Path) -> Result<dsd::DsdStream, String> {
+fn read_dsd_stream(path: &Path) -> Result<dsd::DsdInfo, String> {
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-    let length = file.metadata().map_err(|error| error.to_string())?.len();
-    let mut reader = std::io::BufReader::new(file);
-    let is_dff = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("dff"));
-    if is_dff {
-        dsd::parse_dff(&mut reader, length)
-    } else {
-        dsd::parse_dsf(&mut reader)
-    }
+    dsd::read(&mut std::io::BufReader::new(file)).map(|file| file.info)
 }
 
 fn with_delivery_header(mut response: HttpResponse, plan: &DeliveryPlan) -> HttpResponse {
@@ -3727,7 +3717,7 @@ async fn stream_dop(req: &HttpRequest, path: &Path, song_id: &str) -> HttpRespon
     let Ok(Ok((stream, file))) = opened else {
         return unsupported_media("This DSD file cannot be sent as DoP.");
     };
-    if !stream.supports_dop() {
+    if !dsd::supports_dop(&stream) {
         return unsupported_media("DST-compressed DSD cannot be sent as DoP.");
     }
     let total = dsd::dop_wav_length(&stream);
@@ -4210,7 +4200,7 @@ mod delivery_tests {
         let input = directory.join("track.dsf");
         let bytes = dsd::fixtures::dsf(2_822_400, 2, 160_000, &[]);
         std::fs::write(&input, &bytes).unwrap();
-        let stream = dsd::parse_dsf(&mut std::io::Cursor::new(&bytes)).unwrap();
+        let stream = dsd::read(&mut std::io::Cursor::new(&bytes)).unwrap().info;
         let total = dsd::dop_wav_length(&stream);
         let whole =
             dsd::dop_wav_range(&mut std::io::Cursor::new(&bytes), &stream, 0, total - 1).unwrap();

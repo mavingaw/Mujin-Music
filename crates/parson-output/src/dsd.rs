@@ -60,8 +60,20 @@ pub struct DsdInfo {
     pub block_size: u32,
     /// DSF stores the first sample of each byte in its lowest bit.
     pub lsb_first: bool,
-    /// File offset of an ID3v2 tag, when there is one.
-    pub metadata_offset: Option<u64>,
+    /// The DSDIFF payload is DST compressed: it can be indexed and decoded
+    /// to PCM, but its bits cannot be sent as DSD or DoP.
+    pub dst_compressed: bool,
+    /// File offset and length of an ID3v2 tag, when there is one.
+    pub id3: Option<(u64, u64)>,
+}
+
+/// A DSD file's stream layout and the text DSDIFF keeps in its `DIIN`
+/// chunk (DSF files carry an ID3v2 tag instead).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DsdFile {
+    pub info: DsdInfo,
+    pub title: Option<String>,
+    pub artist: Option<String>,
 }
 
 impl DsdInfo {
@@ -82,6 +94,31 @@ impl DsdInfo {
     pub fn byte_at_ms(&self, position_ms: u64) -> u64 {
         (u64::from(self.rate / 8) * position_ms / 1000).min(self.bytes_per_channel())
     }
+
+    /// Average payload bitrate in kbps.
+    pub fn bitrate_kbps(&self) -> u32 {
+        u32::try_from(u64::from(self.rate) * u64::from(self.channels) / 1000).unwrap_or(u32::MAX)
+    }
+
+    /// The PCM rate of a DoP carrier: 16 DSD bits per frame.
+    pub fn dop_rate(&self) -> u32 {
+        self.rate / 16
+    }
+
+    /// DoP frames (per channel) the stream fills.
+    pub fn dop_frames(&self) -> u64 {
+        self.samples.div_ceil(16)
+    }
+
+    /// The bits can be read as they are (sent as DSD, or framed as DoP).
+    pub fn playable(&self) -> io::Result<()> {
+        if self.dst_compressed {
+            return Err(invalid(
+                "compressed DSDIFF (DST) is not supported for DSD output",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -98,20 +135,32 @@ fn u64_le(bytes: &[u8]) -> u64 {
 
 /// Reads a DSF or DSDIFF header.
 pub fn read_info<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
+    read_file(reader).map(|file| file.info)
+}
+
+/// Reads a DSF or DSDIFF header and the DSDIFF title and artist. The
+/// library indexer and the outputs share this one reader.
+pub fn read_file<R: Read + Seek>(reader: &mut R) -> io::Result<DsdFile> {
+    let file_end = reader.seek(SeekFrom::End(0))?;
     reader.seek(SeekFrom::Start(0))?;
     let mut magic = [0_u8; 4];
     reader.read_exact(&mut magic)?;
     match &magic {
-        b"DSD " => read_dsf(reader),
-        b"FRM8" => read_dff(reader),
+        b"DSD " => read_dsf(reader, file_end).map(|info| DsdFile {
+            info,
+            title: None,
+            artist: None,
+        }),
+        b"FRM8" => read_dff(reader, file_end),
         _ => Err(invalid("not a DSF or DSDIFF file")),
     }
 }
 
-fn read_dsf<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
+fn read_dsf<R: Read + Seek>(reader: &mut R, file_end: u64) -> io::Result<DsdInfo> {
     let mut header = [0_u8; 24];
     reader.read_exact(&mut header)?;
     let header_size = u64_le(&header[0..8]);
+    let file_size = u64_le(&header[8..16]);
     let metadata = u64_le(&header[16..24]);
     reader.seek(SeekFrom::Start(header_size.max(28)))?;
     let mut fmt = [0_u8; 12];
@@ -145,6 +194,12 @@ fn read_dsf<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
         return Err(invalid("DSF data chunk not found"));
     }
     let data_bytes = u64_le(&data[4..12]).saturating_sub(12);
+    // Some taggers append the ID3 chunk without updating the header's file
+    // size, so the tag runs to the real end of the file.
+    let tag_end = file_end.max(file_size);
+    let id3 = (metadata > 0 && tag_end > metadata)
+        .then(|| (metadata, tag_end - metadata))
+        .filter(|(_, length)| *length >= 10);
     Ok(DsdInfo {
         container: DsdContainer::Dsf,
         rate,
@@ -154,7 +209,8 @@ fn read_dsf<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
         data_bytes,
         block_size,
         lsb_first: bits == 1,
-        metadata_offset: (metadata > 0).then_some(metadata),
+        dst_compressed: false,
+        id3,
     })
 }
 
@@ -166,19 +222,44 @@ fn read_chunk<R: Read>(reader: &mut R) -> io::Result<([u8; 4], u64)> {
     Ok((id, size))
 }
 
-fn read_dff<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
+/// A `DIIN` text chunk: a 4-byte length, then the text.
+fn read_dff_text<R: Read>(reader: &mut R, size: u64) -> io::Result<Option<String>> {
+    if size > 64 * 1024 {
+        return Ok(None);
+    }
+    let mut bytes = vec![0; size as usize];
+    reader.read_exact(&mut bytes)?;
+    let text = bytes.get(4..).unwrap_or_default();
+    let text = String::from_utf8_lossy(text)
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
+    Ok((!text.is_empty()).then_some(text))
+}
+
+fn read_dff<R: Read + Seek>(reader: &mut R, file_end: u64) -> io::Result<DsdFile> {
     let mut header = [0_u8; 12];
     reader.read_exact(&mut header)?;
     if &header[8..12] != b"DSD " {
         return Err(invalid("not a DSDIFF DSD file"));
     }
-    let form_end = 12 + u64::from_be_bytes(header[..8].try_into().expect("eight bytes"));
+    // Chunks past the form's declared end (an ID3 tag appended by a
+    // tagger) are still read, up to the real end of the file.
+    let form_end = 12_u64
+        .saturating_add(u64::from_be_bytes(
+            header[..8].try_into().expect("eight bytes"),
+        ))
+        .max(file_end);
     let mut rate = 0;
     let mut channels = 0_u16;
+    let mut dst_compressed = false;
+    let mut dst_frames = None;
     let mut data = None;
-    let mut metadata = None;
+    let mut id3 = None;
+    let mut title = None;
+    let mut artist = None;
     let mut position = 16_u64;
-    while position + 12 <= form_end {
+    while position.saturating_add(12) <= form_end {
         reader.seek(SeekFrom::Start(position))?;
         let Ok((id, size)) = read_chunk(reader) else {
             break;
@@ -192,7 +273,7 @@ fn read_dff<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
                     return Err(invalid("DSDIFF PROP chunk is not SND"));
                 }
                 let mut sub = body + 4;
-                while sub + 12 <= body + size {
+                while sub.saturating_add(12) <= body.saturating_add(size) {
                     reader.seek(SeekFrom::Start(sub))?;
                     let (sub_id, sub_size) = read_chunk(reader)?;
                     match &sub_id {
@@ -209,42 +290,74 @@ fn read_dff<R: Read + Seek>(reader: &mut R) -> io::Result<DsdInfo> {
                         b"CMPR" => {
                             let mut value = [0_u8; 4];
                             reader.read_exact(&mut value)?;
-                            if &value != b"DSD " {
-                                return Err(invalid(
-                                    "compressed DSDIFF (DST) is not supported for DSD output",
-                                ));
-                            }
+                            dst_compressed = &value == b"DST ";
                         }
                         _ => {}
                     }
-                    sub += 12 + sub_size + (sub_size & 1);
+                    sub = sub
+                        .saturating_add(12)
+                        .saturating_add(sub_size)
+                        .saturating_add(sub_size & 1);
                 }
             }
             b"DSD " => data = Some((body, size)),
             b"DST " => {
-                return Err(invalid(
-                    "compressed DSDIFF (DST) is not supported for DSD output",
-                ));
+                data = Some((body, size));
+                dst_compressed = true;
+                // The FRTE sub-chunk counts DST frames (75 per second).
+                if let Ok((frte, _)) = read_chunk(reader)
+                    && &frte == b"FRTE"
+                {
+                    let mut value = [0_u8; 4];
+                    reader.read_exact(&mut value)?;
+                    dst_frames = Some(u32::from_be_bytes(value));
+                }
             }
-            b"ID3 " => metadata = Some(body),
+            b"DIIN" => {
+                let end = body.saturating_add(size);
+                let mut sub = body;
+                while sub.saturating_add(12) <= end {
+                    reader.seek(SeekFrom::Start(sub))?;
+                    let (sub_id, sub_size) = read_chunk(reader)?;
+                    match &sub_id {
+                        b"DITI" => title = read_dff_text(reader, sub_size)?,
+                        b"DIAR" => artist = read_dff_text(reader, sub_size)?,
+                        _ => {}
+                    }
+                    sub = sub
+                        .saturating_add(12)
+                        .saturating_add(sub_size)
+                        .saturating_add(sub_size & 1);
+                }
+            }
+            b"ID3 " | b"id3 " if size >= 10 => id3 = Some((body, size)),
             _ => {}
         }
-        position = body + size + (size & 1);
+        position = body.saturating_add(size).saturating_add(size & 1);
     }
     let (data_offset, data_bytes) = data.ok_or_else(|| invalid("DSDIFF DSD chunk not found"))?;
     if rate == 0 || !(1..=8).contains(&channels) {
         return Err(invalid("DSDIFF properties are missing or impossible"));
     }
-    Ok(DsdInfo {
-        container: DsdContainer::Dff,
-        rate,
-        channels: channels as u8,
-        samples: data_bytes / u64::from(channels) * 8,
-        data_offset,
-        data_bytes,
-        block_size: 1,
-        lsb_first: false,
-        metadata_offset: metadata,
+    let samples = match dst_frames {
+        Some(frames) if dst_compressed => u64::from(frames) * u64::from(rate) / 75,
+        _ => data_bytes / u64::from(channels) * 8,
+    };
+    Ok(DsdFile {
+        info: DsdInfo {
+            container: DsdContainer::Dff,
+            rate,
+            channels: channels as u8,
+            samples,
+            data_offset,
+            data_bytes,
+            block_size: 1,
+            lsb_first: false,
+            dst_compressed,
+            id3,
+        },
+        title,
+        artist,
     })
 }
 
@@ -858,12 +971,16 @@ mod tests {
     }
 
     #[test]
-    fn dst_and_garbage_are_refused() {
+    fn dst_is_read_but_not_played_and_garbage_is_refused() {
         assert!(read_info(&mut Cursor::new(b"RIFF....WAVE".to_vec())).is_err());
         let mut dst = write_dff(2_822_400, 2, &pattern(16));
         let at = dst.windows(4).position(|w| w == b"CMPR").unwrap() + 12;
         dst[at..at + 4].copy_from_slice(b"DST ");
-        assert!(read_info(&mut Cursor::new(dst)).is_err());
+        let info = read_info(&mut Cursor::new(dst)).unwrap();
+        assert!(info.dst_compressed);
+        assert!(info.playable().is_err());
+        let plain = read_info(&mut Cursor::new(write_dff(2_822_400, 2, &pattern(16)))).unwrap();
+        assert!(plain.playable().is_ok());
     }
 
     #[test]
