@@ -186,6 +186,7 @@ export function useAudioLifecycle({
   backgroundWasPlaying,
   graph,
   play,
+  reapplyOutputDevice,
   resumeOnReconnect,
   source,
 }: {
@@ -193,6 +194,8 @@ export function useAudioLifecycle({
   backgroundWasPlaying: MutableRefObject<boolean>;
   graph: MutableRefObject<AudioGraph | null>;
   play: () => void;
+  /** Re-routes to the chosen output, or the default if it went away. */
+  reapplyOutputDevice?: () => Promise<void>;
   resumeOnReconnect: MutableRefObject<boolean>;
   source: MutableRefObject<string>;
 }) {
@@ -238,6 +241,12 @@ export function useAudioLifecycle({
     const outputDeviceChanged = () => {
       const element = audio.current;
       if (!element) return;
+      if (reapplyOutputDevice) {
+        void reapplyOutputDevice()
+          .catch(() => {})
+          .finally(recover);
+        return;
+      }
       const sinkElement = element as HTMLAudioElement & {
         setSinkId?: (sinkId: string) => Promise<void>;
       };
@@ -276,5 +285,13 @@ export function useAudioLifecycle({
       );
       document.removeEventListener("visibilitychange", visibilityChanged);
     };
-  }, [audio, backgroundWasPlaying, graph, play, resumeOnReconnect, source]);
+  }, [
+    audio,
+    backgroundWasPlaying,
+    graph,
+    play,
+    reapplyOutputDevice,
+    resumeOnReconnect,
+    source,
+  ]);
 }

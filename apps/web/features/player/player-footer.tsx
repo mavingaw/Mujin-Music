@@ -12,14 +12,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { AudioLines, ListMusic, Maximize2, MicVocal } from "lucide-react";
+import {
+  AudioLines,
+  ListMusic,
+  Maximize2,
+  MicVocal,
+  SlidersHorizontal,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
-import { FormatBadge } from "./format-badge";
-import type { AudioProperties } from "@parson/music-sdk/types";
+import { OutputPickerButton } from "./output-picker";
+import { DSP_SHORTCUT_LABEL } from "./dsp-panel";
 import {
   ActionButton,
   PlaybackControls,
@@ -34,11 +40,8 @@ export function PlayerFooter({
   artistId,
   artistName,
   artistCredits,
-  audio,
   audioPreset,
   audioPresets,
-  bitrate,
-  casting,
   cover,
   currentTime,
   duration,
@@ -48,6 +51,7 @@ export function PlayerFooter({
   muted,
   onNext,
   onOpenFullscreen,
+  onOpenDsp,
   onOpenQueue,
   onPrevious,
   onSeek,
@@ -59,6 +63,7 @@ export function PlayerFooter({
   onVolumeChange,
   playbackRate,
   queueOpen,
+  signalLight,
   slowedReverb,
   songId,
   title,
@@ -72,11 +77,8 @@ export function PlayerFooter({
   artistId: string;
   artistName: string;
   artistCredits: TrackArtistCreditPart[];
-  audio?: AudioProperties | null;
   audioPreset: AudioPresetId;
   audioPresets: readonly AudioPreset[];
-  bitrate: number;
-  casting: boolean;
   cover: string;
   currentTime: number;
   duration: number;
@@ -86,6 +88,8 @@ export function PlayerFooter({
   muted: boolean;
   onNext: () => void;
   onOpenFullscreen: () => void;
+  /** Opens the DSP engine; omitted while casting. */
+  onOpenDsp?: () => void;
   onOpenQueue: () => void;
   onPrevious: () => void;
   onSeek: (value: number) => void;
@@ -97,6 +101,8 @@ export function PlayerFooter({
   onVolumeChange: (value: number) => void;
   playbackRate: number;
   queueOpen: boolean;
+  /** The signal path quality light, shown beside the transport. */
+  signalLight?: ReactNode;
   slowedReverb: boolean;
   songId: string;
   title: string;
@@ -127,15 +133,6 @@ export function PlayerFooter({
           <TrackInfo
             albumId={albumId}
             artistCredits={artistCredits}
-            audio={audio}
-            bitrate={bitrate}
-            casting={casting}
-            presetLabel={
-              audioPreset === "original"
-                ? null
-                : (audioPresets.find((preset) => preset.id === audioPreset)
-                    ?.label ?? null)
-            }
             cover={cover}
             songId={songId}
             title={title}
@@ -143,14 +140,22 @@ export function PlayerFooter({
             feedback={feedback}
           />
           <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
-            <PlaybackControls
-              compact
-              prominent
-              isPlaying={isPlaying}
-              onNext={onNext}
-              onPrevious={onPrevious}
-              onToggle={onTogglePlayback}
-            />
+            <div className="flex items-center gap-1.5">
+              {signalLight ? (
+                <span className="hidden md:contents">{signalLight}</span>
+              ) : null}
+              <PlaybackControls
+                compact
+                prominent
+                isPlaying={isPlaying}
+                onNext={onNext}
+                onPrevious={onPrevious}
+                onToggle={onTogglePlayback}
+              />
+              {signalLight ? (
+                <span aria-hidden="true" className="hidden h-8 w-8 md:block" />
+              ) : null}
+            </div>
             <Timeline
               className="hidden w-full md:flex"
               currentTime={currentTime}
@@ -189,6 +194,9 @@ export function PlayerFooter({
                 <AudioLines className="h-4 w-4" />
               </ActionButton>
             </div>
+            <div className="hidden sm:block" data-output-picker-trigger>
+              <OutputPickerButton />
+            </div>
             <div className="hidden sm:block">
               <VolumeControl
                 muted={muted}
@@ -212,6 +220,15 @@ export function PlayerFooter({
                 ))}
               </DropdownMenuRadioGroup>
               <DropdownMenuSeparator />
+              {onOpenDsp ? (
+                <DropdownMenuItem onSelect={onOpenDsp}>
+                  <SlidersHorizontal className="h-4 w-4" />
+                  DSP engine
+                  <span className="ml-auto text-[11px] text-zinc-500">
+                    {DSP_SHORTCUT_LABEL}
+                  </span>
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem onSelect={onOpenFullscreen}>
                 <Maximize2 className="h-4 w-4" />
                 Fullscreen
@@ -237,11 +254,7 @@ export function PlayerFooter({
 function TrackInfo({
   albumId,
   artistCredits,
-  audio,
-  bitrate,
-  casting,
   cover,
-  presetLabel,
   title,
   explicit,
   feedback,
@@ -249,11 +262,7 @@ function TrackInfo({
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
-  audio?: AudioProperties | null;
-  bitrate: number;
-  casting: boolean;
   cover: string;
-  presetLabel: string | null;
   title: string;
   explicit: boolean;
   feedback?: ReactNode;
@@ -279,15 +288,6 @@ function TrackInfo({
         <span className="block truncate text-xs text-zinc-400">
           {explicit && <ExplicitBadge />}
           <ArtistCreditLinks credits={artistCredits} />
-        </span>
-        <span className="relative z-30 mt-1 hidden md:flex">
-          <FormatBadge
-            audio={audio}
-            bitrate={bitrate}
-            casting={casting}
-            presetLabel={presetLabel}
-            songId={songId}
-          />
         </span>
       </div>
       <FavoriteButton songId={songId} songName={title} />

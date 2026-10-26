@@ -71,6 +71,18 @@ export interface AudioProperties {
   lossless: boolean | null;
 }
 
+/**
+ * ReplayGain loudness tags. Gains are dB relative to the ReplayGain 2.0
+ * reference (-18 LUFS); peaks are linear (1.0 = full scale). Opus R128 gains
+ * are converted to the same reference.
+ */
+export interface Loudness {
+  track_gain_db?: number;
+  track_peak?: number;
+  album_gain_db?: number;
+  album_peak?: number;
+}
+
 /** Canonical contributor roles the indexer reads from tags. */
 export type CreditRole =
   | "composer"
@@ -104,6 +116,8 @@ export interface SongDetails {
   credits?: Credit[];
   isrc?: string | null;
   label?: string | null;
+  /** ReplayGain tags (parser version 18), omitted when the file has none. */
+  loudness?: Loudness | null;
 }
 
 export interface LibrarySong extends SongDetails {

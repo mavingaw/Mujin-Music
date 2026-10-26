@@ -75,6 +75,7 @@ unicode-normalization = "0.1.25"
 uuid = { version = "1.27.0", features = ["v4", "fast-rng", "macro-diagnostics", "serde"] }
 jwalk = "0.9.0"
 parson-core = { path = "../parson-core" }
+parson-output = { path = "../parson-output" }
 webp = { version = "0.3.1", optional = true }
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 zstd = "0.14.1"
@@ -91,3 +92,7 @@ ravif = { version = "0.13.0", default-features = false, features = ["threading"]
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.190"
 tokio-uring = "0.5.0"
+
+[dev-dependencies]
+# The protocol-level fake renderer and AirPlay receiver for network output tests.
+parson-output = { path = "../parson-output", features = ["network-fakes"] }

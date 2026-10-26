@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::domain::{Album, Artist, AudioProperties, Credit, Song, codec_is_lossless};
+use crate::domain::{Album, Artist, AudioProperties, Credit, Loudness, Song, codec_is_lossless};
 use crate::library::artist_names::{
     artist_credit_names, featured_artists_from_title, format_contributing_artists,
 };
@@ -347,6 +347,7 @@ struct ParsedFile {
     isrc: String,
     #[serde(default)]
     work: TagWork,
+    loudness: Loudness,
     #[serde(skip)]
     tag_parse_us: u64,
     #[serde(skip)]
@@ -891,6 +892,8 @@ struct ExistingFileSnapshot {
     work_mbid: Option<String>,
     #[diesel(sql_type = Nullable<Integer>)]
     composed_year: Option<i32>,
+    #[diesel(sql_type = Nullable<Text>)]
+    loudness_json: Option<String>,
 }
 
 #[derive(Debug, QueryableByName)]
@@ -1025,6 +1028,8 @@ struct TrackRow {
     label: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     isrc: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    loudness_json: Option<String>,
 }
 
 impl TrackRow {
@@ -1055,6 +1060,16 @@ impl TrackRow {
         };
         (!audio.is_empty()).then_some(audio)
     }
+
+    fn loudness(&self) -> Option<Loudness> {
+        parse_loudness_json(self.loudness_json.as_deref())
+    }
+}
+
+fn parse_loudness_json(value: Option<&str>) -> Option<Loudness> {
+    value
+        .and_then(|json| serde_json::from_str::<Loudness>(json).ok())
+        .and_then(Loudness::non_empty)
 }
 
 #[derive(Debug, QueryableByName)]
@@ -2383,6 +2398,7 @@ struct FileExtrasStage<'a> {
     release_type: Option<&'a str>,
     work_mbid: Option<&'a str>,
     composed_year: Option<u16>,
+    loudness: Option<&'a Loudness>,
 }
 
 fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
@@ -2403,6 +2419,7 @@ fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
         release_type: parsed.work.release_type.as_deref(),
         work_mbid: parsed.work.work_id.as_deref(),
         composed_year: parsed.work.composed_year,
+        loudness: (!parsed.loudness.is_empty()).then_some(&parsed.loudness),
     })
 }
 
@@ -5076,6 +5093,10 @@ fn populate_lofty_credits(credits: &mut TagCredits, tag: &lofty::tag::Tag) {
         (ItemKey::MovementNumber, "MOVEMENT"),
         (ItemKey::MusicBrainzReleaseType, "RELEASETYPE"),
         (ItemKey::MusicBrainzWorkId, "MUSICBRAINZ_WORKID"),
+        (ItemKey::ReplayGainTrackGain, "REPLAYGAIN_TRACK_GAIN"),
+        (ItemKey::ReplayGainTrackPeak, "REPLAYGAIN_TRACK_PEAK"),
+        (ItemKey::ReplayGainAlbumGain, "REPLAYGAIN_ALBUM_GAIN"),
+        (ItemKey::ReplayGainAlbumPeak, "REPLAYGAIN_ALBUM_PEAK"),
     ] {
         for value in tag.get_strings(key) {
             credits.apply_named(role, value);
@@ -5597,6 +5618,7 @@ fn parsed_file_from_result(
             work_id: metadata.credits.work_id.clone(),
             composed_year: metadata.credits.composed_year,
         },
+        loudness: metadata.credits.loudness,
         credits: metadata.credits.credits,
         tag_parse_us: metadata.tag_parse_us,
         duration_us: metadata.duration_us,
@@ -5704,6 +5726,7 @@ fn snapshot_to_parsed(snapshot: &ExistingFileSnapshot) -> ParsedFile {
                 .composed_year
                 .and_then(|value| u16::try_from(value).ok()),
         },
+        loudness: parse_loudness_json(snapshot.loudness_json.as_deref()).unwrap_or_default(),
         tag_parse_us: 0,
         duration_us: 0,
         parse_strategy: ParserStrategy::Reused,
@@ -7247,7 +7270,7 @@ fn existing_snapshots(
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
                 rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc,
                 rfm.work, rfm.movement, rfm.movement_number, rfm.release_type,
-                rfm.work_mbid, rfm.composed_year
+                rfm.work_mbid, rfm.composed_year, rfm.loudness_json
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.root_id = {root_id}"
@@ -7269,7 +7292,7 @@ fn all_available_snapshots(conn: &mut SqliteConnection) -> QueryResult<Vec<Exist
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
                 rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc,
                 rfm.work, rfm.movement, rfm.movement_number, rfm.release_type,
-                rfm.work_mbid, rfm.composed_year
+                rfm.work_mbid, rfm.composed_year, rfm.loudness_json
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.availability = 'available'",
@@ -7608,7 +7631,8 @@ fn upsert_file_metadata(
              musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id, error,
              embedded_artwork_offset, embedded_artwork_length,
              codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc,
-             work, movement, movement_number, release_type, work_mbid, composed_year)
+             work, movement, movement_number, release_type, work_mbid, composed_year,
+             loudness_json)
          SELECT file.id, stage.title, stage.album, stage.track_artists_json, stage.album_artists_json,
                 stage.genres_json, stage.release_date, stage.cover_url, stage.parser_version,
                 stage.cover_resolver_version, stage.classification_version,
@@ -7624,7 +7648,8 @@ fn upsert_file_metadata(
                 json_extract(stage.extras_json, '$.movement_number'),
                 json_extract(stage.extras_json, '$.release_type'),
                 json_extract(stage.extras_json, '$.work_mbid'),
-                json_extract(stage.extras_json, '$.composed_year')
+                json_extract(stage.extras_json, '$.composed_year'),
+                json_extract(stage.extras_json, '$.loudness')
          FROM file_metadata_stage stage JOIN file_entry file USING(path) WHERE stage.was_parsed
          ON CONFLICT(file_id) DO UPDATE SET
              title = excluded.title, album = excluded.album, track_artists_json = excluded.track_artists_json,
@@ -7650,6 +7675,7 @@ fn upsert_file_metadata(
              work = excluded.work, movement = excluded.movement,
              movement_number = excluded.movement_number, release_type = excluded.release_type,
              work_mbid = excluded.work_mbid, composed_year = excluded.composed_year,
+             loudness_json = excluded.loudness_json,
              parsed_at = CURRENT_TIMESTAMP
          WHERE raw_file_metadata.title IS NOT excluded.title OR raw_file_metadata.album IS NOT excluded.album
             OR raw_file_metadata.track_artists_json IS NOT excluded.track_artists_json
@@ -7681,7 +7707,8 @@ fn upsert_file_metadata(
             OR raw_file_metadata.movement_number IS NOT excluded.movement_number
             OR raw_file_metadata.release_type IS NOT excluded.release_type
             OR raw_file_metadata.work_mbid IS NOT excluded.work_mbid
-            OR raw_file_metadata.composed_year IS NOT excluded.composed_year;
+            OR raw_file_metadata.composed_year IS NOT excluded.composed_year
+            OR raw_file_metadata.loudness_json IS NOT excluded.loudness_json;
 
          DELETE FROM duration_repair_queue
          WHERE file_id IN (
@@ -10242,6 +10269,7 @@ fn preview_catalog_from_parsed(parsed_files: &[ParsedFile], artist_limit: usize)
                 audio: preview_audio_properties(&parsed.technical),
                 isrc: (!parsed.isrc.is_empty()).then(|| parsed.isrc.clone()),
                 label: (!parsed.label.is_empty()).then(|| parsed.label.clone()),
+                loudness: parsed.loudness.non_empty(),
                 credits: preview_credits(&parsed.credits),
             });
         }
@@ -10714,6 +10742,7 @@ mod external_library_tests {
             label: String::new(),
             isrc: String::new(),
             work: super::TagWork::default(),
+            loudness: Default::default(),
             tag_parse_us: 0,
             duration_us: 0,
             parse_strategy: ParserStrategy::Test,
@@ -10796,7 +10825,8 @@ mod external_library_tests {
                  CREATE TABLE raw_file_metadata (
                      file_id INTEGER PRIMARY KEY, track_artists_json TEXT NOT NULL,
                      codec TEXT, container TEXT, sample_rate INTEGER, bit_depth INTEGER,
-                     channels INTEGER, bitrate INTEGER, label TEXT, isrc TEXT
+                     channels INTEGER, bitrate INTEGER, label TEXT, isrc TEXT,
+                     loudness_json TEXT
                  );
                  INSERT INTO artist_entity VALUES ('primary', 'Primary Artist');
                  INSERT INTO track_entity VALUES
@@ -11146,6 +11176,7 @@ mod external_library_tests {
             release_type: None,
             work_mbid: None,
             composed_year: None,
+            loudness_json: None,
         }
     }
 
@@ -12992,6 +13023,43 @@ mod external_library_tests {
     }
 
     #[test]
+    fn dsd_files_report_their_dsd_rate_and_id3_tags() {
+        use id3::TagLike;
+        let bytes: Vec<u8> = (0..20_000_u32).map(|n| (n % 251) as u8).collect();
+        let mut dsf = parson_output::dsd::write_dsf(2_822_400, 2, &bytes);
+        let mut tag = id3::Tag::new();
+        tag.set_title("Spem in alium");
+        tag.set_artist("The Tallis Scholars");
+        tag.set_album("Tallis: Spem in alium");
+        let mut encoded = Vec::new();
+        tag.write_to(&mut encoded, id3::Version::Id3v24).unwrap();
+        let offset = dsf.len() as u64;
+        dsf[20..28].copy_from_slice(&offset.to_le_bytes());
+        dsf.extend_from_slice(&encoded);
+        let metadata = super::parse_dsf_metadata(&mut Cursor::new(dsf)).unwrap();
+        assert_eq!(metadata.parse_strategy, ParserStrategy::DsfFast);
+        assert_eq!(metadata.title.as_deref(), Some("Spem in alium"));
+        assert_eq!(metadata.track_artists, ["The Tallis Scholars"]);
+        assert_eq!(metadata.technical.codec.as_deref(), Some("dsd"));
+        assert_eq!(metadata.technical.container.as_deref(), Some("dsf"));
+        assert_eq!(metadata.technical.sample_rate, Some(2_822_400));
+        assert_eq!(metadata.technical.bit_depth, Some(1));
+        // 10 000 bytes per channel at 352 800 bytes per second.
+        assert!((metadata.duration_seconds - 10_000.0 / 352_800.0).abs() < 1e-9);
+        assert_eq!(crate::domain::codec_is_lossless("dsd"), Some(true));
+
+        let dff = parson_output::dsd::write_dff(5_644_800, 2, &bytes);
+        let dff_length = dff.len() as u64;
+        let metadata = super::parse_dff_metadata(&mut Cursor::new(dff), dff_length).unwrap();
+        assert_eq!(metadata.parse_strategy, ParserStrategy::DffFast);
+        assert_eq!(metadata.technical.container.as_deref(), Some("dff"));
+        assert_eq!(metadata.technical.sample_rate, Some(5_644_800));
+        assert_eq!(AudioFormat::from_extension("dsf"), AudioFormat::Dsf);
+        assert_eq!(AudioFormat::from_extension("dff"), AudioFormat::Dff);
+        assert!(super::AUDIO_EXTENSIONS.contains(&"dsf"));
+    }
+
+    #[test]
     fn common_pcm_parsers_skip_audio_payloads() {
         let mut wav = Vec::new();
         wav.extend_from_slice(b"RIFF");
@@ -13810,7 +13878,7 @@ fn export_all_tracks(
                 t.track_number, t.duration_seconds, fe.path,
                 COALESCE(rfm.track_artists_json, '[]') AS track_artists_json,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
-                rfm.bitrate, rfm.label, rfm.isrc
+                rfm.bitrate, rfm.label, rfm.isrc, rfm.loudness_json
          FROM track_entity t
          LEFT JOIN track_artist ta ON ta.track_id = t.id AND ta.role = 'primary'
          LEFT JOIN artist_entity ar ON ar.id = ta.artist_id
@@ -13838,6 +13906,7 @@ fn export_all_tracks(
             .map(|artist| hash_artist(artist))
             .collect::<Vec<_>>();
         let audio = row.audio_properties();
+        let loudness = row.loudness();
         let credits = credits_by_track.remove(&row.id).unwrap_or_default();
         let song = Song {
             id: row.id.clone(),
@@ -13845,6 +13914,7 @@ fn export_all_tracks(
             credits,
             isrc: row.isrc.filter(|isrc| !isrc.is_empty()),
             label: row.label.filter(|label| !label.is_empty()),
+            loudness,
             name: value_override(overrides, "track", &row.id, "name", row.title),
             artist: value_override(overrides, "track", &row.id, "artist", row.artist),
             contributing_artists: typed_override(
@@ -14181,6 +14251,7 @@ mod technical_and_credit_tests {
         tag.insert_text(ItemKey::Remixer, "Rémy Remixer".into());
         tag.insert_text(ItemKey::Label, "Fixture Records".into());
         tag.insert_text(ItemKey::Isrc, "USRC17607839".into());
+        tag.insert_text(ItemKey::ReplayGainTrackGain, "-3.21 dB".into());
         let mut output = Cursor::new(source);
         tagged
             .save_to(&mut output, WriteOptions::default())
@@ -14203,6 +14274,7 @@ mod technical_and_credit_tests {
         assert_eq!(parsed.label, "Fixture Records");
         assert_eq!(parsed.isrc, "USRC17607839");
         assert_eq!(parsed.technical.codec.as_deref(), Some("alac"));
+        assert_eq!(parsed.loudness.track_gain_db, Some(-3.21));
     }
 
     #[test]
@@ -14389,6 +14461,14 @@ mod technical_and_credit_tests {
                 description: "ENGINEER".into(),
                 value: "Erin Engineer".into(),
             });
+            tag.add_frame(ExtendedText {
+                description: "replaygain_track_gain".into(),
+                value: "-6.40 dB".into(),
+            });
+            tag.add_frame(ExtendedText {
+                description: "REPLAYGAIN_ALBUM_PEAK".into(),
+                value: "0.999".into(),
+            });
             let mut bytes = Vec::new();
             tag.write_to(&mut bytes, version)
                 .expect("encode ID3 credits");
@@ -14418,6 +14498,8 @@ mod technical_and_credit_tests {
             assert_eq!(credits, expected, "{version:?}");
             assert_eq!(parsed.label, "Fixture Records", "{version:?}");
             assert_eq!(parsed.isrc, "USRC17607839", "{version:?}");
+            assert_eq!(parsed.loudness.track_gain_db, Some(-6.4), "{version:?}");
+            assert_eq!(parsed.loudness.album_peak, Some(0.999), "{version:?}");
             assert_eq!(parsed.technical.sample_rate, Some(44_100));
             assert_eq!(parsed.technical.bitrate_kbps, Some(192));
         }
@@ -14455,6 +14537,11 @@ mod technical_and_credit_tests {
                 "../../migrations/2026-10-27-121500_focus_compositions/up.sql"
             ))
             .expect("compositions schema");
+        connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-10-25-070000_track_loudness/up.sql"
+            ))
+            .expect("loudness schema");
         connection
     }
 
@@ -14571,6 +14658,12 @@ mod technical_and_credit_tests {
             work_id: Some("1f9df192-a621-4e4d-9a53-9a0e8b8a4b1e".into()),
             composed_year: Some(1808),
         };
+        parsed.loudness = Loudness {
+            track_gain_db: Some(-6.4),
+            track_peak: Some(0.988),
+            album_gain_db: Some(-7.1),
+            album_peak: None,
+        };
         let file = discovered("flac-96k-24bit-stereo.flac", 32_182);
         let files = vec![file.clone()];
         connection
@@ -14625,6 +14718,7 @@ mod technical_and_credit_tests {
         assert_eq!(reused.credits, parsed.credits);
         assert_eq!(reused.label, parsed.label);
         assert_eq!(reused.isrc, parsed.isrc);
+        assert_eq!(reused.loudness, parsed.loudness);
     }
 
     #[test]
@@ -14637,8 +14731,9 @@ mod technical_and_credit_tests {
                 "INSERT INTO library_root (id, path) VALUES (1, '/fixtures');
                  INSERT INTO file_entry (id, root_id, path, directory, file_name, extension, size_bytes, modified_at_ns)
                  VALUES (7, 1, '/fixtures/flac-96k-24bit-stereo.flac', '/fixtures', 'flac-96k-24bit-stereo.flac', 'flac', 1, 0);
-                 INSERT INTO raw_file_metadata (file_id, codec, container, sample_rate, bit_depth, channels, bitrate, label, isrc)
-                 VALUES (7, 'flac', 'flac', 96000, 24, 2, 3100, 'Fixture Records', 'USRC17607839');",
+                 INSERT INTO raw_file_metadata (file_id, codec, container, sample_rate, bit_depth, channels, bitrate, label, isrc, loudness_json)
+                 VALUES (7, 'flac', 'flac', 96000, 24, 2, 3100, 'Fixture Records', 'USRC17607839',
+                         '{\"track_gain_db\":-6.5,\"track_peak\":0.5}');",
             )
             .expect("file fixture");
         let file_ids = HashMap::from([(parsed[0].path.to_string(), 7)]);
@@ -14672,6 +14767,11 @@ mod technical_and_credit_tests {
         let json = serde_json::to_value(song).expect("song JSON");
         assert_eq!(json["audio"]["sample_rate"], 96_000);
         assert_eq!(json["credits"][2]["instrument"], "piano");
+        let loudness = song.loudness.expect("loudness");
+        assert_eq!(loudness.track_gain_db, Some(-6.5));
+        assert_eq!(loudness.track_peak, Some(0.5));
+        assert_eq!(loudness.album_gain_db, None);
+        assert_eq!(json["loudness"]["track_gain_db"], -6.5);
     }
 }
 

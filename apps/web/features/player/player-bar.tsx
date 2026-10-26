@@ -11,7 +11,6 @@ import {
 } from "./player-bar-hooks";
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
 import { PlayerFooter } from "./player-footer";
-import { FormatBadge } from "./format-badge";
 import PlayerQueue from "./player-queue";
 import { useMediaSession } from "./use-media-session";
 import { useCastOutput } from "./use-cast-output";
@@ -22,10 +21,12 @@ import {
   isExplicitSongTitle,
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
-import { useSession } from "@/features/account/session-provider";
 import { radioSectionStart, radioStationLabel } from "@parson/music-sdk";
 import { RadioThumbs } from "./radio/radio-controls";
 import { RadioNotices } from "./radio/radio-notices";
+import { useSignalPath } from "./signal-path";
+import { SignalPathLight } from "./signal-path-popover";
+import { DspPanel, isDspShortcut } from "./dsp-panel";
 
 export default function PlayerBar() {
   const {
@@ -57,9 +58,14 @@ export default function PlayerBar() {
     audioPresets,
     currentIndex,
     radio,
+    signal,
+    volumeLevelingMode,
+    setVolumeLevelingMode,
+    dsp,
+    setDsp,
+    output,
   } = usePlayer();
   const currentTime = usePlayerClock();
-  const { session } = useSession();
   const cast = useCastOutput();
   const castItem = cast.session?.items[cast.session.current_position] ?? null;
   const castSong = useQuery({
@@ -160,8 +166,40 @@ export default function PlayerBar() {
   }, []);
   const closeQueue = useCallback(() => setQueueOpen(false), []);
   const cover = effectiveCover;
-  const playbackRate =
-    audioPresets.find((preset) => preset.id === audioPreset)?.rate ?? 1;
+  const activePreset =
+    audioPresets.find((preset) => preset.id === audioPreset) ?? null;
+  const playbackRate = activePreset?.rate ?? 1;
+  const signalSongId = castItem?.song_id || song.id;
+  const { path: signalPath, loading: signalLoading } = useSignalPath({
+    audio: effectiveSong.audio,
+    castDeviceName: cast.session?.receiver_name,
+    casting,
+    muted: effectiveMuted,
+    preset: activePreset,
+    signal,
+    songId: signalSongId,
+    volume: effectiveVolume,
+  });
+  const [dspOpen, setDspOpen] = useState(false);
+  const openDsp = useCallback(() => setDspOpen(true), []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isDspShortcut(event) || event.defaultPrevented) return;
+      event.preventDefault();
+      setDspOpen((value) => !value);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const signalProps = {
+    casting,
+    onOpenDsp: casting ? undefined : openDsp,
+    levelingMode: volumeLevelingMode,
+    loading: signalLoading,
+    onLevelingModeChange: setVolumeLevelingMode,
+    path: signalPath,
+    streamBitrate: signal.streamBitrate,
+  };
 
   usePlayerShortcuts({
     currentTime: effectiveCurrentTime,
@@ -236,20 +274,6 @@ export default function PlayerBar() {
           cover={cover}
           currentTime={effectiveCurrentTime}
           duration={effectiveDuration}
-          formatBadge={
-            <FormatBadge
-              audio={effectiveSong.audio}
-              bitrate={session?.bitrate ?? 0}
-              casting={casting}
-              presetLabel={
-                audioPreset === "original"
-                  ? null
-                  : (audioPresets.find((preset) => preset.id === audioPreset)
-                      ?.label ?? null)
-              }
-              songId={castItem?.song_id || song.id}
-            />
-          }
           readPosition={casting ? undefined : getPlaybackPosition}
           isPlaying={effectivePlaying}
           looping={looping}
@@ -291,6 +315,7 @@ export default function PlayerBar() {
           playbackRate={playbackRate}
           queue={queue}
           queueOpen={queueOpen}
+          signalBadge={<SignalPathLight variant="pill" {...signalProps} />}
           slowedReverb={slowedReverb}
           songId={castItem?.song_id || song.id}
           title={displayTitle}
@@ -343,18 +368,26 @@ export default function PlayerBar() {
         </div>
       ) : null}
 
+      <DspPanel
+        casting={casting}
+        onChange={setDsp}
+        onOpenChange={setDspOpen}
+        open={dspOpen}
+        output={output}
+        path={signalPath}
+        settings={dsp}
+      />
+
       <PlayerFooter
+        onOpenDsp={casting ? undefined : openDsp}
         albumCover={effectiveSong.album_object.cover_url}
         albumId={effectiveSong.album_object.id || album.id}
         albumName={effectiveSong.album_object.name || album.name}
         artistId={effectiveSong.artist_object.id || artist.id}
         artistName={displayArtist}
         artistCredits={artistCredits}
-        audio={effectiveSong.audio}
         audioPreset={audioPreset}
         audioPresets={audioPresets}
-        bitrate={session?.bitrate ?? 0}
-        casting={casting}
         cover={cover}
         currentTime={effectiveCurrentTime}
         duration={effectiveDuration}
@@ -381,6 +414,7 @@ export default function PlayerBar() {
         onVolumeChange={changeVolume}
         playbackRate={playbackRate}
         queueOpen={queueOpen}
+        signalLight={<SignalPathLight {...signalProps} />}
         slowedReverb={slowedReverb}
         songId={castItem?.song_id || song.id}
         title={displayTitle}

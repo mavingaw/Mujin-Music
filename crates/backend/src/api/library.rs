@@ -25,6 +25,7 @@ use crate::api::error::{
     service_unavailable,
 };
 use crate::domain::Artist;
+use crate::signal_path::{ServerLegRequest, StreamTarget, describe_server_leg};
 
 const MAX_CONCURRENT_TRANSCODES: usize = 4;
 const DEFAULT_TRANSCODE_CACHE_MAX_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -1505,15 +1506,9 @@ pub enum StreamAudioEffect {
 }
 
 impl StreamAudioEffect {
+    /// The effect's id in delivery plans and the signal path.
     fn plan_name(self) -> Option<&'static str> {
-        match self {
-            Self::None => None,
-            Self::LightReverb => Some("light_reverb"),
-            Self::Reverb => Some("reverb"),
-            Self::DeepReverb => Some("deep_reverb"),
-            Self::PitchDown => Some("pitch_down"),
-            Self::SlowedReverb => Some("slowed_reverb"),
-        }
+        self.signal_effect().map(|effect| effect.id)
     }
 
     fn cache_name(self) -> &'static str {
@@ -1522,8 +1517,8 @@ impl StreamAudioEffect {
             Self::LightReverb => "light-reverb-v1",
             Self::Reverb => "reverb-v1",
             Self::DeepReverb => "deep-reverb-v1",
-            Self::PitchDown => "pitch-down-v1",
-            Self::SlowedReverb => "slowed-reverb-v2",
+            Self::PitchDown => "pitch-down-v2",
+            Self::SlowedReverb => "slowed-reverb-v3",
         }
     }
 
@@ -1534,12 +1529,66 @@ impl StreamAudioEffect {
             Self::LightReverb => Some("aecho=0.98:0.08:70:0.20"),
             Self::Reverb => Some("aecho=0.80:0.46:70:0.28"),
             Self::DeepReverb => Some("aecho=0.62:0.76:70:0.38"),
-            // Restore duration after changing sample rate for pitch-only control.
-            Self::PitchDown => Some("asetrate=44100*0.82,aresample=44100,atempo=1.219512195"),
+            // Resample to 44.1 kHz first so asetrate's fixed base rate gives
+            // the same pitch for every source rate, then restore duration
+            // after changing sample rate for pitch-only control.
+            Self::PitchDown => {
+                Some("aresample=44100,asetrate=44100*0.82,aresample=44100,atempo=1.219512195")
+            }
             Self::SlowedReverb => {
-                Some("asetrate=44100*0.82,aresample=44100,aecho=0.65:0.42:70:0.28")
+                Some("aresample=44100,asetrate=44100*0.82,aresample=44100,aecho=0.65:0.42:70:0.28")
             }
         }
+    }
+
+    /// How the signal path presents this effect.
+    fn signal_effect(self) -> Option<crate::signal_path::DspEffect> {
+        use crate::signal_path::DspEffect;
+        let (id, label, detail, output_sample_rate) = match self {
+            Self::None => return None,
+            Self::LightReverb => (
+                "light_reverb",
+                "Light reverb",
+                "Server echo reverb, 20% wet",
+                None,
+            ),
+            Self::Reverb => ("reverb", "Reverb", "Server echo reverb, 28% wet", None),
+            Self::DeepReverb => (
+                "deep_reverb",
+                "Deep reverb",
+                "Server echo reverb, 38% wet",
+                None,
+            ),
+            Self::PitchDown => (
+                "pitch_down",
+                "Pitch down",
+                "-3.4 semitones, tempo kept",
+                Some(44_100),
+            ),
+            Self::SlowedReverb => (
+                "slowed_reverb",
+                "Slowed + reverb",
+                "0.82x speed and pitch, echo reverb 28% wet",
+                Some(44_100),
+            ),
+        };
+        Some(DspEffect {
+            id,
+            label,
+            detail,
+            output_sample_rate,
+        })
+    }
+}
+
+/// Folds surround into stereo because the MP3 encoder takes at most two
+/// channels; ffmpeg picks the layout conversion.
+const TRANSCODE_CHANNEL_FILTER: &str = "aformat=channel_layouts=mono|stereo";
+
+fn transcode_filter_graph(audio_effect: StreamAudioEffect) -> String {
+    match audio_effect.ffmpeg_filter() {
+        Some(filter) => format!("[0:a:0]{filter},{TRANSCODE_CHANNEL_FILTER}[a]"),
+        None => format!("[0:a:0]{TRANSCODE_CHANNEL_FILTER}[a]"),
     }
 }
 
@@ -1866,6 +1915,151 @@ mod reliability_tests {
         let combined = StreamAudioEffect::SlowedReverb.ffmpeg_filter().unwrap();
         assert!(combined.contains("asetrate"));
         assert!(combined.contains("aecho"));
+    }
+
+    fn signal_path_cache() -> crate::library::state::LibraryCache {
+        use std::collections::HashMap;
+        let song = Song {
+            id: "song-1".into(),
+            name: "Fixture".into(),
+            path: "/music/fixture.flac".into(),
+            audio: Some(crate::domain::AudioProperties {
+                codec: Some("flac".into()),
+                container: Some("flac".into()),
+                sample_rate: Some(96_000),
+                bit_depth: Some(24),
+                channels: Some(2),
+                bitrate_kbps: Some(2_800),
+                lossless: Some(true),
+            }),
+            ..Song::default()
+        };
+        let album = Album {
+            id: "album-1".into(),
+            songs: vec![song],
+            ..Album::default()
+        };
+        let artist = Artist {
+            id: "artist-1".into(),
+            albums: vec![album],
+            ..Artist::default()
+        };
+        crate::library::state::LibraryCache {
+            search_index: crate::library::search::SearchIndex::build(std::slice::from_ref(&artist))
+                .expect("search index"),
+            artists: Arc::new(vec![artist]),
+            song_map: HashMap::from([("song-1".into(), ("artist-1".into(), "album-1".into()))]),
+            album_genres: HashMap::new(),
+            artist_positions: HashMap::from([("artist-1".into(), 0)]),
+            album_positions: HashMap::from([("album-1".into(), (0, 0))]),
+            song_positions: HashMap::from([("song-1".into(), (0, 0, 0))]),
+            songs_flat: vec!["song-1".into()],
+            songs_by_artist: HashMap::new(),
+            songs_by_genre: HashMap::new(),
+            image_paths: Default::default(),
+        }
+    }
+
+    #[actix_web::test]
+    async fn signal_path_route_describes_the_requested_stream() {
+        use actix_web::{App, test, web};
+        let lifecycle = crate::library::state::LibraryLifecycle::new();
+        lifecycle.set_ready(signal_path_cache()).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(lifecycle))
+                .service(super::song_signal_path),
+        )
+        .await;
+
+        let original: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/song-1/signal-path")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(original["mode"], "original");
+        assert_eq!(original["quality"], "lossless");
+        assert_eq!(original["source"]["summary"], "FLAC 96kHz 24bit 2ch");
+        assert_eq!(original["source"]["high_res"], true);
+        assert_eq!(original["content_type"], "audio/flac");
+
+        let reverb: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/song-1/signal-path?bitrate=0&audio_effect=slowed_reverb")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(reverb["mode"], "transcode");
+        assert_eq!(reverb["effect"], "slowed_reverb");
+        assert_eq!(reverb["delivered"]["sample_rate"], 44_100);
+        assert_eq!(reverb["delivered"]["bitrate_kbps"], 192);
+
+        let cast: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/song-1/signal-path?target=cast")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(cast["target"], "cast");
+        // Cast receivers take FLAC up to 24-bit/96 kHz, so this file is sent as is.
+        assert_eq!(cast["mode"], "original");
+        assert_eq!(cast["delivered"]["codec"], "flac");
+        assert_eq!(cast["quality"], "lossless");
+
+        // The player's formats plan the leg exactly as they plan the stream.
+        let limited: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/media/songs/song-1/signal-path?accept=flac,mp3&max_sample_rate=48000")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(limited["mode"], "transcode");
+        assert_eq!(limited["delivered"]["codec"], "flac");
+        assert_eq!(limited["delivered"]["sample_rate"], 48_000);
+        assert_eq!(limited["content_type"], "audio/flac");
+
+        for (uri, status) in [
+            ("/media/songs/song-1/signal-path?bitrate=999", 400),
+            ("/media/songs/missing/signal-path", 404),
+            ("/media/songs/song-1/signal-path?target=sonos", 400),
+            ("/media/songs/song-1/signal-path?target=native", 400),
+        ] {
+            let response =
+                test::call_service(&app, test::TestRequest::get().uri(uri).to_request()).await;
+            assert_eq!(response.status().as_u16(), status, "{uri}");
+        }
+    }
+
+    #[test]
+    fn transcodes_fold_surround_and_pitch_effects_normalize_the_base_rate() {
+        assert_eq!(
+            super::transcode_filter_graph(StreamAudioEffect::None),
+            "[0:a:0]aformat=channel_layouts=mono|stereo[a]"
+        );
+        let graph = super::transcode_filter_graph(StreamAudioEffect::Reverb);
+        assert!(graph.starts_with("[0:a:0]aecho="));
+        assert!(graph.ends_with(",aformat=channel_layouts=mono|stereo[a]"));
+        for effect in [
+            StreamAudioEffect::PitchDown,
+            StreamAudioEffect::SlowedReverb,
+        ] {
+            let filter = effect.ffmpeg_filter().unwrap();
+            assert!(filter.starts_with("aresample=44100,asetrate="), "{filter}");
+            assert_eq!(
+                effect.signal_effect().unwrap().output_sample_rate,
+                Some(44_100)
+            );
+        }
+        assert!(StreamAudioEffect::None.signal_effect().is_none());
+        assert_eq!(
+            StreamAudioEffect::DeepReverb.signal_effect().unwrap().id,
+            "deep_reverb"
+        );
     }
 
     #[test]
@@ -2278,17 +2472,11 @@ async fn stream_cached_transcode(
     let mut command = Command::new("ffmpeg");
     command.kill_on_drop(true);
     command.args(["-y", "-i"]).arg(input_path);
-    if let Some(filter) = audio_effect.ffmpeg_filter() {
-        command.args([
-            "-filter_complex",
-            &format!("[0:a:0]{filter}[a]"),
-            "-map",
-            "[a]",
-        ]);
-    } else {
-        command.args(["-map", "0:a:0"]);
-    }
     command.args([
+        "-filter_complex",
+        &transcode_filter_graph(audio_effect),
+        "-map",
+        "[a]",
         "-b:a",
         &bitrate_arg,
         "-f",
@@ -2299,6 +2487,8 @@ async fn stream_cached_transcode(
         "0",
         "-write_xing",
         "0",
+    ]);
+    command.args([
         "-flush_packets",
         "1",
         "-threads",
@@ -2583,6 +2773,102 @@ async fn song_delivery(
     HttpResponse::Ok()
         .insert_header((header::CACHE_CONTROL, "no-store"))
         .json(serde_json::json!({ "song_id": song_id, "plan": plan }))
+}
+
+#[derive(Deserialize)]
+pub struct SignalPathQuery {
+    #[serde(default)]
+    pub bitrate: u32,
+    pub slowed_reverb: Option<bool>,
+    pub audio_effect: Option<StreamAudioEffect>,
+    pub target: Option<StreamTarget>,
+    /// Server output device, for `target=native`.
+    pub device: Option<String>,
+    /// The player's formats, as sent with the stream request (see
+    /// [`BitrateQueryParams`]).
+    pub accept: Option<String>,
+    pub max_sample_rate: Option<u32>,
+    pub max_bit_depth: Option<u8>,
+    pub max_channels: Option<u8>,
+    pub dsd: Option<String>,
+}
+
+/// Describes the server leg of the signal path for a stream request with
+/// the same parameters as `/media/songs/{song}/stream`.
+#[get("/media/songs/{song}/signal-path")]
+pub async fn song_signal_path(
+    path: web::Path<String>,
+    query: web::Query<SignalPathQuery>,
+    lifecycle: web::Data<LibraryLifecycle>,
+    native: Option<web::Data<crate::native_output::NativeOutputs>>,
+) -> HttpResponse {
+    let bitrate = query.bitrate;
+    if bitrate > MAX_STREAM_BITRATE || (bitrate > 0 && bitrate < MIN_STREAM_BITRATE) {
+        return bad_request("Invalid bitrate.", "invalid_bitrate");
+    }
+    let audio_effect = query.audio_effect.unwrap_or_else(|| {
+        if query.slowed_reverb.unwrap_or(false) {
+            StreamAudioEffect::SlowedReverb
+        } else {
+            StreamAudioEffect::None
+        }
+    });
+    let cache = match lifecycle.cache().await {
+        Ok(cache) => cache,
+        Err(readiness) => return library_unavailable_response(readiness),
+    };
+    let Some(song) = cache.song(&path) else {
+        return not_found("Song not found.", "song_not_found");
+    };
+    let target = query.target.unwrap_or(StreamTarget::Direct);
+    if target == StreamTarget::Native {
+        let Some(device) = query.device.clone().filter(|device| !device.is_empty()) else {
+            return bad_request("A server output device is required.", "device_required");
+        };
+        let outputs = native
+            .map(|data| data.into_inner())
+            .unwrap_or_else(crate::native_output::global);
+        let song = song.clone();
+        return match web::block(move || outputs.describe(&device, &song)).await {
+            Ok(Ok((_, path))) => HttpResponse::Ok().json(path),
+            Ok(Err(error @ crate::native_output::NativeError::UnknownDevice)) => {
+                not_found(error.to_string(), error.code())
+            }
+            Ok(Err(error)) => bad_request(error.to_string(), error.code()),
+            Err(_) => crate::api::error::internal_server_error(
+                "The audio output task stopped.",
+                "native_output_task_failed",
+            ),
+        };
+    }
+    let song_path = Path::new(&song.path);
+    let extension = song_path
+        .extension()
+        .and_then(|extension| extension.to_str());
+    let request = ServerLegRequest {
+        bitrate_kbps: bitrate,
+        effect: audio_effect.signal_effect(),
+        target,
+        // The same capabilities the stream route plans with.
+        capabilities: if target == StreamTarget::Cast {
+            OutputCapabilities::google_cast()
+        } else {
+            OutputCapabilities::from_query(
+                query.accept.as_deref(),
+                query.max_sample_rate,
+                query.max_bit_depth,
+                query.max_channels,
+                query.dsd.as_deref(),
+            )
+        },
+    };
+    HttpResponse::Ok().json(describe_server_leg(
+        &song.id,
+        song.audio.as_ref(),
+        extension,
+        content_type_for_path(song_path),
+        &request,
+    ))
 }
 
 async fn resolve_stream_song_with_refresh(
