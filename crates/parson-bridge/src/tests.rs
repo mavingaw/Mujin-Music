@@ -112,7 +112,11 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
         .expect("volume");
     bridge.set_hardware_mute("sim-usb-dac", true).expect("mute");
     let deadline = Instant::now() + Duration::from_secs(2);
-    while backend.capture("sim-usb-dac").volume_db != Some(-23.5) && Instant::now() < deadline {
+    // Volume and mute are separate messages: wait for both to land.
+    while Instant::now() < deadline && {
+        let capture = backend.capture("sim-usb-dac");
+        capture.volume_db != Some(-23.5) || !capture.muted
+    } {
         std::thread::sleep(Duration::from_millis(5));
     }
     let capture = backend.capture("sim-usb-dac");
@@ -129,9 +133,12 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
     let mut stream = bridge.open("sim-usb-dac", format, true).expect("reopen");
     let second = noise(44_100, 2, 9);
     stream.write(&second).expect("write");
+    // Pause returns once the bridge reports its device stopped, so the
+    // position it leaves is exact and holds through later reports.
     stream.pause(true).expect("pause in place");
     let held = stream.delay_frames();
-    std::thread::sleep(Duration::from_millis(100));
+    // Several status reports (every 50 ms) arrive while paused.
+    std::thread::sleep(Duration::from_millis(200));
     assert_eq!(stream.delay_frames(), held, "nothing plays while paused");
     stream.pause(false).expect("resume");
     stream.drop_buffer();

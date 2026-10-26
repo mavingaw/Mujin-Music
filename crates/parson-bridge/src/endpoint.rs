@@ -538,6 +538,7 @@ impl Player {
                 corrections: self.corrections,
                 underruns: self.underruns,
                 started: self.started,
+                paused: self.device_paused,
             },
         )
     }
