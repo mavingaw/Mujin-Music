@@ -15,6 +15,8 @@ import { useQuery } from "@tanstack/react-query";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
 import AlbumMenu from "@/features/library/album-menu";
+import { StartRadioButton } from "@/features/player/radio/radio-controls";
+import { BannedBadge, BanToggleButton } from "@/features/library/radio-bans";
 import { songCreditsArtist } from "@/features/library/artist-appearance";
 
 type ArtistDetailsProps = {
@@ -132,9 +134,20 @@ export default function ArtistDetails({
               />
             </div>
           )}
-          <h1 className="min-w-0 wrap-break-word text-4xl font-black leading-none text-white sm:text-6xl">
-            {artist.name}
-          </h1>
+          <div className="min-w-0">
+            <h1 className="min-w-0 wrap-break-word text-4xl font-black leading-none text-white sm:text-6xl">
+              {artist.name}
+            </h1>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <StartRadioButton
+                label={`Start ${artist.name} radio`}
+                seed={{ kind: "artist", id: artist.id }}
+              />
+              <BanToggleButton
+                target={{ kind: "artist", id: artist.id, name: artist.name }}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="space-y-12">
@@ -149,6 +162,7 @@ export default function ArtistDetails({
                     {section.albums.map((album) => (
                       <AlbumMenu
                         album_id={album.id}
+                        album_name={album.name}
                         artist_id={artist.id}
                         key={album.id}
                         showArtist={false}
@@ -175,6 +189,10 @@ export default function ArtistDetails({
                               <AlbumArtFallback />
                             )}
                             <div className="absolute inset-0 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
+                            <BannedBadge
+                              className="absolute bottom-2 left-2 rounded-full bg-black/75 p-1"
+                              target={{ kind: "album", id: album.id }}
+                            />
                           </div>
                           <div className="mt-3 min-w-0">
                             <h4

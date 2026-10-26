@@ -10,13 +10,16 @@ import {
 import { useSession } from "@/features/account/session-provider";
 import { usePlayer } from "@/features/player/player-context";
 import { getAlbumInfo, type LibraryAlbum } from "@parson/music-sdk";
-import { Disc3, Download, Play, UserRound } from "lucide-react";
+import { Disc3, Download, Play, Radio, UserRound } from "lucide-react";
+import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { toast } from "sonner";
 import Link from "next/link";
+import { BanMenuItem } from "@/features/library/radio-bans";
 
 type AlbumMenuProps = {
   album_id: string;
+  album_name?: string;
   artist_id: string;
   children: React.ReactNode;
   showArtist?: boolean;
@@ -24,11 +27,13 @@ type AlbumMenuProps = {
 
 export default function AlbumMenu({
   album_id,
+  album_name,
   artist_id,
   children,
   showArtist = true,
 }: AlbumMenuProps) {
   const player = usePlayer();
+  const startRadio = useStartRadio();
   const { session } = useSession();
 
   const loadAlbum = () =>
@@ -63,6 +68,15 @@ export default function AlbumMenu({
           <Play className="h-4 w-4" />
           Play
         </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void startRadio({ kind: "album", id: album_id })}
+        >
+          <Radio className="h-4 w-4" />
+          Start radio
+        </ContextMenuItem>
+        <BanMenuItem
+          target={{ kind: "album", id: album_id, name: album_name }}
+        />
         <ContextMenuSeparator />
         <ContextMenuItem asChild>
           <Link href={`/album?id=${album_id}`}>

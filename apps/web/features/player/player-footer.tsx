@@ -15,7 +15,7 @@ import {
 import { AudioLines, ListMusic, Maximize2, MicVocal } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
 import { FormatBadge } from "./format-badge";
@@ -63,6 +63,7 @@ export function PlayerFooter({
   songId,
   title,
   explicit,
+  feedback,
   volume,
 }: {
   albumCover?: string;
@@ -100,6 +101,8 @@ export function PlayerFooter({
   songId: string;
   title: string;
   explicit: boolean;
+  /** Radio thumbs for the current track, when it is a Radio pick. */
+  feedback?: ReactNode;
   volume: number;
 }) {
   return (
@@ -137,6 +140,7 @@ export function PlayerFooter({
             songId={songId}
             title={title}
             explicit={explicit}
+            feedback={feedback}
           />
           <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
             <PlaybackControls
@@ -240,6 +244,7 @@ function TrackInfo({
   presetLabel,
   title,
   explicit,
+  feedback,
   songId,
 }: {
   albumId: string;
@@ -251,6 +256,7 @@ function TrackInfo({
   presetLabel: string | null;
   title: string;
   explicit: boolean;
+  feedback?: ReactNode;
   songId: string;
 }) {
   return (
@@ -285,6 +291,9 @@ function TrackInfo({
         </span>
       </div>
       <FavoriteButton songId={songId} songName={title} />
+      {feedback && (
+        <span className="relative z-30 hidden md:flex">{feedback}</span>
+      )}
     </section>
   );
 }

@@ -32,6 +32,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { PageTitle, Screen } from "@/components/music-ui";
 import { layout, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
+import { RadioSettingsRows } from "@/components/radio-ui";
 
 type Tab = "account" | "playback" | "devices" | "library" | "users";
 const labels: Record<Tab, string> = {
@@ -603,6 +604,7 @@ function PlaybackSettings({
           </Text>
         </Pressable>
       ))}
+      <RadioSettingsRows />
     </>
   );
 }

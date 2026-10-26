@@ -23,6 +23,9 @@ import {
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
 import { useSession } from "@/features/account/session-provider";
+import { radioSectionStart, radioStationLabel } from "@parson/music-sdk";
+import { RadioThumbs } from "./radio/radio-controls";
+import { RadioNotices } from "./radio/radio-notices";
 
 export default function PlayerBar() {
   const {
@@ -52,6 +55,8 @@ export default function PlayerBar() {
     volume,
     audioPreset,
     audioPresets,
+    currentIndex,
+    radio,
   } = usePlayer();
   const currentTime = usePlayerClock();
   const { session } = useSession();
@@ -92,6 +97,26 @@ export default function PlayerBar() {
     { id: effectiveSong.artist_object.id || artist.id, name: effectiveArtist },
   ];
   const displayArtist = artistCredits.map((credit) => credit.name).join(", ");
+  const currentItem = casting ? undefined : queue[currentIndex];
+  const currentIsRadioPick =
+    currentItem?.origin === "generated" &&
+    radioSectionStart(
+      queue.map((item) => item.origin),
+      currentIndex - 1,
+    ) === currentIndex;
+  const feedback =
+    currentItem && currentItem.song.id === song.id ? (
+      <RadioThumbs
+        index={currentIndex}
+        label={currentItem.song.name || "this song"}
+        liked={currentItem.liked}
+      />
+    ) : null;
+  const radioLabel = !currentIsRadioPick
+    ? null
+    : radio.seed && radio.seed.kind !== "song"
+      ? radioStationLabel(radio.seed)
+      : `Radio · ${radioStationLabel(radio.seed)}`;
   const togglePlayback = casting
     ? () => cast.send({ command: cast.session?.playing ? "pause" : "play" })
     : togglePlayPause;
@@ -270,6 +295,8 @@ export default function PlayerBar() {
           songId={castItem?.song_id || song.id}
           title={displayTitle}
           explicit={isExplicitSongTitle(effectiveTitle)}
+          feedback={feedback}
+          radioLabel={radioLabel}
           timedLyrics={timedLyrics}
           volume={effectiveVolume}
         />
@@ -358,8 +385,10 @@ export default function PlayerBar() {
         songId={castItem?.song_id || song.id}
         title={displayTitle}
         explicit={isExplicitSongTitle(effectiveTitle)}
+        feedback={currentIsRadioPick ? feedback : null}
         volume={effectiveVolume}
       />
+      {!casting && !fullscreenOpen && !queueOpen && <RadioNotices />}
     </>
   );
 }

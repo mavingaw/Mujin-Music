@@ -4,7 +4,9 @@ import {
   addFavoriteSong,
   findLyrics,
   isFavoriteSong,
+  radioStationLabel,
   removeFavoriteSong,
+  heartState,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
@@ -24,6 +26,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Ban,
   Heart,
   Gauge,
   AudioLines,
@@ -71,7 +74,14 @@ import {
 import { PlaylistPicker } from "@/components/playlist-picker";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
+import { BanAction, useRadioBans } from "@/components/radio-bans";
 import { CastOutputButton } from "@/components/cast-output-button";
+import {
+  RadioNotices,
+  RadioQueueHeader,
+  RadioThumbs,
+  StartRadioAction,
+} from "@/components/radio-ui";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -148,6 +158,7 @@ function NowPlayingPanel({
   song,
   router,
   favorite,
+  banned,
   onToggleFavorite,
   onQueue,
   onLyrics,
@@ -159,6 +170,8 @@ function NowPlayingPanel({
   song: PlayerSong;
   router: Router;
   favorite: boolean;
+  /** Third heart state, as in Roon: Radio and Shuffle never pick it. */
+  banned: boolean;
   onToggleFavorite: () => void;
   onQueue: () => void;
   onLyrics: () => void;
@@ -179,6 +192,13 @@ function NowPlayingPanel({
       />
       <View style={styles.songInfo}>
         <View style={{ flex: 1 }}>
+          {player.radio.currentIsPick ? (
+            <Text numberOfLines={1} style={styles.radioLabel}>
+              {player.radio.seed && player.radio.seed.kind !== "song"
+                ? radioStationLabel(player.radio.seed)
+                : `Radio · ${radioStationLabel(player.radio.seed)}`}
+            </Text>
+          ) : null}
           <Text
             accessibilityLabel={`View album ${song.album_object?.name ?? song.name}`}
             accessibilityRole={song.album_object?.id ? "button" : undefined}
@@ -210,9 +230,11 @@ function NowPlayingPanel({
           accessibilityLabel={
             !online
               ? "Liked songs unavailable offline"
-              : favorite
-                ? "Remove from liked songs"
-                : "Add to liked songs"
+              : banned
+                ? "Banned from Radio and Shuffle. Unban"
+                : favorite
+                  ? "Remove from liked songs and ban from Radio"
+                  : "Add to liked songs"
           }
           accessibilityRole="button"
           disabled={!online}
@@ -220,14 +242,24 @@ function NowPlayingPanel({
           style={!online ? styles.disabledControl : undefined}
           onPress={onToggleFavorite}
         >
-          <Heart
-            color={favorite ? palette.danger : "white"}
-            fill={favorite ? palette.danger : "transparent"}
-            size={25}
-          />
+          {banned ? (
+            <Ban color={palette.danger} size={25} />
+          ) : (
+            <Heart
+              color={favorite ? palette.danger : "white"}
+              fill={favorite ? palette.danger : "transparent"}
+              size={25}
+            />
+          )}
         </Pressable>
       </View>
+      {online ? (
+        <View style={styles.feedbackRow}>
+          <RadioThumbs index={player.currentIndex} name={song.name} />
+        </View>
+      ) : null}
       <PlaybackTimeline onSeek={player.seek} />
+      {online ? <RadioNotices /> : null}
       {notice ? (
         <Text accessibilityRole="alert" style={styles.playbackError}>
           {notice}
@@ -394,6 +426,7 @@ function PlaybackTimeline({ onSeek }: { onSeek: (seconds: number) => void }) {
 }
 
 function QueuePanel({ player }: { player: Player }) {
+  const sectionStart = player.radio.sectionStart;
   return (
     <View style={styles.panel}>
       {player.currentIndex < player.queue.length - 1 ? (
@@ -408,26 +441,40 @@ function QueuePanel({ player }: { player: Player }) {
       <FlatList
         data={player.queue}
         contentContainerStyle={{ paddingVertical: 10 }}
-        getItemLayout={(_data, index) => ({
-          index,
-          length: 64,
-          offset: 64 * index,
-        })}
         keyExtractor={(item, index) => `${item.id}-${index}`}
         removeClippedSubviews
-        renderItem={({ item, index }) => (
-          <SongRow
-            song={item}
-            queue={player.queue}
-            index={index}
-            onRemove={
-              index === player.currentIndex
-                ? undefined
-                : () => player.removeFromQueue(index)
-            }
-            removeLabel="Remove from queue"
-          />
-        )}
+        ListFooterComponent={
+          sectionStart < 0 ? <RadioQueueHeader hasPicks={false} /> : null
+        }
+        renderItem={({ item, index }) => {
+          const radioPick = sectionStart >= 0 && index >= sectionStart;
+          const row = (
+            <SongRow
+              song={item}
+              queue={player.queue}
+              index={index}
+              onRemove={
+                index === player.currentIndex
+                  ? undefined
+                  : () => player.removeFromQueue(index)
+              }
+              removeLabel="Remove from queue"
+            />
+          );
+          return (
+            <>
+              {index === sectionStart ? <RadioQueueHeader hasPicks /> : null}
+              {radioPick ? (
+                <View style={styles.radioRow}>
+                  <View style={{ flex: 1 }}>{row}</View>
+                  <RadioThumbs index={index} name={item.name} size={18} />
+                </View>
+              ) : (
+                row
+              )}
+            </>
+          );
+        }}
       />
     </View>
   );
@@ -633,6 +680,16 @@ function PlayerDrawers({
             onActionsClose();
           }}
         />
+        {online ? (
+          <StartRadioAction
+            seed={{ kind: "song", id: song.id }}
+            onStarted={onActionsClose}
+          />
+        ) : null}
+        <BanAction
+          target={{ kind: "song", id: song.id, name: song.name }}
+          onDone={onActionsClose}
+        />
         {online && song.album_object?.id ? (
           <DrawerAction
             icon={Disc3}
@@ -772,6 +829,7 @@ export default function PlayerScreen() {
     staleTime: 30 * 60_000,
     retry: false,
   });
+  const bans = useRadioBans();
   const favorite = useQuery({
     queryKey: ["favorite-membership", player.current?.id],
     queryFn: () => isFavoriteSong(player.current!.id),
@@ -810,9 +868,23 @@ export default function PlayerScreen() {
       </View>
     );
   const song = player.current;
+  const songBanned = bans.isBanned({ kind: "song", id: song.id });
+  /** Heart cycle: not liked, liked, banned, then back to not liked. */
   const toggleFavorite = async () => {
     if (session.phase !== "ready") return;
     setFavoriteErrorSong(null);
+    const state = heartState(!!favorite.data, songBanned);
+    const target = { kind: "song" as const, id: song.id, name: song.name };
+    if (state === "banned") {
+      if (!(await bans.setBanned(target, false))) {
+        setFavoriteErrorSong(song.id);
+      }
+      return;
+    }
+    if (state === "liked" && !(await bans.setBanned(target, true))) {
+      setFavoriteErrorSong(song.id);
+      return;
+    }
     const next = !favorite.data;
     client.setQueryData(["favorite-membership", song.id], next);
     try {
@@ -844,6 +916,7 @@ export default function PlayerScreen() {
               song={song}
               router={router}
               favorite={!!favorite.data}
+              banned={songBanned}
               onToggleFavorite={() => void toggleFavorite()}
               onQueue={() => setPanel("queue")}
               onLyrics={() => setPanel("lyrics")}
@@ -968,6 +1041,16 @@ const styles = StyleSheet.create({
   },
   panelText: { color: "white", fontWeight: "800" },
   panel: { flex: 1, paddingTop: 18 },
+  radioLabel: {
+    color: "#7dd3fc",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  feedbackRow: { flexDirection: "row", marginTop: -4, marginLeft: -8 },
+  radioRow: { flexDirection: "row", alignItems: "center", paddingRight: 12 },
   lyricsPanel: {
     overflow: "hidden",
     backgroundColor: "#111114",

@@ -5,6 +5,8 @@ import { useState } from "react";
 
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { usePlayer } from "@/providers/player-provider";
+import { StartRadioAction } from "@/components/radio-ui";
+import { BanAction } from "@/components/radio-bans";
 
 export function ArtistActions({
   artistId,
@@ -41,6 +43,14 @@ export function ArtistActions({
             .catch(() => setFailed(true))
             .finally(() => setLoading(false));
         }}
+      />
+      <StartRadioAction
+        seed={{ kind: "artist", id: artistId }}
+        onStarted={onClose}
+      />
+      <BanAction
+        target={{ kind: "artist", id: artistId, name }}
+        onDone={onClose}
       />
       <DrawerAction
         icon={UserRound}

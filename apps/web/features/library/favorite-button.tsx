@@ -2,11 +2,14 @@
 
 import {
   addFavoriteSong,
+  heartState,
   isFavoriteSong,
+  nextHeartState,
   removeFavoriteSong,
 } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, Loader2 } from "lucide-react";
+import { Ban, Heart, Loader2 } from "lucide-react";
+import { useRadioBans } from "./radio-bans";
 
 const favoriteSongDetailsKey = ["favorite-song-details"] as const;
 
@@ -55,6 +58,10 @@ export function useFavoriteSong(songId: string, enabled = true) {
   };
 }
 
+/**
+ * The song heart. Like Roon's, it has three states: not a favourite,
+ * favourite (Liked Songs), and banned (Radio and Shuffle never pick it).
+ */
 export default function FavoriteButton({
   className = "",
   songId,
@@ -65,33 +72,63 @@ export default function FavoriteButton({
   songName?: string;
 }) {
   const favorite = useFavoriteSong(songId);
+  const bans = useRadioBans();
+  const banned = bans.isBanned({ kind: "song", id: songId });
+  const state = heartState(favorite.liked, banned);
   const target = songName ? ` ${songName}` : "";
+  const next = nextHeartState(state);
+  const label =
+    state === "banned"
+      ? `${songName ?? "This song"} is banned. Unban`
+      : state === "liked"
+        ? `Remove${target} from Liked Songs and ban it from Radio`
+        : `Add${target} to Liked Songs`;
+
+  const cycle = () => {
+    const ban = { kind: "song" as const, id: songId, name: songName };
+    if (next === "liked") {
+      favorite.toggle();
+    } else if (next === "banned") {
+      favorite.toggle();
+      bans.setBanned(ban, true);
+    } else {
+      bans.setBanned(ban, false);
+    }
+  };
+
   return (
     <button
-      aria-label={
-        favorite.liked
-          ? `Remove${target} from Liked Songs`
-          : `Add${target} to Liked Songs`
-      }
-      aria-pressed={favorite.liked}
+      aria-label={label}
+      aria-pressed={state !== "none"}
       className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
-        favorite.liked
+        state === "liked"
           ? "text-rose-400 hover:bg-rose-400/10"
-          : "text-zinc-500 hover:bg-white/10 hover:text-white"
+          : state === "banned"
+            ? "text-rose-400/90 hover:bg-rose-400/10"
+            : "text-zinc-500 hover:bg-white/10 hover:text-white"
       } ${className}`}
-      disabled={favorite.loading}
+      data-heart-state={state}
+      disabled={favorite.loading || bans.pending}
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        favorite.toggle();
+        cycle();
       }}
       title={
-        favorite.error ? "Could not update Liked Songs. Try again." : undefined
+        favorite.error
+          ? "Could not update Liked Songs. Try again."
+          : state === "banned"
+            ? "Banned: Radio and Shuffle skip it. Click to unban."
+            : state === "liked"
+              ? "In Liked Songs. Click again to ban."
+              : "Add to Liked Songs"
       }
       type="button"
     >
       {favorite.loading ? (
         <Loader2 className="h-4 w-4 animate-spin" />
+      ) : state === "banned" ? (
+        <Ban className="h-4 w-4" />
       ) : (
         <Heart
           className={`h-4 w-4 ${favorite.liked ? "fill-current" : ""} ${favorite.checking ? "opacity-60" : ""}`}
