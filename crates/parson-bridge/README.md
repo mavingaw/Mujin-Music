@@ -40,9 +40,26 @@ for discovery).
 - Linux, including Raspberry Pi OS (arm64 and armhf): ALSA, loaded at run
   time. Tested with simulated DACs over real sockets and with ALSA's null
   device; not yet on a real USB DAC.
-- Windows and macOS: the bridge builds and connects, but WASAPI exclusive
-  mode and CoreAudio hog mode are not implemented yet, so it lists no
-  outputs there (and says so in Parson).
+- Windows: WASAPI in exclusive mode, event-driven, at the file's own rate
+  and depth (16, 24, or 24-in-32 bits as the DAC takes them), with the
+  documented buffer-alignment retry. `--list` shows each endpoint's native
+  rates, depths and hardware volume range in dB (only volume the DAC itself
+  applies counts; Windows' software endpoint volume is bypassed by
+  exclusive streams). A device with exclusive mode turned off in Windows
+  sound settings plays shared, through the Windows mixer, and says it is
+  not bit-perfect. Allow TCP 1994 in Windows Defender Firewall.
+- macOS: CoreAudio in hog mode. The bridge takes the DAC for itself,
+  switches its nominal sample rate to the file's (waiting for the change to
+  land) and sets the stream's physical format to integer PCM at the file's
+  depth. Samples pass the HAL's float stage, which carries 24 bits exactly,
+  so 16- and 24-bit audio reaches the DAC bit-perfect; 32-bit integer
+  sources are not offered. Hog mode is released when playback ends.
+- Both are tested against protocol-level fakes of each audio stack (exact
+  formats, buffer alignment, whole-buffer events and exclusive ownership
+  for WASAPI; hog-mode toggling, asynchronous rate switching and the
+  float-to-integer conversion for CoreAudio), end to end through a Parson
+  server, and compile-checked for `x86_64-pc-windows-msvc` and
+  `aarch64-apple-darwin`; not yet on a real Windows PC or Mac with a DAC.
 
 Build: `cargo build --release -p parson-bridge` (cross-compile for a Pi with
 `--target aarch64-unknown-linux-gnu`).

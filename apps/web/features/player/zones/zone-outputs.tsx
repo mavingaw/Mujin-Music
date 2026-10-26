@@ -188,9 +188,10 @@ export function ZoneOutputsPanel() {
         </p>
       )}
       <p className="px-2 text-[11px] leading-4 text-zinc-600">
-        Bridges, AirPlay and server-side Chromecast are tested against simulated
-        DACs and protocol-level fake devices, not yet on real hardware. Bridges
-        on Windows (WASAPI) and macOS (CoreAudio) list no outputs yet.
+        Bridges run on Linux (ALSA), Windows (WASAPI exclusive) and macOS
+        (CoreAudio hog mode). Bridges, AirPlay and server-side Chromecast are
+        tested against simulated DACs and protocol-level fakes of each audio
+        stack and device, not yet on real hardware.
       </p>
     </section>
   );

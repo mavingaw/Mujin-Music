@@ -179,6 +179,10 @@ jobs:
         with:
           bun-version: 1.4.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Lint the bridge's WASAPI output natively
+        run: cargo clippy -p parson-bridge --all-targets -- -D warnings
+      - name: Test the bridge's WASAPI output logic natively
+        run: cargo test -p parson-bridge
       - name: Install packaging dependencies
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Install Electron runtime
@@ -261,6 +265,10 @@ jobs:
         with:
           bun-version: 1.4.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Lint the bridge's CoreAudio output natively
+        run: cargo clippy -p parson-bridge --all-targets -- -D warnings
+      - name: Test the bridge's CoreAudio output logic natively
+        run: cargo test -p parson-bridge
       - name: Install packaging dependencies
         run: |
           brew list nasm >/dev/null 2>&1 || brew install nasm

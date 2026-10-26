@@ -31,6 +31,17 @@ test("bridge rows say what the bridge is and how well it keeps time", () => {
     detail: "linux aarch64 · 2 outputs · ALSA · clock synced ±0.2 ms",
     tone: "ok",
   });
+  expect(
+    bridgeSummary(
+      bridge({ platform: "windows x86_64", backend: "WASAPI", devices: 1 }),
+    ).detail,
+  ).toBe("windows x86_64 · 1 output · WASAPI exclusive · clock synced ±0.2 ms");
+  expect(
+    bridgeSummary(bridge({ platform: "macos aarch64", backend: "CoreAudio" }))
+      .detail,
+  ).toBe(
+    "macos aarch64 · 2 outputs · CoreAudio hog mode · clock synced ±0.2 ms",
+  );
   expect(clockLabel(bridge({ clock_uncertainty_us: 20 }))).toBe(
     "clock synced ±0.1 ms",
   );
@@ -47,7 +58,7 @@ test("bridge rows say what the bridge is and how well it keeps time", () => {
     bridgeSummary(
       bridge({
         devices: 0,
-        note: "WASAPI exclusive mode is not implemented yet",
+        note: "this system has no supported audio API",
       }),
     ).tone,
   ).toBe("warn");

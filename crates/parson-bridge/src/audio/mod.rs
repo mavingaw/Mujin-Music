@@ -1,14 +1,17 @@
 //! Audio devices of one machine: the types and traits shared by the Parson
 //! server (its own outputs) and Parson Bridge (outputs of another machine),
-//! plus the backends: ALSA on Linux (incl. Raspberry Pi) and simulated
-//! devices for tests and demos.
+//! plus the backends: ALSA on Linux (incl. Raspberry Pi), WASAPI exclusive
+//! mode on Windows, CoreAudio hog mode on macOS, and simulated devices for
+//! tests and demos.
 //!
 //! Playback is bit-perfect when it can be: a stream is opened at exactly the
 //! file's own rate and depth, exclusively, and samples pass unchanged.
 
 #[cfg(target_os = "linux")]
 pub mod alsa;
+pub mod coreaudio;
 pub mod simulated;
+pub mod wasapi;
 
 use serde::{Deserialize, Serialize};
 
@@ -143,11 +146,19 @@ pub fn native_backend() -> Result<Box<dyn DeviceBackend>, String> {
     {
         alsa::AlsaBackend::load().map(|backend| Box::new(backend) as Box<dyn DeviceBackend>)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        wasapi::com::load().map(|backend| Box::new(backend) as Box<dyn DeviceBackend>)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        coreaudio::hal::load().map(|backend| Box::new(backend) as Box<dyn DeviceBackend>)
+    }
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         Err(NATIVE_UNSUPPORTED.to_string())
     }
 }
 
 /// What a machine without a supported audio API reports.
-pub const NATIVE_UNSUPPORTED: &str = "Bit-perfect output uses ALSA (Linux, including Raspberry Pi OS) in this build. WASAPI exclusive mode (Windows) and CoreAudio hog mode (macOS) are not implemented yet, so this machine lists no devices";
+pub const NATIVE_UNSUPPORTED: &str = "Bit-perfect output uses ALSA (Linux, including Raspberry Pi OS), WASAPI exclusive mode (Windows) or CoreAudio hog mode (macOS); this system has none of them, so it lists no devices";

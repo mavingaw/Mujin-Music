@@ -31,7 +31,25 @@ const RETRY: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// What the zone picker says about bridge zones.
-pub const BRIDGE_NOTE: &str = "Parson Bridge: Parson decodes each file here and sends the samples to the bridge uncompressed over your network; the bridge plays them on the DAC exclusively, as sent. Tested against simulated DACs and ALSA's null device, not yet on real hardware.";
+pub const BRIDGE_NOTE: &str = "Parson Bridge: Parson decodes each file here and sends the samples to the bridge uncompressed over your network; the bridge plays them on the DAC exclusively, as sent (ALSA on Linux, WASAPI exclusive mode on Windows, CoreAudio hog mode on macOS). Tested against simulated DACs, ALSA's null device and protocol-level fakes of WASAPI and the macOS audio HAL, not yet on real hardware.";
+
+/// What a bridge zone says about how it plays, by the bridge's audio API,
+/// including what has and has not been tested.
+pub fn bridge_note(backend: Option<&str>) -> String {
+    const SENT: &str = "Parson Bridge: Parson decodes each file here and sends the samples to the bridge uncompressed over your network;";
+    match backend {
+        Some("WASAPI") => format!(
+            "{SENT} the bridge plays them in WASAPI exclusive mode at the file's own rate and depth, with no Windows mixer, resampler or volume in between. The WASAPI path is tested against a protocol-level fake of Windows' audio stack (exact formats, buffer alignment, event-driven buffers, exclusive ownership), not yet on real hardware."
+        ),
+        Some("CoreAudio") => format!(
+            "{SENT} the bridge takes the DAC in hog mode, switches it to the file's own sample rate and sets its physical format to the file's bit depth, so 16- and 24-bit audio arrives unchanged. The CoreAudio path is tested against a protocol-level fake of the macOS audio HAL (hog mode, asynchronous rate switching, float-to-integer conversion), not yet on real hardware."
+        ),
+        Some("ALSA") => format!(
+            "{SENT} the bridge plays them on the DAC's ALSA hw device exclusively, as sent. Tested against simulated DACs and ALSA's null device, not yet on real hardware."
+        ),
+        _ => BRIDGE_NOTE.to_string(),
+    }
+}
 pub const GROUP_SYNC_NOTE: &str = "Parson Bridge group: one stream, sample-synced to the first zone's DAC clock (within a quarter millisecond). The first zone stays bit-perfect; the others follow by repeating or skipping a single frame now and then.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -401,7 +419,7 @@ impl BridgeHub {
             host: Some(format!("{} · Parson Bridge", info.name)),
             route: Some(format!("on {} via Parson Bridge", info.name)),
             step: None,
-            notes: vec![BRIDGE_NOTE.to_string()],
+            notes: vec![bridge_note(info.backend.as_deref())],
         };
         let devices = Arc::new(DeviceManager::placed(
             Arc::new(link.clone()),
@@ -681,6 +699,16 @@ fn browse_loop(hub: Weak<BridgeHub>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bridge_zones_say_how_they_play_and_what_is_untested() {
+        for backend in [Some("WASAPI"), Some("CoreAudio"), Some("ALSA"), None] {
+            let note = super::bridge_note(backend);
+            assert!(note.contains("not yet on real hardware"), "{note}");
+        }
+        assert!(super::bridge_note(Some("WASAPI")).contains("WASAPI exclusive mode"));
+        assert!(super::bridge_note(Some("CoreAudio")).contains("hog mode"));
+    }
+
     use super::normalize_address;
 
     #[test]

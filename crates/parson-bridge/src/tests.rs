@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::audio::simulated::SimulatedBackend;
-use crate::audio::{DeviceBackend, SampleFormat, StreamFormat};
+use crate::audio::{DeviceBackend, OutputStream, SampleFormat, StreamFormat};
 use crate::endpoint::{Endpoint, EndpointConfig};
 use crate::remote::{GroupMember, RemoteBridge, SyncGroup, common_device};
 
@@ -337,4 +337,62 @@ fn a_stream_whose_device_is_taken_over_fails_instead_of_hanging() {
         capture.bytes.ends_with(&data),
         "the new stream reached the DAC"
     );
+}
+
+#[test]
+fn a_late_start_never_costs_the_clock_master_a_sample() {
+    // The common start time has already passed when the audio arrives (a
+    // slow decoder, a busy machine): the follower skips what it should
+    // have played by now, but the master's timeline is the group's, so it
+    // starts at once and keeps every frame.
+    let (endpoint, backend) = endpoint("living-room", 4.0, 0);
+    let bridge = connect(&endpoint);
+    let format = StreamFormat {
+        sample_rate: 44_100,
+        format: SampleFormat::S16,
+        channels: 2,
+    };
+    let now = bridge
+        .clock_offset_us()
+        .map(|(offset, _)| offset)
+        .unwrap_or(0)
+        + crate::clock::monotonic_us();
+    let data = noise(22_050, 2, 5);
+    for (device, master) in [("sim-usb-dac", true), ("sim-hdmi", false)] {
+        let format = StreamFormat {
+            sample_rate: if master { 44_100 } else { 48_000 },
+            ..format
+        };
+        let mut stream = bridge
+            .open_stream(
+                device,
+                format,
+                true,
+                Some(crate::protocol::SyncStart {
+                    // 20 ms ago.
+                    start_bridge_us: now - 20_000,
+                    master,
+                }),
+            )
+            .expect("open");
+        stream.write(&data).expect("write");
+        stream.drain();
+        let capture = backend.capture(device);
+        let frame = format.frame_bytes();
+        let first = capture
+            .bytes
+            .chunks(frame)
+            .position(|frame| frame.iter().any(|byte| *byte != 0))
+            .expect("audio");
+        let played = &capture.bytes[first * frame..];
+        if master {
+            assert!(played == data.as_slice(), "the master keeps every sample");
+        } else {
+            let skipped = (data.len() - played.len()) / frame;
+            assert!(
+                skipped >= 48 * 20 / 2 && data.ends_with(played),
+                "a late follower skips ahead: {skipped} frames"
+            );
+        }
+    }
 }

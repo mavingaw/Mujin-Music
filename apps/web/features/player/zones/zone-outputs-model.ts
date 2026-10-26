@@ -1,4 +1,8 @@
-import type { BridgeStatus, ZoneOutputsStatus } from "@parson/music-sdk";
+import {
+  bridgeBackendLabel,
+  type BridgeStatus,
+  type ZoneOutputsStatus,
+} from "@parson/music-sdk";
 
 /** One line about a bridge: what it is and how it is doing. */
 export function bridgeSummary(bridge: BridgeStatus): {
@@ -19,7 +23,8 @@ export function bridgeSummary(bridge: BridgeStatus): {
   const parts: string[] = [];
   if (bridge.platform) parts.push(bridge.platform);
   parts.push(bridge.devices === 1 ? "1 output" : `${bridge.devices} outputs`);
-  if (bridge.backend) parts.push(bridge.backend);
+  const backend = bridgeBackendLabel(bridge.backend);
+  if (backend) parts.push(backend);
   const clock = clockLabel(bridge);
   if (clock) parts.push(clock);
   if (bridge.devices === 0 && bridge.note) {

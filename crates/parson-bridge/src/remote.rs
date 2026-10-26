@@ -433,7 +433,7 @@ impl RemoteBridge {
         self.link.fail("disconnected by the server".into());
     }
 
-    fn open_stream(
+    pub(crate) fn open_stream(
         &self,
         device_id: &str,
         format: StreamFormat,

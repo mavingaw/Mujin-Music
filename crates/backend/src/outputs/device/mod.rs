@@ -155,6 +155,22 @@ impl Placement {
     }
 }
 
+/// What a device zone says about an audio API that has only been tested
+/// against a protocol-level fake.
+pub fn untested_note(backend: &str) -> Option<String> {
+    match backend {
+        "WASAPI" => Some(
+            "WASAPI exclusive mode: the DAC runs at the file's own rate and depth with no Windows mixer in between. Tested against a protocol-level fake of Windows' audio stack, not yet on real hardware."
+                .to_string(),
+        ),
+        "CoreAudio" => Some(
+            "CoreAudio hog mode: Parson takes the DAC for itself and switches it to the file's own rate and bit depth (16 and 24-bit arrive unchanged). Tested against a protocol-level fake of the macOS audio HAL, not yet on real hardware."
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// One device zone.
 pub struct DeviceRenderer {
     zone_id: String,
@@ -365,7 +381,8 @@ pub struct DeviceManager {
 
 impl DeviceManager {
     /// `PARSON_LOCAL_AUDIO`: `on` uses the system's audio API (ALSA on
-    /// Linux), `simulated` two simulated DACs (tests and demos), anything
+    /// Linux, WASAPI exclusive mode on Windows, CoreAudio hog mode on
+    /// macOS), `simulated` two simulated DACs (tests and demos), anything
     /// else (or unset) keeps device zones off.
     pub fn from_env() -> Option<Self> {
         let value = std::env::var("PARSON_LOCAL_AUDIO").ok()?;
@@ -379,10 +396,23 @@ impl DeviceManager {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    /// This machine's audio API: ALSA on Linux, WASAPI exclusive mode on
+    /// Windows, CoreAudio hog mode on macOS.
     fn native() -> Self {
-        match alsa::AlsaBackend::load() {
-            Ok(backend) => Self::new(Arc::new(backend), None),
+        match parson_bridge::audio::native_backend() {
+            Ok(backend) => {
+                let backend: Arc<dyn DeviceBackend> = Arc::from(backend);
+                let notes = untested_note(backend.name()).into_iter().collect();
+                Self::placed(
+                    backend,
+                    None,
+                    Placement {
+                        notes,
+                        ..Placement::local()
+                    },
+                    tokio::sync::broadcast::channel(64).0,
+                )
+            }
             Err(error) => Self {
                 backend: None,
                 players: Mutex::new(HashMap::new()),
@@ -390,20 +420,6 @@ impl DeviceManager {
                 note: Some(format!("Audio devices are unavailable: {error}.")),
                 placement: Placement::local(),
             },
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn native() -> Self {
-        Self {
-            backend: None,
-            players: Mutex::new(HashMap::new()),
-            changed: tokio::sync::broadcast::channel(16).0,
-            note: Some(
-                "Audio-device zones use ALSA (Linux) in this build. WASAPI exclusive mode (Windows) and CoreAudio hog mode (macOS) are not implemented yet."
-                    .to_string(),
-            ),
-            placement: Placement::local(),
         }
     }
 
@@ -581,6 +597,15 @@ mod tests {
             bit_depth: Some(bits),
             channels: Some(2),
         }
+    }
+
+    #[test]
+    fn device_zones_on_windows_and_mac_say_what_is_untested() {
+        for backend in ["WASAPI", "CoreAudio"] {
+            let note = super::untested_note(backend).expect("note");
+            assert!(note.contains("not yet on real hardware"), "{note}");
+        }
+        assert!(super::untested_note("ALSA").is_none());
     }
 
     #[test]
