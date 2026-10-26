@@ -5,6 +5,7 @@ export * from "./resources/albums";
 export * from "./resources/artists";
 export * from "./resources/auth";
 export * from "./resources/cast";
+export * from "./resources/control";
 export * from "./resources/data";
 export * from "./resources/filesystem";
 export * from "./resources/genres";

@@ -139,6 +139,7 @@ fn valid_event_type(value: &str) -> bool {
             | "recommendation_impression"
             | "recommendation_selected"
             | "disliked"
+            | "thumbs_up"
     )
 }
 
@@ -152,6 +153,8 @@ fn event_weight(event_type: &str) -> f64 {
         "manual_selection" => 2.0,
         "early_skip" => -5.0,
         "disliked" => -20.0,
+        // A deliberate thumbs up outranks a playlist add.
+        "thumbs_up" => 10.0,
         _ => 0.0,
     }
 }
