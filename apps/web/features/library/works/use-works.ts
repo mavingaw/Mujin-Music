@@ -2,6 +2,8 @@
 
 import {
   clearAlbumIdentification,
+  focusQueryString,
+  type FocusSelection,
   getArtistWorks,
   getSongWorks,
   getWork,
@@ -11,18 +13,28 @@ import {
   type ReleaseMatch,
   type ReleaseSearchTerms,
 } from "@parson/music-sdk";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 
 const noRetryOnMissing = (failureCount: number, error: unknown) =>
   !(isApiError(error) && error.response?.status === 404) && failureCount < 2;
 
-export function useWork(mbid: string | null | undefined) {
+export function useWork(
+  mbid: string | null | undefined,
+  selection: FocusSelection = {},
+) {
   return useQuery({
-    queryKey: ["work", mbid],
-    queryFn: () => getWork(mbid!),
+    queryKey: ["work", mbid, focusQueryString(selection)],
+    queryFn: () => getWork(mbid!, selection),
     enabled: Boolean(mbid),
     retry: noRetryOnMissing,
+    // A new Focus choice keeps the page on screen while it loads.
+    placeholderData: keepPreviousData,
     staleTime: 60_000,
   });
 }

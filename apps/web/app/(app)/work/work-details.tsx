@@ -3,6 +3,7 @@
 import getBaseURL from "@/lib/api/server-url";
 import { AlbumArtFallback, getLibraryImageUrl } from "@/lib/images/image-url";
 import {
+  formatAudio,
   groupRecordings,
   workFacts,
   type PersonRef,
@@ -18,6 +19,8 @@ import { useMemo } from "react";
 import { usePageTitle } from "@/components/app/title-metadata";
 import { usePlayer } from "@/features/player/player-context";
 import { useWork } from "@/features/library/works/use-works";
+import { FocusPanel } from "@/features/library/focus/focus-panel";
+import { useFocusSelection } from "@/features/library/focus/use-focus-selection";
 
 const GROUPINGS: { key: RecordingGrouping; label: string }[] = [
   { key: "album", label: "Album" },
@@ -105,6 +108,20 @@ function RecordingCard({
     player.setSongCallback(target.song, recording.artist, recording.album);
     player.playAudioSource();
   };
+  const best = recording.tracks
+    .map((track) => track.song.audio)
+    .filter((audio) => audio?.codec)
+    .sort(
+      (left, right) =>
+        Number(right?.lossless ?? 0) - Number(left?.lossless ?? 0) ||
+        (right?.bit_depth ?? 0) - (left?.bit_depth ?? 0) ||
+        (right?.sample_rate ?? 0) - (left?.sample_rate ?? 0),
+    )[0];
+  const hires = Boolean(
+    best?.lossless &&
+    ((best.bit_depth ?? 0) >= 24 || (best.sample_rate ?? 0) > 48_000),
+  );
+  const format = formatAudio(best);
   const coverage =
     partCount > 1
       ? recording.complete
@@ -145,6 +162,20 @@ function RecordingCard({
                 {recording.year && ` · ${recording.year}`}
                 {` · ${formatDuration(recording.duration)}`}
               </span>
+              {format && (
+                <span
+                  className={`rounded px-1.5 py-px text-[10px] font-bold tracking-wide ${
+                    hires
+                      ? "bg-amber-300/15 text-amber-200 ring-1 ring-amber-300/30"
+                      : "bg-white/6 text-zinc-400 ring-1 ring-white/10"
+                  }`}
+                  title={
+                    hires ? "Hi-res: lossless above CD resolution" : format
+                  }
+                >
+                  {hires ? `HI-RES · ${format}` : format}
+                </span>
+              )}
               {coverage && (
                 <span
                   className={`rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${
@@ -214,7 +245,8 @@ export default function WorkDetails() {
   const grouping: RecordingGrouping =
     GROUPINGS.find((entry) => entry.key === searchParams?.get("by"))?.key ??
     "album";
-  const query = useWork(id);
+  const [selection, setSelection] = useFocusSelection();
+  const query = useWork(id, selection);
   const page = query.data;
   usePageTitle(page ? page.work.title : null);
   const groups = useMemo(
@@ -229,7 +261,7 @@ export default function WorkDetails() {
       </p>
     );
   }
-  if (query.isPending) {
+  if (query.isPending && !query.data) {
     return (
       <div className="flex justify-center pt-24 text-zinc-500">
         <Loader2 className="h-6 w-6 animate-spin" />
@@ -350,7 +382,7 @@ export default function WorkDetails() {
             <h2 className="text-2xl font-bold text-white" id="work-recordings">
               Recordings
               <span className="ml-2 text-base font-medium text-zinc-500">
-                {page.recordings.length}
+                {page.focus?.total ?? page.recordings.length}
               </span>
             </h2>
             <div
@@ -376,11 +408,31 @@ export default function WorkDetails() {
               ))}
             </div>
           </div>
-          {page.recordings.length === 0 && (
-            <p className="text-sm text-zinc-500">
-              No track in your library performs this work yet.
-            </p>
-          )}
+          <FocusPanel
+            className="mb-6"
+            loading={query.isFetching}
+            noun={{ one: "recording", other: "recordings" }}
+            onChange={setSelection}
+            selection={selection}
+            summary={page.focus}
+          />
+          {page.recordings.length === 0 &&
+            (page.focus?.selected.length ? (
+              <div className="rounded-xl border border-dashed border-white/10 px-6 py-8 text-center text-sm text-zinc-300">
+                No recording matches every filter.{" "}
+                <button
+                  className="font-semibold text-white hover:underline"
+                  onClick={() => setSelection({})}
+                  type="button"
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-500">
+                No track in your library performs this work yet.
+              </p>
+            ))}
           <div className="space-y-10">
             {groups.map((group) => (
               <div key={group.key}>

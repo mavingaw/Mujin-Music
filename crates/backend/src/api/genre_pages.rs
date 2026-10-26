@@ -20,6 +20,7 @@ use crate::enrichment::genres::{
     self, GenreRef, GenreSource, RawGenre, by_slug, children, choose_raw, lineage, resolve,
     with_ancestors,
 };
+use crate::enrichment::identity::{PersonIdentity, load_identity};
 use crate::enrichment::store::{self, EditorialText, TaskState};
 use crate::enrichment::worker::wake;
 use crate::library::identity::normalize_artist_identity;
@@ -378,6 +379,7 @@ pub fn genre_page_people(
     index: &GenreIndex,
     slug: &str,
     external_composers: &[store::CreditRow],
+    identity: &PersonIdentity,
 ) -> (Vec<GenreAlbum>, Vec<GenrePerson>, Vec<GenrePerson>, usize) {
     let mut albums = Vec::new();
     let mut artists = HashMap::<String, GenrePerson>::new();
@@ -425,6 +427,8 @@ pub fn genre_page_people(
             entry.album_count += 1;
             entry.track_count += album.songs.len();
             let mut credit = |id: &str, name: &str, track: &str| {
+                // One entry per person, whatever name a source uses.
+                let name = identity.display_name(id).unwrap_or(name);
                 let entry = composers
                     .entry(id.to_string())
                     .or_insert_with(|| (person(id, name), HashSet::new(), HashSet::new()));
@@ -440,16 +444,17 @@ pub fn genre_page_people(
                     .filter(|credit| credit.role == "composer")
                 {
                     if !composer.artist_id.is_empty() {
-                        credit(&composer.artist_id, &composer.name, &song.id);
+                        let id = identity.for_local(
+                            &composer.artist_id,
+                            &composer.name,
+                            Some(&album.id),
+                        );
+                        credit(&id, &composer.name, &song.id);
                     }
                 }
             }
             for row in external.get(album.id.as_str()).into_iter().flatten() {
-                let id = names.get(&row.normalized_name).cloned().or_else(|| {
-                    row.source_artist_id
-                        .as_ref()
-                        .map(|mbid| format!("{}{mbid}", crate::api::editorial::EXTERNAL_PREFIX))
-                });
+                let id = crate::api::editorial::row_person(identity, &names, row);
                 if let Some(id) = id {
                     credit(&id, &row.name, &row.track_id);
                 }
@@ -570,8 +575,9 @@ async fn genre_page(
     if stored.queued {
         wake().notify_all();
     }
+    let identity = load_identity(image_pool.clone(), cache.clone()).await;
     let (albums, mut artists, mut composers, album_count) =
-        genre_page_people(&cache, &stored.index, &slug, &stored.composers);
+        genre_page_people(&cache, &stored.index, &slug, &stored.composers, &identity);
     let name = match node {
         Some(node) => node.name.to_string(),
         None => match albums
@@ -985,8 +991,13 @@ mod tests {
             source: "musicbrainz".into(),
             source_artist_id: Some("1f9df192-a621-4f54-8850-2c5373b7eac9".into()),
         }];
-        let (albums, artists, composers, count) =
-            genre_page_people(&cache, &index, "jazz", &external);
+        let (albums, artists, composers, count) = genre_page_people(
+            &cache,
+            &index,
+            "jazz",
+            &external,
+            &PersonIdentity::default(),
+        );
         assert_eq!(count, 2);
         assert_eq!(
             albums
@@ -1012,10 +1023,22 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Bill Evans", "John Coltrane", "Miles Davis"]
         );
-        let (_, _, classical, _) = genre_page_people(&cache, &index, "classical", &external);
+        let (_, _, classical, _) = genre_page_people(
+            &cache,
+            &index,
+            "classical",
+            &external,
+            &PersonIdentity::default(),
+        );
         assert_eq!(classical[0].name, "Ludwig van Beethoven");
         assert!(classical[0].artist_id.starts_with("mb:"));
-        let (krautrock, _, _, _) = genre_page_people(&cache, &index, "krautrock", &external);
+        let (krautrock, _, _, _) = genre_page_people(
+            &cache,
+            &index,
+            "krautrock",
+            &external,
+            &PersonIdentity::default(),
+        );
         assert!(krautrock.is_empty(), "tago-mago is not in the test library");
     }
 }

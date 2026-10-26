@@ -141,6 +141,14 @@ describe("facts and formats", () => {
       lossless: false,
     };
     expect(formatAudio(flac)).toBe("FLAC 96 kHz 24-bit");
+    expect(
+      formatAudio({
+        ...flac,
+        codec: "pcm",
+        sample_rate: 22_050,
+        bit_depth: 16,
+      }),
+    ).toBe("PCM 22.05 kHz 16-bit");
     expect(formatAudio({ ...flac, sample_rate: 44100 })).toBe(
       "FLAC 44.1 kHz 24-bit",
     );

@@ -16,6 +16,7 @@ use crate::api::error::{bad_request, internal_server_error, not_found};
 use crate::api::song::{ResponseSong, response_song};
 use crate::domain::{Album, Artist};
 use crate::enrichment::genres::GenreRef;
+use crate::enrichment::identity::{PersonIdentity, PersonMembers, load_identity};
 use crate::enrichment::musicbrainz::is_placeholder_artist;
 use crate::enrichment::store::{
     self, CreditRow, EditorialText, ImageRow, MAX_NOTE_CHARS, NoteRow, TaskState,
@@ -36,6 +37,9 @@ pub struct AboutCredit {
     /// MusicBrainz, or `None` when the credit cannot be browsed.
     pub artist_id: Option<String>,
     pub name: String,
+    /// Other names the sources credit this person under ("Jonathan Davis"
+    /// for Q-Tip).
+    pub credited_as: Vec<String>,
     pub role: String,
     pub instrument: Option<String>,
     /// Tracks the credit applies to; empty means the whole release.
@@ -110,7 +114,12 @@ pub struct RoleSummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArtistAbout {
+    /// The person's canonical id: a page opened under another of their ids
+    /// (a second spelling, their MusicBrainz id) answers for this one.
     pub artist_id: String,
+    pub requested_id: String,
+    /// Other names the person is credited under in this library.
+    pub credited_as: Vec<String>,
     pub name: String,
     pub biography: Option<EditorialText>,
     pub image: Option<EditorialImage>,
@@ -157,9 +166,9 @@ pub struct ArtistCredits {
     pub songs: Vec<CreditedSong>,
 }
 
-fn credit_key(name: &str, role: &str, instrument: Option<&str>) -> (String, String, String) {
+fn credit_key(person: &str, role: &str, instrument: Option<&str>) -> (String, String, String) {
     (
-        normalize_artist_identity(name),
+        person.to_string(),
         role.to_string(),
         instrument.unwrap_or_default().to_lowercase(),
     )
@@ -178,28 +187,107 @@ pub fn merge_album_credits(
     known_artists: &HashMap<String, String>,
     external: &[CreditRow],
 ) -> Vec<AboutCredit> {
+    merge_album_credits_with(album, known_artists, external, &PersonIdentity::default())
+}
+
+/// The canonical person a MusicBrainz credit row names: a local person
+/// first (by MusicBrainz id, alias or name), else their MusicBrainz page.
+pub(crate) fn row_person(
+    identity: &PersonIdentity,
+    known_artists: &HashMap<String, String>,
+    row: &CreditRow,
+) -> Option<String> {
+    identity
+        .for_row(row)
+        .filter(|id| !id.starts_with(EXTERNAL_PREFIX))
+        .or_else(|| {
+            known_artists
+                .get(&row.normalized_name)
+                .map(|id| identity.for_local(id, &row.name, Some(&row.album_id)))
+        })
+        .or_else(|| identity.for_row(row))
+}
+
+/// Merges tag and external credits into one entry per person and role,
+/// whatever name each source credits the person under.
+pub fn merge_album_credits_with(
+    album: &Album,
+    known_artists: &HashMap<String, String>,
+    external: &[CreditRow],
+    identity: &PersonIdentity,
+) -> Vec<AboutCredit> {
     let mut merged: Vec<AboutCredit> = Vec::new();
     let mut index: HashMap<(String, String, String), usize> = HashMap::new();
     for credit in tag_album_credits(&album.songs) {
-        let key = credit_key(
+        let person = identity.for_local(
+            &credit.credit.artist_id,
             &credit.credit.name,
+            Some(&album.id),
+        );
+        let key = credit_key(
+            &person,
             &credit.credit.role,
             credit.credit.instrument.as_deref(),
         );
-        index.insert(key, merged.len());
-        merged.push(AboutCredit {
-            artist_id: Some(credit.credit.artist_id),
-            name: credit.credit.name,
-            role: credit.credit.role,
-            instrument: credit.credit.instrument,
-            track_ids: credit.track_ids,
-            sources: vec!["tags".into()],
-            image_url: None,
-        });
+        match index.get(&key) {
+            Some(position) => {
+                // The same person under another tag spelling.
+                let existing = &mut merged[*position];
+                if normalize_artist_identity(&existing.name)
+                    != normalize_artist_identity(&credit.credit.name)
+                    && !existing.credited_as.contains(&credit.credit.name)
+                {
+                    existing.credited_as.push(credit.credit.name.clone());
+                }
+                if existing.track_ids.is_empty() || credit.track_ids.is_empty() {
+                    existing.track_ids.clear();
+                } else {
+                    existing.track_ids.extend(credit.track_ids);
+                }
+            }
+            None => {
+                index.insert(key, merged.len());
+                merged.push(AboutCredit {
+                    name: identity
+                        .display_name(&person)
+                        .filter(|_| person != credit.credit.artist_id)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| credit.credit.name.clone()),
+                    credited_as: Vec::new(),
+                    artist_id: Some(person),
+                    role: credit.credit.role,
+                    instrument: credit.credit.instrument,
+                    track_ids: credit.track_ids,
+                    sources: vec!["tags".into()],
+                    image_url: None,
+                });
+                let entry = merged.last_mut().expect("just pushed");
+                if normalize_artist_identity(&entry.name)
+                    != normalize_artist_identity(&credit.credit.name)
+                {
+                    entry.credited_as.push(credit.credit.name.clone());
+                }
+            }
+        }
+    }
+    // People the album's tags name are who a same-named external credit
+    // means.
+    let mut known = known_artists.clone();
+    for credit in &merged {
+        if let Some(id) = &credit.artist_id {
+            known.insert(normalize_artist_identity(&credit.name), id.clone());
+            for name in &credit.credited_as {
+                known.insert(normalize_artist_identity(name), id.clone());
+            }
+        }
     }
     for row in external {
         let instrument = Some(row.instrument.clone()).filter(|value| !value.is_empty());
-        let mut key = credit_key(&row.name, &row.role, instrument.as_deref());
+        let person = row_person(identity, &known, row);
+        let person_key = person
+            .clone()
+            .unwrap_or_else(|| format!("name:{}", row.normalized_name));
+        let mut key = credit_key(&person_key, &row.role, instrument.as_deref());
         if !index.contains_key(&key)
             && let Some(instrument) = &instrument
         {
@@ -221,6 +309,11 @@ pub fn merge_album_credits(
                 if !existing.sources.contains(&row.source) {
                     existing.sources.push(row.source.clone());
                 }
+                if normalize_artist_identity(&existing.name) != row.normalized_name
+                    && !existing.credited_as.contains(&row.name)
+                {
+                    existing.credited_as.push(row.name.clone());
+                }
                 if row.track_id.is_empty() {
                     existing.track_ids.clear();
                 } else if !existing.track_ids.is_empty()
@@ -231,12 +324,20 @@ pub fn merge_album_credits(
             }
             None => {
                 index.insert(key, merged.len());
+                let name = person
+                    .as_deref()
+                    .and_then(|id| identity.display_name(id))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| row.name.clone());
+                let credited_as = if normalize_artist_identity(&name) == row.normalized_name {
+                    Vec::new()
+                } else {
+                    vec![row.name.clone()]
+                };
                 merged.push(AboutCredit {
-                    artist_id: known_artists
-                        .get(&row.normalized_name)
-                        .cloned()
-                        .or_else(|| external_id(row)),
-                    name: row.name.clone(),
+                    artist_id: person.or_else(|| external_id(row)),
+                    name,
+                    credited_as,
                     role: row.role.clone(),
                     instrument,
                     track_ids: if row.track_id.is_empty() {
@@ -324,7 +425,29 @@ pub fn collect_artist_credits(
     artist_id: &str,
     external: &[CreditRow],
 ) -> Option<ArtistCredits> {
-    let mut name = cache.artist(artist_id).map(|artist| artist.name.clone());
+    let identity = PersonIdentity::build(cache, &[], &[], &[]);
+    let members = identity.members(artist_id);
+    collect_person_credits(cache, &identity, &members, external)
+}
+
+/// Every credit for a person under any of their ids and names.
+pub fn collect_person_credits(
+    cache: &LibraryCache,
+    identity: &PersonIdentity,
+    members: &PersonMembers,
+    external: &[CreditRow],
+) -> Option<ArtistCredits> {
+    let artist_id = members.canonical.as_str();
+    let known = crate::api::works::person_index(cache);
+    let is_person = |id: &str, name: &str, album_id: &str| {
+        (members.local_ids.iter().any(|local| local == id)
+            || members.names.contains(&normalize_artist_identity(name)))
+            && identity.for_local(id, name, Some(album_id)) == artist_id
+    };
+    let mut name = cache
+        .artist(artist_id)
+        .map(|artist| artist.name.clone())
+        .or_else(|| identity.display_name(artist_id).map(str::to_string));
     let has_discography = cache
         .artist(artist_id)
         .is_some_and(|artist| !artist.albums.is_empty());
@@ -348,7 +471,8 @@ pub fn collect_artist_credits(
         for album in &artist.albums {
             for song in &album.songs {
                 for credit in song.credits.iter().filter(|credit| {
-                    credit.artist_id == artist_id && !ARTIST_ROLES.contains(&credit.role.as_str())
+                    !ARTIST_ROLES.contains(&credit.role.as_str())
+                        && is_person(&credit.artist_id, &credit.name, &album.id)
                 }) {
                     name.get_or_insert_with(|| credit.name.clone());
                     add_song_role(
@@ -365,6 +489,9 @@ pub fn collect_artist_credits(
         }
     }
     for row in external {
+        if row_person(identity, &known, row).as_deref() != Some(artist_id) {
+            continue;
+        }
         name.get_or_insert_with(|| row.name.clone());
         let role = CreditRole {
             role: row.role.clone(),
@@ -529,10 +656,44 @@ struct Stored {
     profile: Option<store::ProfileRow>,
     texts: HashMap<String, EditorialText>,
     image: Option<ImageRow>,
+    /// The id the image is stored under.
+    image_id: String,
     note: Option<NoteRow>,
     enabled: bool,
     task: Option<TaskState>,
     credits: Vec<CreditRow>,
+}
+
+/// Who a person page is about: their canonical id, other ids whose
+/// stored biography and photo may stand in, and the names and MusicBrainz
+/// ids their external credits are stored under.
+struct PersonLookup {
+    fallback_ids: Vec<String>,
+    names: Vec<String>,
+    mbids: Vec<String>,
+}
+
+impl PersonLookup {
+    fn new(members: &PersonMembers) -> Self {
+        let mut fallback_ids = members
+            .local_ids
+            .iter()
+            .filter(|id| **id != members.canonical)
+            .cloned()
+            .collect::<Vec<_>>();
+        fallback_ids.extend(
+            members
+                .mbids
+                .iter()
+                .map(|mbid| format!("{EXTERNAL_PREFIX}{mbid}"))
+                .filter(|id| *id != members.canonical),
+        );
+        PersonLookup {
+            fallback_ids,
+            names: members.names.clone(),
+            mbids: members.mbids.clone(),
+        }
+    }
 }
 
 async fn load_stored(
@@ -540,22 +701,43 @@ async fn load_stored(
     entity_type: &'static str,
     entity_id: String,
     user_id: Option<i32>,
-    person: Option<(Option<String>, Option<String>)>,
+    person: Option<PersonLookup>,
 ) -> Result<Stored, String> {
     web::block(move || {
         let mut connection = pool.get().map_err(|error| error.to_string())?;
         let run = |connection: &mut diesel::SqliteConnection| -> diesel::QueryResult<Stored> {
             let credits = match &person {
-                Some((name, mbid)) => {
-                    store::person_credits(connection, name.as_deref(), mbid.as_deref())?
-                }
+                Some(person) => store::people_credits(connection, &person.names, &person.mbids)?,
                 None if entity_type == "album" => store::album_credits(connection, &entity_id)?,
                 None => Vec::new(),
             };
+            // A person's biography may be stored under another of their
+            // ids (their MusicBrainz page, or a second spelling).
+            let mut text_id = entity_id.clone();
+            let mut profile = store::load_profile(connection, entity_type, &entity_id)?;
+            if profile.is_none()
+                && let Some(person) = &person
+            {
+                for id in &person.fallback_ids {
+                    if let Some(found) = store::load_profile(connection, entity_type, id)? {
+                        profile = Some(found);
+                        text_id = id.clone();
+                        break;
+                    }
+                }
+            }
+            let (image, image_id) = match store::load_image(connection, entity_type, &entity_id)? {
+                Some(image) => (Some(image), entity_id.clone()),
+                None => (
+                    store::load_image(connection, entity_type, &text_id)?,
+                    text_id.clone(),
+                ),
+            };
             Ok(Stored {
-                profile: store::load_profile(connection, entity_type, &entity_id)?,
-                texts: texts_by_kind(store::load_texts(connection, entity_type, &entity_id)?),
-                image: store::load_image(connection, entity_type, &entity_id)?,
+                profile,
+                texts: texts_by_kind(store::load_texts(connection, entity_type, &text_id)?),
+                image,
+                image_id,
                 note: match user_id {
                     Some(user_id) => {
                         store::load_note(connection, user_id, entity_type, &entity_id)?
@@ -693,7 +875,8 @@ pub async fn album_about(
     }
     let work_texts = if untrusted { Vec::new() } else { work_texts };
     let mut texts = stored.texts;
-    let mut credits = merge_album_credits(album, &known, &stored.credits);
+    let identity = load_identity(image_pool.clone(), cache.clone()).await;
+    let mut credits = merge_album_credits_with(album, &known, &stored.credits, &identity);
     let ids = credits
         .iter()
         .filter_map(|credit| credit.artist_id.clone())
@@ -775,13 +958,14 @@ pub async fn artist_credits(
         Ok(cache) => cache,
         Err(readiness) => return library_unavailable_response(readiness),
     };
-    let person = person_query(&cache, &artist_id);
+    let identity = load_identity(pool.get_ref().clone(), cache.clone()).await;
+    let members = identity.members(&artist_id);
     let stored = match load_stored(
         pool.get_ref().clone(),
         "artist",
-        artist_id.clone(),
+        members.canonical.clone(),
         None,
-        Some(person),
+        Some(PersonLookup::new(&members)),
     )
     .await
     {
@@ -791,7 +975,7 @@ pub async fn artist_credits(
             return internal_server_error("Could not load credits.", "credits_failed");
         }
     };
-    match collect_artist_credits(&cache, &artist_id, &stored.credits) {
+    match collect_person_credits(&cache, &identity, &members, &stored.credits) {
         Some(credits) => HttpResponse::Ok().json(credits),
         None => not_found("Artist not found.", "artist_not_found"),
     }
@@ -810,13 +994,16 @@ pub async fn artist_about(
         Err(readiness) => return library_unavailable_response(readiness),
     };
     let user_id = authenticated_user_id(&request).ok();
-    let person = person_query(&cache, &artist_id);
+    let identity = load_identity(pool.get_ref().clone(), cache.clone()).await;
+    let members = identity.members(&artist_id);
+    let requested_id = artist_id;
+    let artist_id = members.canonical.clone();
     let stored = match load_stored(
         pool.get_ref().clone(),
         "artist",
         artist_id.clone(),
         user_id,
-        Some(person),
+        Some(PersonLookup::new(&members)),
     )
     .await
     {
@@ -826,9 +1013,16 @@ pub async fn artist_about(
             return internal_server_error("Could not load artist details.", "editorial_failed");
         }
     };
-    let Some(credits) = collect_artist_credits(&cache, &artist_id, &stored.credits) else {
+    let Some(credits) = collect_person_credits(&cache, &identity, &members, &stored.credits) else {
         return not_found("Artist not found.", "artist_not_found");
     };
+    let credited_as = crate::api::discography::credited_names(
+        &cache,
+        &identity,
+        &members,
+        &stored.credits,
+        &credits.name,
+    );
     let mut stored = stored;
     if is_placeholder_artist(&credits.name) {
         // "Unknown Artist" is not a person; never show a namesake's
@@ -860,13 +1054,15 @@ pub async fn artist_about(
     HttpResponse::Ok().json(ArtistAbout {
         genres,
         image: stored.image.map(|image| EditorialImage {
-            url: artist_image_url(&artist_id),
+            url: artist_image_url(&stored.image_id),
             author: image.author,
             license: image.license,
             license_url: image.license_url,
             page_url: image.page_url,
         }),
         artist_id,
+        requested_id,
+        credited_as,
         name: credits.name,
         biography: texts.remove("biography"),
         facts: parse_facts(stored.profile.as_ref()),
@@ -1354,6 +1550,60 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_person_credited_under_two_names_is_one_credit() {
+        use crate::enrichment::identity::tests::{QTIP, cache as tribe, identity};
+        let cache = tribe();
+        let album = cache.album("low-end").unwrap().clone();
+        let external = [row(
+            "low-end",
+            "check-the-rhime",
+            "Jonathan Davis",
+            "composer",
+            "",
+            QTIP,
+        )];
+        let known = album_known_artists(&cache, &album);
+        let merged = merge_album_credits_with(&album, &known, &external, &identity());
+        assert_eq!(merged.len(), 1, "Q-Tip and Jonathan Davis are one person");
+        let credit = &merged[0];
+        assert_eq!(credit.name, "Q-Tip");
+        assert_eq!(credit.artist_id.as_deref(), Some("tag-qtip"));
+        assert_eq!(credit.credited_as, vec!["Jonathan Davis".to_string()]);
+        assert_eq!(credit.sources, vec!["tags", "musicbrainz"]);
+        // Without the identity the two names stay apart, as before.
+        let apart = merge_album_credits(&album, &known, &external);
+        assert_eq!(apart.len(), 2);
+    }
+
+    #[test]
+    fn a_person_page_collects_credits_under_every_name() {
+        use crate::enrichment::identity::tests::{KORN_JD, QTIP, cache as tribe, identity};
+        let cache = tribe();
+        let identity = identity();
+        let external = [
+            row("low-end", "", "Jonathan Davis", "producer", "", QTIP),
+            // Korn's singer shares the name but is someone else.
+            row("korn-album", "", "Jonathan Davis", "composer", "", KORN_JD),
+        ];
+        let members = identity.members(&format!("mb:{QTIP}"));
+        let credits = collect_person_credits(&cache, &identity, &members, &external).unwrap();
+        assert_eq!(credits.artist_id, "tag-qtip");
+        assert_eq!(credits.name, "Q-Tip");
+        let albums = credits
+            .albums
+            .iter()
+            .map(|entry| entry.album.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(albums, vec!["low-end"]);
+        let roles = credits
+            .roles
+            .iter()
+            .map(|role| role.role.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(roles, vec!["composer", "producer"]);
     }
 
     #[test]

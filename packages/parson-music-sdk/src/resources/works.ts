@@ -1,4 +1,5 @@
 import api from "../core/http";
+import { focusQueryString, type FocusSelection } from "../editorial/focus";
 import type {
   AlbumIdentification,
   ComposerWorks,
@@ -10,9 +11,16 @@ import type {
 
 const segment = (id: string) => encodeURIComponent(id);
 
-/** A work with every recording of it in the library. */
-export async function getWork(mbid: string): Promise<WorkPage> {
-  const response = await api.get<WorkPage>(`/works/${segment(mbid)}`);
+/** A work with every recording of it in the library, narrowed by an
+ * optional Focus selection (conductor, ensemble, bit depth, ...). */
+export async function getWork(
+  mbid: string,
+  selection: FocusSelection = {},
+): Promise<WorkPage> {
+  const query = focusQueryString(selection);
+  const response = await api.get<WorkPage>(
+    `/works/${segment(mbid)}${query ? `?${query}` : ""}`,
+  );
   return response.data;
 }
 

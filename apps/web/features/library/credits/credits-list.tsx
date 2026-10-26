@@ -80,10 +80,20 @@ export function CreditsList({
                   name={credit.name}
                   size={36}
                 />
-                <CreditName
-                  className="truncate font-medium text-zinc-100"
-                  credit={credit}
-                />
+                <span className="flex min-w-0 flex-col">
+                  <CreditName
+                    className="truncate font-medium text-zinc-100"
+                    credit={credit}
+                  />
+                  {credit.credited_as?.length ? (
+                    <span
+                      className="truncate text-xs text-zinc-500"
+                      title="The same person, credited under another name"
+                    >
+                      as {credit.credited_as.join(", ")}
+                    </span>
+                  ) : null}
+                </span>
                 <SourceMark sources={credit.sources} />
                 {trackLabel && (
                   <span className="shrink-0 text-xs tabular-nums text-zinc-500">

@@ -3,6 +3,7 @@ pub mod artist;
 pub mod auth;
 pub mod cast;
 pub mod data;
+pub mod discography;
 pub mod editorial;
 pub mod error;
 pub mod filesystem;

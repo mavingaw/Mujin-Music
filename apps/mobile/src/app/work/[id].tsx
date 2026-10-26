@@ -1,11 +1,13 @@
 import {
+  focusQueryString,
   getWork,
+  type FocusSelection,
   groupRecordings,
   recordingPerformers,
   workFacts,
   type RecordingGrouping,
 } from "@parson/music-sdk";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import { useMemo, useState } from "react";
@@ -23,6 +25,7 @@ import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { EditorialBlock } from "@/components/credits";
 import { Chip } from "@/components/works";
+import { FocusBar } from "@/components/focus";
 import { palette } from "@/constants/colors";
 import { artistRoute, joinMeta, workRoute } from "@/lib/credit-links";
 import {
@@ -41,10 +44,12 @@ export default function WorkScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [grouping, setGrouping] = useState<RecordingGrouping>("album");
+  const [selection, setSelection] = useState<FocusSelection>({});
   const work = useQuery({
-    queryKey: ["work", id],
-    queryFn: () => getWork(id),
+    queryKey: ["work", id, focusQueryString(selection)],
+    queryFn: () => getWork(id, selection),
     enabled: !!id,
+    placeholderData: keepPreviousData,
     staleTime: 60_000,
   });
   const groups = useMemo(
@@ -138,7 +143,14 @@ export default function WorkScreen() {
               ))}
             </View>
           ) : null}
-          <SectionTitle>{`Recordings (${recordings.length})`}</SectionTitle>
+          <SectionTitle>{`Recordings (${work.data.focus?.total ?? recordings.length})`}</SectionTitle>
+          <FocusBar
+            loading={work.isFetching}
+            noun={{ one: "recording", other: "recordings" }}
+            onChange={setSelection}
+            selection={selection}
+            summary={work.data.focus}
+          />
           <View style={styles.groupings}>
             {GROUPINGS.map((entry) => (
               <Chip

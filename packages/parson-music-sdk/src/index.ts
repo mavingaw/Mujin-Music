@@ -1,6 +1,7 @@
 export * from "./core/http";
 export * from "./domain/types";
 export * from "./editorial/credits";
+export * from "./editorial/focus";
 export * from "./editorial/genres";
 export * from "./editorial/people";
 export * from "./player/audio-presets";

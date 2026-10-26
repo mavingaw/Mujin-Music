@@ -251,6 +251,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(crate::api::editorial::artist_image)
             .service(crate::api::editorial::put_artist_note)
             .service(crate::api::works::get_artist_works)
+            .service(crate::api::discography::get_discography)
             .service(get_artist_info),
     );
 }

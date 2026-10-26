@@ -1,9 +1,15 @@
 import {
   creditRoleLabel,
   creditRolesLabel,
+  discographySections,
   enrichmentWaitingLabel,
+  focusQueryString,
+  focusRoleLabel,
   getAlbumInfos,
   getArtistAbout,
+  getArtistDiscography,
+  qualityBadge,
+  type FocusSelection,
   getArtistCredits,
   getArtistInfo,
   getArtistWorks,
@@ -12,10 +18,10 @@ import {
   type Artist,
   type LibraryAlbum,
 } from "@parson/music-sdk";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Play, Shuffle } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -33,6 +39,7 @@ import { AlbumActions } from "@/components/album-actions";
 import { EditorialBlock, NoteBlock } from "@/components/credits";
 import { CompositionsSection } from "@/components/works";
 import { GenreChips } from "@/components/genres";
+import { FocusBar } from "@/components/focus";
 import { apiUrl } from "@/lib/runtime";
 import { joinMeta } from "@/lib/credit-links";
 import { palette } from "@/constants/colors";
@@ -65,6 +72,27 @@ export default function ArtistScreen() {
     enabled: !!id,
     staleTime: 60_000,
   });
+  const [selection, setSelection] = useState<FocusSelection>({});
+  // A person opened under another of their ids moves to their one page.
+  const canonical =
+    about.data && about.data.artist_id !== id && about.data.requested_id === id
+      ? about.data.artist_id
+      : null;
+  useEffect(() => {
+    if (canonical) router.replace(`/artist/${encodeURIComponent(canonical)}`);
+  }, [canonical, router]);
+  const discography = useQuery({
+    queryKey: ["artist-discography", id, focusQueryString(selection)],
+    queryFn: () => getArtistDiscography(id, selection),
+    enabled: !!id && !canonical,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
+  const focusSections = useMemo(
+    () =>
+      discography.data ? discographySections(discography.data.albums) : null,
+    [discography.data],
+  );
   const isComposer = Boolean(
     about.data?.roles.some((role) => role.role === "composer"),
   );
@@ -216,6 +244,11 @@ export default function ArtistScreen() {
                 ])}
               </Text>
             ) : null}
+            {about.data?.credited_as?.length ? (
+              <Text style={styles.facts}>
+                Also credited as {about.data.credited_as.join(", ")}
+              </Text>
+            ) : null}
             <GenreChips centered genres={about.data?.genres} />
             {!data.icon_url && about.data?.image ? (
               <Text style={styles.photoCredit}>
@@ -310,7 +343,102 @@ export default function ArtistScreen() {
               </ScrollView>
             </View>
           ) : null}
-          {sections.map((section) => (
+          {focusSections && discography.data ? (
+            <View>
+              <SectionTitle>Discography</SectionTitle>
+              <FocusBar
+                loading={discography.isFetching}
+                note={
+                  discography.data.albums.every((entry) =>
+                    entry.sources.every((source) => source === "local"),
+                  )
+                    ? "Source: every album here is a local file. Streaming albums join the Source filter once a streaming service adds them to the library."
+                    : undefined
+                }
+                onChange={setSelection}
+                selection={selection}
+                summary={discography.data.focus}
+              />
+              {discography.data.albums.length === 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setSelection({})}
+                  style={styles.emptyFocus}
+                >
+                  <Text style={styles.creditRole}>
+                    No album matches every filter · Tap to clear
+                  </Text>
+                </Pressable>
+              ) : null}
+              {focusSections.map((section) => (
+                <View key={section.key}>
+                  <Text style={styles.subsection}>{section.title}</Text>
+                  <View style={styles.grid}>
+                    {section.albums.map((entry) => {
+                      const badge = qualityBadge(entry);
+                      const roles = entry.roles
+                        .filter((role) => role !== "main")
+                        .map(focusRoleLabel)
+                        .slice(0, 2);
+                      return (
+                        <Pressable
+                          accessibilityLabel={`${entry.album.name}${badge ? `, ${badge}` : ""}`}
+                          accessibilityRole="button"
+                          key={entry.album.id}
+                          onLongPress={() =>
+                            setSelected(entry.album as unknown as Album)
+                          }
+                          onPress={() => {
+                            if (!selected)
+                              router.push(`/album/${entry.album.id}`);
+                          }}
+                          style={styles.card}
+                        >
+                          <Artwork
+                            path={entry.album.cover_url}
+                            rounded={9}
+                            size={156}
+                          />
+                          <Text numberOfLines={2} style={styles.albumName}>
+                            {entry.album.name}
+                          </Text>
+                          <Text numberOfLines={1} style={styles.creditRole}>
+                            {joinMeta([
+                              entry.artist.id !== data.id
+                                ? entry.artist.name
+                                : null,
+                              entry.year ? String(entry.year) : null,
+                            ])}
+                          </Text>
+                          <View style={styles.badges}>
+                            {badge ? (
+                              <Text
+                                style={[
+                                  styles.badge,
+                                  entry.quality === "hires" &&
+                                    styles.badgeHires,
+                                ]}
+                              >
+                                {entry.quality === "hires"
+                                  ? `HI-RES ${badge}`
+                                  : badge}
+                              </Text>
+                            ) : null}
+                            {roles.map((role) => (
+                              <Text key={role} style={styles.badge}>
+                                {role.toUpperCase()}
+                              </Text>
+                            ))}
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {(focusSections ? [] : sections).map((section) => (
             <View key={section.key}>
               <SectionTitle>{section.title}</SectionTitle>
               <View style={styles.grid}>
@@ -460,6 +588,28 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   rail: { paddingHorizontal: 20, gap: 16 },
+  subsection: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "800",
+    paddingHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  emptyFocus: { paddingHorizontal: 20, paddingVertical: 16 },
+  badges: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 5 },
+  badge: {
+    color: palette.secondary,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.07)",
+  },
+  badgeHires: { color: "#fcd34d", backgroundColor: "rgba(252,211,77,0.14)" },
   creditRole: { color: palette.muted, fontSize: 12, marginTop: 2 },
   errorState: { flex: 1, alignItems: "center", justifyContent: "center" },
   error: { color: palette.secondary },

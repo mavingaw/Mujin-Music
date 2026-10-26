@@ -42,7 +42,7 @@ pub fn artist_search_url(name: &str) -> String {
 }
 
 pub fn artist_lookup_url(mbid: &str) -> String {
-    format!("{API_ROOT}/artist/{mbid}?inc=url-rels+genres&fmt=json")
+    format!("{API_ROOT}/artist/{mbid}?inc=url-rels+genres+aliases&fmt=json")
 }
 
 /// A title and, for classical albums titled "Beethoven: Symphony No. 9",
@@ -196,6 +196,8 @@ pub struct ArtistProfile {
     /// A Commons file linked as the artist's image, a fallback when the
     /// Wikidata item has no P18 image.
     pub image_file: Option<String>,
+    /// Other names: legal names, stage names and spellings.
+    pub aliases: Vec<String>,
 }
 
 pub fn parse_artist(body: &Value) -> Option<ArtistProfile> {
@@ -213,7 +215,32 @@ pub fn parse_artist(body: &Value) -> Option<ArtistProfile> {
         wikipedia: wikipedia_relation(body),
         genres: parse_genres(body),
         image_file: image_relation(body),
+        aliases: parse_aliases(body),
     })
+}
+
+/// At most this many aliases are kept per person.
+pub const MAX_ALIASES: usize = 24;
+
+/// The names in an artist's `aliases` (looked up with `inc=aliases`):
+/// legal names, stage names and spellings, but not search hints.
+pub fn parse_aliases(body: &Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for alias in array(body, "aliases") {
+        if alias.get("type").and_then(Value::as_str) == Some("Search hint") {
+            continue;
+        }
+        let Some(name) = text(alias, "name") else {
+            continue;
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+        if names.len() >= MAX_ALIASES {
+            break;
+        }
+    }
+    names
 }
 
 /// A genre as MusicBrainz names it, with its vote count.
@@ -549,7 +576,11 @@ pub fn choose_release_in_year(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalCredit {
+    /// The name the release credits, which may differ from the person's
+    /// own (MusicBrainz "credited as").
     pub name: String,
+    /// The person's own MusicBrainz name.
+    pub artist_name: Option<String>,
     pub artist_mbid: Option<String>,
     pub role: String,
     pub instrument: Option<String>,
@@ -663,6 +694,7 @@ fn relation_credits(value: &Value, credits: &mut Vec<ExternalCredit>) {
                 };
                 let credit = ExternalCredit {
                     name,
+                    artist_name: text(artist, "name"),
                     artist_mbid: text(artist, "id").filter(|id| is_mbid(id)),
                     role,
                     instrument,
@@ -945,6 +977,36 @@ mod tests {
         for name in ["Miles Davis", "Unknown Mortal Orchestra", "The Unknowns"] {
             assert!(!is_placeholder_artist(name), "{name}");
         }
+    }
+
+    #[test]
+    fn artist_aliases_and_credited_names_are_read() {
+        let body = json!({
+            "id": BEATLES, "name": "Q-Tip",
+            "aliases": [
+                {"name": "Jonathan Davis", "type": "Legal name"},
+                {"name": "Kamaal Ibn John Fareed", "type": "Legal name"},
+                {"name": "Q Tip", "type": "Search hint"},
+                {"name": "Jonathan Davis", "type": "Artist name"}
+            ]
+        });
+        let profile = parse_artist(&body).unwrap();
+        assert_eq!(
+            profile.aliases,
+            vec!["Jonathan Davis", "Kamaal Ibn John Fareed"]
+        );
+        assert!(artist_lookup_url(BEATLES).contains("aliases"));
+        let release = json!({
+            "id": BEATLES,
+            "relations": [{
+                "type": "producer", "target-type": "artist",
+                "target-credit": "Jonathan Davis",
+                "artist": {"id": OTHER, "name": "Q-Tip"}
+            }]
+        });
+        let details = parse_release(&release).unwrap();
+        assert_eq!(details.credits[0].name, "Jonathan Davis");
+        assert_eq!(details.credits[0].artist_name.as_deref(), Some("Q-Tip"));
     }
 
     #[test]

@@ -13,12 +13,16 @@ use crate::api::error::{bad_request, conflict, internal_server_error, not_found}
 use crate::api::song::{ResponseSong, response_song};
 use crate::domain::{Album, Artist, Song};
 use crate::enrichment::fetch::{Fetch, HttpFetch, MAX_JSON_BYTES};
+use crate::enrichment::identity::{PersonIdentity, load_identity};
 use crate::enrichment::musicbrainz::{
     self as mb, ReleaseCandidate, identify_query, is_mbid, is_placeholder_artist, release_query_url,
 };
 use crate::enrichment::store::{self, CreditRow, Identification, TrackWorkRow, WorkRow};
 use crate::enrichment::worker::wake;
 use crate::enrichment::works::{first_year, part_title, period_for_year};
+use crate::library::focus::{
+    FocusRecord, FocusSummary, Selection, focus, looks_like_ensemble, parse_selection,
+};
 use crate::library::identity::normalize_artist_identity;
 use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
@@ -83,7 +87,11 @@ pub struct WorkPage {
     pub work: WorkSummary,
     pub parent: Option<WorkSummary>,
     pub parts: Vec<WorkSummary>,
+    /// The recordings the Focus selection keeps (all of them without one).
     pub recordings: Vec<Recording>,
+    /// Focus chips over every recording: conductor, ensemble, soloist,
+    /// instrument, performer, format and source, with counts.
+    pub focus: FocusSummary,
     pub url: String,
     /// About the work, from the Wikipedia article MusicBrainz links (a
     /// movement shows its piece's text), with CC BY-SA attribution.
@@ -328,6 +336,14 @@ pub fn build_recordings(
             let key = normalize_artist_identity(&entry.name);
             !named.contains(&key) && Some(&key) != composer.as_ref()
         });
+        // An orchestra tagged only as a track artist is the ensemble.
+        if ensembles.is_empty() {
+            let (groups, people): (Vec<_>, Vec<_>) = artists
+                .into_iter()
+                .partition(|entry| looks_like_ensemble(&entry.name));
+            ensembles = groups;
+            artists = people;
+        }
         soloists.retain(|entry| {
             let key = normalize_artist_identity(&entry.name);
             Some(&key) != composer.as_ref()
@@ -509,13 +525,105 @@ async fn blocking<T: Send + 'static>(
     .map_err(|error| error.to_string())?
 }
 
+/// One person per id in a list, after merging ids that are one person.
+fn canonical_people(identity: &PersonIdentity, people: &mut Vec<PersonRef>, album_id: &str) {
+    let mut seen = HashSet::new();
+    people.retain_mut(|person| {
+        if let Some(id) = &person.artist_id {
+            let canonical = identity.for_local(id, &person.name, Some(album_id));
+            if canonical != *id
+                && let Some(name) = identity.display_name(&canonical)
+            {
+                person.name = name.to_string();
+            }
+            person.artist_id = Some(canonical);
+        }
+        let key = person
+            .artist_id
+            .clone()
+            .unwrap_or_else(|| normalize_artist_identity(&person.name));
+        seen.insert((key, person.instrument.clone()))
+    });
+}
+
+/// Resolves every person on the recordings to one identity each.
+pub fn canonical_recordings(identity: &PersonIdentity, recordings: &mut [Recording]) {
+    for recording in recordings {
+        let album_id = recording.album.id.clone();
+        for list in [
+            &mut recording.conductors,
+            &mut recording.ensembles,
+            &mut recording.soloists,
+            &mut recording.artists,
+        ] {
+            canonical_people(identity, list, &album_id);
+        }
+    }
+}
+
+/// A recording's Focus record.
+pub fn recording_record(recording: &Recording, composer: Option<&PersonRef>) -> FocusRecord {
+    let mut record = FocusRecord::default();
+    for person in &recording.conductors {
+        record.add_person("conductor", person.artist_id.as_deref(), &person.name);
+    }
+    for person in &recording.ensembles {
+        record.add_person("ensemble", person.artist_id.as_deref(), &person.name);
+    }
+    for person in &recording.soloists {
+        record.add_person("soloist", person.artist_id.as_deref(), &person.name);
+        if let Some(instrument) = &person.instrument {
+            record.add("instrument", &instrument.to_lowercase(), instrument, None);
+        }
+    }
+    for person in &recording.artists {
+        // Tags often name the orchestra only as a track artist.
+        let group = if looks_like_ensemble(&person.name) {
+            "ensemble"
+        } else {
+            "performer"
+        };
+        record.add_person(group, person.artist_id.as_deref(), &person.name);
+    }
+    if let Some(composer) = composer {
+        record.add_person("composer", composer.artist_id.as_deref(), &composer.name);
+    }
+    for track in &recording.tracks {
+        record.add_track(track.song.audio.as_ref(), &track.song.path);
+    }
+    record
+}
+
+/// Keeps the recordings a Focus selection keeps, with the chip counts.
+pub fn focus_recordings(
+    recordings: Vec<Recording>,
+    composer: Option<&PersonRef>,
+    selection: &Selection,
+) -> (Vec<Recording>, FocusSummary) {
+    let records = recordings
+        .iter()
+        .map(|recording| recording_record(recording, composer))
+        .collect::<Vec<_>>();
+    let (matched, summary) = focus(&records, selection);
+    let matched = matched.into_iter().collect::<HashSet<_>>();
+    let kept = recordings
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| matched.contains(index))
+        .map(|(_, recording)| recording)
+        .collect();
+    (kept, summary)
+}
+
 #[get("/{mbid}")]
 pub async fn get_work(
     mbid: web::Path<String>,
+    query: web::Query<Vec<(String, String)>>,
     pool: web::Data<DbPool>,
     lifecycle: web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
     let mbid = mbid.into_inner();
+    let selection = parse_selection(&query.into_inner());
     if !is_mbid(&mbid) {
         return not_found("Work not found.", "work_not_found");
     }
@@ -537,7 +645,8 @@ pub async fn get_work(
         }
     };
     let people = person_index(&cache);
-    let recordings = build_recordings(
+    let identity = load_identity(pool.get_ref().clone(), cache.clone()).await;
+    let mut recordings = build_recordings(
         &cache,
         &people,
         &data.top,
@@ -545,6 +654,16 @@ pub async fn get_work(
         &data.links,
         &data.external,
     );
+    canonical_recordings(&identity, &mut recordings);
+    let mut work = summary(&data.work, &people);
+    if let Some(composer) = work.composer.as_mut() {
+        if let Some(mbid) = data.work.composer_mbid.as_deref() {
+            composer.artist_id = Some(identity.for_mbid(mbid));
+        } else if let Some(id) = composer.artist_id.clone() {
+            composer.artist_id = Some(identity.for_local(&id, &composer.name, None));
+        }
+    }
+    let (recordings, focus) = focus_recordings(recordings, work.composer.as_ref(), &selection);
     // Only movements someone has a recording of are listed.
     let recorded = data
         .links
@@ -552,7 +671,8 @@ pub async fn get_work(
         .map(|link| link.work_mbid.as_str())
         .collect::<HashSet<_>>();
     HttpResponse::Ok().json(WorkPage {
-        work: summary(&data.work, &people),
+        work,
+        focus,
         parent: data.parent.as_ref().map(|parent| summary(parent, &people)),
         parts: data
             .parts
@@ -578,23 +698,57 @@ pub async fn get_artist_works(
         Err(readiness) => return library_unavailable_response(readiness),
     };
     let (normalized, external) = person_query(&cache, &artist_id);
-    let name = cache.artist(&artist_id).map(|artist| artist.name.clone());
-    let local = artist_id.clone();
+    let identity = load_identity(pool.get_ref().clone(), cache.clone()).await;
+    let members = identity.members(&artist_id);
+    let artist_id = members.canonical.clone();
+    let name = cache
+        .artist(&artist_id)
+        .map(|artist| artist.name.clone())
+        .or_else(|| identity.display_name(&artist_id).map(str::to_string));
+    let local = members.local_ids.clone();
+    let mut names = members.names.clone();
+    names.extend(normalized);
+    let mut mbids = members.mbids.clone();
+    mbids.extend(external);
     let rows = blocking(pool.get_ref(), move |connection| {
-        let mut mbids = external.into_iter().collect::<Vec<_>>();
-        if !local.starts_with(EXTERNAL_PREFIX) {
-            mbids.extend(store::linked_artist_mbids(connection, &local)?);
+        for id in local.iter().filter(|id| !id.starts_with(EXTERNAL_PREFIX)) {
+            mbids.extend(store::linked_artist_mbids(connection, id)?);
         }
-        store::composer_works(connection, normalized.as_deref(), &mbids)
+        mbids.sort();
+        mbids.dedup();
+        names.sort();
+        names.dedup();
+        let mut found: Vec<(WorkRow, i64, i64)> = Vec::new();
+        let lookups = if names.is_empty() {
+            vec![None]
+        } else {
+            names.iter().map(|name| Some(name.as_str())).collect()
+        };
+        for name in lookups.into_iter().take(8) {
+            for row in store::composer_works(connection, name, &mbids)? {
+                if !found.iter().any(|(known, _, _)| known.mbid == row.0.mbid) {
+                    found.push(row);
+                }
+            }
+        }
+        found.sort_by(|left, right| left.0.title.cmp(&right.0.title));
+        Ok(found)
     })
     .await;
-    let rows = match rows {
+    let mut rows = match rows {
         Ok(rows) => rows,
         Err(error) => {
             tracing::error!(%error, "could not load compositions");
             return internal_server_error("Could not load compositions.", "works_failed");
         }
     };
+    // A namesake's compositions (same name, another MusicBrainz person)
+    // are not this person's.
+    rows.retain(|(work, _, _)| {
+        work.composer_mbid
+            .as_deref()
+            .is_none_or(|mbid| identity.for_mbid(mbid) == artist_id)
+    });
     let people = person_index(&cache);
     let name = name.or_else(|| {
         rows.first()
@@ -1049,6 +1203,166 @@ mod tests {
             work_mbid: work.into(),
             recording_mbid: None,
         }
+    }
+
+    fn recording(
+        album_id: &str,
+        conductor: &str,
+        orchestra: &str,
+        bits: u8,
+        rate: u32,
+    ) -> Recording {
+        let album = Album {
+            id: album_id.into(),
+            name: album_id.into(),
+            ..Album::default()
+        };
+        let artist = Artist {
+            id: conductor.into(),
+            name: conductor.into(),
+            ..Artist::default()
+        };
+        let song = Song {
+            id: format!("{album_id}-1"),
+            name: "I. Allegro con brio".into(),
+            path: format!("/music/{album_id}/01.flac"),
+            audio: Some(crate::domain::AudioProperties {
+                codec: Some("flac".into()),
+                sample_rate: Some(rate),
+                bit_depth: Some(bits),
+                lossless: Some(true),
+                ..Default::default()
+            }),
+            ..Song::default()
+        };
+        Recording {
+            year: None,
+            conductors: vec![PersonRef {
+                artist_id: Some(conductor.into()),
+                name: conductor.into(),
+                instrument: None,
+            }],
+            ensembles: Vec::new(),
+            soloists: Vec::new(),
+            artists: vec![PersonRef {
+                artist_id: Some(orchestra.into()),
+                name: orchestra.into(),
+                instrument: None,
+            }],
+            tracks: vec![RecordingTrack {
+                song: response_song(&song, &album, &artist),
+                work_mbid: SYMPHONY.into(),
+                part_title: "I. Allegro con brio".into(),
+                part_position: Some(1),
+            }],
+            complete: true,
+            duration: 0.0,
+            album,
+            artist,
+        }
+    }
+
+    #[test]
+    fn recordings_focus_on_conductor_orchestra_and_resolution() {
+        let recordings = vec![
+            recording(
+                "karajan-po-96",
+                "karajan",
+                "Philharmonia Orchestra",
+                24,
+                96_000,
+            ),
+            recording(
+                "karajan-po-44",
+                "karajan",
+                "Philharmonia Orchestra",
+                16,
+                44_100,
+            ),
+            recording(
+                "karajan-bp-192",
+                "karajan",
+                "Berliner Philharmoniker",
+                24,
+                192_000,
+            ),
+            recording(
+                "kleiber-wp-96",
+                "kleiber",
+                "Wiener Philharmoniker",
+                24,
+                96_000,
+            ),
+        ];
+        let selection = parse_selection(&[
+            ("conductor".into(), "karajan".into()),
+            ("ensemble".into(), "Philharmonia Orchestra".into()),
+            ("quality".into(), "hires".into()),
+        ]);
+        let (kept, summary) = focus_recordings(recordings, None, &selection);
+        assert_eq!(
+            kept.iter()
+                .map(|recording| recording.album.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["karajan-po-96"]
+        );
+        assert_eq!(summary.total, 4);
+        assert_eq!(summary.matched, 1);
+        // The orchestra billed as a track artist is an ensemble chip.
+        let ensembles = summary
+            .groups
+            .iter()
+            .find(|group| group.key == "ensemble")
+            .unwrap();
+        assert!(
+            ensembles
+                .values
+                .iter()
+                .any(|chip| chip.label == "Philharmonia Orchestra")
+        );
+        // Every chip left would show the same one recording.
+        assert!(
+            summary
+                .groups
+                .iter()
+                .all(|group| group.key != "sample_rate")
+        );
+        let all = vec![
+            recording("a", "karajan", "Philharmonia Orchestra", 24, 96_000),
+            recording("b", "karajan", "Berliner Philharmoniker", 24, 192_000),
+        ];
+        let (_, summary) = focus_recordings(all, None, &Selection::new());
+        let rates = summary
+            .groups
+            .iter()
+            .find(|group| group.key == "sample_rate")
+            .unwrap();
+        assert_eq!(rates.values[0].label, "192 kHz");
+    }
+
+    #[test]
+    fn merged_people_are_listed_once_on_a_recording() {
+        use crate::enrichment::identity::tests::{QTIP, identity};
+        let identity = identity();
+        let mut recordings = vec![recording("low-end", "x", "y", 16, 44_100)];
+        recordings[0].soloists = vec![
+            PersonRef {
+                artist_id: Some("tag-qtip".into()),
+                name: "Q-Tip".into(),
+                instrument: None,
+            },
+            PersonRef {
+                artist_id: Some(format!("mb:{QTIP}")),
+                name: "Jonathan Davis".into(),
+                instrument: None,
+            },
+        ];
+        canonical_recordings(&identity, &mut recordings);
+        assert_eq!(recordings[0].soloists.len(), 1);
+        assert_eq!(
+            recordings[0].soloists[0].artist_id.as_deref(),
+            Some("tag-qtip")
+        );
     }
 
     #[test]

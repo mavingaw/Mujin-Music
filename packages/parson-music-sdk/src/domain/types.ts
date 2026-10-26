@@ -388,6 +388,9 @@ export type CreditSource = "tags" | "musicbrainz" | (string & {});
 export interface AboutCredit {
   artist_id: string | null;
   name: string;
+  /** Other names the sources credit this person under ("Jonathan Davis"
+   * for Q-Tip). Older servers leave this out. */
+  credited_as?: string[];
   role: CreditRole | (string & {});
   instrument: string | null;
   track_ids: string[];
@@ -616,7 +619,13 @@ export interface CreditRoleSummary {
 }
 
 export interface ArtistAbout {
+  /** The person's canonical id: a page opened under another of their ids
+   * (a second spelling, their MusicBrainz id) answers for this one. */
   artist_id: string;
+  /** The id the page was opened with. Older servers leave this out. */
+  requested_id?: string;
+  /** Other names the person is credited under in this library. */
+  credited_as?: string[];
   name: string;
   biography: EditorialText | null;
   image: EditorialImage | null;
@@ -739,7 +748,10 @@ export interface WorkPage {
   parent: WorkSummary | null;
   /** Movements with at least one recording in the library. */
   parts: WorkSummary[];
+  /** The recordings the Focus selection keeps (all without one). */
   recordings: WorkRecording[];
+  /** Focus chips over every recording. Older servers leave this out. */
+  focus?: FocusSummary;
   /** The work on MusicBrainz. */
   url: string;
   /**
@@ -795,4 +807,76 @@ export interface IdentifySearch {
   local_track_count: number;
   identification: AlbumIdentification | null;
   releases: ReleaseMatch[];
+}
+
+/** A Focus facet group. */
+export type FocusGroupKey =
+  | "role"
+  | "performer"
+  | "conductor"
+  | "ensemble"
+  | "soloist"
+  | "instrument"
+  | "composer"
+  | "form"
+  | "period"
+  | "quality"
+  | "bit_depth"
+  | "sample_rate"
+  | "source";
+
+/** One value of a Focus group, with how many albums choosing it shows. */
+export interface FocusChip {
+  /** A person's id, `name:<name>` for someone with no page, or a value
+   * such as `24`, `96000`, `hires`, `local`, `symphony`. */
+  key: string;
+  label: string;
+  artist_id?: string | null;
+  count: number;
+  selected: boolean;
+}
+
+export interface FocusGroup {
+  key: FocusGroupKey;
+  label: string;
+  values: FocusChip[];
+}
+
+export interface FocusSummary {
+  /** Albums or recordings before filtering. */
+  total: number;
+  /** Albums or recordings the selection keeps. */
+  matched: number;
+  /** Groups with a value that narrows or is chosen. */
+  groups: FocusGroup[];
+  /** Chosen values, keyed `group=value`, including any nothing has. */
+  selected: FocusChip[];
+}
+
+/** An album on a person's discography. */
+export interface FocusAlbum {
+  album: Album;
+  artist: Artist;
+  year: number | null;
+  /** The person's roles: `main`, `featured`, or a credit role. */
+  roles: string[];
+  conductors: PersonRef[];
+  ensembles: PersonRef[];
+  /** The best format on the album, e.g. "FLAC 24-bit / 96 kHz". */
+  format: string | null;
+  quality: "hires" | "lossless" | "lossy" | null;
+  sources: string[];
+}
+
+/** Everything a person made, appears on, conducted, composed or is
+ * credited on, filtered by a Focus selection. */
+export interface PersonDiscography {
+  /** The person's canonical id. */
+  artist_id: string;
+  requested_id: string;
+  name: string;
+  /** Other names the person is credited under. */
+  credited_as: string[];
+  albums: FocusAlbum[];
+  focus: FocusSummary;
 }

@@ -1,10 +1,12 @@
 import api from "../core/http";
+import { focusQueryString, type FocusSelection } from "../editorial/focus";
 import type {
   AlbumAbout,
   ArtistAbout,
   ArtistCredits,
   EnrichmentOverview,
   EnrichmentSettings,
+  PersonDiscography,
   UserNote,
 } from "../domain/types";
 
@@ -26,6 +28,21 @@ export async function getArtistAbout(id: string): Promise<ArtistAbout> {
 export async function getArtistCredits(id: string): Promise<ArtistCredits> {
   const response = await api.get<ArtistCredits>(
     `/artists/${segment(id)}/credits`,
+  );
+  return response.data;
+}
+
+/**
+ * A person's whole discography (albums they made, appear on, conducted,
+ * composed for or are credited on), narrowed by a Focus selection.
+ */
+export async function getArtistDiscography(
+  id: string,
+  selection: FocusSelection = {},
+): Promise<PersonDiscography> {
+  const query = focusQueryString(selection);
+  const response = await api.get<PersonDiscography>(
+    `/artists/${segment(id)}/discography${query ? `?${query}` : ""}`,
   );
   return response.data;
 }
