@@ -70,6 +70,9 @@ export function PlayerFooter({
   explicit,
   feedback,
   volume,
+  zonePicker,
+  zoneLabel,
+  zoneSignal,
 }: {
   albumCover?: string;
   albumId: string;
@@ -110,6 +113,12 @@ export function PlayerFooter({
   /** Radio thumbs for the current track, when it is a Radio pick. */
   feedback?: ReactNode;
   volume: number;
+  /** Roon-style zone picker, shown next to volume. */
+  zonePicker?: ReactNode;
+  /** Name of the remote zone being controlled, if any. */
+  zoneLabel?: string | null;
+  /** The remote zone's quality light, beside "Playing on". */
+  zoneSignal?: ReactNode;
 }) {
   return (
     <SongMenu
@@ -138,6 +147,8 @@ export function PlayerFooter({
             title={title}
             explicit={explicit}
             feedback={feedback}
+            zoneLabel={zoneLabel ?? null}
+            zoneSignal={zoneSignal}
           />
           <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
             <div className="flex items-center gap-1.5">
@@ -197,6 +208,11 @@ export function PlayerFooter({
             <div className="hidden sm:block" data-output-picker-trigger>
               <OutputPickerButton />
             </div>
+            {zonePicker && (
+              <div className="relative z-30" data-zone-picker-slot>
+                {zonePicker}
+              </div>
+            )}
             <div className="hidden sm:block">
               <VolumeControl
                 muted={muted}
@@ -259,6 +275,8 @@ function TrackInfo({
   explicit,
   feedback,
   songId,
+  zoneLabel,
+  zoneSignal,
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
@@ -267,6 +285,8 @@ function TrackInfo({
   explicit: boolean;
   feedback?: ReactNode;
   songId: string;
+  zoneLabel: string | null;
+  zoneSignal?: ReactNode;
 }) {
   return (
     <section className="flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden md:justify-self-start">
@@ -289,8 +309,16 @@ function TrackInfo({
           {explicit && <ExplicitBadge />}
           <ArtistCreditLinks credits={artistCredits} />
         </span>
+        {zoneLabel && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[11px] font-medium text-emerald-300">
+              Playing on {zoneLabel}
+            </span>
+            {zoneSignal}
+          </span>
+        )}
       </div>
-      <FavoriteButton songId={songId} songName={title} />
+      {songId && <FavoriteButton songId={songId} songName={title} />}
       {feedback && (
         <span className="relative z-30 hidden md:flex">{feedback}</span>
       )}

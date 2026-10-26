@@ -9,6 +9,8 @@ import type {
   ServerSignalPath,
   VolumeLevelingMode,
   VolumeLevelingResult,
+  ZoneDsp,
+  ZoneRepeatMode,
 } from "@parson/music-sdk";
 import type { OutputDevice } from "./dsp-store";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
@@ -56,6 +58,7 @@ export type Player = {
   slowedReverb: boolean;
   audioPreset: AudioPresetId;
   audioPresets: readonly AudioPreset[];
+  /** True while repeating the current track (`repeatMode === "one"`). */
   looping: boolean;
   /** Index of the active item in `queue`. */
   currentIndex: number;
@@ -68,6 +71,8 @@ export type Player = {
   dsp: DspSettings;
   setDsp: (settings: DspSettings) => void;
   output: PlayerOutputState;
+  repeatMode: ZoneRepeatMode;
+  shuffle: boolean;
   setSongCallback: (
     song: PlayerInput,
     artist?: Partial<Artist>,
@@ -83,12 +88,27 @@ export type Player = {
   playPreviousSong: () => void;
   playQueueItem: (index: number) => void;
   reorderQueue: (from: number, to: number) => void;
+  /** Removes an upcoming item (not history or the current track). */
+  removeQueueItem: (index: number) => void;
+  clearUpcoming: () => void;
+  setRepeatMode: (mode: ZoneRepeatMode) => void;
+  /** Shuffles upcoming items; turning it off restores their order. */
+  setShuffle: (enabled: boolean) => void;
   handleTimeChange: (value: number | string) => void;
   getPlaybackPosition: () => number;
   setAudioVolume: (value: number | string) => void;
+  /** This zone's crossfade time (s) and leveling factor for the current track. */
+  setOutputSettings: (settings: {
+    crossfadeSeconds: number;
+    /** The zone's leveling factor; `null` when the zone does not level. */
+    levelingFactor: number | null;
+    /** This zone's DSP (preamp, shelves, crossfeed); `null` is off. */
+    dsp?: ZoneDsp | null;
+  }) => void;
   toggleMute: () => void;
   toggleSlowedReverb: () => void;
   setAudioPreset: (preset: AudioPresetId) => void;
+  /** Cycles repeat: off, queue, track. */
   toggleLoop: () => void;
 };
 

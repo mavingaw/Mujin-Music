@@ -20,6 +20,7 @@ import { AlbumFocusTracks } from "@/components/album-focus-tracks";
 import { Screen } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { formatCollectionDuration } from "@/lib/format";
 import {
   immediateBorderlessPressFeedback,
@@ -30,6 +31,7 @@ export default function AlbumScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const player = usePlayer();
+  const playback = useZonePlayback();
   const album = useQuery({
     queryKey: ["album", id],
     queryFn: () => getAlbumInfo(id, false) as Promise<LibraryAlbum>,
@@ -123,7 +125,7 @@ export default function AlbumScreen() {
                   albumPlaying
                     ? player.toggle()
                     : data.songs[0] &&
-                      player.playSong(data.songs[0], data.songs)
+                      playback.playSong(data.songs[0], data.songs)
                 }
               >
                 {albumPlaying ? (
@@ -138,7 +140,7 @@ export default function AlbumScreen() {
                 accessibilityRole="button"
                 disabled={!data.songs.length}
                 style={styles.shuffle}
-                onPress={() => player.playShuffled(data.songs)}
+                onPress={() => playback.playShuffled(data.songs)}
               >
                 <Shuffle color={palette.secondary} size={21} />
               </Pressable>

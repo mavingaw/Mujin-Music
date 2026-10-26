@@ -135,6 +135,7 @@ pub fn cors() -> Cors {
             header::CONTENT_TYPE,
             header::HeaderName::from_static(REQUEST_ID_HEADER),
             header::HeaderName::from_static("x-parson-client"),
+            header::HeaderName::from_static(crate::api::zones::ZONE_DEVICE_HEADER),
         ])
         .expose_headers([header::HeaderName::from_static(REQUEST_ID_HEADER)])
         .supports_credentials()

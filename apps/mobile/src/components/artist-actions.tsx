@@ -4,9 +4,9 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
-import { usePlayer } from "@/providers/player-provider";
 import { StartRadioAction } from "@/components/radio-ui";
 import { BanAction } from "@/components/radio-bans";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 
 export function ArtistActions({
   artistId,
@@ -20,7 +20,7 @@ export function ArtistActions({
   open: boolean;
 }) {
   const router = useRouter();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   return (
@@ -37,7 +37,7 @@ export function ArtistActions({
           void getArtistInfo(artistId)
             .then((artist) => {
               const songs = artist.albums.flatMap((album) => album.songs);
-              if (songs[0]) player.playSong(songs[0], songs);
+              if (songs[0]) playback.playSong(songs[0], songs);
               onClose();
             })
             .catch(() => setFailed(true))

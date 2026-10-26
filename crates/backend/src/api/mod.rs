@@ -20,6 +20,7 @@ pub mod search;
 pub mod setup;
 pub mod song;
 pub mod user;
+pub mod zones;
 
 use crate::domain::{Album, Artist};
 

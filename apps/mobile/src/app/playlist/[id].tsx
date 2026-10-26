@@ -33,7 +33,7 @@ import { PlaylistCover } from "@/components/playlist-cover";
 import { SmartPlaylistBanner } from "@/components/smart-playlist-banner";
 import { Screen, SongRow } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
-import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   immediateBorderlessPressFeedback,
   immediatePressFeedback,
@@ -43,7 +43,7 @@ import { formatCollectionDuration } from "@/lib/format";
 export default function PlaylistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const client = useQueryClient();
   const [menu, setMenu] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -186,7 +186,7 @@ export default function PlaylistScreen() {
                 disabled={!data.songs.length}
                 style={styles.play}
                 onPress={() =>
-                  data.songs[0] && player.playSong(data.songs[0], data.songs)
+                  data.songs[0] && playback.playSong(data.songs[0], data.songs)
                 }
               >
                 <Play color="black" fill="black" size={28} />
@@ -197,7 +197,7 @@ export default function PlaylistScreen() {
                 accessibilityRole="button"
                 disabled={!data.songs.length}
                 style={styles.shuffle}
-                onPress={() => player.playShuffled(data.songs)}
+                onPress={() => playback.playShuffled(data.songs)}
               >
                 <Shuffle color={palette.secondary} size={21} />
               </Pressable>
@@ -237,7 +237,7 @@ export default function PlaylistScreen() {
             label="Play"
             onPress={() => {
               setMenu(false);
-              if (data.songs[0]) player.playSong(data.songs[0], data.songs);
+              if (data.songs[0]) playback.playSong(data.songs[0], data.songs);
             }}
           />
           <DrawerAction
@@ -245,7 +245,7 @@ export default function PlaylistScreen() {
             label="Shuffle"
             onPress={() => {
               setMenu(false);
-              player.playShuffled(data.songs);
+              playback.playShuffled(data.songs);
             }}
           />
           <DrawerAction

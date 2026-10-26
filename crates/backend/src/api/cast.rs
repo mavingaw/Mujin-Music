@@ -185,11 +185,16 @@ fn signature_payload(session_id: &str, song_id: &str, expires: i64) -> String {
     format!("{session_id}\n{song_id}\n{expires}")
 }
 
-fn sign_media_url(session_id: &str, song_id: &str, expires: i64) -> String {
+pub(crate) fn sign_media_url(session_id: &str, song_id: &str, expires: i64) -> String {
     URL_SAFE_NO_PAD.encode(media_signature_bytes(session_id, song_id, expires))
 }
 
-fn verify_media_signature(session_id: &str, song_id: &str, expires: i64, signature: &str) -> bool {
+pub(crate) fn verify_media_signature(
+    session_id: &str,
+    song_id: &str,
+    expires: i64,
+    signature: &str,
+) -> bool {
     let Ok(candidate) = URL_SAFE_NO_PAD.decode(signature) else {
         return false;
     };
@@ -234,7 +239,7 @@ fn request_origin(request: &HttpRequest) -> String {
     format!("{}://{}", connection.scheme(), connection.host())
 }
 
-fn encoded(value: &str) -> String {
+pub(crate) fn encoded(value: &str) -> String {
     utf8_percent_encode(value, URL_COMPONENT).to_string()
 }
 
@@ -781,41 +786,7 @@ async fn send_command(
     let form = form.into_inner();
     let result = web::block(move || -> Result<Option<(i32, i32)>, String> {
         let mut connection = command_pool.get().map_err(|error| error.to_string())?;
-        if let Some(position) = form.queue_position {
-            let count = diesel::sql_query(
-                "SELECT CAST(COUNT(*) AS BIGINT) AS count FROM cast_session_item WHERE session_id = ?",
-            )
-            .bind::<Text, _>(&session_id)
-            .get_result::<CountRow>(&mut connection)
-            .map_err(|error| error.to_string())?
-            .count;
-            if i64::from(position) >= count {
-                return Ok(Some((-1, -1)));
-            }
-        }
-        let changed = diesel::sql_query(
-            "UPDATE cast_session SET command = ?, command_position_ms = ?, command_volume = ?, command_muted = ?, command_queue_position = ?,
-                    command_revision = command_revision + 1, revision = revision + 1,
-                    updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND user_id = ? AND status IN ('connecting', 'playing', 'paused')
-                   AND expires_at >= ?",
-        )
-        .bind::<Text, _>(&form.command)
-        .bind::<Nullable<BigInt>, _>(form.position_ms)
-        .bind::<Nullable<Double>, _>(form.volume)
-        .bind::<Nullable<Bool>, _>(form.muted)
-        .bind::<Nullable<Integer>, _>(form.queue_position)
-        .bind::<Text, _>(&session_id)
-        .bind::<Integer, _>(user_id)
-        .bind::<BigInt, _>(now_seconds())
-        .execute(&mut connection)
-        .map_err(|error| error.to_string())?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        query_session(&mut connection, &session_id, user_id)
-            .map_err(|error| error.to_string())
-            .map(|row| row.map(|(session, _)| (session.revision, session.command_revision)))
+        enqueue_command(&mut connection, &session_id, user_id, &form)
     })
     .await;
     match result {
@@ -841,6 +812,160 @@ async fn send_command(
             HttpResponse::InternalServerError().finish()
         }
     }
+}
+
+/// Stores a command for the receiver's sender to apply. `Some((-1, -1))`
+/// means the queue position is out of range, `None` that no active session
+/// matched.
+fn enqueue_command(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    session_id: &str,
+    user_id: i32,
+    form: &CastCommandRequest,
+) -> Result<Option<(i32, i32)>, String> {
+    if let Some(position) = form.queue_position {
+        let count = diesel::sql_query(
+            "SELECT CAST(COUNT(*) AS BIGINT) AS count FROM cast_session_item WHERE session_id = ?",
+        )
+        .bind::<Text, _>(session_id)
+        .get_result::<CountRow>(connection)
+        .map_err(|error| error.to_string())?
+        .count;
+        if i64::from(position) >= count {
+            return Ok(Some((-1, -1)));
+        }
+    }
+    let changed = diesel::sql_query(
+            "UPDATE cast_session SET command = ?, command_position_ms = ?, command_volume = ?, command_muted = ?, command_queue_position = ?,
+                    command_revision = command_revision + 1, revision = revision + 1,
+                    updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND user_id = ? AND status IN ('connecting', 'playing', 'paused')
+                   AND expires_at >= ?",
+        )
+        .bind::<Text, _>(&form.command)
+        .bind::<Nullable<BigInt>, _>(form.position_ms)
+        .bind::<Nullable<Double>, _>(form.volume)
+        .bind::<Nullable<Bool>, _>(form.muted)
+        .bind::<Nullable<Integer>, _>(form.queue_position)
+        .bind::<Text, _>(session_id)
+        .bind::<Integer, _>(user_id)
+        .bind::<BigInt, _>(now_seconds())
+        .execute(connection)
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    query_session(connection, session_id, user_id)
+        .map_err(|error| error.to_string())
+        .map(|row| row.map(|(session, _)| (session.revision, session.command_revision)))
+}
+
+/// The user's active Chromecast session, as a zone sees it.
+pub(crate) struct CastZoneSnapshot {
+    pub session_id: String,
+    pub receiver_name: String,
+    pub status: String,
+    pub current_position: usize,
+    pub position_ms: i64,
+    pub duration_ms: i64,
+    pub playing: bool,
+    pub volume: f64,
+    pub muted: bool,
+    pub song_ids: Vec<String>,
+}
+
+/// Reads the user's active cast session for the zone list.
+pub(crate) fn zone_snapshot(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    user_id: i32,
+) -> Result<Option<CastZoneSnapshot>, diesel::result::Error> {
+    #[derive(QueryableByName)]
+    struct IdRow {
+        #[diesel(sql_type = Text)]
+        id: String,
+    }
+    let Some(row) = diesel::sql_query(
+        "SELECT id FROM cast_session
+         WHERE user_id = ? AND status IN ('connecting', 'playing', 'paused') AND expires_at >= ?
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<BigInt, _>(now_seconds())
+    .get_result::<IdRow>(connection)
+    .optional()?
+    else {
+        return Ok(None);
+    };
+    let Some((session, items)) = query_session(connection, &row.id, user_id)? else {
+        return Ok(None);
+    };
+    Ok(Some(CastZoneSnapshot {
+        session_id: session.id,
+        receiver_name: session.receiver_name,
+        status: session.status,
+        current_position: usize::try_from(session.current_position).unwrap_or(0),
+        position_ms: session.position_ms,
+        duration_ms: session.duration_ms,
+        playing: session.playing,
+        volume: session.volume,
+        muted: session.muted,
+        song_ids: items.into_iter().map(|item| item.song_id).collect(),
+    }))
+}
+
+/// Sends a remote command to a cast session on behalf of the zone API.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn zone_command(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    user_id: i32,
+    session_id: &str,
+    command: &str,
+    position_ms: Option<i64>,
+    volume: Option<f64>,
+    muted: Option<bool>,
+    queue_position: Option<i32>,
+) -> Result<bool, String> {
+    if !valid_command(command, position_ms, volume, muted, queue_position) {
+        return Ok(false);
+    }
+    let form = CastCommandRequest {
+        command: command.to_string(),
+        position_ms,
+        volume,
+        muted,
+        queue_position,
+    };
+    let queued = enqueue_command(connection, session_id, user_id, &form)?;
+    let accepted = matches!(queued, Some((revision, _)) if revision >= 0);
+    if accepted {
+        notify_cast_changed(user_id);
+    }
+    Ok(accepted)
+}
+
+/// Ends a cast session (zone transfer away from Chromecast).
+pub(crate) fn zone_stop(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    user_id: i32,
+    session_id: &str,
+) -> Result<bool, diesel::result::Error> {
+    let changed = diesel::sql_query(
+        "UPDATE cast_session SET status = 'stopped', playing = 0, command = 'stop',
+                command_revision = command_revision + 1, revision = revision + 1,
+                updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+    )
+    .bind::<Text, _>(session_id)
+    .bind::<Integer, _>(user_id)
+    .execute(connection)?;
+    if changed == 1 {
+        notify_cast_changed(user_id);
+    }
+    Ok(changed == 1)
+}
+
+/// Subscribes to cast session changes (user ids).
+pub(crate) fn subscribe_cast_changes() -> tokio::sync::broadcast::Receiver<i32> {
+    cast_events().subscribe()
 }
 
 #[delete("/{session_id}")]

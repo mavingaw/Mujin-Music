@@ -32,10 +32,12 @@ const DEFAULT_TRANSCODE_CACHE_MAX_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 static TRANSCODE_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static TRANSCODE_CACHE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
+fn new_transcode_slots() -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(MAX_CONCURRENT_TRANSCODES))
+}
+
 fn transcode_slots() -> Arc<Semaphore> {
-    TRANSCODE_SLOTS
-        .get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_TRANSCODES)))
-        .clone()
+    TRANSCODE_SLOTS.get_or_init(new_transcode_slots).clone()
 }
 
 fn transcode_cache_locks() -> &'static Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> {
@@ -1797,10 +1799,46 @@ fn content_type_for_path(path: &Path) -> &'static str {
 }
 
 fn transcode_cache_path(song_id: &str, path: &Path, bitrate: u32) -> PathBuf {
+    transcode_cache_path_for(song_id, path, bitrate, TranscodeFormat::Mp3)
+}
+
+fn transcode_cache_path_for(
+    song_id: &str,
+    path: &Path,
+    bitrate: u32,
+    format: TranscodeFormat,
+) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(song_id.as_bytes());
     hasher.update(path.to_string_lossy().as_bytes());
     hasher.update(bitrate.to_le_bytes());
+    if format != TranscodeFormat::Mp3 {
+        hasher.update(format.extension().as_bytes());
+    }
+    if let TranscodeFormat::SonosFlac {
+        gain_tenths_db,
+        dsp,
+        sample_rate,
+        bit_depth,
+    } = format
+    {
+        // Files made before the high-quality resampler and 24-bit lossy
+        // decoding are not reused.
+        hasher.update(b"resampler-v2");
+        if gain_tenths_db != 0 {
+            hasher.update(b"gain");
+            hasher.update(gain_tenths_db.to_le_bytes());
+        }
+        if let Some(filter) = dsp.ffmpeg_filter() {
+            hasher.update(b"dsp");
+            hasher.update(filter.as_bytes());
+        }
+        if sample_rate > 48_000 || bit_depth > 24 {
+            // Hi-res renderer conversions (Sonos keys stay unchanged).
+            hasher.update(sample_rate.to_le_bytes());
+            hasher.update([bit_depth]);
+        }
+    }
     if let Ok(metadata) = std::fs::metadata(path) {
         hasher.update(metadata.len().to_le_bytes());
         if let Ok(modified) = metadata.modified()
@@ -1818,8 +1856,183 @@ fn transcode_cache_path(song_id: &str, path: &Path, bitrate: u32) -> PathBuf {
     let mut cache_dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
     cache_dir.push("Parson");
     cache_dir.push("Transcodes");
-    cache_dir.push(format!("{}.mp3", cache_key));
+    cache_dir.push(format!("{}.{}", cache_key, format.extension()));
     cache_dir
+}
+
+/// Output of the ffmpeg transcoder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TranscodeFormat {
+    /// MP3 at the requested bitrate.
+    Mp3,
+    /// FLAC within a renderer's limits (Sonos, Chromecast, UPnP), with
+    /// optional leveling gain and zone DSP.
+    SonosFlac {
+        sample_rate: u32,
+        bit_depth: u8,
+        /// Volume leveling gain in tenths of a dB (0: none).
+        gain_tenths_db: i16,
+        dsp: crate::zones::ZoneDsp,
+    },
+}
+
+impl TranscodeFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::SonosFlac { .. } => "flac",
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Mp3 => "audio/mpeg",
+            Self::SonosFlac { .. } => "audio/flac",
+        }
+    }
+}
+
+/// How a song reaches a renderer (Sonos, Chromecast, UPnP).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RendererStreamPlan {
+    pub mime_type: &'static str,
+    /// `None` streams the original file; otherwise FLAC at this rate/depth
+    /// (or MP3, see `lossy`).
+    pub convert_to: Option<(u32, u8)>,
+    /// The renderer takes no lossless format: convert to 320 kbps MP3.
+    pub lossy: bool,
+}
+
+pub(crate) type SonosStreamPlan = RendererStreamPlan;
+
+/// The codec of `song`, from its tags or extension.
+fn stream_codec(song: &crate::domain::Song) -> (String, String) {
+    let extension = Path::new(&song.path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let codec = song
+        .audio
+        .as_ref()
+        .and_then(|audio| audio.codec.clone())
+        .unwrap_or_else(|| match extension.as_str() {
+            "mp3" => "mp3".to_string(),
+            "aac" => "aac".to_string(),
+            "flac" => "flac".to_string(),
+            "wav" => "pcm".to_string(),
+            "m4a" | "mp4" => "aac".to_string(),
+            other => other.to_string(),
+        });
+    (codec, extension)
+}
+
+/// The highest rate at or below `limit` in the source's rate family
+/// (44.1 kHz or 48 kHz multiples), so conversions never cross families
+/// unless they must.
+fn renderer_rate(sample_rate: u32, limit: u32) -> u32 {
+    let base = if sample_rate.is_multiple_of(11_025) {
+        44_100
+    } else {
+        48_000
+    };
+    let ceiling = sample_rate.min(limit);
+    [8, 4, 2, 1]
+        .iter()
+        .map(|factor| base * factor)
+        .find(|rate| *rate <= ceiling)
+        .unwrap_or(if base <= limit { base } else { limit })
+}
+
+/// What a renderer with `limits` gets for `song`: the original file when
+/// it plays it natively within its limits, else FLAC at the closest rate
+/// and depth it takes (MP3 for renderers without a lossless format).
+/// `processed` (leveling, DSP) always converts, so the gain can be applied.
+pub(crate) fn renderer_stream_plan(
+    song: &crate::domain::Song,
+    limits: crate::outputs::FormatLimits,
+    processed: bool,
+) -> RendererStreamPlan {
+    let (codec, extension) = stream_codec(song);
+    let audio = song.audio.clone().unwrap_or_default();
+    let sample_rate = audio.sample_rate.unwrap_or(44_100);
+    let bit_depth = audio.bit_depth.unwrap_or(16);
+    let within_limits = sample_rate <= limits.max_sample_rate && bit_depth <= limits.max_bit_depth;
+    let direct = match codec.as_str() {
+        "mp3" if limits.mp3 => Some("audio/mpeg"),
+        "aac" if extension == "aac" && limits.aac => Some("audio/aac"),
+        "aac" if matches!(extension.as_str(), "m4a" | "mp4") && limits.aac => Some("audio/mp4"),
+        "alac" if matches!(extension.as_str(), "m4a" | "mp4") && limits.alac && within_limits => {
+            Some("audio/mp4")
+        }
+        "flac" if extension == "flac" && limits.flac && within_limits => Some("audio/flac"),
+        "pcm" if extension == "wav" && limits.wav && within_limits => Some("audio/wav"),
+        _ => None,
+    };
+    if let Some(mime_type) = direct.filter(|_| !processed) {
+        return RendererStreamPlan {
+            mime_type,
+            convert_to: None,
+            lossy: false,
+        };
+    }
+    if !limits.flac {
+        return RendererStreamPlan {
+            mime_type: "audio/mpeg",
+            convert_to: None,
+            lossy: true,
+        };
+    }
+    let depth_limit = limits.max_bit_depth.clamp(16, 24);
+    RendererStreamPlan {
+        mime_type: "audio/flac",
+        convert_to: Some((
+            renderer_rate(sample_rate, limits.max_sample_rate),
+            if processed || !lossless_codec(&codec) {
+                // 24 bits keep the resolution a gain change would otherwise
+                // lose, and everything a lossy decoder puts out (it decodes
+                // to floating point, not to 16 bits).
+                depth_limit
+            } else {
+                bit_depth.clamp(16, depth_limit)
+            },
+        )),
+        lossy: false,
+    }
+}
+
+/// The resampler the FLAC a renderer gets is made with.
+fn renderer_resample_filter(sample_rate: u32, bit_depth: u8) -> String {
+    let (sample_format, dither) = if bit_depth > 16 {
+        ("s32", "none")
+    } else {
+        ("s16", "triangular_hp")
+    };
+    format!(
+        "aresample={sample_rate}:filter_size=64:phase_shift=10:cutoff=0.97:linear_interp=1:osf={sample_format}:dither_method={dither}"
+    )
+}
+
+/// Codecs that keep every sample of the original recording.
+pub(crate) fn lossless_codec(codec: &str) -> bool {
+    matches!(
+        codec,
+        "flac" | "alac" | "pcm" | "wav" | "aiff" | "ape" | "wavpack" | "wv"
+    )
+}
+
+/// Sonos plays MP3, AAC, FLAC, ALAC and WAV up to 48 kHz/24-bit. Anything
+/// above that, or any other codec, becomes FLAC at the nearest supported rate
+/// (44.1 kHz for the 44.1 family, else 48 kHz): lossless sources at their own
+/// depth (at most 24 bits), lossy ones (Ogg Vorbis, Opus) at 24 bits.
+pub(crate) fn sonos_stream_plan(song: &crate::domain::Song) -> SonosStreamPlan {
+    renderer_stream_plan(song, crate::outputs::FormatLimits::SONOS, false)
+}
+
+/// How a leveled song reaches a Sonos player: always converted (so the gain
+/// can be applied) to FLAC within 48 kHz/24-bit at the source's rate family.
+pub(crate) fn sonos_leveled_stream_plan(song: &crate::domain::Song) -> SonosStreamPlan {
+    renderer_stream_plan(song, crate::outputs::FormatLimits::SONOS, true)
 }
 
 #[cfg(test)]
@@ -1837,8 +2050,8 @@ mod reliability_tests {
     use super::{
         LibraryRefreshFailure, LibraryRefreshSuccess, MAX_CONCURRENT_TRANSCODES, StreamAudioEffect,
         TranscodeCleanup, automatic_change_is_settled, classify_refresh_result,
-        content_type_for_path, merge_progressive_catalog, parse_range, prune_transcode_cache,
-        release_transcode_lock, retain_progressive_albums_with_artwork,
+        content_type_for_path, merge_progressive_catalog, new_transcode_slots, parse_range,
+        prune_transcode_cache, release_transcode_lock, retain_progressive_albums_with_artwork,
         select_auto_refresh_quiet_window, stream_file_range, transcode_cache_locks,
         transcode_cache_path, transcode_slots,
     };
@@ -2244,13 +2457,18 @@ mod reliability_tests {
 
     #[test]
     fn transcode_capacity_is_bounded() {
-        let slots = transcode_slots();
+        // A pool built exactly like the shared one: tests running alongside
+        // this one may hold the shared pool's permits for their conversions,
+        // and taking them all here would starve those tests.
+        let slots = new_transcode_slots();
         let permits = (0..MAX_CONCURRENT_TRANSCODES)
             .map(|_| slots.clone().try_acquire_owned().expect("available slot"))
             .collect::<Vec<_>>();
         assert!(slots.clone().try_acquire_owned().is_err());
         drop(permits);
         assert!(slots.try_acquire_owned().is_ok());
+        // The shared pool is built the same way.
+        assert!(transcode_slots().available_permits() <= MAX_CONCURRENT_TRANSCODES);
     }
 
     #[test]
@@ -2425,9 +2643,10 @@ async fn stream_cached_transcode(
     etag_key: &str,
     bitrate: u32,
     audio_effect: StreamAudioEffect,
+    format: TranscodeFormat,
 ) -> HttpResponse {
     if tokio::fs::metadata(cache_path).await.is_ok() {
-        return stream_file_range(req, cache_path, etag_key, "audio/mpeg").await;
+        return stream_file_range(req, cache_path, etag_key, format.content_type()).await;
     }
 
     let cache_lock = {
@@ -2441,7 +2660,7 @@ async fn stream_cached_transcode(
     if tokio::fs::metadata(cache_path).await.is_ok() {
         drop(cache_guard);
         release_transcode_lock(cache_path, &cache_lock).await;
-        return stream_file_range(req, cache_path, etag_key, "audio/mpeg").await;
+        return stream_file_range(req, cache_path, etag_key, format.content_type()).await;
     }
     let Some(parent) = cache_path.parent() else {
         drop(cache_guard);
@@ -2472,22 +2691,64 @@ async fn stream_cached_transcode(
     let mut command = Command::new("ffmpeg");
     command.kill_on_drop(true);
     command.args(["-y", "-i"]).arg(input_path);
-    command.args([
-        "-filter_complex",
-        &transcode_filter_graph(audio_effect),
-        "-map",
-        "[a]",
-        "-b:a",
-        &bitrate_arg,
-        "-f",
-        "mp3",
-        "-c:a",
-        "libmp3lame",
-        "-compression_level",
-        "0",
-        "-write_xing",
-        "0",
-    ]);
+    match format {
+        TranscodeFormat::Mp3 => {
+            command.args([
+                "-filter_complex",
+                &transcode_filter_graph(audio_effect),
+                "-map",
+                "[a]",
+                "-b:a",
+                &bitrate_arg,
+                "-f",
+                "mp3",
+                "-c:a",
+                "libmp3lame",
+                "-compression_level",
+                "0",
+                "-write_xing",
+                "0",
+            ]);
+        }
+        TranscodeFormat::SonosFlac {
+            sample_rate,
+            bit_depth,
+            gain_tenths_db,
+            dsp,
+        } => {
+            if let Some(filter) = audio_effect.ffmpeg_filter() {
+                command.args([
+                    "-filter_complex",
+                    &format!("[0:a:0]{filter}[a]"),
+                    "-map",
+                    "[a]",
+                ]);
+            } else {
+                command.args(["-map", "0:a:0"]);
+            }
+            let sample_format = if bit_depth > 16 { "s32" } else { "s16" };
+            let mut filters = Vec::new();
+            if gain_tenths_db != 0 {
+                filters.push(format!("volume={:.1}dB", f32::from(gain_tenths_db) / 10.0));
+            }
+            if let Some(filter) = dsp.ffmpeg_filter() {
+                filters.push(filter);
+            }
+            // A long linear-phase filter for any rate change, and TPDF
+            // dither (high-passed) when the result is cut to 16 bits,
+            // instead of ffmpeg's short default filter and truncation.
+            filters.push(renderer_resample_filter(sample_rate, bit_depth));
+            if audio_effect.ffmpeg_filter().is_none() {
+                command.args(["-af", &filters.join(",")]);
+            }
+            command
+                .args(["-vn", "-c:a", "flac", "-ar"])
+                .arg(sample_rate.to_string())
+                .args(["-sample_fmt", sample_format, "-bits_per_raw_sample"])
+                .arg(bit_depth.to_string())
+                .args(["-compression_level", "5", "-f", "flac"]);
+        }
+    }
     command.args([
         "-flush_packets",
         "1",
@@ -2610,7 +2871,7 @@ async fn stream_cached_transcode(
     });
 
     HttpResponse::Ok()
-        .insert_header((header::CONTENT_TYPE, "audio/mpeg"))
+        .insert_header((header::CONTENT_TYPE, format.content_type()))
         .insert_header((header::CACHE_CONTROL, "no-store"))
         .streaming(stream)
 }
@@ -2997,6 +3258,7 @@ async fn stream_song_planned(
                 &format!("{}-{}k", cache_identity, bitrate),
                 *bitrate,
                 audio_effect,
+                TranscodeFormat::Mp3,
             )
             .await
         }
@@ -3316,6 +3578,107 @@ pub(crate) fn cast_delivery_plan(song: &crate::domain::Song) -> DeliveryPlan {
         0,
         None,
     )
+}
+
+/// Streams Sonos-compatible audio: the original file when Sonos plays it
+/// natively, else FLAC within 48 kHz/24-bit. Leveled audio (`gain_db` is
+/// set, even to 0) is always converted, as its DIDL-Lite promised FLAC.
+pub(crate) async fn stream_sonos_compatible(
+    req: &HttpRequest,
+    song_key: &str,
+    lifecycle: &web::Data<LibraryLifecycle>,
+    gain_db: Option<f32>,
+) -> HttpResponse {
+    stream_renderer_compatible(
+        req,
+        song_key,
+        lifecycle,
+        crate::outputs::FormatLimits::SONOS,
+        gain_db,
+        crate::zones::ZoneDsp::default(),
+    )
+    .await
+}
+
+/// Streams what a renderer with `limits` plays: the original file when it
+/// can (bit-perfect), else FLAC within its limits. Leveling (`gain_db`,
+/// even 0) and DSP always convert, so the processing can be applied.
+pub(crate) async fn stream_renderer_compatible(
+    req: &HttpRequest,
+    song_key: &str,
+    lifecycle: &web::Data<LibraryLifecycle>,
+    limits: crate::outputs::FormatLimits,
+    gain_db: Option<f32>,
+    dsp: crate::zones::ZoneDsp,
+) -> HttpResponse {
+    let gain_tenths_db = gain_db
+        .map(|gain| (gain * 10.0).round().clamp(-480.0, 240.0) as i16)
+        .unwrap_or(0);
+    let dsp = if dsp.is_active() {
+        dsp
+    } else {
+        crate::zones::ZoneDsp::default()
+    };
+    let processed = gain_db.is_some() || dsp.is_active();
+    let plan = lifecycle.cache().await.ok().and_then(|cache| {
+        cache
+            .song(song_key)
+            .map(|song| renderer_stream_plan(song, limits, processed))
+    });
+    let Some(plan) = plan else {
+        return not_found("Song not found.", "song_not_found");
+    };
+    let (song_id, song_path) = match resolve_stream_song_with_refresh(song_key, lifecycle).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
+    if plan.lossy {
+        let cache_path = transcode_cache_path(&song_id, &song_path, MAX_STREAM_BITRATE);
+        return stream_cached_transcode(
+            req,
+            &song_path,
+            &cache_path,
+            &format!("{song_id}-renderer-mp3"),
+            MAX_STREAM_BITRATE,
+            StreamAudioEffect::None,
+            TranscodeFormat::Mp3,
+        )
+        .await;
+    }
+    match plan.convert_to {
+        None => stream_file_range(req, &song_path, &song_id, plan.mime_type).await,
+        Some((sample_rate, bit_depth)) => {
+            let format = TranscodeFormat::SonosFlac {
+                sample_rate,
+                bit_depth,
+                gain_tenths_db,
+                dsp,
+            };
+            let cache_path = transcode_cache_path_for(&song_id, &song_path, 0, format);
+            let dsp_key = dsp
+                .ffmpeg_filter()
+                .map(|filter| {
+                    let mut hasher = Sha256::new();
+                    hasher.update(filter.as_bytes());
+                    let digest = hasher.finalize();
+                    format!(
+                        "-dsp{:02x}{:02x}{:02x}{:02x}",
+                        digest[0], digest[1], digest[2], digest[3]
+                    )
+                })
+                .unwrap_or_default();
+            stream_cached_transcode(
+                req,
+                &song_path,
+                &cache_path,
+                &format!("{song_id}-sonos-{sample_rate}-{bit_depth}-{gain_tenths_db}{dsp_key}"),
+                0,
+                StreamAudioEffect::None,
+                format,
+            )
+            .await
+        }
+    }
 }
 
 /// Streams receiver-safe audio for Google Cast, at the best quality it accepts.

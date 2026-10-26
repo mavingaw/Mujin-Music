@@ -54,7 +54,7 @@ import {
   useDownloadsRevision,
 } from "@/lib/downloads";
 import { useSession } from "@/providers/session-provider";
-import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { PlaylistCover } from "@/components/playlist-cover";
 import { BannedSection } from "@/components/banned-section";
 import { WorkRow } from "@/components/composition-item";
@@ -71,7 +71,7 @@ type Section = LibrarySection;
 
 export default function LibraryScreen() {
   const session = useSession();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const client = useQueryClient();
   const [selectedSection, setSelectedSection] = useState<Section>(() =>
     session.phase === "offline" ? "downloads" : "albums",
@@ -362,7 +362,7 @@ export default function LibraryScreen() {
                 accessibilityLabel="Shuffle liked songs"
                 accessibilityRole="button"
                 style={styles.shuffleCollection}
-                onPress={() => player.playShuffled(likedSongs)}
+                onPress={() => playback.playShuffled(likedSongs)}
               >
                 <Shuffle color="white" size={18} />
                 <Text style={styles.shuffleCollectionText}>Shuffle</Text>

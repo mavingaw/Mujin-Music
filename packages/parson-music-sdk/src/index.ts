@@ -27,3 +27,4 @@ export * from "./resources/radio-bans";
 export * from "./resources/search";
 export * from "./resources/songs";
 export * from "./resources/users";
+export * from "./resources/zones";

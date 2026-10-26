@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/backend", "crates/parson-core", "crates/parson-output", "crates/windows-bridge", "crates/windows-server"]
+members = ["crates/backend", "crates/parson-bridge", "crates/parson-core", "crates/parson-output", "crates/windows-bridge", "crates/windows-server"]
 resolver = "2"
 
 [profile.dev]
