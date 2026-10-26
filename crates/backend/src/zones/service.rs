@@ -3767,6 +3767,21 @@ mod settings_storage_tests {
         dsp: Option<String>,
     }
 
+    /// Reverts migrations down to (and including) the DSP chain migration.
+    fn revert_dsp_chain(connection: &mut diesel::sqlite::SqliteConnection) {
+        const DSP_CHAIN: &str = "20261104000000";
+        while connection
+            .applied_migrations()
+            .expect("applied migrations")
+            .iter()
+            .any(|version| version.to_string() == DSP_CHAIN)
+        {
+            connection
+                .revert_last_migration(crate::persistence::connection::MIGRATIONS)
+                .expect("revert");
+        }
+    }
+
     fn stored_dsp(connection: &mut diesel::sqlite::SqliteConnection) -> serde_json::Value {
         let row = diesel::sql_query("SELECT dsp FROM zone_setting WHERE zone_id = 'device:dac'")
             .get_result::<DspRow>(connection)
@@ -3781,9 +3796,7 @@ mod settings_storage_tests {
         connection
             .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
             .expect("migrations");
-        connection
-            .revert_last_migration(crate::persistence::connection::MIGRATIONS)
-            .expect("before the DSP chain");
+        revert_dsp_chain(&mut connection);
         diesel::sql_query(
             "INSERT INTO zone_setting (zone_id, crossfade_seconds, leveling, leveling_target_lufs,
                  leveling_adjustment_db, private, dsp)
@@ -3816,9 +3829,7 @@ mod settings_storage_tests {
             "Headroom \u{2212}3.0 dB, EQ 100 Hz low shelf +3.0 dB, 10 kHz high shelf \u{2212}1.0 dB, Crossfeed (strong)"
         );
         // Back to the five knobs on the way down.
-        connection
-            .revert_last_migration(crate::persistence::connection::MIGRATIONS)
-            .expect("revert");
+        revert_dsp_chain(&mut connection);
         assert_eq!(
             stored_dsp(&mut connection),
             serde_json::json!({"enabled": true, "preamp_db": -3, "bass_db": 3, "treble_db": -1, "crossfeed": true})

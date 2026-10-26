@@ -854,6 +854,10 @@ export interface PersonRef {
 
 /** A composition, keyed by its MusicBrainz work id. */
 export interface WorkSummary {
+  /**
+   * The MusicBrainz work id, or a `wk_…` id for a work the library knows
+   * only from its tags (it has a work page, but no MusicBrainz page).
+   */
   mbid: string;
   title: string;
   /** Form or MusicBrainz work type: Symphony, Sonata, Song, ... */
@@ -912,7 +916,7 @@ export interface WorkPage {
   recordings: WorkRecording[];
   /** Focus chips over every recording. Older servers leave this out. */
   focus?: FocusSummary;
-  /** The work on MusicBrainz. */
+  /** The work on MusicBrainz; empty for a work known only from tags. */
   url: string;
   /**
    * About the work from the Wikipedia article MusicBrainz links (a

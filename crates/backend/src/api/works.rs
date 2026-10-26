@@ -33,6 +33,15 @@ const MAX_QUERY_CHARS: usize = 300;
 
 /// A person on a work or recording, linked to a local artist, to a
 /// MusicBrainz-only person (`mb:<id>`), or not browsable.
+/// A work's id: its MusicBrainz id, or `wk_` and 16 hex digits for a work
+/// the library knows only from its tags.
+pub fn is_work_id(id: &str) -> bool {
+    is_mbid(id)
+        || id.strip_prefix("wk_").is_some_and(|hash| {
+            hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PersonRef {
     pub artist_id: Option<String>,
@@ -718,7 +727,7 @@ pub async fn get_work(
 ) -> HttpResponse {
     let mbid = mbid.into_inner();
     let selection = parse_selection(&query.into_inner());
-    if !is_mbid(&mbid) {
+    if !is_work_id(&mbid) {
         return not_found("Work not found.", "work_not_found");
     }
     let cache = match lifecycle.cache().await {
@@ -775,7 +784,11 @@ pub async fn get_work(
             .map(|part| summary(part, &people))
             .collect(),
         recordings,
-        url: format!("https://musicbrainz.org/work/{mbid}"),
+        url: if is_mbid(&mbid) {
+            format!("https://musicbrainz.org/work/{mbid}")
+        } else {
+            String::new()
+        },
         about: data.about,
     })
 }

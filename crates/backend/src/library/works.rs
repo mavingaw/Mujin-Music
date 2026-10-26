@@ -8,17 +8,25 @@
 //! Song, ...), an instrumentation category (Orchestra, Solo Keyboard,
 //! Keyboard Trio, ...), a composition year and a period (Baroque,
 //! Classical, Romantic, ...). Facts come, in order of trust, from file tags
-//! (`COMPOSITIONDATE`), the MusicBrainz work cache filled by
-//! [`crate::library::works_online`], a small table of well known works, and
+//! (`COMPOSITIONDATE`), what MusicBrainz says about the work (the `work`
+//! rows metadata enrichment fills), a small table of well known works, and
 //! finally the work title itself ("Violin Concerto in D major, Op. 61").
 //!
-//! Composers get life dates, nationality and a period from MusicBrainz or a
-//! built-in table of canonical composers; a composer with neither takes the
-//! period most of their dated works share.
+//! Works are one model: the library's works are the `work` rows marked
+//! `in_library`, under their MusicBrainz id when the tags or MusicBrainz
+//! album matching give one (`wk_…` otherwise), linked to tracks by
+//! `track_work` rows from the `library` source. Tags come first: a track
+//! takes MusicBrainz's link only when its tags name no work id.
 //!
-//! The tables (`work_entity`, `track_work`, `work_composer`,
-//! `composer_entity`) are rebuilt from the catalog whenever its
-//! fingerprint changes, so they never drift from the indexed tracks.
+//! Composers get life dates, nationality and a period from their
+//! MusicBrainz artist profile or a built-in table of canonical composers;
+//! a composer with neither takes the period most of their dated works
+//! share.
+//!
+//! The library rows (`work.in_library` and its facts, `library` links,
+//! `work_composer`, `composer_entity`) are rebuilt from the catalog
+//! whenever its fingerprint changes, so they never drift from the indexed
+//! tracks.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
@@ -1774,12 +1782,12 @@ struct WorkTrackRow {
 struct OnlineWorkRow {
     #[diesel(sql_type = Text)]
     mbid: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    title: Option<String>,
+    #[diesel(sql_type = Text)]
+    title: String,
     #[diesel(sql_type = Nullable<Text>)]
     work_type: Option<String>,
-    #[diesel(sql_type = Nullable<Integer>)]
-    composed_year: Option<i32>,
+    #[diesel(sql_type = Nullable<Text>)]
+    composed: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     parent_mbid: Option<String>,
 }
@@ -1790,12 +1798,90 @@ struct ComposerRow {
     artist_id: String,
     #[diesel(sql_type = Text)]
     name: String,
-    #[diesel(sql_type = Nullable<Integer>)]
-    birth_year: Option<i32>,
-    #[diesel(sql_type = Nullable<Integer>)]
-    death_year: Option<i32>,
+    /// From the artist's MusicBrainz profile.
     #[diesel(sql_type = Nullable<Text>)]
-    country: Option<String>,
+    begin: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    end: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    area: Option<String>,
+    /// Facts an earlier MusicBrainz lookup stored for the composer.
+    #[diesel(sql_type = Nullable<Integer>)]
+    kept_birth: Option<i32>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    kept_death: Option<i32>,
+    #[diesel(sql_type = Nullable<Text>)]
+    kept_country: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    kept_nationality: Option<String>,
+}
+
+/// The first plausible four-digit year in a date or range, e.g. 1822 in
+/// `1822–1824` or `1822-05-07`.
+fn first_year(text: &str) -> Option<i32> {
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(3))
+        .filter(|start| {
+            bytes[*start..*start + 4].iter().all(u8::is_ascii_digit)
+                && (*start == 0 || !bytes[*start - 1].is_ascii_digit())
+                && bytes
+                    .get(*start + 4)
+                    .is_none_or(|next| !next.is_ascii_digit())
+        })
+        .find_map(|start| text[start..start + 4].parse::<i32>().ok())
+        .filter(|year| (500..=2100).contains(year))
+}
+
+/// Adjective for a MusicBrainz area name (an artist profile's `area`).
+pub fn nationality_for_area(area: &str) -> Option<&'static str> {
+    let code = match folded_words(area).trim() {
+        "germany" | "prussia" | "east germany" | "west germany" => "DE",
+        "austria" | "austria hungary" => "AT",
+        "france" => "FR",
+        "italy" => "IT",
+        "united kingdom" | "england" | "scotland" | "wales" | "great britain" => "GB",
+        "ireland" => "IE",
+        "russia" | "soviet union" | "russian empire" => "RU",
+        "ukraine" => "UA",
+        "poland" => "PL",
+        "czech republic" | "czechia" | "czechoslovakia" | "bohemia" => "CZ",
+        "slovakia" => "SK",
+        "hungary" => "HU",
+        "romania" => "RO",
+        "bulgaria" => "BG",
+        "greece" => "GR",
+        "spain" => "ES",
+        "portugal" => "PT",
+        "netherlands" => "NL",
+        "belgium" => "BE",
+        "switzerland" => "CH",
+        "denmark" => "DK",
+        "norway" => "NO",
+        "sweden" => "SE",
+        "finland" => "FI",
+        "iceland" => "IS",
+        "estonia" => "EE",
+        "latvia" => "LV",
+        "lithuania" => "LT",
+        "armenia" => "AM",
+        "georgia" => "GE",
+        "turkey" => "TR",
+        "israel" => "IL",
+        "united states" | "usa" => "US",
+        "canada" => "CA",
+        "mexico" => "MX",
+        "brazil" => "BR",
+        "argentina" => "AR",
+        "cuba" => "CU",
+        "australia" => "AU",
+        "new zealand" => "NZ",
+        "japan" => "JP",
+        "china" => "CN",
+        "south korea" | "korea" => "KR",
+        "india" => "IN",
+        _ => return None,
+    };
+    nationality_for_country(code)
 }
 
 #[derive(QueryableByName)]
@@ -1811,17 +1897,24 @@ const CLASSICAL_GENRES: &str = "ge.normalized_name LIKE '%classical%' \
     OR ge.normalized_name LIKE '%chamber%' OR ge.normalized_name LIKE '%symphon%' \
     OR ge.normalized_name IN ('early music', 'romantic', 'renaissance', 'medieval', 'lieder', 'art song')";
 
+/// What a rebuild reads: the catalog, MusicBrainz's facts about works and
+/// its album links, and composers' artist profiles. A rebuild writes none
+/// of these (it never touches `updated_at` or MusicBrainz rows' facts).
 const FINGERPRINT_SQL: &str = "SELECT \
     (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '') FROM track_entity) || '|' || \
     (SELECT COUNT(*) || ':' || COALESCE(MAX(parsed_at), '') FROM raw_file_metadata) || '|' || \
     (SELECT COUNT(*) FROM track_artist WHERE role = 'composer') || '|' || \
-    (SELECT COUNT(*) || ':' || COALESCE(MAX(fetched_at), '') FROM musicbrainz_work) || '|' || \
-    (SELECT COUNT(*) || ':' || COALESCE(MAX(fetched_at), '') FROM musicbrainz_composer) || '|' || ? \
+    (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '') FROM work \
+       WHERE musicbrainz_facts = 1) || '|' || \
+    (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) FROM track_work \
+       WHERE source = 'musicbrainz') || '|' || \
+    (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), '') FROM editorial_profile \
+       WHERE entity_type = 'artist') || '|' || ? \
     AS fingerprint";
 
 /// Bumped whenever classification rules or tables change, so existing
 /// libraries rebuild their works with the new rules.
-const WORK_BUILDER_VERSION: &str = "2";
+const WORK_BUILDER_VERSION: &str = "3";
 
 /// Rebuilds the work tables when the catalog changed since the last build.
 /// Returns whether a rebuild ran.
@@ -1884,12 +1977,17 @@ pub fn ensure_works(connection: &mut SqliteConnection) -> QueryResult<bool> {
     })
 }
 
-/// Rebuilds `work_entity`, `track_work`, `work_composer` and
-/// `composer_entity` from the catalog.
+/// Rebuilds the library's works (`work` rows marked `in_library`, their
+/// `library` track links, `work_composer` and `composer_entity`) from the
+/// catalog, MusicBrainz's facts and composers' profiles.
 pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
+    // A track's work id: its tags first, then MusicBrainz's album match.
     let rows = diesel::sql_query(format!(
         "SELECT t.id AS track_id, t.title AS title, t.album_id AS album_id, \
-           NULLIF(trim(pm.work), '') AS work, pm.work_mbid AS work_mbid, \
+           NULLIF(trim(pm.work), '') AS work, \
+           COALESCE(pm.work_mbid, (SELECT l.work_mbid FROM track_work l \
+             WHERE l.track_id = t.id AND l.source = 'musicbrainz' \
+             ORDER BY l.rowid LIMIT 1)) AS work_mbid, \
            NULLIF(trim(pm.movement), '') AS movement, \
            CAST(pm.movement_number AS INTEGER) AS movement_number, \
            CAST(pm.composed_year AS INTEGER) AS composed_year, \
@@ -1904,6 +2002,8 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
          LEFT JOIN artist_entity ar ON ar.id = ta.artist_id \
          WHERE ta.artist_id IS NOT NULL OR NULLIF(trim(pm.work), '') IS NOT NULL \
            OR pm.work_mbid IS NOT NULL \
+           OR EXISTS (SELECT 1 FROM track_work l WHERE l.track_id = t.id \
+                      AND l.source = 'musicbrainz') \
          ORDER BY t.album_id, t.disc_number, t.track_number, t.id, ta.position, ar.name"
     ))
     .load::<WorkTrackRow>(connection)?;
@@ -1934,9 +2034,11 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
         }
     }
 
+    // What MusicBrainz says about works (album matching, composer
+    // catalogues and work lookups).
     let online = diesel::sql_query(
-        "SELECT mbid, title, work_type, composed_year, parent_mbid FROM musicbrainz_work \
-         WHERE status = 'ok'",
+        "SELECT mbid, title, form AS work_type, composed, parent_mbid FROM work \
+         WHERE musicbrainz_facts = 1 AND title <> ''",
     )
     .load::<OnlineWorkRow>(connection)?
     .into_iter()
@@ -1944,22 +2046,28 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
         (
             row.mbid,
             OnlineWork {
-                title: row.title,
+                title: Some(row.title),
                 work_type: row.work_type,
-                composed_year: row.composed_year,
+                composed_year: row.composed.as_deref().and_then(first_year),
                 parent_mbid: row.parent_mbid,
             },
         )
     })
     .collect::<HashMap<_, _>>();
 
-    // Composer facts: MusicBrainz first, then the built-in table.
+    // Composer facts: the artist's MusicBrainz profile, then what an
+    // earlier MusicBrainz lookup stored, then the built-in table.
     let composers = diesel::sql_query(
-        "SELECT ar.id AS artist_id, ar.name AS name, mc.birth_year AS birth_year, \
-           mc.death_year AS death_year, mc.country AS country \
+        "SELECT ar.id AS artist_id, ar.name AS name, \
+           json_extract(p.profile_json, '$.begin') AS begin, \
+           json_extract(p.profile_json, '$.end') AS end, \
+           json_extract(p.profile_json, '$.area') AS area, \
+           ce.birth_year AS kept_birth, ce.death_year AS kept_death, \
+           ce.country AS kept_country, ce.nationality AS kept_nationality \
          FROM artist_entity ar \
-         LEFT JOIN musicbrainz_composer mc ON mc.normalized_name = ar.normalized_name \
-           AND mc.status = 'ok' \
+         LEFT JOIN editorial_profile p ON p.entity_type = 'artist' AND p.entity_id = ar.id \
+           AND json_valid(p.profile_json) \
+         LEFT JOIN composer_entity ce ON ce.artist_id = ar.id AND ce.source = 'musicbrainz' \
          WHERE ar.id IN (SELECT artist_id FROM track_artist WHERE role = 'composer') \
          GROUP BY ar.id",
     )
@@ -1968,21 +2076,38 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
         birth: Option<i32>,
         death: Option<i32>,
         nationality: Option<String>,
+        country: Option<String>,
         period: Option<String>,
         source: &'static str,
     }
     let mut profiles = HashMap::<String, Profile>::new();
     for row in composers {
         let known = known_composer(&row.name);
-        let (birth, death, nationality, source) = if row.birth_year.is_some() {
+        let profile_birth = row.begin.as_deref().and_then(first_year);
+        let known_nationality = || known.map(|known| known.nationality.to_string());
+        let (birth, death, nationality, country, source) = if profile_birth.is_some() {
             (
-                row.birth_year,
-                row.death_year,
-                row.country
+                profile_birth,
+                row.end.as_deref().and_then(first_year),
+                row.area
+                    .as_deref()
+                    .and_then(nationality_for_area)
+                    .map(str::to_string)
+                    .or_else(known_nationality),
+                None,
+                "musicbrainz",
+            )
+        } else if row.kept_birth.is_some() {
+            (
+                row.kept_birth,
+                row.kept_death,
+                row.kept_country
                     .as_deref()
                     .and_then(nationality_for_country)
                     .map(str::to_string)
-                    .or_else(|| known.map(|known| known.nationality.to_string())),
+                    .or(row.kept_nationality)
+                    .or_else(known_nationality),
+                row.kept_country,
                 "musicbrainz",
             )
         } else if let Some(known) = known {
@@ -1990,10 +2115,11 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
                 Some(known.birth),
                 known.death,
                 Some(known.nationality.to_string()),
+                None,
                 "builtin",
             )
         } else {
-            (None, None, None, "derived")
+            (None, None, None, None, "derived")
         };
         profiles.insert(
             row.artist_id,
@@ -2001,6 +2127,7 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
                 birth,
                 death,
                 nationality,
+                country,
                 period: composer_period(birth, death).map(str::to_string),
                 source,
             },
@@ -2034,32 +2161,87 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
         }
     }
 
+    // A work keeps its MusicBrainz id as its id; works grouped under one
+    // id (a tagged title and an untagged one of the same MusicBrainz work)
+    // become one.
+    let mut merged = BTreeMap::<String, BuiltWork>::new();
+    for work in works {
+        let id = work
+            .musicbrainz_work_id
+            .clone()
+            .unwrap_or_else(|| work.id.clone());
+        match merged.get_mut(&id) {
+            Some(known) => {
+                known.tagged |= work.tagged;
+                for composer in work.composers {
+                    if !known.composers.contains(&composer) {
+                        known.composers.push(composer);
+                    }
+                }
+                known.tracks.extend(work.tracks);
+                known.form = known.form.take().or(work.form);
+                known.instrumentation = known.instrumentation.take().or(work.instrumentation);
+                known.scoring = known.scoring.take().or(work.scoring);
+                known.composed_year = known.composed_year.or(work.composed_year);
+                known.period = known.period.take().or(work.period);
+            }
+            None => {
+                merged.insert(id.clone(), BuiltWork { id, ..work });
+            }
+        }
+    }
+    let albums = tracks
+        .iter()
+        .map(|track| (track.track_id.as_str(), track.album_id.as_deref()))
+        .collect::<HashMap<_, _>>();
+    let names = tracks
+        .iter()
+        .flat_map(|track| track.composers.iter())
+        .map(|(id, name)| (id.as_str(), name.as_str()))
+        .collect::<HashMap<_, _>>();
+
+    // Works only the library knew go; MusicBrainz's stay, out of the
+    // library until a track performs them again.
     connection.batch_execute(
-        "DELETE FROM track_work; DELETE FROM work_composer; DELETE FROM composer_entity;",
+        "DELETE FROM track_work WHERE source = 'library'; \
+         DELETE FROM work_composer; \
+         DELETE FROM composer_entity; \
+         CREATE TEMP TABLE IF NOT EXISTS work_previous (id TEXT PRIMARY KEY, created_at DATETIME); \
+         DELETE FROM work_previous; \
+         INSERT INTO work_previous SELECT mbid, created_at FROM work WHERE in_library = 1; \
+         DELETE FROM work WHERE musicbrainz_facts = 0; \
+         UPDATE work SET in_library = 0, tagged = 0, instrumentation = NULL, scoring = NULL, \
+           composed_year = NULL, period = NULL WHERE in_library = 1;",
     )?;
-    // Keep the creation time of works that survive a rebuild.
-    connection.batch_execute(
-        "CREATE TEMP TABLE IF NOT EXISTS work_entity_previous (id TEXT PRIMARY KEY, created_at DATETIME);
-         DELETE FROM work_entity_previous;
-         INSERT INTO work_entity_previous SELECT id, created_at FROM work_entity;
-         DELETE FROM work_entity;",
-    )?;
-    for work in &works {
+    for work in merged.values() {
+        let composer = work
+            .composers
+            .first()
+            .and_then(|id| names.get(id.as_str()).copied());
         diesel::sql_query(
-            "INSERT INTO work_entity(id, title, musicbrainz_work_id, form, instrumentation, \
-               scoring, composed_year, period, tagged, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, \
-               COALESCE((SELECT created_at FROM work_entity_previous WHERE id = ?), CURRENT_TIMESTAMP))",
+            "INSERT INTO work(mbid, title, form, instrumentation, scoring, composed_year, \
+               period, tagged, in_library, composer_name, composer_normalized, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, \
+               COALESCE((SELECT created_at FROM work_previous WHERE id = ?), CURRENT_TIMESTAMP)) \
+             ON CONFLICT(mbid) DO UPDATE SET \
+               form = COALESCE(excluded.form, work.form), \
+               instrumentation = excluded.instrumentation, scoring = excluded.scoring, \
+               composed_year = excluded.composed_year, period = excluded.period, \
+               tagged = excluded.tagged, in_library = 1, \
+               composer_name = COALESCE(work.composer_name, excluded.composer_name), \
+               composer_normalized = COALESCE(work.composer_normalized, excluded.composer_normalized), \
+               created_at = COALESCE(work.created_at, excluded.created_at)",
         )
         .bind::<Text, _>(&work.id)
         .bind::<Text, _>(&work.title)
-        .bind::<Nullable<Text>, _>(work.musicbrainz_work_id.as_deref())
         .bind::<Nullable<Text>, _>(work.form.as_deref())
         .bind::<Nullable<Text>, _>(work.instrumentation.as_deref())
         .bind::<Nullable<Text>, _>(work.scoring.as_deref())
         .bind::<Nullable<Integer>, _>(work.composed_year)
         .bind::<Nullable<Text>, _>(work.period.as_deref())
         .bind::<Integer, _>(i32::from(work.tagged))
+        .bind::<Nullable<Text>, _>(composer)
+        .bind::<Nullable<Text>, _>(composer.map(normalize_artist_identity))
         .bind::<Text, _>(&work.id)
         .execute(connection)?;
         for (position, composer) in work.composers.iter().enumerate() {
@@ -2074,10 +2256,12 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
         }
         for (track, movement, number) in &work.tracks {
             diesel::sql_query(
-                "INSERT INTO track_work(track_id, work_id, movement, movement_number) \
-                 VALUES (?, ?, ?, ?) ON CONFLICT(track_id) DO NOTHING",
+                "INSERT INTO track_work(track_id, album_id, work_mbid, movement, \
+                   movement_number, source) VALUES (?, ?, ?, ?, ?, 'library') \
+                 ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(track)
+            .bind::<Text, _>(albums.get(track.as_str()).copied().flatten().unwrap_or(""))
             .bind::<Text, _>(&work.id)
             .bind::<Nullable<Text>, _>(movement.as_deref())
             .bind::<Nullable<Integer>, _>(*number)
@@ -2086,17 +2270,26 @@ pub fn rebuild_works(connection: &mut SqliteConnection) -> QueryResult<()> {
     }
     for (artist_id, profile) in profiles {
         diesel::sql_query(
-            "INSERT INTO composer_entity(artist_id, birth_year, death_year, nationality, period, source) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO composer_entity(artist_id, birth_year, death_year, nationality, \
+               country, period, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind::<Text, _>(&artist_id)
         .bind::<Nullable<Integer>, _>(profile.birth)
         .bind::<Nullable<Integer>, _>(profile.death)
         .bind::<Nullable<Text>, _>(profile.nationality.as_deref())
+        .bind::<Nullable<Text>, _>(profile.country.as_deref())
         .bind::<Nullable<Text>, _>(profile.period.as_deref())
         .bind::<Text, _>(profile.source)
         .execute(connection)?;
     }
+    // Works the tags name by MusicBrainz id but MusicBrainz has not been
+    // asked about yet are looked up by metadata enrichment.
+    connection.batch_execute(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id) \
+         SELECT 'musicbrainz', 'work', mbid FROM work \
+         WHERE in_library = 1 AND musicbrainz_facts = 0 AND length(mbid) = 36 \
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING;",
+    )?;
     Ok(())
 }
 
