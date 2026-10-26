@@ -52,6 +52,17 @@ const SHARED_BUFFER_HNS: i64 = 2_000_000;
 /// How long an exclusive stream may go without asking for audio.
 const EVENT_TIMEOUT_MS: u32 = 2_000;
 
+/// Whether `bytes` of audio are exactly `frames` frames of `block_align`
+/// bytes: the size of the buffer `IAudioRenderClient::GetBuffer` returns,
+/// so nothing is copied past its end.
+pub(crate) fn render_fits(frames: u32, block_align: usize, bytes: usize) -> bool {
+    block_align > 0
+        && usize::try_from(frames)
+            .ok()
+            .and_then(|frames| frames.checked_mul(block_align))
+            == Some(bytes)
+}
+
 /// What an HRESULT means, for people.
 pub fn describe(hr: HResult) -> String {
     let text = match hr {
