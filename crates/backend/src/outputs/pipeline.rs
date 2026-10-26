@@ -665,6 +665,7 @@ pub fn dsd_source(audio: Option<&AudioProperties>) -> Option<DsdSource> {
 fn open_dsd(path: &Path, packing: DsdPacking, position_ms: u64) -> io::Result<PcmSource> {
     let mut file = io::BufReader::new(std::fs::File::open(path)?);
     let info = parson_output::dsd::read_info(&mut file)?;
+    info.playable()?;
     let per_frame = packing.bytes_per_frame() as u64;
     let start = info.byte_at_ms(position_ms) / per_frame * per_frame;
     Ok(Box::new(DsdPcm::new(

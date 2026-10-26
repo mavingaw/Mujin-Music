@@ -5291,7 +5291,7 @@ fn parse_audio_reader<R: Read + Seek>(
         AudioFormat::Wav => parse_wav_fast(reader, file.size_bytes.max(0) as u64),
         AudioFormat::Aiff => parse_aiff_fast(reader, file.size_bytes.max(0) as u64),
         AudioFormat::Dsf => parse_dsf_metadata(reader),
-        AudioFormat::Dff => parse_dff_metadata(reader, file.size_bytes.max(0) as u64),
+        AudioFormat::Dff => parse_dff_metadata(reader),
         _ => parse_with_lofty(reader),
     };
     (parsed, parser_fallbacks, fast_path_error)
@@ -5507,8 +5507,9 @@ fn apply_embedded_id3<R: Read + Seek>(
     }
 }
 
-fn apply_dsd_stream(metadata: &mut RawAudioMetadata, stream: &crate::library::dsd::DsdStream) {
+fn apply_dsd_stream(metadata: &mut RawAudioMetadata, file: &crate::library::dsd::DsdFile) {
     use crate::library::dsd::DsdContainer;
+    let stream = &file.info;
     metadata.duration_seconds = stream.duration_seconds();
     metadata.duration_source = Some(if metadata.duration_seconds > 0.0 {
         DurationSource::Exact
@@ -5516,7 +5517,7 @@ fn apply_dsd_stream(metadata: &mut RawAudioMetadata, stream: &crate::library::ds
         DurationSource::Unavailable
     });
     metadata.audio_offset = Some(stream.data_offset);
-    metadata.audio_bytes = Some(stream.data_length);
+    metadata.audio_bytes = Some(stream.data_bytes);
     metadata.technical = AudioProperties {
         codec: Some(if stream.dst_compressed { "dst" } else { "dsd" }.into()),
         container: Some(
@@ -5526,28 +5527,28 @@ fn apply_dsd_stream(metadata: &mut RawAudioMetadata, stream: &crate::library::ds
             }
             .into(),
         ),
-        sample_rate: Some(stream.sample_rate),
+        sample_rate: Some(stream.rate),
         bit_depth: Some(1),
-        channels: u8::try_from(stream.channels).ok(),
+        channels: Some(stream.channels),
         bitrate_kbps: Some(stream.bitrate_kbps()).filter(|kbps| *kbps > 0),
         lossless: None,
     };
     if metadata.title.is_none() {
-        metadata.title = stream.title.clone();
+        metadata.title = file.title.clone();
     }
     if metadata.track_artists.is_empty() {
-        metadata.track_artists = split_people(stream.artist.as_deref());
+        metadata.track_artists = split_people(file.artist.as_deref());
     }
 }
 
 fn parse_dsf_metadata<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata, String> {
     let started = Instant::now();
-    let stream = crate::library::dsd::parse_dsf(reader)?;
+    let stream = crate::library::dsd::read(reader)?;
     let mut metadata = RawAudioMetadata {
         parse_strategy: ParserStrategy::DsfFast,
         ..RawAudioMetadata::default()
     };
-    if let Some((offset, _)) = stream.id3 {
+    if let Some((offset, _)) = stream.info.id3 {
         apply_embedded_id3(reader, offset, &mut metadata)?;
     }
     apply_dsd_stream(&mut metadata, &stream);
@@ -5555,17 +5556,14 @@ fn parse_dsf_metadata<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata
     Ok(metadata)
 }
 
-fn parse_dff_metadata<R: Read + Seek>(
-    reader: &mut R,
-    file_length: u64,
-) -> Result<RawAudioMetadata, String> {
+fn parse_dff_metadata<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata, String> {
     let started = Instant::now();
-    let stream = crate::library::dsd::parse_dff(reader, file_length)?;
+    let stream = crate::library::dsd::read(reader)?;
     let mut metadata = RawAudioMetadata {
         parse_strategy: ParserStrategy::DffFast,
         ..RawAudioMetadata::default()
     };
-    if let Some((offset, _)) = stream.id3 {
+    if let Some((offset, _)) = stream.info.id3 {
         apply_embedded_id3(reader, offset, &mut metadata)?;
     }
     apply_dsd_stream(&mut metadata, &stream);
@@ -6896,7 +6894,7 @@ fn embedded_cover_from_file(path: &Path, region: Option<EmbeddedArtworkRegion>) 
     let fast = match extension.as_str() {
         "flac" => embedded_flac_cover(&mut reader),
         "m4a" | "alac" => embedded_mp4_cover(&mut reader, file_length),
-        "dsf" | "dff" => return embedded_dsd_cover(&mut reader, &extension, file_length),
+        "dsf" | "dff" => return embedded_dsd_cover(&mut reader),
         "tak" | "tta" | "wma" | "mka" | "caf" | "w64" => {
             return crate::library::probe::ffmpeg_attached_picture(path);
         }
@@ -6912,17 +6910,8 @@ fn embedded_cover_from_file(path: &Path, region: Option<EmbeddedArtworkRegion>) 
 }
 
 /// Front cover from the ID3v2 chunk of a DSF or DFF file.
-fn embedded_dsd_cover<R: Read + Seek>(
-    reader: &mut R,
-    extension: &str,
-    file_length: u64,
-) -> Option<Vec<u8>> {
-    let stream = if extension == "dsf" {
-        crate::library::dsd::parse_dsf(reader).ok()?
-    } else {
-        crate::library::dsd::parse_dff(reader, file_length).ok()?
-    };
-    let (offset, _) = stream.id3?;
+fn embedded_dsd_cover<R: Read + Seek>(reader: &mut R) -> Option<Vec<u8>> {
+    let (offset, _) = crate::library::dsd::read(reader).ok()?.info.id3?;
     reader.seek(SeekFrom::Start(offset)).ok()?;
     let tag = id3::Tag::read_from2(reader).ok()?;
     let pictures = tag.pictures().collect::<Vec<_>>();
@@ -13152,8 +13141,7 @@ mod external_library_tests {
         assert_eq!(crate::domain::codec_is_lossless("dsd"), Some(true));
 
         let dff = parson_output::dsd::write_dff(5_644_800, 2, &bytes);
-        let dff_length = dff.len() as u64;
-        let metadata = super::parse_dff_metadata(&mut Cursor::new(dff), dff_length).unwrap();
+        let metadata = super::parse_dff_metadata(&mut Cursor::new(dff)).unwrap();
         assert_eq!(metadata.parse_strategy, ParserStrategy::DffFast);
         assert_eq!(metadata.technical.container.as_deref(), Some("dff"));
         assert_eq!(metadata.technical.sample_rate, Some(5_644_800));
