@@ -233,8 +233,9 @@ export default function LibraryOverview() {
       (view === "playlists" ? playlists.error : null));
 
   const selectView = (nextView: LibraryView) => {
-    const nextFocus =
-      isBrowseView(nextView) ? withEntity(focus, nextView) : focus;
+    const nextFocus = isBrowseView(nextView)
+      ? withEntity(focus, nextView)
+      : focus;
     setView(nextView);
     setFocusState(nextFocus);
     writeURL(nextView, nextFocus);
