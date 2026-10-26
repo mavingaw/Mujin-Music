@@ -45,8 +45,8 @@ use crate::library::search::normalize as normalize_search_text;
 use crate::library::storage::get_cover_art_path;
 use crate::persistence::connection::{DbPool, connect};
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
-const TAG_PARSER_VERSION: &str = "17";
+use crate::library::formats::AUDIO_EXTENSIONS;
+const TAG_PARSER_VERSION: &str = "18";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -76,6 +76,18 @@ enum AudioFormat {
     Wav,
     Aiff,
     Alac,
+    WavPack,
+    Ape,
+    Tak,
+    Tta,
+    Musepack,
+    Dsf,
+    Dff,
+    Aac,
+    Wma,
+    Matroska,
+    Caf,
+    Wave64,
     Unknown,
 }
 
@@ -84,12 +96,24 @@ impl AudioFormat {
         match extension {
             "mp3" => Self::Mp3,
             "flac" => Self::Flac,
-            "ogg" => Self::Ogg,
+            "ogg" | "oga" => Self::Ogg,
             "m4a" => Self::M4a,
             "opus" => Self::Opus,
             "wav" => Self::Wav,
-            "aiff" => Self::Aiff,
+            "aiff" | "aif" | "aifc" => Self::Aiff,
             "alac" => Self::Alac,
+            "wv" => Self::WavPack,
+            "ape" => Self::Ape,
+            "tak" => Self::Tak,
+            "tta" => Self::Tta,
+            "mpc" => Self::Musepack,
+            "dsf" => Self::Dsf,
+            "dff" => Self::Dff,
+            "aac" => Self::Aac,
+            "wma" => Self::Wma,
+            "mka" => Self::Matroska,
+            "caf" => Self::Caf,
+            "w64" => Self::Wave64,
             _ => Self::Unknown,
         }
     }
@@ -104,8 +128,28 @@ impl AudioFormat {
             Self::Wav => "wav",
             Self::Aiff => "aiff",
             Self::Alac => "alac",
+            Self::WavPack => "wv",
+            Self::Ape => "ape",
+            Self::Tak => "tak",
+            Self::Tta => "tta",
+            Self::Musepack => "mpc",
+            Self::Dsf => "dsf",
+            Self::Dff => "dff",
+            Self::Aac => "aac",
+            Self::Wma => "wma",
+            Self::Matroska => "mka",
+            Self::Caf => "caf",
+            Self::Wave64 => "w64",
             Self::Unknown => "unknown",
         }
+    }
+
+    /// Formats read by `ffprobe` instead of an in-process parser.
+    const fn needs_ffprobe(self) -> bool {
+        matches!(
+            self,
+            Self::Tak | Self::Tta | Self::Wma | Self::Matroska | Self::Caf | Self::Wave64
+        )
     }
 }
 
@@ -194,6 +238,9 @@ enum ParserStrategy {
     Lofty,
     LoftyFlacFallback,
     LoftyMp4Fallback,
+    DsfFast,
+    DffFast,
+    Ffprobe,
     Reused,
     #[cfg(test)]
     Test,
@@ -213,6 +260,9 @@ impl ParserStrategy {
             Self::Lofty => "lofty",
             Self::LoftyFlacFallback => "lofty_flac_fallback",
             Self::LoftyMp4Fallback => "lofty_mp4_fallback",
+            Self::DsfFast => "dsf_fast",
+            Self::DffFast => "dff_fast",
+            Self::Ffprobe => "ffprobe",
             Self::Reused => "reused",
             #[cfg(test)]
             Self::Test => "test",
@@ -1753,8 +1803,16 @@ fn tag_region_bytes() -> usize {
 fn tag_region_plan(format: AudioFormat, file_length: u64) -> (usize, usize) {
     let budget = tag_region_bytes().min(file_length as usize);
     match format {
-        AudioFormat::Ogg | AudioFormat::Opus | AudioFormat::M4a | AudioFormat::Alac => {
-            (budget / 2, budget - budget / 2)
+        AudioFormat::Ogg
+        | AudioFormat::Opus
+        | AudioFormat::M4a
+        | AudioFormat::Alac
+        | AudioFormat::WavPack
+        | AudioFormat::Ape
+        | AudioFormat::Musepack => (budget / 2, budget - budget / 2),
+        // Headers are small; tags usually live in a trailing ID3 chunk.
+        AudioFormat::Dsf | AudioFormat::Dff | AudioFormat::Wav | AudioFormat::Aiff => {
+            (budget.min(4096), budget - budget.min(4096))
         }
         _ => (budget, 0),
     }
@@ -3358,9 +3416,18 @@ fn wanted_id3_text_frame(id: &[u8]) -> bool {
 
 /// Reads catalog ID3 text while seeking past large payloads.
 fn read_compact_id3v2<R: Read + Seek>(reader: &mut R) -> Result<Option<id3::Tag>, String> {
+    read_compact_id3v2_at(reader, 0)
+}
+
+/// Reads the text frames of an ID3v2 tag that starts at `base` (an MP3 head,
+/// or the `ID3 ` chunk of a WAV, AIFF, DSF or DFF file).
+fn read_compact_id3v2_at<R: Read + Seek>(
+    reader: &mut R,
+    base: u64,
+) -> Result<Option<id3::Tag>, String> {
     const MAX_TEXT_FRAME_BYTES: u64 = 1024 * 1024;
     reader
-        .seek(SeekFrom::Start(0))
+        .seek(SeekFrom::Start(base))
         .map_err(|error| error.to_string())?;
     let mut header = [0_u8; 10];
     if reader.read_exact(&mut header).is_err() || &header[..3] != b"ID3" {
@@ -3391,7 +3458,7 @@ fn read_compact_id3v2<R: Read + Seek>(reader: &mut R) -> Result<Option<id3::Tag>
         }
         position = position.saturating_add(extended_size);
         reader
-            .seek(SeekFrom::Start(position))
+            .seek(SeekFrom::Start(base.saturating_add(position)))
             .map_err(|error| error.to_string())?;
     }
 
@@ -4021,6 +4088,8 @@ fn parse_wav_fast<R: Read + Seek>(
     };
     let mut byte_rate = 0_u32;
     let mut data_bytes = 0_u64;
+    let mut id3_offset = None;
+    let mut info = None;
     metadata.technical.container = Some("wav".into());
     while reader
         .stream_position()
@@ -4069,6 +4138,16 @@ fn parse_wav_fast<R: Read + Seek>(
                 }
             }
             b"data" => data_bytes = u64::from(size),
+            b"id3 " | b"ID3 " => id3_offset = Some(start),
+            b"LIST" if (4..=1024 * 1024).contains(&size) => {
+                let mut list = vec![0; size as usize];
+                reader
+                    .read_exact(&mut list)
+                    .map_err(|error| error.to_string())?;
+                if &list[..4] == b"INFO" {
+                    info = Some(list[4..].to_vec());
+                }
+            }
             _ => {}
         }
         reader
@@ -4078,6 +4157,13 @@ fn parse_wav_fast<R: Read + Seek>(
                     .saturating_add(u64::from(size & 1)),
             ))
             .map_err(|error| error.to_string())?;
+    }
+    let tagged = match id3_offset {
+        Some(offset) => apply_embedded_id3(reader, offset, &mut metadata)?,
+        None => false,
+    };
+    if !tagged && let Some(info) = info {
+        apply_riff_info(&mut metadata, &info);
     }
     if byte_rate > 0 && data_bytes > 0 {
         metadata.duration_seconds = data_bytes as f64 / byte_rate as f64;
@@ -4119,6 +4205,7 @@ fn parse_aiff_fast<R: Read + Seek>(
         parse_strategy: ParserStrategy::AiffFast,
         ..RawAudioMetadata::default()
     };
+    let mut id3_offset = None;
     while reader
         .stream_position()
         .map_err(|error| error.to_string())?
@@ -4170,6 +4257,8 @@ fn parse_aiff_fast<R: Read + Seek>(
                 channels: u8::try_from(channels).ok().filter(|channels| *channels > 0),
                 lossless: None,
             };
+        } else if matches!(&kind, b"ID3 " | b"id3 ") {
+            id3_offset = Some(start);
         }
         reader
             .seek(SeekFrom::Start(
@@ -4178,6 +4267,9 @@ fn parse_aiff_fast<R: Read + Seek>(
                     .saturating_add(u64::from(size & 1)),
             ))
             .map_err(|error| error.to_string())?;
+    }
+    if let Some(offset) = id3_offset {
+        apply_embedded_id3(reader, offset, &mut metadata)?;
     }
     metadata
         .duration_source
@@ -4775,6 +4867,18 @@ fn container_for_format(format: AudioFormat) -> Option<&'static str> {
         AudioFormat::M4a | AudioFormat::Alac => Some("mp4"),
         AudioFormat::Wav => Some("wav"),
         AudioFormat::Aiff => Some("aiff"),
+        AudioFormat::WavPack => Some("wavpack"),
+        AudioFormat::Ape => Some("ape"),
+        AudioFormat::Tak => Some("tak"),
+        AudioFormat::Tta => Some("tta"),
+        AudioFormat::Musepack => Some("mpc"),
+        AudioFormat::Dsf => Some("dsf"),
+        AudioFormat::Dff => Some("dff"),
+        AudioFormat::Aac => Some("aac"),
+        AudioFormat::Wma => Some("asf"),
+        AudioFormat::Matroska => Some("matroska"),
+        AudioFormat::Caf => Some("caf"),
+        AudioFormat::Wave64 => Some("w64"),
         AudioFormat::Unknown => None,
     }
 }
@@ -4806,6 +4910,13 @@ fn finish_technical_properties(
             AudioFormat::Flac => Some("flac"),
             AudioFormat::Alac => Some("alac"),
             AudioFormat::Opus => Some("opus"),
+            AudioFormat::WavPack => Some("wavpack"),
+            AudioFormat::Ape => Some("ape"),
+            AudioFormat::Tak => Some("tak"),
+            AudioFormat::Tta => Some("tta"),
+            AudioFormat::Musepack => Some("musepack"),
+            AudioFormat::Dsf => Some("dsd"),
+            AudioFormat::Aac => Some("aac"),
             _ => None,
         }
         .map(ToString::to_string);
@@ -4963,12 +5074,17 @@ fn parse_audio_reader<R: Read + Seek>(
         }
         AudioFormat::Wav => parse_wav_fast(reader, file.size_bytes.max(0) as u64),
         AudioFormat::Aiff => parse_aiff_fast(reader, file.size_bytes.max(0) as u64),
+        AudioFormat::Dsf => parse_dsf_metadata(reader),
+        AudioFormat::Dff => parse_dff_metadata(reader, file.size_bytes.max(0) as u64),
         _ => parse_with_lofty(reader),
     };
     (parsed, parser_fallbacks, fast_path_error)
 }
 
 fn parse_audio_file(file: &DiscoveredFile, local_cover: &str) -> ParsedFile {
+    if file.format.needs_ffprobe() {
+        return parse_audio_file_with_ffprobe(file, local_cover);
+    }
     let path = &file.native_path;
     let mut file_opens = 0;
     let mut reader = match File::open(path) {
@@ -5018,6 +5134,9 @@ fn parse_audio_file_prefetched(
     local_cover: &str,
     prefetched: PrefetchedRegions,
 ) -> ParsedFile {
+    if file.format.needs_ffprobe() {
+        return parse_audio_file_with_ffprobe(file, local_cover);
+    }
     let bytes_read = prefetched.bytes_read;
     let storage_read_calls = prefetched.read_calls;
     let mut reader = BufReader::with_capacity(4 * 1024, SparseRegionReader::new(prefetched));
@@ -5045,6 +5164,228 @@ fn parse_audio_file_prefetched(
             fast_path_error,
         },
     )
+}
+
+fn parse_audio_file_with_ffprobe(file: &DiscoveredFile, local_cover: &str) -> ParsedFile {
+    parsed_file_from_result(
+        file,
+        local_cover,
+        parse_with_ffprobe(&file.native_path),
+        ParseIoTelemetry {
+            file_opens: 1,
+            ..ParseIoTelemetry::default()
+        },
+    )
+}
+
+/// Reads tags and stream properties through `ffprobe` (TAK, TTA, WMA, MKA, CAF, W64).
+fn parse_with_ffprobe(path: &Path) -> Result<RawAudioMetadata, String> {
+    let started = Instant::now();
+    let mut probed = crate::library::probe::ffprobe(path)?;
+    // ffprobe counts whole CAF packets; the `pakt` chunk has the exact length.
+    if probed.container.as_deref() == Some("caf")
+        && let Some(rate) = probed.sample_rate
+        && let Ok(file) = File::open(path)
+        && let Some(frames) = caf_valid_frames(&mut BufReader::new(file))
+    {
+        probed.duration_seconds = frames as f64 / f64::from(rate);
+    }
+    Ok(raw_metadata_from_probe(
+        &probed,
+        elapsed_us(started.elapsed()),
+    ))
+}
+
+/// Valid (non-priming, non-remainder) frames from a CAF `pakt` chunk.
+fn caf_valid_frames<R: Read + Seek>(reader: &mut R) -> Option<u64> {
+    let mut header = [0_u8; 8];
+    reader.read_exact(&mut header).ok()?;
+    if &header[..4] != b"caff" {
+        return None;
+    }
+    loop {
+        let mut chunk = [0_u8; 12];
+        reader.read_exact(&mut chunk).ok()?;
+        let size = i64::from_be_bytes(chunk[4..12].try_into().ok()?);
+        if &chunk[..4] == b"pakt" {
+            let mut table = [0_u8; 16];
+            reader.read_exact(&mut table).ok()?;
+            let frames = i64::from_be_bytes(table[8..16].try_into().ok()?);
+            return u64::try_from(frames).ok().filter(|frames| *frames > 0);
+        }
+        if size < 0 {
+            return None;
+        }
+        reader.seek(SeekFrom::Current(size)).ok()?;
+    }
+}
+
+fn leading_number(value: Option<&str>) -> u16 {
+    value
+        .unwrap_or_default()
+        .trim()
+        .split(|character: char| !character.is_ascii_digit())
+        .next()
+        .and_then(|number| number.parse::<u32>().ok())
+        .unwrap_or_default()
+        .min(u32::from(u16::MAX)) as u16
+}
+
+fn raw_metadata_from_probe(
+    probed: &crate::library::probe::ProbedAudio,
+    elapsed: u64,
+) -> RawAudioMetadata {
+    let first = |keys: &[&str]| keys.iter().find_map(|key| probed.tag(key));
+    let mut metadata = RawAudioMetadata {
+        parse_strategy: ParserStrategy::Ffprobe,
+        ..RawAudioMetadata::default()
+    };
+    metadata.title = first(&["TITLE"]).map(ToString::to_string);
+    metadata.album = first(&["ALBUM"]).map(ToString::to_string);
+    metadata.track_artists = split_people(first(&["ARTIST", "AUTHOR"]));
+    metadata.album_artists = split_people(first(&[
+        "ALBUM_ARTIST",
+        "ALBUMARTIST",
+        "ALBUM ARTIST",
+        "WM/ALBUMARTIST",
+    ]));
+    metadata.genre = first(&["GENRE"]).unwrap_or_default().to_string();
+    metadata.release_date =
+        first(&["DATE", "YEAR", "ORIGINALDATE", "WM/YEAR"]).map(|value| value.trim().to_string());
+    metadata.track_number = leading_number(first(&["TRACK", "TRACKNUMBER", "WM/TRACKNUMBER"]));
+    metadata.disc_number = leading_number(first(&["DISC", "DISCNUMBER", "WM/PARTOFSET"]));
+    for (key, value) in &probed.tags {
+        metadata.credits.apply_named(key, value);
+    }
+    metadata.technical = AudioProperties {
+        codec: probed.codec.clone(),
+        container: probed.container.clone(),
+        sample_rate: probed.sample_rate,
+        bit_depth: probed.bit_depth,
+        channels: probed.channels,
+        bitrate_kbps: probed.bitrate_kbps,
+        lossless: None,
+    };
+    metadata.duration_seconds = probed.duration_seconds;
+    metadata.duration_source = Some(if probed.duration_seconds > 0.0 {
+        DurationSource::Exact
+    } else {
+        DurationSource::Unavailable
+    });
+    metadata.tag_parse_us = elapsed;
+    metadata
+}
+
+/// Applies the tags of an ID3v2 chunk embedded in a RIFF/IFF/DSD container.
+fn apply_embedded_id3<R: Read + Seek>(
+    reader: &mut R,
+    offset: u64,
+    metadata: &mut RawAudioMetadata,
+) -> Result<bool, String> {
+    match read_compact_id3v2_at(reader, offset)? {
+        Some(tag) => {
+            populate_id3_metadata(metadata, &tag);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+fn apply_dsd_stream(metadata: &mut RawAudioMetadata, stream: &crate::library::dsd::DsdStream) {
+    use crate::library::dsd::DsdContainer;
+    metadata.duration_seconds = stream.duration_seconds();
+    metadata.duration_source = Some(if metadata.duration_seconds > 0.0 {
+        DurationSource::Exact
+    } else {
+        DurationSource::Unavailable
+    });
+    metadata.audio_offset = Some(stream.data_offset);
+    metadata.audio_bytes = Some(stream.data_length);
+    metadata.technical = AudioProperties {
+        codec: Some(if stream.dst_compressed { "dst" } else { "dsd" }.into()),
+        container: Some(
+            match stream.container {
+                DsdContainer::Dsf => "dsf",
+                DsdContainer::Dff => "dff",
+            }
+            .into(),
+        ),
+        sample_rate: Some(stream.sample_rate),
+        bit_depth: Some(1),
+        channels: u8::try_from(stream.channels).ok(),
+        bitrate_kbps: Some(stream.bitrate_kbps()).filter(|kbps| *kbps > 0),
+        lossless: None,
+    };
+    if metadata.title.is_none() {
+        metadata.title = stream.title.clone();
+    }
+    if metadata.track_artists.is_empty() {
+        metadata.track_artists = split_people(stream.artist.as_deref());
+    }
+}
+
+fn parse_dsf_metadata<R: Read + Seek>(reader: &mut R) -> Result<RawAudioMetadata, String> {
+    let started = Instant::now();
+    let stream = crate::library::dsd::parse_dsf(reader)?;
+    let mut metadata = RawAudioMetadata {
+        parse_strategy: ParserStrategy::DsfFast,
+        ..RawAudioMetadata::default()
+    };
+    if let Some((offset, _)) = stream.id3 {
+        apply_embedded_id3(reader, offset, &mut metadata)?;
+    }
+    apply_dsd_stream(&mut metadata, &stream);
+    metadata.tag_parse_us = elapsed_us(started.elapsed());
+    Ok(metadata)
+}
+
+fn parse_dff_metadata<R: Read + Seek>(
+    reader: &mut R,
+    file_length: u64,
+) -> Result<RawAudioMetadata, String> {
+    let started = Instant::now();
+    let stream = crate::library::dsd::parse_dff(reader, file_length)?;
+    let mut metadata = RawAudioMetadata {
+        parse_strategy: ParserStrategy::DffFast,
+        ..RawAudioMetadata::default()
+    };
+    if let Some((offset, _)) = stream.id3 {
+        apply_embedded_id3(reader, offset, &mut metadata)?;
+    }
+    apply_dsd_stream(&mut metadata, &stream);
+    metadata.tag_parse_us = elapsed_us(started.elapsed());
+    Ok(metadata)
+}
+
+/// Applies a RIFF `LIST/INFO` chunk (title, artist, album, date, genre, track).
+fn apply_riff_info(metadata: &mut RawAudioMetadata, info: &[u8]) {
+    let mut position = 0;
+    while position + 8 <= info.len() {
+        let id = &info[position..position + 4];
+        let size =
+            u32::from_le_bytes(info[position + 4..position + 8].try_into().expect("size")) as usize;
+        let start = position + 8;
+        let end = start.saturating_add(size).min(info.len());
+        let value = String::from_utf8_lossy(&info[start..end])
+            .trim_matches(char::from(0))
+            .trim()
+            .to_string();
+        if !value.is_empty() {
+            match id {
+                b"INAM" => metadata.title = Some(value),
+                b"IART" => metadata.track_artists = split_people(Some(&value)),
+                b"IPRD" => metadata.album = Some(value),
+                b"ICRD" => metadata.release_date = Some(value),
+                b"IGNR" => metadata.genre = value,
+                b"ITRK" | b"IPRT" => metadata.track_number = leading_number(Some(&value)),
+                b"IMUS" => {
+                    metadata.credits.apply_named("COMPOSER", &value);
+                }
+                _ => {}
+            }
+        }
+        position = start + size + (size & 1);
+    }
 }
 
 #[derive(Default)]
@@ -6291,6 +6632,10 @@ fn embedded_cover_from_file(path: &Path, region: Option<EmbeddedArtworkRegion>) 
     let fast = match extension.as_str() {
         "flac" => embedded_flac_cover(&mut reader),
         "m4a" | "alac" => embedded_mp4_cover(&mut reader, file_length),
+        "dsf" | "dff" => return embedded_dsd_cover(&mut reader, &extension, file_length),
+        "tak" | "tta" | "wma" | "mka" | "caf" | "w64" => {
+            return crate::library::probe::ffmpeg_attached_picture(path);
+        }
         _ => return embedded_cover_with_lofty(reader),
     };
     match fast {
@@ -6300,6 +6645,28 @@ fn embedded_cover_from_file(path: &Path, region: Option<EmbeddedArtworkRegion>) 
             embedded_cover_with_lofty(reader)
         }
     }
+}
+
+/// Front cover from the ID3v2 chunk of a DSF or DFF file.
+fn embedded_dsd_cover<R: Read + Seek>(
+    reader: &mut R,
+    extension: &str,
+    file_length: u64,
+) -> Option<Vec<u8>> {
+    let stream = if extension == "dsf" {
+        crate::library::dsd::parse_dsf(reader).ok()?
+    } else {
+        crate::library::dsd::parse_dff(reader, file_length).ok()?
+    };
+    let (offset, _) = stream.id3?;
+    reader.seek(SeekFrom::Start(offset)).ok()?;
+    let tag = id3::Tag::read_from2(reader).ok()?;
+    let pictures = tag.pictures().collect::<Vec<_>>();
+    pictures
+        .iter()
+        .find(|picture| picture.picture_type == id3::frame::PictureType::CoverFront)
+        .or_else(|| pictures.first())
+        .map(|picture| picture.data.clone())
 }
 
 fn embedded_cover_representative<'a, S>(
@@ -6485,8 +6852,19 @@ fn attach_fallback_local_covers<S>(
 
 fn quality_rank(file: &DiscoveredFile, parsed: &ParsedFile) -> i32 {
     let extension_score = match file.format {
-        AudioFormat::Flac | AudioFormat::Alac | AudioFormat::Wav | AudioFormat::Aiff => 10_000,
-        AudioFormat::M4a | AudioFormat::Opus => 5_000,
+        AudioFormat::Dsf | AudioFormat::Dff => 11_000,
+        AudioFormat::Flac
+        | AudioFormat::Alac
+        | AudioFormat::Wav
+        | AudioFormat::Aiff
+        | AudioFormat::WavPack
+        | AudioFormat::Ape
+        | AudioFormat::Tak
+        | AudioFormat::Tta
+        | AudioFormat::Caf
+        | AudioFormat::Wave64 => 10_000,
+        AudioFormat::Matroska | AudioFormat::Wma => 6_000,
+        AudioFormat::M4a | AudioFormat::Opus | AudioFormat::Aac | AudioFormat::Musepack => 5_000,
         AudioFormat::Ogg => 4_000,
         AudioFormat::Mp3 => 3_000,
         _ => 1_000,
@@ -13950,5 +14328,472 @@ mod technical_and_credit_tests {
         let json = serde_json::to_value(song).expect("song JSON");
         assert_eq!(json["audio"]["sample_rate"], 96_000);
         assert_eq!(json["credits"][2]["instrument"], "piano");
+    }
+}
+
+#[cfg(test)]
+mod collector_format_tests {
+    //! Every format a collector keeps is recognised, tagged and described:
+    //! ffmpeg-generated fixtures in `testdata/audio` plus minimal APE, DSF and
+    //! DFF files built here (ffmpeg cannot write them).
+
+    use std::io::Cursor;
+
+    use id3::{TagLike, Version};
+    use lofty::config::WriteOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::probe::Probe;
+    use lofty::tag::{Accessor, ItemKey};
+
+    use super::*;
+    use crate::library::dsd::fixtures;
+
+    fn discovered(path: &Path, size: usize) -> DiscoveredFile {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let extension = name
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let text = path.to_string_lossy().to_string();
+        DiscoveredFile {
+            native_path: path.to_path_buf(),
+            native_directory: path.parent().unwrap().to_path_buf(),
+            path: text.as_str().into(),
+            directory: path.parent().unwrap().to_string_lossy().as_ref().into(),
+            file_name: name.as_str().into(),
+            format: AudioFormat::from_extension(&extension),
+            size_bytes: size as i64,
+            modified_at_ns: 0,
+            stable_identity: None,
+            tag_fingerprint: None,
+        }
+    }
+
+    /// Parses in-memory bytes through the in-process parsers.
+    fn parse_bytes(name: &str, bytes: Vec<u8>) -> ParsedFile {
+        let file = discovered(&Path::new("/fixtures").join(name), bytes.len());
+        let mut reader = Cursor::new(bytes);
+        let (parsed, fallbacks, error) = parse_audio_reader(&file, &mut reader);
+        assert_eq!(fallbacks, 0, "{name} fell back: {error:?}");
+        let parsed = parsed_file_from_result(&file, "", parsed, ParseIoTelemetry::default());
+        assert!(parsed.error.is_none(), "{name}: {:?}", parsed.error);
+        parsed
+    }
+
+    fn ffprobe_available() -> bool {
+        std::process::Command::new("ffprobe")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// Parses a file on disk the way a scan does (ffprobe formats included).
+    fn parse_file(name: &str, bytes: &[u8]) -> ParsedFile {
+        let directory =
+            std::env::temp_dir().join(format!("parson-formats-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let parsed = parse_audio_file(&discovered(&path, bytes.len()), "");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(parsed.error.is_none(), "{name}: {:?}", parsed.error);
+        parsed
+    }
+
+    struct Expect {
+        codec: &'static str,
+        container: &'static str,
+        rate: u32,
+        depth: Option<u8>,
+        channels: u8,
+        tagged: bool,
+    }
+
+    fn check(name: &str, parsed: &ParsedFile, expect: &Expect, duration: f64) {
+        let technical = &parsed.technical;
+        assert_eq!(
+            technical.codec.as_deref(),
+            Some(expect.codec),
+            "{name} codec"
+        );
+        assert_eq!(
+            technical.container.as_deref(),
+            Some(expect.container),
+            "{name} container"
+        );
+        assert_eq!(technical.sample_rate, Some(expect.rate), "{name} rate");
+        assert_eq!(technical.bit_depth, expect.depth, "{name} depth");
+        assert_eq!(technical.channels, Some(expect.channels), "{name} channels");
+        assert!(
+            (parsed.duration_seconds - duration).abs() < 0.06,
+            "{name}: duration {}",
+            parsed.duration_seconds
+        );
+        if expect.tagged {
+            assert_eq!(parsed.title, "Fixture", "{name} title");
+            assert_eq!(parsed.track_artists, ["Fixture Artist"], "{name} artist");
+            assert_eq!(parsed.album, "Fixture Album", "{name} album");
+        }
+    }
+
+    macro_rules! audio {
+        ($name:literal) => {
+            include_bytes!(concat!("../../testdata/audio/", $name)).as_slice()
+        };
+    }
+
+    #[test]
+    fn every_listed_extension_maps_to_a_known_format() {
+        for extension in crate::library::formats::AUDIO_EXTENSIONS {
+            assert_ne!(
+                AudioFormat::from_extension(extension),
+                AudioFormat::Unknown,
+                "{extension}"
+            );
+        }
+    }
+
+    #[test]
+    fn in_process_formats_report_tags_and_properties() {
+        let cases: [(&str, &[u8], Expect); 5] = [
+            (
+                "wavpack-96k-24bit-stereo.wv",
+                audio!("wavpack-96k-24bit-stereo.wv"),
+                Expect {
+                    codec: "wavpack",
+                    container: "wavpack",
+                    rate: 96_000,
+                    depth: Some(24),
+                    channels: 2,
+                    tagged: true,
+                },
+            ),
+            (
+                "flac-48k-24bit-5.1.flac",
+                audio!("flac-48k-24bit-5.1.flac"),
+                Expect {
+                    codec: "flac",
+                    container: "flac",
+                    rate: 48_000,
+                    depth: Some(24),
+                    channels: 6,
+                    tagged: true,
+                },
+            ),
+            (
+                "aac-adts-44k-stereo.aac",
+                audio!("aac-adts-44k-stereo.aac"),
+                Expect {
+                    codec: "aac",
+                    container: "aac",
+                    rate: 44_100,
+                    depth: None,
+                    channels: 2,
+                    tagged: false,
+                },
+            ),
+            (
+                "wav-tagged-44k-16bit-stereo.wav",
+                audio!("wav-tagged-44k-16bit-stereo.wav"),
+                Expect {
+                    codec: "pcm",
+                    container: "wav",
+                    rate: 44_100,
+                    depth: Some(16),
+                    channels: 2,
+                    tagged: true,
+                },
+            ),
+            (
+                "aiff-tagged-44k-16bit-stereo.aiff",
+                audio!("aiff-tagged-44k-16bit-stereo.aiff"),
+                Expect {
+                    codec: "pcm",
+                    container: "aiff",
+                    rate: 44_100,
+                    depth: Some(16),
+                    channels: 2,
+                    tagged: true,
+                },
+            ),
+        ];
+        for (name, bytes, expect) in cases {
+            let parsed = parse_bytes(name, bytes.to_vec());
+            check(name, &parsed, &expect, 0.3);
+        }
+        let wav = parse_bytes(
+            "wav-tagged-44k-16bit-stereo.wav",
+            audio!("wav-tagged-44k-16bit-stereo.wav").to_vec(),
+        );
+        assert_eq!(wav.track_number, 3);
+        assert_eq!(wav.genres, ["Jazz"]);
+        let aiff = parse_bytes(
+            "aiff-tagged-44k-16bit-stereo.aiff",
+            audio!("aiff-tagged-44k-16bit-stereo.aiff").to_vec(),
+        );
+        assert_eq!(aiff.track_number, 3);
+        assert!(
+            aiff.credits
+                .iter()
+                .any(|credit| credit.role_key() == "composer"),
+            "AIFF ID3 composer"
+        );
+    }
+
+    #[test]
+    fn ffprobe_formats_report_tags_and_properties() {
+        if !ffprobe_available() {
+            eprintln!("skipping: ffprobe is not installed");
+            return;
+        }
+        let cases: [(&str, &[u8], Expect); 5] = [
+            (
+                "wma-44k-stereo.wma",
+                audio!("wma-44k-stereo.wma"),
+                Expect {
+                    codec: "wma",
+                    container: "asf",
+                    rate: 44_100,
+                    depth: None,
+                    channels: 2,
+                    tagged: true,
+                },
+            ),
+            (
+                "mka-flac-48k-24bit-5.1.mka",
+                audio!("mka-flac-48k-24bit-5.1.mka"),
+                Expect {
+                    codec: "flac",
+                    container: "matroska",
+                    rate: 48_000,
+                    depth: Some(24),
+                    channels: 6,
+                    tagged: true,
+                },
+            ),
+            (
+                "tta-44k-16bit-stereo.tta",
+                audio!("tta-44k-16bit-stereo.tta"),
+                Expect {
+                    codec: "tta",
+                    container: "tta",
+                    rate: 44_100,
+                    depth: Some(16),
+                    channels: 2,
+                    tagged: true,
+                },
+            ),
+            (
+                "caf-alac-44k-16bit-stereo.caf",
+                audio!("caf-alac-44k-16bit-stereo.caf"),
+                Expect {
+                    codec: "alac",
+                    container: "caf",
+                    rate: 44_100,
+                    depth: Some(16),
+                    channels: 2,
+                    tagged: false,
+                },
+            ),
+            (
+                "w64-48k-24bit-stereo.w64",
+                audio!("w64-48k-24bit-stereo.w64"),
+                Expect {
+                    codec: "pcm",
+                    container: "w64",
+                    rate: 48_000,
+                    depth: Some(24),
+                    channels: 2,
+                    tagged: false,
+                },
+            ),
+        ];
+        for (name, bytes, expect) in cases {
+            let parsed = parse_file(name, bytes);
+            assert_eq!(parsed.parse_strategy, ParserStrategy::Ffprobe, "{name}");
+            // ffmpeg's CAF muxer declares whole 4096-frame packets as valid in `pakt`.
+            let declared = if name.ends_with(".caf") {
+                16_384.0 / 44_100.0
+            } else {
+                0.3
+            };
+            check(name, &parsed, &expect, declared);
+        }
+        let wma = parse_file("wma-44k-stereo.wma", audio!("wma-44k-stereo.wma"));
+        assert_eq!(wma.track_number, 3);
+        assert_eq!(wma.album_artists, ["Fixture Artist"]);
+        assert!(
+            wma.credits
+                .iter()
+                .any(|credit| credit.role_key() == "composer"),
+            "WMA composer"
+        );
+    }
+
+    fn id3_tag(with_cover: bool) -> Vec<u8> {
+        let mut tag = id3::Tag::new();
+        tag.set_title("Fixture");
+        tag.set_artist("Fixture Artist");
+        tag.set_album("Fixture Album");
+        tag.set_album_artist("Fixture Artist");
+        tag.set_track(4);
+        tag.set_text("TCOM", "Clara Composer");
+        if with_cover {
+            tag.add_frame(id3::frame::Picture {
+                mime_type: "image/png".into(),
+                picture_type: id3::frame::PictureType::CoverFront,
+                description: String::new(),
+                data: b"\x89PNG fixture cover".to_vec(),
+            });
+        }
+        let mut bytes = Vec::new();
+        tag.write_to(&mut bytes, Version::Id3v24).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn dsf_files_are_indexed_with_id3_tags_and_cover() {
+        let bytes = fixtures::dsf(2_822_400, 2, 2_822_400 * 3 / 10, &id3_tag(true));
+        let parsed = parse_bytes("track.dsf", bytes.clone());
+        assert_eq!(parsed.parse_strategy, ParserStrategy::DsfFast);
+        check(
+            "track.dsf",
+            &parsed,
+            &Expect {
+                codec: "dsd",
+                container: "dsf",
+                rate: 2_822_400,
+                depth: Some(1),
+                channels: 2,
+                tagged: true,
+            },
+            0.3,
+        );
+        assert_eq!(parsed.track_number, 4);
+        assert_eq!(parsed.technical.bitrate_kbps, Some(5644));
+        assert!(crate::domain::codec_is_lossless("dsd").unwrap());
+
+        let directory = std::env::temp_dir().join(format!("parson-dsf-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("track.dsf");
+        std::fs::write(&path, &bytes).unwrap();
+        let cover = embedded_cover_from_file(&path, None);
+        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(cover.as_deref(), Some(b"\x89PNG fixture cover".as_slice()));
+    }
+
+    #[test]
+    fn dff_files_are_indexed_from_diin_text() {
+        let bytes = fixtures::dff(5_644_800, 2, 5_644_800 / 2, "Fixture", "Fixture Artist");
+        let parsed = parse_bytes("track.dff", bytes);
+        assert_eq!(parsed.parse_strategy, ParserStrategy::DffFast);
+        check(
+            "track.dff",
+            &parsed,
+            &Expect {
+                codec: "dsd",
+                container: "dff",
+                rate: 5_644_800,
+                depth: Some(1),
+                channels: 2,
+                tagged: false,
+            },
+            0.5,
+        );
+        assert_eq!(parsed.title, "Fixture");
+        assert_eq!(parsed.track_artists, ["Fixture Artist"]);
+    }
+
+    /// A minimal Monkey's Audio 3.99 file: descriptor, header, seek table and
+    /// placeholder frame data (the indexer reads headers and tags only).
+    fn ape_file(sample_rate: u32, bits: u16, channels: u16, blocks: u32) -> Vec<u8> {
+        let frame_data = vec![0_u8; 64];
+        let mut out = Vec::new();
+        out.extend_from_slice(b"MAC ");
+        out.extend_from_slice(&3990_u16.to_le_bytes());
+        out.extend_from_slice(&0_u16.to_le_bytes());
+        out.extend_from_slice(&52_u32.to_le_bytes()); // descriptor
+        out.extend_from_slice(&24_u32.to_le_bytes()); // header
+        out.extend_from_slice(&4_u32.to_le_bytes()); // seek table
+        out.extend_from_slice(&0_u32.to_le_bytes()); // WAV header data
+        out.extend_from_slice(&(frame_data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0_u32.to_le_bytes());
+        out.extend_from_slice(&0_u32.to_le_bytes()); // terminating data
+        out.extend_from_slice(&[0; 16]); // MD5
+        out.extend_from_slice(&2000_u16.to_le_bytes()); // compression level
+        out.extend_from_slice(&0_u16.to_le_bytes()); // flags
+        out.extend_from_slice(&73_728_u32.to_le_bytes()); // blocks per frame
+        out.extend_from_slice(&blocks.to_le_bytes()); // final frame blocks
+        out.extend_from_slice(&1_u32.to_le_bytes()); // total frames
+        out.extend_from_slice(&bits.to_le_bytes());
+        out.extend_from_slice(&channels.to_le_bytes());
+        out.extend_from_slice(&sample_rate.to_le_bytes());
+        out.extend_from_slice(&((out.len() + 4) as u32).to_le_bytes()); // seek table
+        out.extend_from_slice(&frame_data);
+        out
+    }
+
+    #[test]
+    fn monkeys_audio_files_are_indexed_with_apev2_tags() {
+        let source = ape_file(88_200, 24, 2, 44_100);
+        let mut tagged = Probe::new(Cursor::new(source.clone()))
+            .guess_file_type()
+            .unwrap()
+            .read()
+            .expect("lofty reads the APE header");
+        if tagged.primary_tag_mut().is_none() {
+            tagged.insert_tag(lofty::tag::Tag::new(tagged.primary_tag_type()));
+        }
+        let tag = tagged.primary_tag_mut().unwrap();
+        tag.set_title("Fixture".into());
+        tag.set_artist("Fixture Artist".into());
+        tag.set_album("Fixture Album".into());
+        tag.insert_text(ItemKey::Composer, "Clara Composer".into());
+        let mut output = Cursor::new(source);
+        tagged
+            .save_to(&mut output, WriteOptions::default())
+            .expect("write APEv2 tag");
+        let parsed = parse_bytes("track.ape", output.into_inner());
+        check(
+            "track.ape",
+            &parsed,
+            &Expect {
+                codec: "ape",
+                container: "ape",
+                rate: 88_200,
+                depth: Some(24),
+                channels: 2,
+                tagged: true,
+            },
+            0.5,
+        );
+        assert!(
+            parsed
+                .credits
+                .iter()
+                .any(|credit| credit.role_key() == "composer")
+        );
+    }
+
+    #[test]
+    fn lossless_and_dsd_files_outrank_lossy_copies() {
+        let parsed = |duration| ParsedFile {
+            duration_seconds: duration,
+            ..parse_bytes(
+                "wav-tagged-44k-16bit-stereo.wav",
+                audio!("wav-tagged-44k-16bit-stereo.wav").to_vec(),
+            )
+        };
+        let rank = |name: &str| {
+            let file = discovered(&Path::new("/fixtures").join(name), 1000);
+            quality_rank(&file, &parsed(1.0))
+        };
+        assert!(rank("a.dsf") > rank("a.flac"));
+        assert!(rank("a.ape") > rank("a.mp3"));
+        assert!(rank("a.wv") > rank("a.m4a"));
+        assert!(rank("a.tak") > rank("a.wma"));
     }
 }

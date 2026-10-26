@@ -1,5 +1,7 @@
 import {
+  applyPlaybackCapabilities,
   configureApiRuntime,
+  type PlaybackCapabilities,
   getFreshAuthorizationHeaders,
   refreshToken as refreshTokenRequest,
   signImagePath,
@@ -152,11 +154,21 @@ export async function lockScreenArtworkUrl(path?: string | null) {
   return applyImageSignature(uri, signed.expiresAt, signed.signature);
 }
 
-export function streamUrl(songId: string, bitrate = 0) {
+/**
+ * Media stream URL. With `capabilities` the server converts formats this
+ * device cannot decode (losslessly where it can); without them it sends the
+ * original file.
+ */
+export function streamUrl(
+  songId: string,
+  bitrate = 0,
+  capabilities: PlaybackCapabilities | null = null,
+) {
   const url = new URL(
     apiUrl(`media/songs/${encodeURIComponent(songId)}/stream`),
   );
   url.searchParams.set("bitrate", String(bitrate));
+  applyPlaybackCapabilities(url, capabilities);
   return url.toString();
 }
 

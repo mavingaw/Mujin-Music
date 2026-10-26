@@ -7,6 +7,7 @@ import { useSession } from "@/features/account/session-provider";
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
 import streamUrl from "@/lib/api/stream-url";
+import { browserPlaybackCapabilities } from "./playback-capabilities";
 import { isCurrentTrackGeneration, setMediaPosition } from "./player-state";
 import { audioPresets } from "./audio-presets";
 import {
@@ -120,7 +121,14 @@ export function usePlayerController() {
       setArtistState(normalized.artist_object);
       setAlbumState(normalized.album_object);
       setImageSrc(cover(normalized.album_object.cover_url));
-      setAudioSource(streamUrl(normalized.id, session?.bitrate ?? 0));
+      setAudioSource(
+        streamUrl(
+          normalized.id,
+          session?.bitrate ?? 0,
+          false,
+          browserPlaybackCapabilities(),
+        ),
+      );
       if (
         currentOrigin.current === "manual" &&
         !persistedQueue.current &&
@@ -445,7 +453,14 @@ export function usePlayerController() {
     }
     const next = queueRef.current[index.current + 1];
     preloadAudioSource(
-      next ? streamUrl(next.song.id, session?.bitrate ?? 0) : null,
+      next
+        ? streamUrl(
+            next.song.id,
+            session?.bitrate ?? 0,
+            false,
+            browserPlaybackCapabilities(),
+          )
+        : null,
     );
   }, [
     audioVersion,

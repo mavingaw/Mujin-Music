@@ -51,3 +51,33 @@ enc 48000 mono -c:a libopus -b:a 64k opus-48k-mono.opus
 enc 22050 mono -c:a pcm_s16le -map_metadata -1 wav-22k-16bit-mono.wav
 # AIFF 48 kHz / 24-bit stereo.
 enc 48000 stereo -c:a pcm_s24be -map_metadata -1 aiff-48k-24bit-stereo.aiff
+
+# Collector formats for the "play any format" tests. ffmpeg cannot write APE,
+# TAK, DSF or DFF; the tests build minimal valid files for those in Rust.
+tagged() {
+  # Like enc, adding album artist, track, date, genre and composer tags.
+  rate=$1
+  layout=$2
+  shift 2
+  enc "$rate" "$layout" -metadata "album_artist=Fixture Artist" -metadata "track=3/9" \
+    -metadata "date=1999" -metadata "genre=Jazz" -metadata "composer=Clara Composer" "$@"
+}
+# FLAC 48 kHz / 24-bit 5.1.
+enc 48000 5.1 -c:a flac -sample_fmt s32 -bits_per_raw_sample 24 flac-48k-24bit-5.1.flac
+# WavPack 96 kHz / 24-bit stereo with APEv2 tags.
+tagged 96000 stereo -c:a wavpack -sample_fmt s32p -bits_per_raw_sample 24 wavpack-96k-24bit-stereo.wv
+# Windows Media Audio 2, 44.1 kHz stereo.
+tagged 44100 stereo -c:a wmav2 -b:a 128k wma-44k-stereo.wma
+# FLAC in Matroska, 48 kHz / 24-bit 5.1.
+tagged 48000 5.1 -c:a flac -sample_fmt s32 mka-flac-48k-24bit-5.1.mka
+# True Audio 44.1 kHz / 16-bit stereo.
+tagged 44100 stereo -c:a tta -sample_fmt s16 tta-44k-16bit-stereo.tta
+# ALAC in Core Audio Format, 44.1 kHz / 16-bit stereo.
+enc 44100 stereo -c:a alac -sample_fmt s16p caf-alac-44k-16bit-stereo.caf
+# Sony Wave64, 48 kHz / 24-bit stereo.
+enc 48000 stereo -c:a pcm_s24le w64-48k-24bit-stereo.w64
+# Raw AAC (ADTS), 44.1 kHz stereo.
+enc 44100 stereo -c:a aac -b:a 128k aac-adts-44k-stereo.aac
+# WAV with RIFF INFO tags and AIFF with an ID3 chunk.
+tagged 44100 stereo -c:a pcm_s16le wav-tagged-44k-16bit-stereo.wav
+tagged 44100 stereo -c:a pcm_s16be -write_id3v2 1 aiff-tagged-44k-16bit-stereo.aiff

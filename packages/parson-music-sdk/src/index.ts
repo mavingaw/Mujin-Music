@@ -1,6 +1,7 @@
 export * from "./core/http";
 export * from "./domain/types";
 export * from "./player/audio-presets";
+export * from "./player/formats";
 export * from "./resources/albums";
 export * from "./resources/artists";
 export * from "./resources/auth";
@@ -12,6 +13,7 @@ export * from "./resources/home";
 export * from "./resources/images";
 export * from "./resources/library";
 export * from "./resources/lyrics";
+export * from "./resources/media";
 export * from "./resources/playlists";
 export * from "./resources/playback";
 export * from "./resources/search";
