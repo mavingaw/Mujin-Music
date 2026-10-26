@@ -3,6 +3,7 @@ pub mod album_sources;
 pub mod artist;
 pub mod auth;
 pub mod cast;
+pub mod control;
 pub mod data;
 pub mod discography;
 pub mod editorial;

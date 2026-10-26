@@ -35,3 +35,6 @@ nas-music-folder/
 __pycache__/
 
 .DS_Store
+
+# Home Assistant integration test harness
+.venv-ha/
