@@ -601,6 +601,21 @@ impl TidalClient {
         (pending, url)
     }
 
+    /// A browser sign-in for a client whose redirect URI is a Parson key
+    /// service's relay: TIDAL returns to the relay, which forwards the code
+    /// to `return_uri` (this server's callback) named in the state. The
+    /// token exchange still uses the relay URI, as TIDAL requires.
+    pub fn relayed_browser_authorization(
+        credentials: &ClientCredentials,
+        relay_redirect_uri: &str,
+        return_uri: &str,
+    ) -> (BrowserAuthorization, String) {
+        let (mut pending, _) = Self::browser_authorization(credentials, relay_redirect_uri);
+        pending.state = super::key_service::relay_state(&pending.state, return_uri);
+        let url = browser_authorize_url(credentials, &pending);
+        (pending, url)
+    }
+
     /// Fills in which account a token belongs to from `GET /sessions`,
     /// for token replies (refreshes) that leave the user out.
     pub async fn identify(&self, mut session: ProviderSession) -> ProviderResult<ProviderSession> {
@@ -1597,6 +1612,7 @@ mod tests {
         ClientCredentials {
             client_id: "listener-client-id".into(),
             client_secret: Some("listener-client-secret".into()),
+            ..Default::default()
         }
     }
 

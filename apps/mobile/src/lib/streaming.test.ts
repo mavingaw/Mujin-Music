@@ -9,7 +9,10 @@ import type {
 import {
   codeSecondsLeft,
   editorialPreview,
+  keysNoticeText,
+  signInThroughText,
   subscriberSetupText,
+  tidalPhoneSignIn,
   deliveryText,
   needsOwnCredentials,
   serviceAction,
@@ -188,4 +191,50 @@ test("subscribers are told to ask the server owner, not to find API keys", () =>
   expect(subscriberSetupText("qobuz", "Qobuz")).toContain(
     "Qobuz email and password",
   );
+});
+
+test("a key service means a subscription is all a listener needs", () => {
+  const provider = {
+    id: "qobuz",
+    name: "Qobuz",
+    status: "configured",
+    credentials: {
+      configured: false,
+      client_id_hint: null,
+      has_secret: false,
+      uses_server_credentials: false,
+    },
+    server_credentials_available: true,
+    server_credentials_source: "key_service",
+    key_service: {
+      url: "https://keys.parson.test",
+      issuer: "Parson",
+      offers: true,
+      device_code: false,
+      error: null,
+    },
+  } as unknown as StreamingProviderStatus;
+  expect(needsOwnCredentials(provider)).toBeFalse();
+  expect(signInThroughText(provider)).toBe(
+    "Signs in through Parson's licensed Qobuz app · Use your own",
+  );
+  expect(keysNoticeText([provider])).toContain(
+    "Sign in to Qobuz with just your subscription",
+  );
+  const tidal = { ...provider, id: "tidal", name: "TIDAL" };
+  expect(tidalPhoneSignIn(tidal).canStart).toBeFalse();
+  expect(
+    tidalPhoneSignIn({
+      ...tidal,
+      key_service: { ...provider.key_service!, device_code: true },
+    }).canStart,
+  ).toBeTrue();
+  const none = {
+    ...provider,
+    server_credentials_available: false,
+    server_credentials_source: null,
+    key_service: null,
+  };
+  expect(keysNoticeText([none])).toContain("no key service");
+  expect(tidalPhoneSignIn({ ...none, id: "tidal" }).canStart).toBeTrue();
 });

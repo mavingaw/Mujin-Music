@@ -2,6 +2,11 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api, { ApiError } from "../core/http";
 import {
   accountProof,
+  albumPlayChoice,
+  matchAlbumVersions,
+  streamingSignInPath,
+  tidalSignInMethods,
+  type StreamingProviderStatus,
   type StreamingAccountCheck,
   finishTidalBrowserSignIn,
   readTidalCallback,
@@ -740,5 +745,175 @@ describe("account proof", () => {
     expect(preview?.tone).toBe("failed");
     expect(preview?.label).toBe("Last check: Preview only");
     expect(preview?.detail).toContain("a preview");
+  });
+});
+
+describe("sign-in with only a subscription", () => {
+  const base: Pick<
+    StreamingProviderStatus,
+    | "credentials"
+    | "server_credentials_available"
+    | "server_credentials_source"
+    | "key_service"
+  > = {
+    credentials: {
+      configured: false,
+      client_id_hint: null,
+      has_secret: false,
+      uses_server_credentials: false,
+    },
+    server_credentials_available: true,
+    server_credentials_source: "key_service",
+    key_service: {
+      url: "https://keys.parson.test",
+      issuer: "Parson",
+      offers: true,
+      device_code: false,
+      error: null,
+    },
+  };
+
+  test("a key service means the listener only signs in", () => {
+    expect(streamingSignInPath(base)).toEqual({
+      kind: "subscription",
+      via: "key_service",
+      issuer: "Parson",
+    });
+    expect(tidalSignInMethods(base)).toEqual({
+      primary: "browser",
+      secondary: null,
+    });
+    expect(
+      tidalSignInMethods({
+        ...base,
+        key_service: { ...base.key_service!, device_code: true },
+      }),
+    ).toEqual({ primary: "device_code", secondary: "browser" });
+  });
+
+  test("owner keys, own keys and no keys are told apart", () => {
+    expect(
+      streamingSignInPath({ ...base, server_credentials_source: "settings" }),
+    ).toEqual({ kind: "subscription", via: "server" });
+    expect(
+      streamingSignInPath({
+        ...base,
+        credentials: { ...base.credentials, configured: true },
+      }),
+    ).toEqual({ kind: "own_credentials" });
+    expect(
+      streamingSignInPath({
+        ...base,
+        server_credentials_available: false,
+        server_credentials_source: null,
+        key_service: { ...base.key_service!, offers: false, error: "timeout" },
+      }),
+    ).toEqual({ kind: "setup_needed", keyServiceError: "timeout" });
+    expect(
+      tidalSignInMethods({ ...base, server_credentials_source: "settings" }),
+    ).toEqual({ primary: "device_code", secondary: "browser" });
+  });
+});
+
+describe("album Play follows the source preference", () => {
+  const lossless = (bit_depth: number, sample_rate: number, label: string) => ({
+    lossless: true,
+    bit_depth,
+    sample_rate,
+    bitrate_kbps: null,
+    label,
+  });
+  const subject = {
+    id: "qobuz:q1",
+    title: "Kind of Blue (Legacy Edition)",
+    artistName: "Miles Davis",
+    source: "qobuz" as const,
+    format: lossless(16, 44_100, "16/44.1 FLAC"),
+  };
+
+  test("matches copies by normalized title and artist, once each", () => {
+    const versions = matchAlbumVersions(
+      subject,
+      [
+        {
+          id: "tidal:t1",
+          title: "Kind Of Blue",
+          provider: "tidal",
+          artist: { id: "tidal:a", name: "Miles Davis", provider: "tidal" },
+          format: lossless(24, 192_000, "24/192 FLAC"),
+        },
+        {
+          id: "tidal:t2",
+          title: "Kind of Blue",
+          provider: "tidal",
+          artist: { id: "tidal:b", name: "A Tribute Band", provider: "tidal" },
+          format: null,
+        },
+        {
+          id: "qobuz:q1",
+          title: "Kind of Blue",
+          provider: "qobuz",
+          artist: { id: "qobuz:a", name: "Miles Davis", provider: "qobuz" },
+          format: null,
+        },
+      ] as never,
+      [
+        {
+          id: "42",
+          title: "Kind of Blue",
+          artistName: "Miles Davis",
+          format: lossless(24, 96_000, "24/96 FLAC"),
+        },
+      ],
+    );
+    expect(versions.map((version) => version.id)).toEqual([
+      "qobuz:q1",
+      "tidal:t1",
+      "42",
+    ]);
+  });
+
+  test("Play starts the preferred copy, not the open page's", () => {
+    const versions: AlbumVersion[] = [
+      { id: "qobuz:q1", title: "x", source: "qobuz", format: subject.format },
+      {
+        id: "tidal:t1",
+        title: "x",
+        source: "tidal",
+        format: lossless(24, 192_000, "24/192 FLAC"),
+      },
+      {
+        id: "42",
+        title: "x",
+        source: "local",
+        format: lossless(24, 96_000, "24/96 FLAC"),
+      },
+    ];
+    const best = albumPlayChoice(
+      "qobuz:q1",
+      rankAlbumVersions(versions, "highest_quality"),
+    );
+    expect(best?.version.id).toBe("tidal:t1");
+    expect(best?.isThisCopy).toBe(false);
+    expect(best?.label).toBe("TIDAL · 24/192 FLAC");
+
+    const tidalFirst = albumPlayChoice(
+      "42",
+      rankAlbumVersions(
+        versions.map((version) =>
+          version.source === "tidal" ? { ...version, format: null } : version,
+        ),
+        "tidal",
+      ),
+    );
+    expect(tidalFirst?.version.id).toBe("tidal:t1");
+
+    const mine = albumPlayChoice("42", rankAlbumVersions(versions, "local"));
+    expect(mine?.isThisCopy).toBe(true);
+    expect(mine?.label).toBe("Your files · 24/96 FLAC");
+
+    expect(
+      albumPlayChoice("42", rankAlbumVersions([versions[2]!], "tidal")),
+    ).toBeNull();
   });
 });

@@ -8,6 +8,7 @@ pub mod filesystem;
 pub mod genres;
 pub mod home;
 pub mod image;
+pub mod key_service;
 pub mod library;
 pub mod lyrics;
 pub mod metadata;

@@ -34,9 +34,12 @@ import { SourceTag } from "@/components/streaming-ui";
 import { palette } from "@/constants/colors";
 import {
   codeSecondsLeft,
+  keysNoticeText,
   needsOwnCredentials,
+  signInThroughText,
   subscriberSetupText,
   serviceAction,
+  tidalPhoneSignIn,
 } from "@/lib/streaming";
 
 const errorText = (error: unknown, fallback: string) =>
@@ -73,8 +76,9 @@ export function StreamingServicesSettings() {
         <Text style={styles.sandbox}>
           Sandbox mode: recorded TIDAL and Qobuz responses, and 30-second
           synthesized tones rendered in each announced format (24/192 FLAC,
-          TIDAL Max DASH, CD, AAC). Any credentials work. No real account is
-          used.
+          TIDAL Max DASH, CD, AAC). Sign-in goes through a simulated Parson key
+          service, as it would for a subscriber; any email and password work. No
+          real account is used.
         </Text>
       ) : null}
       {providers.data.providers.map((provider) => (
@@ -109,18 +113,17 @@ export function StreamingServicesSettings() {
       ))}
       <SourcePreferencePicker />
       <Text style={styles.fine}>
-        No API key ships with Parson: neither service issues one, and Parson
-        never extracts one. Your server owner adds them once, then you only sign
-        in. Tokens are encrypted on your server and never stored on this phone.
+        {keysNoticeText(providers.data.providers)}
       </Text>
       <Text style={styles.fine}>
         Built and tested against recorded TIDAL and Qobuz responses and media
         rendered to match them. It has not yet been run against a live TIDAL or
         Qobuz account, so full-length hi-res from the real services is unproven
         until your own Check connection passes; only then does an account show
-        Verified. TIDAL clients are free to register at developer.tidal.com;
-        Qobuz issues app IDs on request. See How to get credentials in the web
-        app&apos;s Settings, Services.
+        Verified. Subscription-only sign-in through a key service was tested
+        with the key service&apos;s own code against recorded replies; no key
+        service with real TIDAL or Qobuz licences exists yet. See How to get
+        credentials in the web app&apos;s Settings, Services.
       </Text>
     </View>
   );
@@ -444,7 +447,7 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
               left
             </Text>
           </View>
-        ) : (
+        ) : tidalPhoneSignIn(provider).canStart ? (
           <Pressable
             accessibilityRole="button"
             disabled={busy}
@@ -458,6 +461,8 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
           >
             <Text style={styles.primaryText}>Sign in with TIDAL</Text>
           </Pressable>
+        ) : (
+          <Text style={styles.body}>{tidalPhoneSignIn(provider).note}</Text>
         )
       ) : (
         <>
@@ -504,12 +509,7 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
       )}
       {!editing ? (
         <Pressable accessibilityRole="button" onPress={() => setEditing(true)}>
-          <Text style={styles.fine}>
-            {provider.credentials.configured &&
-            !provider.credentials.uses_server_credentials
-              ? `Your credentials ${provider.credentials.client_id_hint ?? ""} · Change`
-              : "Signs in through this server's credentials · Use your own"}
-          </Text>
+          <Text style={styles.fine}>{signInThroughText(provider)}</Text>
         </Pressable>
       ) : null}
       {message ? <Text style={styles.warning}>{message}</Text> : null}

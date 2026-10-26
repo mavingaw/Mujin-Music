@@ -8,6 +8,7 @@
 pub mod artwork;
 pub mod catalog;
 pub mod hub;
+pub mod key_service;
 pub mod md5;
 pub mod media;
 pub mod probe;
@@ -532,12 +533,16 @@ pub struct ResolvedStream {
     pub stream_seconds: Option<f64>,
 }
 
-/// User-supplied API credentials. For TIDAL these are an OAuth client id and
-/// optional secret; for Qobuz an app id and app secret.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// API credentials. For TIDAL these are an OAuth client id and optional
+/// secret; for Qobuz an app id and either an app secret or, for an app a
+/// Parson key service holds, that service's URL (it signs stream requests so
+/// the secret never reaches this server).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientCredentials {
     pub client_id: String,
     pub client_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_service: Option<String>,
 }
 
 /// A signed-in session. Only ever stored sealed.

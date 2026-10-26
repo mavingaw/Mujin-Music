@@ -12,8 +12,10 @@ import {
   signOutOfStreamingProvider,
   startTidalBrowserSignIn,
   startTidalSignIn,
+  streamingSignInPath,
   syncStreamingLibrary,
   tidalRedirectUri,
+  tidalSignInMethods,
   type StreamQuality,
   type StreamingConnectionCheck,
   type StreamingPendingSignIn,
@@ -189,22 +191,7 @@ export default function ServicesSettings() {
         ))}
       </div>
 
-      <div className="flex gap-3 rounded-xl bg-white/3 px-4 py-3.5 text-[13px] leading-5 text-zinc-400">
-        <ShieldCheck
-          aria-hidden="true"
-          className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300"
-        />
-        <p>
-          <span className="font-medium text-zinc-200">
-            No API key ships with Parson.
-          </span>{" "}
-          TIDAL and Qobuz do not issue Parson one, and Parson never extracts one
-          from their apps. Your server owner adds a TIDAL client and a Qobuz app
-          once; after that you only sign in to your own account. You can also
-          bring your own. Credentials and sign-in tokens are encrypted on this
-          server, used only for your account, and never sent to your devices.
-        </p>
-      </div>
+      <KeysNotice providers={providers} />
 
       <CredentialsGuide />
 
@@ -221,6 +208,12 @@ export default function ServicesSettings() {
           connection after signing in: an account shows{" "}
           <span className="text-emerald-300">Verified</span> only once the real
           service has sent it a whole track, lossless, in the announced format.
+        </p>
+        <p className="mt-2">
+          Subscription-only sign-in through a Parson key service (Qobuz signing,
+          the TIDAL relay) was tested by running the key service&apos;s own code
+          against the same recorded replies. No key service holding real TIDAL
+          or Qobuz licences exists yet.
         </p>
       </div>
 
@@ -262,6 +255,66 @@ function libraryCountLabel(provider: StreamingProviderStatus) {
   return `${plural(provider.library.albums, "album")} · ${plural(provider.library.tracks, "track")}`;
 }
 
+/**
+ * Says how listeners sign in on this server, and why: with a Parson key
+ * service a subscription is all anyone needs; without one, somebody adds
+ * an app once. Never claims more than the server reports.
+ */
+function KeysNotice({ providers }: { providers: StreamingProviderStatus[] }) {
+  const viaService = providers.filter((provider) => {
+    const path = streamingSignInPath(provider);
+    return path.kind === "subscription" && path.via === "key_service";
+  });
+  const service = providers.find(
+    (provider) => provider.key_service,
+  )?.key_service;
+  if (viaService.length) {
+    const issuer = service?.issuer ?? "Parson";
+    const names = viaService.map((provider) => provider.name).join(" and ");
+    return (
+      <div className="flex gap-3 rounded-xl border border-emerald-300/15 bg-emerald-300/5 px-4 py-3.5 text-[13px] leading-5 text-zinc-300">
+        <ShieldCheck
+          aria-hidden="true"
+          className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300"
+        />
+        <p>
+          <span className="font-medium text-white">
+            Sign in to {names} with just your subscription.
+          </span>{" "}
+          This server uses {issuer}&apos;s key service, which holds the licensed
+          TIDAL client and Qobuz app, so nobody registers anything. You log in
+          to TIDAL on tidal.com; your Qobuz password goes to Qobuz only. The key
+          service signs stream requests and relays TIDAL&apos;s sign-in back
+          here, and never sees your password or session. Sign-in tokens are
+          encrypted on this server for your account only.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-3 rounded-xl bg-white/3 px-4 py-3.5 text-[13px] leading-5 text-zinc-400">
+      <ShieldCheck
+        aria-hidden="true"
+        className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300"
+      />
+      <p>
+        <span className="font-medium text-zinc-200">
+          {service
+            ? "Parson's key service is not answering."
+            : "This server has no key service."}
+        </span>{" "}
+        {service?.error
+          ? `${service.url} could not be read (${service.error}). Until it answers, `
+          : "TIDAL and Qobuz license their APIs to apps, not to listeners. A Parson key service holding those licences lets a subscriber sign in with nothing else, but this build names none: neither service has issued keys to Parson yet, and Parson never extracts keys from their apps. So "}
+        your server owner adds a TIDAL client and a Qobuz app once; after that
+        you only sign in to your own account. You can also bring your own.
+        Credentials and sign-in tokens are encrypted on this server, used only
+        for your account, and never sent to your devices.
+      </p>
+    </div>
+  );
+}
+
 export function SandboxNotice({ compact = false }: { compact?: boolean }) {
   return (
     <div className="flex gap-3 rounded-xl border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-[13px] leading-5 text-amber-100">
@@ -270,7 +323,7 @@ export function SandboxNotice({ compact = false }: { compact?: boolean }) {
         <span className="font-semibold">Sandbox mode.</span>{" "}
         {compact
           ? "Recorded TIDAL and Qobuz responses; tracks play a 30-second synthesized tone in the format each reply announces."
-          : "This server answers with recorded TIDAL and Qobuz responses instead of contacting the services. Tracks play a 30-second synthesized tone, rendered in the format each recorded reply announces (24/192 FLAC, TIDAL Max as DASH, CD FLAC, AAC, MP3) and streamed through the same proxy and format check as a real account. Any credentials work here; no real account is used. Sandbox mode is off unless the server is started with PARSON_STREAMING_SANDBOX=1."}
+          : "This server answers with recorded TIDAL and Qobuz responses instead of contacting the services. Tracks play a 30-second synthesized tone, rendered in the format each recorded reply announces (24/192 FLAC, TIDAL Max as DASH, CD FLAC, AAC, MP3) and streamed through the same proxy and format check as a real account. Sign-in goes through a simulated Parson key service, so it looks the way it does for a subscriber; any email and password work and no real account is used. Sandbox mode is off unless the server is started with PARSON_STREAMING_SANDBOX=1."}
       </p>
     </div>
   );
@@ -552,6 +605,17 @@ function CredentialsStep({
   );
 }
 
+function signsInThrough(provider: StreamingProviderStatus) {
+  const path = streamingSignInPath(provider);
+  if (path.kind === "own_credentials") {
+    return `Your ${credentialLabels[provider.id].id} ${provider.credentials.client_id_hint ?? ""}`;
+  }
+  if (path.kind === "subscription" && path.via === "key_service") {
+    return `Signs in through ${path.issuer}'s licensed ${provider.name} app`;
+  }
+  return `Signs in through ${credentialLabels[provider.id].server}`;
+}
+
 function CredentialSummary({
   provider,
   onChange,
@@ -561,10 +625,7 @@ function CredentialSummary({
 }) {
   return (
     <p className="text-xs text-zinc-500">
-      {provider.credentials.configured &&
-      !provider.credentials.uses_server_credentials
-        ? `Your ${credentialLabels[provider.id].id} ${provider.credentials.client_id_hint ?? ""}`
-        : `Signs in through ${credentialLabels[provider.id].server}`}
+      {signsInThrough(provider)}
       {" · "}
       <button
         className="text-zinc-300 underline-offset-4 hover:text-white hover:underline"
@@ -717,41 +778,54 @@ function TidalSignIn({
     );
   }
 
+  const methods = tidalSignInMethods(provider);
+  const path = streamingSignInPath(provider);
+  const viaKeyService =
+    path.kind === "subscription" && path.via === "key_service";
+  const run = (method: "device_code" | "browser") =>
+    method === "browser" ? startInBrowser() : start();
   return (
     <div className="space-y-5">
       <p className="text-sm leading-6 text-zinc-400">
-        TIDAL signs in with a one-time code: you approve Parson on TIDAL&apos;s
-        own site, so your password never passes through this server.
+        {methods.primary === "browser"
+          ? "You log in on tidal.com and approve Parson, and TIDAL sends you straight back here. Your password never passes through this server."
+          : "TIDAL signs in with a one-time code: you approve Parson on TIDAL's own site, so your password never passes through this server."}
       </p>
       {message && <p className="text-sm text-amber-200">{message}</p>}
       <div className="flex flex-wrap items-center gap-3">
         <Button
           className="rounded-full px-6"
           disabled={starting}
-          onClick={() => void start()}
+          onClick={() => void run(methods.primary)}
         >
           {starting ? "Starting…" : "Sign in with TIDAL"}
         </Button>
-        <Button
-          className="rounded-full"
-          disabled={starting}
-          onClick={() => void startInBrowser()}
-          variant="secondary"
-        >
-          Sign in on tidal.com instead
-        </Button>
+        {methods.secondary && (
+          <Button
+            className="rounded-full"
+            disabled={starting}
+            onClick={() => void run(methods.secondary!)}
+            variant="secondary"
+          >
+            {methods.secondary === "browser"
+              ? "Sign in on tidal.com instead"
+              : "Use a code instead"}
+          </Button>
+        )}
       </div>
-      <p className="text-xs leading-5 text-zinc-500">
-        The code works with clients TIDAL allows to use device sign-in. A client
-        you register yourself at developer.tidal.com signs in on tidal.com
-        instead; register{" "}
-        <code className="break-all rounded bg-white/6 px-1 py-0.5 text-zinc-300">
-          {typeof window === "undefined"
-            ? "/settings/services/tidal-callback"
-            : tidalRedirectUri(window.location.origin)}
-        </code>{" "}
-        as its redirect URI.
-      </p>
+      {!viaKeyService && (
+        <p className="text-xs leading-5 text-zinc-500">
+          The code works with clients TIDAL allows to use device sign-in. A
+          client you register yourself at developer.tidal.com signs in on
+          tidal.com instead; register{" "}
+          <code className="break-all rounded bg-white/6 px-1 py-0.5 text-zinc-300">
+            {typeof window === "undefined"
+              ? "/settings/services/tidal-callback"
+              : tidalRedirectUri(window.location.origin)}
+          </code>{" "}
+          as its redirect URI.
+        </p>
+      )}
       <CredentialSummary onChange={onChangeCredentials} provider={provider} />
     </div>
   );

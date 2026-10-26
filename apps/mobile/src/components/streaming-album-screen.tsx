@@ -31,19 +31,38 @@ import {
   EditorialSection,
   StartRadioButton,
 } from "@/components/streaming-notes";
+import {
+  PreferredPlayCaption,
+  usePreferredAlbumPlay,
+} from "@/components/preferred-album-play";
 import { palette } from "@/constants/colors";
 import { formatCollectionDuration } from "@/lib/format";
-import { usePlayer } from "@/providers/player-provider";
 
 /** A TIDAL or Qobuz album, opened from search, the library or the player. */
 export function StreamingAlbumScreen({ id }: { id: string }) {
   const router = useRouter();
-  const player = usePlayer();
   const album = useQuery({
     queryKey: ["streaming", "album", id],
     queryFn: () => getStreamingAlbum(id),
     retry: 1,
   });
+  const loaded = album.data;
+  const songs =
+    loaded?.tracks
+      .filter((track) => track.streamable)
+      .map((track) => streamingTrackToSong(track, loaded)) ?? [];
+  const preferred = usePreferredAlbumPlay(
+    loaded
+      ? {
+          id: loaded.id,
+          title: loaded.title,
+          artistName: loaded.artist.name,
+          source: loaded.provider,
+          format: loaded.format ?? null,
+        }
+      : null,
+    songs,
+  );
   if (album.isPending)
     return (
       <Screen>
@@ -69,11 +88,7 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
       </Screen>
     );
   }
-  const songs = data.tracks
-    .filter((track) => track.streamable)
-    .map((track) => streamingTrackToSong(track, data));
-  const playing =
-    player.isPlaying && player.current?.album_object?.id === data.id;
+  const playing = preferred.playing;
   return (
     <Screen>
       <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
@@ -123,12 +138,10 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
               <Pressable
                 accessibilityLabel={playing ? "Pause album" : "Play album"}
                 accessibilityRole="button"
-                disabled={!songs.length}
-                onPress={() =>
-                  playing
-                    ? player.toggle()
-                    : songs[0] && player.playSong(songs[0], songs)
+                disabled={
+                  (!songs.length && !preferred.choice) || preferred.starting
                 }
+                onPress={() => void preferred.play()}
                 style={styles.circle}
               >
                 {playing ? (
@@ -146,6 +159,7 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
               />
               <StartRadioButton id={data.id} label={data.title} seed="album" />
             </View>
+            <PreferredPlayCaption play={preferred} />
           </View>
           {data.tracks.map((track, index) => (
             <StreamingTrackRow

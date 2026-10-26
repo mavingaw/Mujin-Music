@@ -13,7 +13,12 @@ import Link from "next/link";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
 import { AlbumArtFallback } from "@/lib/images/image-url";
-import { AlbumVersions, BetterVersionNotice } from "./album-versions";
+import {
+  AlbumVersions,
+  BetterVersionNotice,
+  streamingAlbumSubject,
+} from "./album-versions";
+import { PreferredPlayCaption, usePreferredAlbumPlay } from "./preferred-play";
 import { FormatBadge, SourceBadge } from "./source-badge";
 import { LibraryButton } from "./library-button";
 import { StartRadioButton } from "./radio-button";
@@ -35,6 +40,11 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
   const playback = useStreamingPlayback();
   const data = album.data;
   usePageTitle(data ? `${data.title} - ${data.artist.name}` : null);
+  const subject = data ? streamingAlbumSubject(data) : null;
+  const playThisCopy = () => {
+    if (data) playback.playAlbum(data);
+  };
+  const preferred = usePreferredAlbumPlay(subject, playThisCopy);
 
   if (!parsed) return <EntityPageState kind="album" />;
   if (album.isPending) return <EntityPageState kind="album" loading />;
@@ -70,8 +80,8 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
     );
   }
 
-  const isAlbumPlaying =
-    playback.isPlaying && playback.currentAlbumId === data.id;
+  const isAlbumPlaying = preferred.playing;
+  const albumSubject = streamingAlbumSubject(data);
   const year = data.release_date?.slice(0, 4);
   const tone = formatTone(data.format);
   const discs = new Set(data.tracks.map((track) => track.disc_number)).size;
@@ -151,12 +161,9 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
         <div className="mb-7 flex flex-wrap items-center gap-4">
           <button
             aria-label={`${isAlbumPlaying ? "Pause" : "Play"} ${data.title}`}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100"
-            onClick={() =>
-              isAlbumPlaying
-                ? playback.playAlbum(data, playback.currentSongId)
-                : playback.playAlbum(data)
-            }
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100 disabled:opacity-70"
+            disabled={preferred.starting}
+            onClick={() => void preferred.play()}
             type="button"
           >
             {isAlbumPlaying ? (
@@ -165,6 +172,10 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
               <Play className="ml-1 h-6 w-6 fill-black text-black" />
             )}
           </button>
+          <PreferredPlayCaption
+            onPlayThisCopy={playThisCopy}
+            play={preferred}
+          />
           <LibraryButton
             id={data.id}
             inLibrary={data.in_library}
@@ -194,7 +205,7 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
           )}
         </div>
 
-        <BetterVersionNotice album={data} />
+        <BetterVersionNotice subject={albumSubject} />
 
         <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_auto_3rem] gap-3 border-b border-white/10 px-3 py-2 text-sm font-medium text-zinc-500 sm:gap-4 sm:px-4">
           <div className="text-center">#</div>
@@ -239,7 +250,7 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
 
         <AlbumCredits album={data} />
 
-        <AlbumVersions album={data} />
+        <AlbumVersions subject={albumSubject} />
 
         <footer className="mt-10 space-y-1 text-xs text-zinc-500">
           {data.release_date && <p>Released {data.release_date}</p>}
