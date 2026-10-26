@@ -1,12 +1,11 @@
 //! Network outputs: streamers and speakers the server plays to over the
 //! LAN, after its own decoder and DSP chain.
 //!
-//! - [`upnp`]: UPnP AV and OpenHome renderers (network streamers, AV
-//!   receivers, most "UPnP/DLNA" DACs). The server serves the processed
-//!   PCM as an endless WAV (or LPCM) over HTTP and tells the renderer to
-//!   pull it, so its sample rate and bit depth reach the renderer intact.
 //! - [`raop`]: AirPlay receivers, through AirPlay 1 (RAOP): ALAC at
 //!   44.1 kHz/16 bit over RTP, the only format that protocol carries.
+//! - UPnP AV and OpenHome renderers fetch what the server serves them; the
+//!   server's zones drive them (`parson-music`'s `outputs::upnp`), with the
+//!   identity types here ([`NetworkInfo`], [`ManualEndpoint`]).
 //!
 //! Either way the DSP chain runs on the server before the network hop, the
 //! format limits are per endpoint (declared by the renderer, fixed by the
@@ -15,9 +14,6 @@
 
 pub mod http;
 pub mod raop;
-pub mod stream;
-pub mod upnp;
-pub mod xml;
 
 #[cfg(any(test, feature = "network-fakes"))]
 pub mod fakes;
@@ -113,10 +109,6 @@ pub struct NetworkInfo {
     /// What this output has, and has not, been tested against.
     pub verification: String,
 }
-
-/// Said on every UPnP device, until Parson has been run against real
-/// renderers.
-pub const UPNP_VERIFICATION: &str = "Built to the UPnP AV and OpenHome specifications and tested end to end against Parson's protocol-level fake renderer (SSDP, device description, SOAP control and the HTTP pull, with the samples compared byte for byte). Not yet tested with a real network streamer.";
 
 /// Said on every AirPlay device.
 pub const AIRPLAY_VERIFICATION: &str = "Built to the AirPlay 1 (RAOP) protocol and tested end to end against Parson's protocol-level fake receiver (RTSP, RTP audio, timing and sync, with the decoded ALAC compared sample for sample). Not yet tested with real AirPlay hardware. Receivers that require encryption, a password or pairing are listed but cannot be played to.";

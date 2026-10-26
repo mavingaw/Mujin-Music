@@ -61,6 +61,22 @@ impl ZoneKind {
     pub fn is_client(self) -> bool {
         matches!(self, Self::Web | Self::Desktop | Self::Mobile)
     }
+
+    /// What the zone is, in words, e.g. `Sonos room`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Web => "Web browser",
+            Self::Desktop => "Desktop app",
+            Self::Mobile => "Phone",
+            Self::Chromecast => "Chromecast",
+            Self::Sonos => "Sonos room",
+            Self::Upnp => "UPnP renderer",
+            Self::Device => "Audio device",
+            Self::Bridge => "Parson Bridge device",
+            Self::Airplay => "AirPlay receiver",
+            Self::Linked => "Linked zones",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,8 +368,10 @@ pub struct ZoneSettingsSupport {
     pub volume_limits: bool,
     /// Only Parson apps can be private (they belong to one device).
     pub private: bool,
-    /// Per-zone DSP (preamp, bass, treble, headphone crossfeed).
+    /// Per-zone DSP (headroom, parametric EQ, crossfeed, convolution).
     pub dsp: bool,
+    /// How DSD reaches the device can be chosen (device setup).
+    pub dsd: bool,
     /// Exclusive (bit-perfect) access to an audio device.
     pub exclusive: bool,
     /// Volume modes this zone can use; empty when fixed by the device.
@@ -402,96 +420,43 @@ pub const SAMPLE_RATE_CHOICES: &[u32] = &[
     44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000,
 ];
 pub const BIT_DEPTH_CHOICES: &[u8] = &[16, 24, 32];
-pub const DSP_GAIN_RANGE: std::ops::RangeInclusive<i8> = -12..=12;
-pub const DSP_PREAMP_RANGE: std::ops::RangeInclusive<i8> = -24..=0;
+pub const DSD_RATE_CHOICES: &[u32] = &parson_output::DSD_RATES;
 
-/// Per-zone DSP, applied server-side for zones the server plays (devices,
-/// UPnP renderers) and by the web and desktop apps for their own zone.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ZoneDsp {
-    pub enabled: bool,
-    /// Extra attenuation in dB (0 or less).
-    pub preamp_db: i8,
-    /// Low shelf at 100 Hz, in dB.
-    pub bass_db: i8,
-    /// High shelf at 10 kHz, in dB.
-    pub treble_db: i8,
-    /// Headphone crossfeed (Bauer-style) for less extreme stereo.
-    pub crossfeed: bool,
-}
+/// A zone's DSP chain: the server runs it for every zone it plays (devices,
+/// bridges, AirPlay, and the streams it serves to UPnP renderers, Sonos and
+/// Cast), and the web and desktop apps run the same settings for their own
+/// zone.
+pub use parson_output::DsdStrategy;
+pub use parson_output::dsp::DspSettings;
 
-impl ZoneDsp {
-    /// Whether any processing happens.
-    pub fn is_active(&self) -> bool {
-        self.enabled
-            && (self.preamp_db != 0 || self.bass_db != 0 || self.treble_db != 0 || self.crossfeed)
+/// Short description of a DSP chain for signal paths, e.g. `Headroom
+/// −3.0 dB, EQ 2 bands, Crossfeed (medium)`; empty when nothing processes.
+pub fn dsp_summary(dsp: &DspSettings) -> String {
+    let mut parts = Vec::new();
+    if let Some(headroom) = dsp.headroom_db() {
+        parts.push(format!(
+            "Headroom {}",
+            parson_output::dsp::format_db(headroom)
+        ));
     }
-
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if !DSP_PREAMP_RANGE.contains(&self.preamp_db) {
-            return Err("invalid_dsp_preamp");
-        }
-        if !DSP_GAIN_RANGE.contains(&self.bass_db) || !DSP_GAIN_RANGE.contains(&self.treble_db) {
-            return Err("invalid_dsp_gain");
-        }
-        Ok(())
+    let bands = dsp.active_bands();
+    if !bands.is_empty() {
+        parts.push(format!(
+            "EQ {}",
+            bands
+                .iter()
+                .map(parson_output::dsp::EqBand::describe)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
-
-    /// Headroom management: the level drops by the largest boost so EQ
-    /// never clips, unless the preamp already lowers it further.
-    pub fn effective_preamp_db(&self) -> i8 {
-        let boost = self.bass_db.max(self.treble_db).max(0);
-        self.preamp_db.min(-boost)
+    if let Some(strength) = dsp.crossfeed() {
+        parts.push(format!("Crossfeed ({})", strength.label().to_lowercase()));
     }
-
-    /// The ffmpeg filter chain, or `None` when nothing is processed.
-    pub fn ffmpeg_filter(&self) -> Option<String> {
-        if !self.is_active() {
-            return None;
-        }
-        let mut parts = Vec::new();
-        let preamp = self.effective_preamp_db();
-        if preamp != 0 {
-            parts.push(format!("volume={preamp}dB"));
-        }
-        if self.bass_db != 0 {
-            parts.push(format!("bass=g={}:f=100:t=q:w=0.707", self.bass_db));
-        }
-        if self.treble_db != 0 {
-            parts.push(format!("treble=g={}:f=10000:t=q:w=0.707", self.treble_db));
-        }
-        if self.crossfeed {
-            parts.push("crossfeed=strength=0.3:range=0.5".to_string());
-        }
-        Some(parts.join(","))
+    if dsp.convolution_filter().is_some() {
+        parts.push("Convolution".to_string());
     }
-
-    /// Short description for signal paths, e.g. `Bass +3 dB, Crossfeed`.
-    pub fn summary(&self) -> String {
-        let signed = |value: i8| {
-            if value > 0 {
-                format!("+{value}")
-            } else {
-                format!("\u{2212}{}", value.unsigned_abs())
-            }
-        };
-        let mut parts = Vec::new();
-        let preamp = self.effective_preamp_db();
-        if preamp != 0 {
-            parts.push(format!("Preamp {} dB", signed(preamp)));
-        }
-        if self.bass_db != 0 {
-            parts.push(format!("Bass {} dB", signed(self.bass_db)));
-        }
-        if self.treble_db != 0 {
-            parts.push(format!("Treble {} dB", signed(self.treble_db)));
-        }
-        if self.crossfeed {
-            parts.push("Crossfeed".to_string());
-        }
-        parts.join(", ")
-    }
+    parts.join(", ")
 }
 
 /// What a zone can play natively, and what happens to everything else.
@@ -527,6 +492,10 @@ pub struct ZoneStreamInfo {
     pub steps: Vec<String>,
     /// Roon-style rating of the whole path.
     pub quality: StreamQuality,
+    /// Every stage from the file to the device, as the server's pipeline
+    /// describes it (zones the server decodes for).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_path: Option<crate::signal_path::ServerSignalPath>,
 }
 
 /// How much of the original reaches the output, worst stage first: a lossy
@@ -570,12 +539,16 @@ pub struct ZoneSettingsView {
     pub leveling_target_lufs: i8,
     pub leveling_adjustment_db: i8,
     pub private: bool,
-    pub dsp: ZoneDsp,
+    pub dsp: DspSettings,
     pub exclusive: bool,
     pub volume_mode: VolumeMode,
     pub volume_control: VolumeControl,
     pub max_sample_rate: Option<u32>,
     pub max_bit_depth: Option<u8>,
+    /// How DSD files reach the device (Roon's DSD Playback Strategy).
+    pub dsd_strategy: DsdStrategy,
+    /// Highest DSD rate sent as DSD; above it DSD is converted to PCM.
+    pub max_dsd_rate: Option<u32>,
     pub supports: ZoneSettingsSupport,
     /// How the settings apply on this kind of zone.
     pub notes: Vec<String>,
@@ -592,12 +565,14 @@ impl ZoneSettingsView {
             leveling_target_lufs: DEFAULT_LEVELING_TARGET_LUFS,
             leveling_adjustment_db: 0,
             private: false,
-            dsp: ZoneDsp::default(),
+            dsp: DspSettings::default(),
             exclusive: false,
             volume_mode: VolumeMode::Hardware,
             volume_control: VolumeControl::Parson,
             max_sample_rate: None,
             max_bit_depth: None,
+            dsd_strategy: DsdStrategy::Auto,
+            max_dsd_rate: None,
             supports: ZoneSettingsSupport::default(),
             notes: Vec::new(),
         }
@@ -711,8 +686,188 @@ pub struct Zone {
     pub settings: ZoneSettingsView,
     /// Format limits and the signal path of the playing track.
     pub output: Option<ZoneOutputInfo>,
+    /// The physical outputs the zone plays through (Roon's endpoints): one
+    /// DAC or player, or every member of a group.
+    pub endpoints: Vec<ZoneEndpoint>,
     /// Format limits or other facts worth showing, e.g. Sonos conversions.
     pub notes: Vec<String>,
+}
+
+/// What the server's DSP chain can do for an endpoint.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct DspSupport {
+    /// The chain can run: the output's formats are known.
+    pub available: bool,
+    /// Why it cannot, when it cannot.
+    pub reason: Option<String>,
+    /// e.g. `Parson DSP, 64-bit float`.
+    pub engine: &'static str,
+    /// The output plays stereo, which crossfeed needs.
+    pub crossfeed: bool,
+    /// Fixed DSP sample rates the output accepts as configured.
+    pub sample_rates: Vec<u32>,
+    /// Depth the chain dithers to.
+    pub output_bits: Option<u8>,
+}
+
+/// One physical output of a zone: a DAC on this machine or a bridge, an
+/// AirPlay receiver, a UPnP or OpenHome player, a Sonos room, a phone.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ZoneEndpoint {
+    /// The zone the endpoint plays as on its own (a group member's id).
+    pub id: String,
+    pub name: String,
+    /// e.g. `USB · hw:1,0` or `Linn Klimax DS`.
+    pub detail: String,
+    /// The audio API or protocol, e.g. `ALSA`, `AirPlay`, `OpenHome`.
+    pub driver: Option<String>,
+    /// e.g. `ALSA hw:1,0 exclusive`, following the zone's Exclusive Mode.
+    pub mode_label: Option<String>,
+    /// How the driver addresses it, e.g. `hw:1,0` or `192.168.1.40:7000`.
+    pub address: Option<String>,
+    pub exclusive_capable: bool,
+    /// Why its formats could not be read, e.g. another app holds it.
+    pub probe_error: Option<String>,
+    /// Every standard rate, depth and DSD rate, supported or not, and
+    /// whether the zone's device setup allows it.
+    pub formats: Option<parson_output::FormatSupport>,
+    /// Sample containers it accepts, e.g. `24-bit packed`.
+    pub sample_formats: Vec<&'static str>,
+    pub channels: Option<(u8, u8)>,
+    /// Native DSD containers the driver accepts, e.g. `DSD_U32_BE`.
+    pub dsd_formats: Vec<&'static str>,
+    /// What the kernel reports about the hardware (USB id and speed).
+    pub hardware: Option<parson_output::procfs::HardwareInfo>,
+    /// A network player's protocol, address, identity and what it has been
+    /// tested against.
+    pub network: Option<parson_output::network::NetworkInfo>,
+    /// The server's DSP chain for this endpoint.
+    pub dsp_support: Option<DspSupport>,
+    /// The endpoint's own volume (a group member's, or the zone's).
+    pub volume: Option<ZoneVolume>,
+    /// The endpoint has its own picture (`GET /zones/{id}/icon`).
+    pub has_icon: bool,
+}
+
+impl ZoneEndpoint {
+    /// An endpoint known only by name (an app, a Sonos room, a Cast device).
+    pub fn named(id: &str, name: &str, detail: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            detail: detail.to_string(),
+            driver: None,
+            mode_label: None,
+            address: None,
+            exclusive_capable: false,
+            probe_error: None,
+            formats: None,
+            sample_formats: Vec::new(),
+            channels: None,
+            dsd_formats: Vec::new(),
+            hardware: None,
+            network: None,
+            dsp_support: None,
+            volume: None,
+            has_icon: false,
+        }
+    }
+
+    /// A device the server opens itself, under the zone's device setup.
+    pub fn for_device(
+        id: &str,
+        device: &parson_output::DeviceInfo,
+        settings: &parson_output::OutputSettings,
+    ) -> Self {
+        let caps = device.caps.as_ref();
+        Self {
+            id: id.to_string(),
+            name: device.name.clone(),
+            detail: device.detail.clone(),
+            driver: Some(device.driver.name().to_string()),
+            mode_label: Some(device.mode_label(settings.exclusive)),
+            address: device.address.clone(),
+            exclusive_capable: device.exclusive_capable,
+            probe_error: device.probe_error.clone(),
+            formats: caps.map(|caps| parson_output::format_support(caps, settings)),
+            sample_formats: caps
+                .map(|caps| {
+                    caps.sample_formats
+                        .iter()
+                        .map(|format| format.label())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            channels: caps.map(|caps| (caps.min_channels, caps.max_channels)),
+            dsd_formats: caps
+                .map(|caps| {
+                    caps.dsd_formats
+                        .iter()
+                        .map(|format| format.label())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            hardware: device.hardware.clone(),
+            has_icon: device
+                .network
+                .as_ref()
+                .is_some_and(|network| network.icon_url.is_some()),
+            network: device.network.clone(),
+            dsp_support: Some(device_dsp_support(device, settings)),
+            volume: None,
+        }
+    }
+}
+
+/// What the DSP chain can do on `device` under `settings`.
+pub fn device_dsp_support(
+    device: &parson_output::DeviceInfo,
+    settings: &parson_output::OutputSettings,
+) -> DspSupport {
+    let Some(caps) = device.caps.as_ref() else {
+        return DspSupport {
+            available: false,
+            reason: Some(match &device.probe_error {
+                Some(error) => format!(
+                    "Parson could not read the formats {} accepts ({error}), so it cannot run the DSP engine for it.",
+                    device.name
+                ),
+                None => format!(
+                    "Parson could not read the formats {} accepts, so it cannot run the DSP engine for it.",
+                    device.name
+                ),
+            }),
+            engine: crate::signal_path::SERVER_DSP_ENGINE,
+            crossfeed: false,
+            sample_rates: Vec::new(),
+            output_bits: None,
+        };
+    };
+    DspSupport {
+        available: true,
+        reason: None,
+        engine: crate::signal_path::SERVER_DSP_ENGINE,
+        crossfeed: caps.min_channels <= 2 && caps.max_channels >= 2,
+        sample_rates: parson_output::dsp::selectable_rates(caps, settings),
+        output_bits: caps
+            .bit_depths()
+            .into_iter()
+            .filter(|bits| settings.max_bit_depth.is_none_or(|max| *bits <= max))
+            .max(),
+    }
+}
+
+/// What the DSP chain does for a renderer Parson streams to: it runs on
+/// the server before the encoder, at the renderer's own format.
+pub fn served_dsp_support() -> DspSupport {
+    DspSupport {
+        available: true,
+        reason: None,
+        engine: crate::signal_path::SERVER_DSP_ENGINE,
+        crossfeed: true,
+        sample_rates: Vec::new(),
+        output_bits: None,
+    }
 }
 
 /// A remote-control command for a zone.

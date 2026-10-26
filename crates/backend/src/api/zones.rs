@@ -229,6 +229,7 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
             volume_mode: None,
             stream: None,
         }),
+        endpoints: Vec::new(),
         notes: vec![
             FormatLimits::CHROMECAST.note("Chromecast"),
             "Chromecast playback is started from the Parson mobile app; Chromecast groups are made in Google Home and show up as their own zone.".to_string(),
@@ -744,6 +745,108 @@ async fn remove_bridge(
     }
 }
 
+fn network_players_of(
+    service: &ZoneService,
+) -> Option<std::sync::Arc<crate::outputs::network::NetworkPlayers>> {
+    service
+        .outputs()
+        .and_then(|outputs| outputs.network.clone())
+}
+
+/// UPnP, OpenHome and AirPlay players added by address, and whether the
+/// server searches the network for them.
+#[get("/outputs/network")]
+async fn network_players(request: HttpRequest, service: web::Data<ZoneService>) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    match network_players_of(&service) {
+        Some(players) => HttpResponse::Ok().json(players.view()),
+        None => HttpResponse::Ok().json(serde_json::json!({"discovery": false, "manual": []})),
+    }
+}
+
+/// Adds (or renames) a network player by address. Admins only: the server
+/// connects to whatever address is given.
+#[post("/outputs/network")]
+async fn add_network_player(
+    request: HttpRequest,
+    form: web::Json<parson_output::network::ManualEndpoint>,
+    service: web::Data<ZoneService>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    if !is_admin(&request) {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "admin_required"}));
+    }
+    let Some(players) = network_players_of(&service) else {
+        return error_response(ZoneError::Unsupported("network_players_disabled"));
+    };
+    let endpoint = form.into_inner();
+    if let Err(message) = players.add(endpoint) {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"error": "invalid_network_player", "message": message}));
+    }
+    if let Some(outputs) = service.outputs() {
+        outputs.network_changed().await;
+    }
+    HttpResponse::Ok().json(players.view())
+}
+
+#[derive(Deserialize)]
+struct RemoveNetworkPlayer {
+    address: String,
+}
+
+#[delete("/outputs/network")]
+async fn remove_network_player(
+    request: HttpRequest,
+    form: web::Json<RemoveNetworkPlayer>,
+    service: web::Data<ZoneService>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    if !is_admin(&request) {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "admin_required"}));
+    }
+    let Some(players) = network_players_of(&service) else {
+        return error_response(ZoneError::Unsupported("network_players_disabled"));
+    };
+    if let Err(message) = players.remove(&form.address) {
+        return HttpResponse::NotFound()
+            .json(serde_json::json!({"error": "network_player_not_found", "message": message}));
+    }
+    if let Some(outputs) = service.outputs() {
+        outputs.network_changed().await;
+    }
+    HttpResponse::Ok().json(players.view())
+}
+
+/// A network player's own picture (its UPnP icon), fetched from it.
+#[get("/{zone_id}/icon")]
+async fn zone_icon(
+    request: HttpRequest,
+    zone_id: web::Path<String>,
+    service: web::Data<ZoneService>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    let icon = match service.outputs().and_then(|outputs| outputs.upnp.clone()) {
+        Some(upnp) => upnp.icon(&zone_id).await,
+        None => None,
+    };
+    match icon {
+        Some((content_type, bytes)) => HttpResponse::Ok()
+            .content_type(content_type)
+            .insert_header(("Cache-Control", "private, max-age=3600"))
+            .body(bytes),
+        None => HttpResponse::NotFound().json(serde_json::json!({"error": "zone_icon_not_found"})),
+    }
+}
+
 /// Roon's "Pause all": pauses every playing zone this viewer can see.
 #[post("/pause-all")]
 async fn pause_all(
@@ -1111,6 +1214,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(sonos_discover)
             .service(pause_all)
             .service(outputs_discover)
+            .service(network_players)
+            .service(add_network_player)
+            .service(remove_network_player)
             .service(bridge_status)
             .service(add_bridge)
             .service(remove_bridge)
@@ -1120,7 +1226,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(send_command)
             .service(update_settings)
             .service(loudness)
-            .service(sleep_timer),
+            .service(sleep_timer)
+            .service(zone_icon),
     );
 }
 

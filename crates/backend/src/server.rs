@@ -383,13 +383,11 @@ pub async fn build_server_with_shutdown_timeout(
         .unwrap_or(2);
     tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Parson server");
 
-    let native_outputs = web::Data::from(crate::native_output::global());
     let server = HttpServer::new(move || {
         App::new()
             .app_data(database.clone())
             .app_data(library.clone())
             .app_data(lyrics_service.clone())
-            .app_data(native_outputs.clone())
             .app_data(zone_service.clone())
             .app_data(streaming_services.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))

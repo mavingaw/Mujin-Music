@@ -7,8 +7,8 @@ rust-version = "1.99"
 license = "GPL-3.0-only"
 
 [features]
-# Protocol-level fake UPnP renderer and AirPlay receiver, for demos and
-# integration tests without network audio hardware.
+# Protocol-level fake AirPlay receiver, for demos and integration tests
+# without network audio hardware.
 network-fakes = []
 
 [[example]]

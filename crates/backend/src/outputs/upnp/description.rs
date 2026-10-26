@@ -1,21 +1,46 @@
-//! UPnP device and service descriptions of DLNA media renderers.
+//! UPnP device and service descriptions of DLNA media renderers and
+//! OpenHome renderers (Linn and the many streamers that speak its
+//! protocol).
 
 use crate::sonos::xml::child_text;
 
 pub const AV_TRANSPORT: &str = "urn:schemas-upnp-org:service:AVTransport:1";
 pub const RENDERING_CONTROL: &str = "urn:schemas-upnp-org:service:RenderingControl:1";
 pub const CONNECTION_MANAGER: &str = "urn:schemas-upnp-org:service:ConnectionManager:1";
+pub const OH_PLAYLIST: &str = "urn:av-openhome-org:service:Playlist:1";
+pub const OH_VOLUME: &str = "urn:av-openhome-org:service:Volume:1";
+pub const OH_TIME: &str = "urn:av-openhome-org:service:Time:1";
+pub const OH_INFO: &str = "urn:av-openhome-org:service:Info:1";
+pub const OH_PRODUCT: &str = "urn:av-openhome-org:service:Product:1";
 
 /// One service of a renderer, with absolute URLs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceUrls {
+    /// As the description declares it (SOAP actions name this exact type).
     pub service_type: String,
     pub control_url: String,
     pub scpd_url: String,
     pub event_url: Option<String>,
 }
 
-/// The parts of a MediaRenderer description Parson uses.
+/// A picture the device offers of itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Icon {
+    pub mime: String,
+    pub width: u32,
+    pub url: String,
+}
+
+/// How Parson controls a renderer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    /// UPnP AV: AVTransport, RenderingControl, ConnectionManager.
+    UpnpAv,
+    /// OpenHome: Playlist, Volume, Time and Info.
+    OpenHome,
+}
+
+/// The parts of a renderer description Parson uses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererDescription {
     /// UDN without the `uuid:` prefix.
@@ -24,9 +49,16 @@ pub struct RendererDescription {
     pub manufacturer: String,
     pub model_name: String,
     pub model_number: Option<String>,
-    pub av_transport: ServiceUrls,
+    pub model_description: Option<String>,
+    pub av_transport: Option<ServiceUrls>,
     pub rendering_control: Option<ServiceUrls>,
     pub connection_manager: Option<ServiceUrls>,
+    pub oh_playlist: Option<ServiceUrls>,
+    pub oh_volume: Option<ServiceUrls>,
+    pub oh_time: Option<ServiceUrls>,
+    pub oh_info: Option<ServiceUrls>,
+    pub oh_product: Option<ServiceUrls>,
+    pub icons: Vec<Icon>,
 }
 
 impl RendererDescription {
@@ -45,6 +77,31 @@ impl RendererDescription {
         } else {
             format!("{manufacturer} {model}")
         }
+    }
+
+    /// UPnP AV when the renderer has an AVTransport (gapless with
+    /// `SetNextAVTransportURI`), else its OpenHome playlist.
+    pub fn control(&self) -> Control {
+        if self.av_transport.is_some() {
+            Control::UpnpAv
+        } else {
+            Control::OpenHome
+        }
+    }
+
+    /// The renderer speaks OpenHome (it may also speak UPnP AV).
+    pub fn open_home(&self) -> bool {
+        self.oh_playlist.is_some() || self.oh_product.is_some()
+    }
+
+    /// The best picture: the widest PNG, else the widest icon.
+    pub fn best_icon(&self) -> Option<&Icon> {
+        let png = self
+            .icons
+            .iter()
+            .filter(|icon| icon.mime.contains("png"))
+            .max_by_key(|icon| icon.width);
+        png.or_else(|| self.icons.iter().max_by_key(|icon| icon.width))
     }
 }
 
@@ -72,7 +129,8 @@ pub fn absolute_url(base: &str, value: &str) -> Option<String> {
     }
 }
 
-/// Parses a device description fetched from `location`.
+/// Parses a device description fetched from `location`: the first device
+/// (root or embedded) that is a MediaRenderer or has an OpenHome playlist.
 pub fn parse(document: &str, location: &str) -> Result<RendererDescription, String> {
     let document = roxmltree::Document::parse(document).map_err(|error| error.to_string())?;
     let base = document
@@ -82,15 +140,37 @@ pub fn parse(document: &str, location: &str) -> Result<RendererDescription, Stri
         .map(|text| text.trim().to_string())
         .filter(|text| text.starts_with("http://"))
         .unwrap_or_else(|| location.to_string());
+    let services_of = |device: roxmltree::Node<'_, '_>| -> Vec<ServiceUrls> {
+        device
+            .children()
+            .filter(|child| child.is_element() && child.tag_name().name() == "serviceList")
+            .flat_map(|list| list.children().filter(|node| node.is_element()))
+            .filter_map(|service| {
+                let text = |name: &str| child_text(service, name).filter(|value| !value.is_empty());
+                Some(ServiceUrls {
+                    service_type: text("serviceType")?,
+                    control_url: absolute_url(&base, &text("controlURL")?)?,
+                    scpd_url: text("SCPDURL")
+                        .and_then(|url| absolute_url(&base, &url))
+                        .unwrap_or_default(),
+                    event_url: text("eventSubURL").and_then(|url| absolute_url(&base, &url)),
+                })
+            })
+            .collect()
+    };
     let device = document
         .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "device")
         .find(|node| {
-            node.is_element()
-                && node.tag_name().name() == "device"
-                && child_text(*node, "deviceType")
-                    .is_some_and(|kind| kind.contains("device:MediaRenderer"))
+            child_text(*node, "deviceType")
+                .is_some_and(|kind| kind.contains("device:MediaRenderer"))
+                || services_of(*node).iter().any(|service| {
+                    service
+                        .service_type
+                        .contains("av-openhome-org:service:Playlist:")
+                })
         })
-        .ok_or_else(|| "not a UPnP MediaRenderer description".to_string())?;
+        .ok_or_else(|| "not a UPnP MediaRenderer or OpenHome description".to_string())?;
     let direct = |name: &str| {
         device
             .children()
@@ -103,20 +183,7 @@ pub fn parse(document: &str, location: &str) -> Result<RendererDescription, Stri
         .map(|udn| udn.trim_start_matches("uuid:").to_string())
         .filter(|udn| valid_udn(udn))
         .ok_or_else(|| "renderer description has no valid UDN".to_string())?;
-    let services: Vec<ServiceUrls> = device
-        .children()
-        .filter(|child| child.is_element() && child.tag_name().name() == "serviceList")
-        .flat_map(|list| list.children().filter(|node| node.is_element()))
-        .filter_map(|service| {
-            let text = |name: &str| child_text(service, name).filter(|value| !value.is_empty());
-            Some(ServiceUrls {
-                service_type: text("serviceType")?,
-                control_url: absolute_url(&base, &text("controlURL")?)?,
-                scpd_url: absolute_url(&base, &text("SCPDURL")?)?,
-                event_url: text("eventSubURL").and_then(|url| absolute_url(&base, &url)),
-            })
-        })
-        .collect();
+    let services = services_of(device);
     let find = |prefix: &str| {
         services
             .iter()
@@ -124,16 +191,41 @@ pub fn parse(document: &str, location: &str) -> Result<RendererDescription, Stri
             .cloned()
     };
     let av_transport = find("urn:schemas-upnp-org:service:AVTransport:")
-        .ok_or_else(|| "renderer has no AVTransport service".to_string())?;
+        .filter(|service| !service.scpd_url.is_empty());
+    let oh_playlist = find("urn:av-openhome-org:service:Playlist:");
+    if av_transport.is_none() && oh_playlist.is_none() {
+        return Err("renderer has neither an AVTransport nor an OpenHome playlist".to_string());
+    }
+    let icons = device
+        .children()
+        .filter(|child| child.is_element() && child.tag_name().name() == "iconList")
+        .flat_map(|list| list.children().filter(|node| node.is_element()))
+        .filter_map(|icon| {
+            Some(Icon {
+                mime: child_text(icon, "mimetype").unwrap_or_default(),
+                width: child_text(icon, "width")
+                    .and_then(|width| width.parse().ok())
+                    .unwrap_or(0),
+                url: absolute_url(&base, &child_text(icon, "url")?)?,
+            })
+        })
+        .collect();
     let model_name = direct("modelName").unwrap_or_else(|| "Media renderer".to_string());
     Ok(RendererDescription {
         friendly_name: direct("friendlyName").unwrap_or_else(|| model_name.clone()),
         manufacturer: direct("manufacturer").unwrap_or_default(),
         model_number: direct("modelNumber"),
+        model_description: direct("modelDescription"),
         model_name,
         av_transport,
         rendering_control: find("urn:schemas-upnp-org:service:RenderingControl:"),
         connection_manager: find("urn:schemas-upnp-org:service:ConnectionManager:"),
+        oh_playlist,
+        oh_volume: find("urn:av-openhome-org:service:Volume:"),
+        oh_time: find("urn:av-openhome-org:service:Time:"),
+        oh_info: find("urn:av-openhome-org:service:Info:"),
+        oh_product: find("urn:av-openhome-org:service:Product:"),
+        icons,
         udn,
     })
 }
@@ -233,14 +325,16 @@ mod tests {
         assert_eq!(description.udn, "5f9ec1b3-ed59-1900-4530-0005cd123456");
         assert_eq!(description.friendly_name, "Living Room AVR");
         assert_eq!(description.model(), "Denon AVR-X2800H");
+        let transport = description.av_transport.as_ref().expect("AVTransport");
         assert_eq!(
-            description.av_transport.control_url,
+            transport.control_url,
             "http://10.0.0.9:60006/upnp/control/AVTransport1"
         );
         assert_eq!(
-            description.av_transport.scpd_url,
+            transport.scpd_url,
             "http://10.0.0.9:60006/upnp/desc/AVTransport.xml"
         );
+        assert_eq!(description.control(), super::Control::UpnpAv);
         assert_eq!(
             description
                 .rendering_control
@@ -254,6 +348,63 @@ mod tests {
         assert!(parse("<root><device><deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType></device></root>", "http://h/").is_err());
         assert!(!valid_udn("../etc"));
         assert_eq!(absolute_url("file:///x", "/a"), None);
+    }
+
+    #[test]
+    fn reads_an_open_home_renderer_embedded_in_a_product_with_its_icons() {
+        let xml = r#"<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <URLBase>http://10.0.0.20:55178/</URLBase>
+  <device>
+    <deviceType>urn:linn-co-uk:device:Product:1</deviceType>
+    <friendlyName>Lounge</friendlyName>
+    <UDN>uuid:4c494e4e-0026-0f21-a0b5-01303738013f-root</UDN>
+    <deviceList>
+      <device>
+        <deviceType>urn:av-openhome-org:device:Source:1</deviceType>
+        <friendlyName>Lounge DS</friendlyName>
+        <manufacturer>Linn</manufacturer>
+        <modelName>Klimax DS</modelName>
+        <modelDescription>Network music player</modelDescription>
+        <UDN>uuid:4c494e4e-0026-0f21-a0b5-01303738013f</UDN>
+        <iconList>
+          <icon><mimetype>image/jpeg</mimetype><width>240</width><url>/icon-240.jpg</url></icon>
+          <icon><mimetype>image/png</mimetype><width>120</width><url>icon-120.png</url></icon>
+        </iconList>
+        <serviceList>
+          <service><serviceType>urn:av-openhome-org:service:Product:1</serviceType><controlURL>/ds/Product/control</controlURL><SCPDURL>/ds/Product/scpd.xml</SCPDURL></service>
+          <service><serviceType>urn:av-openhome-org:service:Playlist:1</serviceType><controlURL>/ds/Playlist/control</controlURL><SCPDURL>/ds/Playlist/scpd.xml</SCPDURL></service>
+          <service><serviceType>urn:av-openhome-org:service:Volume:2</serviceType><controlURL>/ds/Volume/control</controlURL><SCPDURL>/ds/Volume/scpd.xml</SCPDURL></service>
+          <service><serviceType>urn:av-openhome-org:service:Time:1</serviceType><controlURL>/ds/Time/control</controlURL><SCPDURL>/ds/Time/scpd.xml</SCPDURL></service>
+          <service><serviceType>urn:av-openhome-org:service:Info:1</serviceType><controlURL>/ds/Info/control</controlURL><SCPDURL>/ds/Info/scpd.xml</SCPDURL></service>
+        </serviceList>
+      </device>
+    </deviceList>
+  </device>
+</root>"#;
+        let description = parse(xml, "http://10.0.0.20:55178/description.xml").expect("OpenHome");
+        assert_eq!(description.friendly_name, "Lounge DS");
+        assert_eq!(description.model(), "Linn Klimax DS");
+        assert_eq!(description.control(), super::Control::OpenHome);
+        assert!(description.open_home() && description.av_transport.is_none());
+        assert_eq!(
+            description.oh_playlist.as_ref().unwrap().control_url,
+            "http://10.0.0.20:55178/ds/Playlist/control"
+        );
+        // The declared version is what SOAP actions must name.
+        assert_eq!(
+            description.oh_volume.as_ref().unwrap().service_type,
+            "urn:av-openhome-org:service:Volume:2"
+        );
+        assert_eq!(
+            description.best_icon().unwrap().url,
+            "http://10.0.0.20:55178/icon-120.png",
+            "a PNG beats a wider JPEG"
+        );
+        assert_eq!(
+            description.model_description.as_deref(),
+            Some("Network music player")
+        );
     }
 
     #[test]

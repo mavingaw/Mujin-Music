@@ -122,6 +122,85 @@ pub fn data_path(parts: &[&str]) -> PathBuf {
     path
 }
 
+/// A file the server keeps in its data folder. Its path is built only
+/// from the fixed names here, never from anything a request carries, and
+/// every write stays inside the data folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataFile {
+    /// Parson Bridges added by address.
+    Bridges,
+    /// UPnP and AirPlay players added by address.
+    NetworkPlayers,
+    /// Device setup of the old server-output picker (imported into zones).
+    LegacyNativeOutputs,
+    /// DSP chains of the old server-output picker (imported into zones).
+    LegacyNativeDsp,
+    /// Network players of the old server-output picker.
+    LegacyNetworkOutputs,
+}
+
+impl DataFile {
+    fn parts(self) -> &'static [&'static str] {
+        match self {
+            Self::Bridges => &["Outputs", "bridges.json"],
+            Self::NetworkPlayers => &["Outputs", "network-players.json"],
+            Self::LegacyNativeOutputs => &["native-outputs.json"],
+            Self::LegacyNativeDsp => &["native-dsp.json"],
+            Self::LegacyNetworkOutputs => &["network-outputs.json"],
+        }
+    }
+
+    pub fn path(self) -> PathBuf {
+        data_path(self.parts())
+    }
+
+    /// The file's contents; `None` when it does not exist (or cannot be
+    /// read).
+    pub fn read(self) -> Option<Vec<u8>> {
+        fs::read(self.path()).ok()
+    }
+
+    /// Replaces the file atomically (a temporary file in the same folder,
+    /// then a rename), creating its folder when needed.
+    pub fn write(self, bytes: &[u8]) -> std::io::Result<()> {
+        write_inside(&data_path(&[]), self.parts(), bytes)
+    }
+
+    /// Renames the file to `<name>.imported` once its contents moved
+    /// elsewhere, so it is read only once.
+    pub fn retire(self) -> std::io::Result<()> {
+        let path = self.path();
+        let mut retired = path.clone().into_os_string();
+        retired.push(".imported");
+        fs::rename(path, retired)
+    }
+}
+
+/// Writes `bytes` to `root` joined with `parts` (fixed names, no
+/// separators or parent references), atomically.
+fn write_inside(root: &Path, parts: &[&str], bytes: &[u8]) -> std::io::Result<()> {
+    let safe = |part: &&str| {
+        !part.is_empty()
+            && *part != "."
+            && *part != ".."
+            && !part.contains(['/', '\\'])
+            && !part.contains('\0')
+    };
+    let Some((name, folders)) = parts.split_last() else {
+        return Err(std::io::Error::other("no file name"));
+    };
+    if !parts.iter().all(safe) {
+        return Err(std::io::Error::other("invalid data file name"));
+    }
+    let mut folder = root.to_path_buf();
+    folder.extend(folders);
+    fs::create_dir_all(&folder)?;
+    let path = folder.join(name);
+    let temp = folder.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&temp, bytes)?;
+    fs::rename(&temp, &path)
+}
+
 fn copy_restore_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -504,8 +583,35 @@ mod tests {
     use super::{
         allowed_origins_for, apply_reset_at, load_or_create_instance_id_at, load_or_create_key_at,
         load_or_create_session_secret_at, parse_bind_address, parse_port, parse_public_url,
-        persist_secret, secure_cookies_for,
+        persist_secret, secure_cookies_for, write_inside,
     };
+
+    #[test]
+    fn data_files_are_written_atomically_and_only_inside_the_data_folder() {
+        let root = std::env::temp_dir().join(format!("parson-data-{}", uuid::Uuid::new_v4()));
+        write_inside(&root, &["Outputs", "network-players.json"], b"[]").unwrap();
+        assert_eq!(
+            std::fs::read(root.join("Outputs").join("network-players.json")).unwrap(),
+            b"[]"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(root.join("Outputs"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "the temporary file was renamed");
+        for parts in [
+            &["..", "escape.json"][..],
+            &["Outputs", "../escape.json"][..],
+            &["a\\b.json"][..],
+            &[][..],
+            &[""][..],
+        ] {
+            assert!(write_inside(&root, parts, b"x").is_err(), "{parts:?}");
+        }
+        assert!(!root.with_file_name("escape.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn streaming_token_keys_are_created_once_and_reject_corruption() {

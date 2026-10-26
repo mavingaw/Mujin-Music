@@ -9,6 +9,8 @@
 //! volume, leveling, DSP) is shown in the zone's signal path.
 
 pub mod engine;
+#[cfg(test)]
+mod engine_tests;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -18,10 +20,10 @@ use futures::future::BoxFuture;
 pub use parson_output::simulated;
 pub use parson_output::{Backend, DeviceInfo, HardwareVolume, SampleFormat, Sink, StreamFormat};
 
+use super::FormatLimits;
 use super::renderer::{
     Renderer, RendererInfo, RendererSettings, RendererState, TrackRequest, to_device_scale,
 };
-use super::{FormatLimits, SourceFormat};
 use crate::zones::{DeviceVolumeRange, VolumeMode, ZoneKind};
 
 /// What a device plays untouched: any decodable lossless file at a rate
@@ -35,91 +37,8 @@ pub fn device_limits(device: &DeviceInfo) -> FormatLimits {
         alac: true,
         mp3: true,
         aac: true,
+        lpcm: false,
     }
-}
-
-/// The stream format for `source` on `device`, and whether it is exact
-/// (no resampling, no lost bits, same channels).
-pub fn choose_format(
-    device: &DeviceInfo,
-    source: &SourceFormat,
-    max: FormatLimits,
-) -> (StreamFormat, bool) {
-    let allowed_rates: Vec<u32> = device
-        .sample_rates()
-        .iter()
-        .copied()
-        .filter(|rate| *rate <= max.max_sample_rate)
-        .collect();
-    let rates = if allowed_rates.is_empty() {
-        device.sample_rates().to_vec()
-    } else {
-        allowed_rates
-    };
-    let source_rate = source.sample_rate.unwrap_or(44_100);
-    let family = |rate: u32| rate.is_multiple_of(11_025);
-    let sample_rate = if rates.contains(&source_rate) {
-        source_rate
-    } else {
-        // Prefer the same rate family (no 44.1 -> 48 conversion), highest
-        // rate at or below the source, then anything at or below it.
-        rates
-            .iter()
-            .copied()
-            .filter(|rate| family(*rate) == family(source_rate) && *rate <= source_rate)
-            .max()
-            .or_else(|| {
-                rates
-                    .iter()
-                    .copied()
-                    .filter(|rate| *rate <= source_rate)
-                    .max()
-            })
-            .or_else(|| rates.iter().copied().min())
-            .unwrap_or(48_000)
-    };
-    let lossless = source.lossless();
-    let source_bits = if lossless {
-        source.bit_depth.unwrap_or(16)
-    } else {
-        // Decoded lossy audio has more resolution than 16 bits.
-        32
-    };
-    let pcm: Vec<SampleFormat> = device
-        .sample_formats()
-        .iter()
-        .copied()
-        .filter(|format| !format.is_dsd())
-        .collect();
-    let usable: Vec<SampleFormat> = pcm
-        .iter()
-        .copied()
-        .filter(|format| format.bits() <= max.max_bit_depth.max(16))
-        .collect();
-    let formats = if usable.is_empty() { pcm } else { usable };
-    // The smallest container that holds every source bit, else the largest.
-    let mut by_size = formats.clone();
-    by_size.sort_by_key(|format| format.bits());
-    let format = by_size
-        .iter()
-        .copied()
-        .find(|format| format.bits() >= source_bits)
-        .or_else(|| by_size.last().copied())
-        .unwrap_or(SampleFormat::S16);
-    let source_channels = source.channels.unwrap_or(2).max(1);
-    let channels = source_channels.min(device.max_channels());
-    let exact = sample_rate == source_rate
-        && format.bits() >= source_bits.min(32)
-        && channels == source_channels
-        && lossless;
-    (
-        StreamFormat {
-            sample_rate,
-            sample_format: format,
-            channels,
-        },
-        exact,
-    )
 }
 
 /// Where a manager's devices are: this machine, a Parson Bridge, an
@@ -131,23 +50,40 @@ pub struct Placement {
     pub kind: ZoneKind,
     /// Shown before the device description, e.g. `kitchen-pi · Parson Bridge`.
     pub host: Option<String>,
+    /// The machine the devices are attached to, for the signal path; this
+    /// server when `None`.
+    pub machine: Option<String>,
     /// Added to the signal path's output, e.g. `on kitchen-pi via Parson Bridge`.
     pub route: Option<String>,
     /// A step every stream takes (sync corrections of a group).
     pub step: Option<String>,
     /// Facts the zone shows (what was tested, what the protocol allows).
     pub notes: Vec<String>,
+    /// Only devices that can be played become zones (a receiver that needs
+    /// pairing is listed in the status, not as a zone).
+    pub playable_only: bool,
 }
 
 impl Placement {
+    fn engine_route(&self) -> engine::Route {
+        engine::Route {
+            host: self.machine.clone(),
+            suffix: self.route.clone(),
+            step: self.step.clone(),
+            modeless: self.kind == ZoneKind::Airplay,
+        }
+    }
+
     pub fn local() -> Self {
         Self {
             prefix: "device:".to_string(),
             kind: ZoneKind::Device,
             host: None,
+            machine: None,
             route: None,
             step: None,
             notes: Vec::new(),
+            playable_only: false,
         }
     }
 }
@@ -191,11 +127,8 @@ impl DeviceRenderer {
                 backend.clone(),
                 device.clone(),
                 changed,
-                engine::Route {
-                    suffix: placement.route.clone(),
-                    step: placement.step.clone(),
-                    modeless: placement.kind == ZoneKind::Airplay,
-                },
+                placement.engine_route(),
+                crate::outputs::pipeline::global(),
             ),
             zone_id,
             device: Mutex::new(device),
@@ -275,8 +208,18 @@ impl Renderer for DeviceRenderer {
             gapless: true,
             exclusive_capable: self.placement.kind != ZoneKind::Airplay,
             network: false,
+            endpoint: device.network.clone(),
             notes,
         }
+    }
+
+    fn endpoints(&self, output: &parson_output::OutputSettings) -> Vec<crate::zones::ZoneEndpoint> {
+        let device = self.device();
+        let mut endpoint = crate::zones::ZoneEndpoint::for_device(&self.zone_id, &device, output);
+        if let Some(host) = &self.placement.host {
+            endpoint.detail = format!("{host} · {}", device.detail);
+        }
+        vec![endpoint]
     }
 
     fn state(&self) -> RendererState {
@@ -376,22 +319,33 @@ pub struct DeviceManager {
     changed: tokio::sync::broadcast::Sender<()>,
     note: Option<String>,
     placement: Placement,
+    /// Decoders and filters its devices play with.
+    pipeline: Arc<crate::outputs::pipeline::Pipeline>,
 }
 
 impl DeviceManager {
-    /// `PARSON_LOCAL_AUDIO`: `on` uses the system's audio API (ALSA on
-    /// Linux, WASAPI exclusive mode on Windows, CoreAudio hog mode on
-    /// macOS), `simulated` two simulated DACs (tests and demos), anything
-    /// else (or unset) keeps device zones off.
+    /// `PARSON_LOCAL_AUDIO`: `off` keeps device zones off, `simulated`
+    /// lists two simulated DACs (tests and demos; the older
+    /// `PARSON_NATIVE_OUTPUT_SIMULATE=1` too), anything else (or unset) uses
+    /// the system's audio API (ALSA on Linux, WASAPI exclusive mode on
+    /// Windows, CoreAudio hog mode on macOS).
     pub fn from_env() -> Option<Self> {
-        let value = std::env::var("PARSON_LOCAL_AUDIO").ok()?;
+        let value = std::env::var("PARSON_LOCAL_AUDIO")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                std::env::var("PARSON_NATIVE_OUTPUT_SIMULATE")
+                    .is_ok_and(|value| value == "1")
+                    .then(|| "simulated".to_string())
+            })
+            .unwrap_or_else(|| "on".to_string());
         match value.trim().to_ascii_lowercase().as_str() {
             "simulated" | "simulate" => Some(Self::new(
                 Arc::new(simulated::SimulatedBackend::demo()),
                 None,
             )),
-            "1" | "on" | "true" | "yes" | "native" => Some(Self::native()),
-            _ => None,
+            "0" | "off" | "false" | "no" | "disabled" => None,
+            _ => Some(Self::native()),
         }
     }
 
@@ -418,6 +372,7 @@ impl DeviceManager {
                 changed: tokio::sync::broadcast::channel(16).0,
                 note: Some(format!("Audio devices are unavailable: {error}.")),
                 placement: Placement::local(),
+                pipeline: crate::outputs::pipeline::global(),
             },
         }
     }
@@ -439,12 +394,30 @@ impl DeviceManager {
         placement: Placement,
         changed: tokio::sync::broadcast::Sender<()>,
     ) -> Self {
+        Self::with_pipeline(
+            backend,
+            note,
+            placement,
+            changed,
+            crate::outputs::pipeline::global(),
+        )
+    }
+
+    /// [`DeviceManager::placed`] with its own decoders and filters.
+    pub fn with_pipeline(
+        backend: Arc<dyn Backend>,
+        note: Option<String>,
+        placement: Placement,
+        changed: tokio::sync::broadcast::Sender<()>,
+        pipeline: Arc<crate::outputs::pipeline::Pipeline>,
+    ) -> Self {
         let manager = Self {
             backend: Some(backend),
             players: Mutex::new(HashMap::new()),
             changed,
             note,
             placement,
+            pipeline,
         };
         manager.refresh();
         manager
@@ -473,7 +446,10 @@ impl DeviceManager {
         let Some(backend) = &self.backend else {
             return;
         };
-        let devices = backend.devices();
+        let mut devices = backend.devices();
+        if self.placement.playable_only {
+            devices.retain(|device| device.caps.is_some());
+        }
         let mut changed = false;
         {
             let mut players = self.lock();
@@ -499,11 +475,8 @@ impl DeviceManager {
                                 backend.clone(),
                                 device.clone(),
                                 self.changed.clone(),
-                                engine::Route {
-                                    suffix: self.placement.route.clone(),
-                                    step: self.placement.step.clone(),
-                                    modeless: self.placement.kind == ZoneKind::Airplay,
-                                },
+                                self.placement.engine_route(),
+                                self.pipeline.clone(),
                             ),
                             placement: self.placement.clone(),
                         };
@@ -565,53 +538,6 @@ impl Drop for DeviceManager {
 
 #[cfg(test)]
 mod tests {
-    use parson_output::DeviceCaps;
-    use parson_output::simulated::simulated_device;
-
-    use super::{DeviceInfo, HardwareVolume, SampleFormat, choose_format, device_limits};
-    use crate::outputs::{FormatLimits, SourceFormat};
-
-    fn caps(rates: &[u32], formats: &[SampleFormat]) -> DeviceCaps {
-        DeviceCaps {
-            sample_rates: rates.to_vec(),
-            sample_formats: formats.to_vec(),
-            min_channels: 1,
-            max_channels: 2,
-            dsd_formats: Vec::new(),
-            dsd_rates: Vec::new(),
-        }
-    }
-
-    fn dac() -> DeviceInfo {
-        simulated_device(
-            "dac",
-            "DAC",
-            "USB",
-            caps(
-                &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
-                &[
-                    SampleFormat::S16,
-                    SampleFormat::S24Packed,
-                    SampleFormat::S32,
-                ],
-            ),
-            Some(HardwareVolume {
-                min_db: -127.5,
-                max_db: 0.0,
-                step_db: 0.5,
-            }),
-        )
-    }
-
-    fn flac(rate: u32, bits: u8) -> SourceFormat {
-        SourceFormat {
-            codec: Some("flac".into()),
-            sample_rate: Some(rate),
-            bit_depth: Some(bits),
-            channels: Some(2),
-        }
-    }
-
     #[test]
     fn device_zones_on_windows_and_mac_say_what_is_untested() {
         for backend in ["WASAPI", "CoreAudio"] {
@@ -619,56 +545,5 @@ mod tests {
             assert!(note.contains("not yet on real hardware"), "{note}");
         }
         assert!(super::untested_note("ALSA").is_none());
-    }
-
-    #[test]
-    fn picks_the_exact_format_when_the_device_takes_it() {
-        let device = dac();
-        let limits = device_limits(&device);
-        let (format, exact) = choose_format(&device, &flac(96_000, 24), limits);
-        assert!(exact);
-        assert_eq!(format.sample_rate, 96_000);
-        assert_eq!(format.sample_format, SampleFormat::S24Packed);
-        let (format, exact) = choose_format(&device, &flac(44_100, 16), limits);
-        assert!(exact);
-        assert_eq!(format.sample_format, SampleFormat::S16);
-        // 352.8 kHz goes down within its family, not to 192 kHz.
-        let (format, exact) = choose_format(&device, &flac(352_800, 24), limits);
-        assert!(!exact);
-        assert_eq!(format.sample_rate, 176_400);
-        // A user maximum of 96 kHz applies.
-        let (format, _) = choose_format(
-            &device,
-            &flac(192_000, 24),
-            limits.capped(Some(96_000), None),
-        );
-        assert_eq!(format.sample_rate, 96_000);
-    }
-
-    #[test]
-    fn hdmi_style_outputs_convert_and_say_so() {
-        let device = DeviceInfo {
-            caps: Some(caps(&[48_000], &[SampleFormat::S16])),
-            hardware_volume: None,
-            ..dac()
-        };
-        let (format, exact) = choose_format(&device, &flac(44_100, 24), device_limits(&device));
-        assert!(!exact);
-        assert_eq!(
-            (format.sample_rate, format.sample_format),
-            (48_000, SampleFormat::S16)
-        );
-        let (format, exact) = choose_format(
-            &device,
-            &SourceFormat {
-                codec: Some("mp3".into()),
-                sample_rate: Some(48_000),
-                bit_depth: None,
-                channels: Some(2),
-            },
-            FormatLimits::SONOS,
-        );
-        assert!(!exact, "lossy sources are never called bit-perfect");
-        assert_eq!(format.sample_rate, 48_000);
     }
 }

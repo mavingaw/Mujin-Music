@@ -135,6 +135,23 @@ fn song(id: &str, path: &Path, seconds: f64, codec: &str, rate: u32, bits: Optio
     }
 }
 
+/// The chain the old bass/crossfeed knobs made: a 100 Hz shelf, crossfeed.
+fn bass_and_crossfeed() -> DspSettings {
+    let mut dsp = DspSettings::default();
+    dsp.eq.enabled = true;
+    dsp.eq.preset = "custom".into();
+    dsp.eq.bands = vec![parson_output::dsp::EqBand {
+        id: "band-1".into(),
+        enabled: true,
+        filter_type: parson_output::dsp::EqFilterType::Lowshelf,
+        frequency: 100.0,
+        gain_db: 3.0,
+        q: 0.707,
+    }];
+    dsp.crossfeed.enabled = true;
+    dsp
+}
+
 fn library(songs: Vec<Song>) -> LibraryCache {
     let album = Album {
         id: "album-1".to_string(),
@@ -296,14 +313,18 @@ async fn upnp_renderer_plays_gapless_converts_and_follows_the_queue_end_to_end()
         sink: "http-get:*:audio/flac:*,http-get:*:audio/L16;rate=96000;channels=2:*,http-get:*:audio/L24;rate=96000;channels=2:*,http-get:*:audio/mpeg:*",
         volume_max: 30,
         gapless: true,
+        ..FakeRendererSpec::default()
     })
     .await;
     let controller = Arc::new(
-        UpnpController::new(UpnpConfig {
-            ssdp_targets: vec![renderer.ssdp_address],
-            static_locations: Vec::new(),
-            search_timeout: Duration::from_millis(400),
-        })
+        UpnpController::new(
+            UpnpConfig {
+                ssdp_targets: vec![renderer.ssdp_address],
+                static_locations: Vec::new(),
+                search_timeout: Duration::from_millis(400),
+            },
+            None,
+        )
         .expect("controller"),
     );
     let service = web::Data::new(ZoneService::new(None, None));
@@ -919,13 +940,13 @@ async fn audio_device_zones_play_bit_perfect_and_follow_device_setup_end_to_end(
         stream
             .steps
             .iter()
-            .any(|step| step == "Resampled 44.1 kHz to 48 kHz (the device does not take 44.1 kHz)")
+            .any(|step| step.starts_with("Sample rate conversion: 44.1kHz to 48kHz ("))
     );
     assert!(
         stream
             .steps
             .iter()
-            .any(|step| step.starts_with("Reduced to 16-bit"))
+            .any(|step| step == "Bit depth reduction: 24bit to 16bit, TPDF dither")
     );
     assert!(
         drive_until(&service, |service| zone(service, &cache, hdmi).status
@@ -943,12 +964,7 @@ async fn audio_device_zones_play_bit_perfect_and_follow_device_setup_end_to_end(
             ZoneSettingsPatch {
                 max_sample_rate: Some(Some(48_000)),
                 exclusive: Some(false),
-                dsp: Some(ZoneDsp {
-                    enabled: true,
-                    bass_db: 3,
-                    crossfeed: true,
-                    ..ZoneDsp::default()
-                }),
+                dsp: Some(bass_and_crossfeed()),
                 ..ZoneSettingsPatch::default()
             },
             Viewer::default(),
@@ -987,7 +1003,13 @@ async fn audio_device_zones_play_bit_perfect_and_follow_device_setup_end_to_end(
         stream
             .steps
             .iter()
-            .any(|step| step == "DSP: Preamp \u{2212}3 dB, Bass +3 dB, Crossfeed")
+            .any(|step| step == "Parametric EQ: 1 band: 100 Hz low shelf +3.0 dB")
+    );
+    assert!(
+        stream
+            .steps
+            .iter()
+            .any(|step| step.starts_with("Crossfeed: Medium"))
     );
     assert!(
         drive_until(&service, |service| zone(service, &cache, dac).status
@@ -1011,7 +1033,7 @@ async fn audio_device_zones_play_bit_perfect_and_follow_device_setup_end_to_end(
                 volume_mode: Some(VolumeMode::Fixed),
                 max_sample_rate: Some(None),
                 exclusive: Some(true),
-                dsp: Some(ZoneDsp::default()),
+                dsp: Some(DspSettings::default()),
                 ..ZoneSettingsPatch::default()
             },
             Viewer::default(),
@@ -1389,19 +1411,18 @@ async fn chromecast_zone_reports_limits_takes_commands_and_serves_receiver_flac(
     let _ = std::fs::remove_dir_all(&directory);
 }
 
-/// Manual helper: runs a fake UPnP renderer until killed and prints its
-/// description URL for `PARSON_UPNP_RENDERERS`.
+/// Manual helper: runs a fake UPnP renderer (an OpenHome one with
+/// `PARSON_FAKE_OPENHOME=1`) until killed and prints its description URL,
+/// for `PARSON_UPNP_RENDERERS` or Settings → Audio outputs → Add a network
+/// player.
 #[actix_web::test]
 #[ignore = "manual: serves a fake UPnP renderer until interrupted"]
 async fn serve_fake_upnp_renderer() {
     let renderer = FakeRenderer::start(FakeRendererSpec {
-        udn: "5f9ec1b3-ed59-1900-4530-00a0deadbeef",
-        name: "Living Room Streamer",
-        manufacturer: "Acme Audio",
-        model: "Stream 9",
         sink: "http-get:*:audio/flac:*,http-get:*:audio/L16;rate=96000;channels=2:*,http-get:*:audio/L24;rate=96000;channels=2:*,http-get:*:audio/mpeg:*,http-get:*:audio/mp4:*",
-        volume_max: 30,
-        gapless: true,
+        openhome: std::env::var("PARSON_FAKE_OPENHOME").is_ok_and(|value| value == "1"),
+        icon: true,
+        ..FakeRendererSpec::default()
     })
     .await;
     println!("PARSON_UPNP_RENDERERS={}", renderer.location);
@@ -1987,8 +2008,10 @@ fn cd_flac_from_raw(directory: &Path, name: &str, raw: &[u8]) -> PathBuf {
 
 #[actix_web::test]
 async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
-    use crate::outputs::airplay::fake::FakeReceiver;
-    use crate::outputs::airplay::{AirplayController, Receiver};
+    use crate::outputs::airplay::AirplayController;
+    use parson_output::network::NetworkRegistry;
+    use parson_output::network::fakes::{FakeAirPlayConfig, FakeAirPlayReceiver};
+    use parson_output::network::raop::{RaopTxt, Receiver};
     if !ffmpeg_available() {
         eprintln!("ffmpeg not installed; skipping");
         return;
@@ -2011,23 +2034,26 @@ async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
         .await;
     let cache = lifecycle.cache().await.expect("cache");
 
-    let receiver = FakeReceiver::start(false);
-    let airplay = AirplayController::new();
+    // The receiver loses its fifth packet once and asks for it again.
+    let receiver = FakeAirPlayReceiver::start(FakeAirPlayConfig {
+        drop_packet: Some(5),
+        ..FakeAirPlayConfig::default()
+    })
+    .expect("fake receiver");
+    let airplay = AirplayController::new(Arc::new(NetworkRegistry::default()));
     airplay.add_receiver(Receiver {
-        id: "aabbccddeeff".into(),
+        id: "airplay:aabbccddeeff".into(),
         name: "Kitchen speaker".into(),
-        model: Some("AirPort10,115".into()),
-        address: receiver.address.to_string(),
-        supported: true,
-        reason: None,
+        address: receiver.address,
+        txt: RaopTxt::from_pairs([("am", "AirPort10,115"), ("cn", "0,1"), ("et", "0,3")]),
+        manual: false,
     });
     airplay.add_receiver(Receiver {
-        id: "homepod".into(),
+        id: "airplay:homepod".into(),
         name: "HomePod".into(),
-        model: Some("AudioAccessory5,1".into()),
-        address: "127.0.0.1:9".into(),
-        supported: false,
-        reason: Some("only AirPlay 2".into()),
+        address: "127.0.0.1:9".parse().expect("address"),
+        txt: RaopTxt::from_pairs([("am", "AudioAccessory5,1"), ("et", "4")]),
+        manual: false,
     });
     let service = ZoneService::new(None, None);
     service.set_outputs(Arc::new(Outputs {
@@ -2047,7 +2073,17 @@ async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
         .expect("AirPlay zone");
     assert_eq!(speaker.kind, ZoneKind::Airplay);
     assert_eq!(speaker.ecosystem, "airplay");
-    assert_eq!(speaker.device, "AirPlay · AirPort10,115");
+    assert_eq!(
+        speaker.device,
+        format!(
+            "AirPlay · AirPort Express (2nd generation) · {}",
+            receiver.address.ip()
+        )
+    );
+    let endpoint = &speaker.endpoints[0];
+    let network = endpoint.network.as_ref().expect("network identity");
+    assert_eq!(network.manufacturer.as_deref(), Some("Apple"));
+    assert_eq!(endpoint.driver.as_deref(), Some("AirPlay"));
     assert!(!speaker.settings.supports.exclusive);
     assert!(speaker.notes[0].contains("44.1 kHz/16-bit lossless (ALAC)"));
     assert!(
@@ -2082,6 +2118,9 @@ async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
         .and_then(|output| output.stream)
         .expect("signal path");
     assert!(stream.bit_perfect, "{stream:?}");
+    // The samples arrive intact, but the receiver's own volume and
+    // processing make AirPlay High quality at best (as Roon rates it).
+    assert_eq!(stream.quality, crate::zones::StreamQuality::High);
     assert_eq!(
         stream.output,
         "44.1 kHz/16-bit (S16_LE) to Kitchen speaker over AirPlay (ALAC)"
@@ -2105,34 +2144,27 @@ async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
         .await,
         "plays to the end"
     );
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let state = receiver.state();
+    let state = receiver.wait_for(Duration::from_secs(3), |state| state.torn_down);
     assert_eq!(
         &state.methods[..4],
         &["OPTIONS", "ANNOUNCE", "SETUP", "RECORD"]
     );
-    assert!(
-        state.methods.contains(&"TEARDOWN".to_string()),
-        "{:?}",
-        state.methods
-    );
-    assert!(state.sdp.contains("a=rtpmap:96 AppleLossless"));
-    assert!(
-        state
-            .sdp
-            .contains("a=fmtp:96 352 0 16 40 10 14 2 255 0 0 44100")
-    );
-    assert_eq!(state.bad_frames, 0);
-    assert_eq!(state.markers, 1, "the first packet is marked");
-    assert!(state.syncs >= 1);
+    assert!(state.torn_down, "{:?}", state.methods);
+    let sdp = state.sdp.clone().expect("ANNOUNCE");
+    assert!(sdp.contains("a=rtpmap:96 AppleLossless"));
+    assert!(sdp.contains("a=fmtp:96 352 0 16 40 10 14 2 255 0 0 44100"));
+    assert!(state.decode_errors.is_empty(), "{:?}", state.decode_errors);
+    assert_eq!(state.marker_packets, 1, "the first packet is marked");
+    assert!(state.first_sync_seen && state.sync_packets >= 1);
     assert_eq!(state.sync_latency, Some(88_200));
-    assert_eq!(
-        state.timing_replies, 1,
-        "answers the receiver's clock requests"
-    );
+    assert!(state.timing_ok, "answers the receiver's clock requests");
     assert_eq!(state.resent, 1, "resends the packet the receiver lost");
     assert_eq!(state.volumes.last(), Some(&-15.0));
-    let pcm = state.pcm();
+    let pcm: Vec<u8> = state
+        .samples
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect();
     assert!(pcm.len() >= raw.len() && pcm.len() < raw.len() + 352 * 4);
     assert!(
         pcm[..raw.len()] == raw[..],
@@ -2172,13 +2204,13 @@ async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
         stream
             .steps
             .iter()
-            .any(|step| step.contains("Resampled 96 kHz to 44.1 kHz"))
+            .any(|step| step.starts_with("Sample rate conversion: 96kHz to 44.1kHz ("))
     );
     assert!(
         stream
             .steps
             .iter()
-            .any(|step| step.contains("Reduced to 16-bit"))
+            .any(|step| step == "Bit depth reduction: 24bit to 16bit, TPDF dither")
     );
     service
         .command(USER, id, ZoneCommand::Stop, None)
@@ -2703,4 +2735,434 @@ async fn audio_device_standby_releases_the_dac_and_play_wakes_it_where_it_stoppe
         "the DAC's own volume stays untouched"
     );
     std::fs::remove_dir_all(&directory).ok();
+}
+
+/// UPnP renderers and the server's routes, for the OpenHome and
+/// by-address tests.
+async fn upnp_zones(
+    controller: Arc<UpnpController>,
+    lifecycle: Arc<LibraryLifecycle>,
+) -> (web::Data<ZoneService>, actix_web::dev::ServerHandle) {
+    let service = web::Data::new(ZoneService::new(None, None));
+    service.set_outputs(Arc::new(Outputs {
+        upnp: Some(controller),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+    let (port, server) = serve_device_routes(service.clone(), web::Data::from(lifecycle)).await;
+    service.set_port(port);
+    (service, server)
+}
+
+#[actix_web::test]
+async fn openhome_renderers_play_gapless_from_their_playlist_and_report_what_they_decode() {
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-openhome-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let a = tone(&directory, "a", "flac", 96_000, 4.0);
+    let b = tone(&directory, "b", "flac", 96_000, 4.0);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![
+            song("song-a", &a, 4.0, "flac", 96_000, Some(24)),
+            song("song-b", &b, 4.0, "flac", 96_000, Some(24)),
+        ]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+    let renderer = FakeRenderer::start(FakeRendererSpec {
+        udn: "4c494e4e-0026-0f21-a0b5-01303738013f",
+        name: "Lounge DS",
+        manufacturer: "Linn",
+        model: "Klimax DS",
+        sink: "http-get:*:audio/flac:*,http-get:*:audio/x-flac;rate=192000:*,http-get:*:audio/mpeg:*",
+        volume_max: 100,
+        openhome: true,
+        icon: true,
+        ..FakeRendererSpec::default()
+    })
+    .await;
+    let controller = Arc::new(
+        UpnpController::new(
+            UpnpConfig {
+                ssdp_targets: vec![renderer.ssdp_address],
+                static_locations: Vec::new(),
+                search_timeout: Duration::from_millis(400),
+            },
+            None,
+        )
+        .expect("controller"),
+    );
+    let (service, server) = upnp_zones(controller.clone(), lifecycle.clone()).await;
+
+    // --- Found by the OpenHome SSDP search, described with its identity.
+    assert_eq!(controller.discover().await.expect("discovery"), 1);
+    let zone_id = "upnp:4c494e4e-0026-0f21-a0b5-01303738013f";
+    let listed = zone(&service, &cache, zone_id);
+    assert_eq!(listed.kind, ZoneKind::Upnp);
+    assert_eq!(listed.name, "Lounge DS");
+    assert_eq!(listed.device, "Linn Klimax DS");
+    assert!(
+        listed
+            .notes
+            .iter()
+            .any(|note| note.contains("OpenHome playlist"))
+    );
+    let endpoint = &listed.endpoints[0];
+    assert_eq!(endpoint.driver.as_deref(), Some("OpenHome"));
+    assert!(endpoint.has_icon);
+    let network = endpoint.network.as_ref().expect("identity");
+    assert_eq!(
+        network.protocol,
+        parson_output::network::NetworkProtocol::OpenHome
+    );
+    assert_eq!(network.manufacturer.as_deref(), Some("Linn"));
+    assert!(network.reports_format);
+    assert_eq!(
+        endpoint
+            .dsp_support
+            .as_ref()
+            .map(|support| support.available),
+        Some(true),
+        "the server's DSP chain runs before the renderer"
+    );
+    let (content_type, icon) = controller.icon(zone_id).await.expect("icon");
+    assert_eq!(content_type, "image/png");
+    assert_eq!(icon, crate::outputs::upnp::fake::FAKE_ICON);
+    let range = listed
+        .volume
+        .as_ref()
+        .and_then(|volume| volume.device_range.clone())
+        .expect("OpenHome volume");
+    assert_eq!((range.min, range.max), (0.0, 100.0));
+
+    // --- Both tracks go into the playlist; the first starts.
+    service
+        .command(
+            USER,
+            zone_id,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-a", "song-b"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let state = renderer.snapshot();
+    assert_eq!(
+        state.playlist.len(),
+        2,
+        "the next track is queued gaplessly"
+    );
+    assert!(state.playlist[0].1.contains("/zones/render/song-a/"));
+    assert!(state.playlist[1].1.contains("/zones/render/song-b/"));
+    assert_eq!(state.playlist_id, state.playlist[0].0);
+    for action in ["DeleteAll", "Insert", "SeekId", "Play"] {
+        assert!(!state.calls(action).is_empty(), "{action} was called");
+    }
+    // The file reaches it untouched; it says it decodes exactly that.
+    assert!(renderer.wait_for(|state| !state.fetches.is_empty()).await);
+    let fetch = renderer.snapshot().fetches[0].clone();
+    assert_eq!(fetch.content_type.as_deref(), Some("audio/flac"));
+    assert_eq!(
+        fetch.bytes as u64,
+        std::fs::metadata(&a).expect("file").len()
+    );
+    assert!(
+        drive_until(&service, |service| {
+            zone(service, &cache, zone_id)
+                .output
+                .and_then(|output| output.stream)
+                .is_some_and(|stream| {
+                    stream
+                        .steps
+                        .iter()
+                        .any(|step| step.starts_with("Renderer reports"))
+                })
+        })
+        .await
+    );
+    let stream = zone(&service, &cache, zone_id)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(stream.bit_perfect, "{stream:?}");
+    assert!(
+        stream.steps.contains(
+            &"Renderer reports: decoding FLAC 96 kHz/24-bit, lossless, exactly what Parson sends"
+                .to_string()
+        ),
+        "{:?}",
+        stream.steps
+    );
+    assert_eq!(stream.quality, crate::zones::StreamQuality::Lossless);
+
+    // --- Volume on its OpenHome scale; pause.
+    service
+        .command(
+            USER,
+            zone_id,
+            ZoneCommand::SetVolume {
+                volume: 40,
+                member_id: None,
+                above_comfort: false,
+            },
+            None,
+        )
+        .await
+        .expect("volume");
+    assert_eq!(renderer.snapshot().volume, 40);
+    service
+        .command(USER, zone_id, ZoneCommand::Pause, None)
+        .await
+        .expect("pause");
+    assert_eq!(renderer.snapshot().transport, "PAUSED_PLAYBACK");
+    service
+        .command(USER, zone_id, ZoneCommand::Play, None)
+        .await
+        .expect("play");
+
+    // --- Gapless: the renderer moves to the queued playlist entry itself.
+    renderer.finish_track();
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, zone_id)
+            .queue
+            .current_position
+            == 1)
+        .await
+    );
+    assert!(renderer.wait_for(|state| state.fetches.len() >= 2).await);
+    let state = renderer.snapshot();
+    assert_eq!(
+        state.playlist_id, state.playlist[1].0,
+        "it plays the queued entry"
+    );
+    assert_eq!(
+        state.calls("Insert").len(),
+        2,
+        "nothing more to queue after it"
+    );
+    service
+        .command(USER, zone_id, ZoneCommand::Stop, None)
+        .await
+        .expect("stop");
+    server.stop(true).await;
+
+    // --- A renderer that resamples internally is caught by its own report.
+    let resampling = FakeRenderer::start(FakeRendererSpec {
+        udn: "4c494e4e-0026-0f21-a0b5-01303738f00d",
+        name: "Kitchen DS",
+        sink: "http-get:*:audio/flac:*",
+        volume_max: 100,
+        openhome: true,
+        reports_rate: Some(48_000),
+        ..FakeRendererSpec::default()
+    })
+    .await;
+    let controller = Arc::new(
+        UpnpController::new(
+            UpnpConfig {
+                ssdp_targets: vec![resampling.ssdp_address],
+                static_locations: Vec::new(),
+                search_timeout: Duration::from_millis(400),
+            },
+            None,
+        )
+        .expect("controller"),
+    );
+    let (service, server) = upnp_zones(controller.clone(), lifecycle.clone()).await;
+    assert_eq!(controller.discover().await.expect("discovery"), 1);
+    let kitchen = "upnp:4c494e4e-0026-0f21-a0b5-01303738f00d";
+    service
+        .command(
+            USER,
+            kitchen,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-a"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    assert!(resampling.wait_for(|state| !state.fetches.is_empty()).await);
+    assert!(
+        drive_until(&service, |service| {
+            zone(service, &cache, kitchen)
+                .output
+                .and_then(|output| output.stream)
+                .is_some_and(|stream| {
+                    stream
+                        .steps
+                        .iter()
+                        .any(|step| step.starts_with("Renderer reports"))
+                })
+        })
+        .await
+    );
+    let stream = zone(&service, &cache, kitchen)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(!stream.bit_perfect);
+    assert_eq!(stream.quality, crate::zones::StreamQuality::High);
+    assert!(
+        stream.steps.iter().any(|step| step
+            == "Renderer reports: decoding FLAC 48 kHz/24-bit, lossless, not what Parson sends (the renderer converts it)"),
+        "{:?}",
+        stream.steps
+    );
+    server.stop(true).await;
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[actix_web::test]
+async fn players_added_by_address_are_found_and_lpcm_only_renderers_get_exact_pcm() {
+    use parson_output::network::{ManualEndpoint, NetworkProtocol, NetworkRegistry};
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-lpcm-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    // 1 s of CD-quality noise, so every sample can be checked.
+    let raw: Vec<u8> = raw_s24(44_100, 77)
+        .chunks(3)
+        .flat_map(|sample| [sample[1], sample[2]])
+        .collect();
+    let cd = cd_flac_from_raw(&directory, "cd", &raw);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![song(
+            "song-cd",
+            &cd,
+            1.0,
+            "flac",
+            44_100,
+            Some(16),
+        )]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+    // One renderer takes only 16-bit LPCM at 44.1 kHz; it is added by its
+    // description URL. The other is added by host and port: Parson asks
+    // it with a unicast SSDP search.
+    let lpcm = FakeRenderer::start(FakeRendererSpec {
+        udn: "5f9ec1b3-ed59-1900-4530-00a0000c0de1",
+        name: "Garage DLNA",
+        sink: "http-get:*:audio/L16;rate=44100;channels=2:DLNA.ORG_PN=LPCM",
+        ..FakeRendererSpec::default()
+    })
+    .await;
+    let by_host = FakeRenderer::start(FakeRendererSpec {
+        udn: "5f9ec1b3-ed59-1900-4530-00a0000c0de2",
+        name: "Study Streamer",
+        ..FakeRendererSpec::default()
+    })
+    .await;
+    let registry = Arc::new(NetworkRegistry::new(vec![
+        ManualEndpoint {
+            protocol: NetworkProtocol::UpnpAv,
+            address: lpcm.location.clone(),
+            name: None,
+        },
+        ManualEndpoint {
+            protocol: NetworkProtocol::UpnpAv,
+            address: by_host.ssdp_address.to_string(),
+            name: None,
+        },
+    ]));
+    // Discovery is off: only the players added by address are searched.
+    let controller = Arc::new(
+        UpnpController::new(
+            UpnpConfig {
+                ssdp_targets: Vec::new(),
+                static_locations: Vec::new(),
+                search_timeout: Duration::from_millis(400),
+            },
+            Some(registry),
+        )
+        .expect("controller"),
+    );
+    let (service, server) = upnp_zones(controller.clone(), lifecycle.clone()).await;
+    assert_eq!(controller.discover().await.expect("discovery"), 2);
+    let zones = service.list(USER, Some(&cache));
+    for (id, name) in [
+        ("upnp:5f9ec1b3-ed59-1900-4530-00a0000c0de1", "Garage DLNA"),
+        (
+            "upnp:5f9ec1b3-ed59-1900-4530-00a0000c0de2",
+            "Study Streamer",
+        ),
+    ] {
+        let found = zones.iter().find(|zone| zone.id == id).expect("zone");
+        assert_eq!(found.name, name);
+        assert!(
+            found.endpoints[0]
+                .network
+                .as_ref()
+                .is_some_and(|network| network.manual),
+            "{name} is marked as added by address"
+        );
+    }
+    let garage = "upnp:5f9ec1b3-ed59-1900-4530-00a0000c0de1";
+    let output = zone(&service, &cache, garage).output.expect("output");
+    assert_eq!((output.max_sample_rate, output.max_bit_depth), (44_100, 16));
+    assert!(
+        output.note.contains("uncompressed PCM (LPCM)"),
+        "{}",
+        output.note
+    );
+
+    // --- It gets big-endian 16-bit PCM, every sample exact.
+    service
+        .command(
+            USER,
+            garage,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-cd"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load");
+    let state = lpcm.snapshot();
+    assert!(state.metadata.contains("audio/L16;rate=44100;channels=2"));
+    assert!(lpcm.wait_for(|state| !state.fetches.is_empty()).await);
+    let fetch = lpcm.snapshot().fetches[0].clone();
+    assert_eq!(fetch.status, 200);
+    assert_eq!(
+        fetch.content_type.as_deref(),
+        Some("audio/L16;rate=44100;channels=2")
+    );
+    let body = std::fs::read(fetch.saved.expect("body")).expect("saved body");
+    let swapped: Vec<u8> = body
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|sample| [sample[1], sample[0]])
+        .collect();
+    assert_eq!(swapped.len(), raw.len());
+    assert!(swapped == raw, "every sample arrives unchanged");
+    let stream = zone(&service, &cache, garage)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert_eq!(stream.output, "LPCM 44.1 kHz/16-bit to Garage DLNA");
+    assert!(
+        stream
+            .steps
+            .iter()
+            .any(|step| step.starts_with("Sent as uncompressed PCM (LPCM, 44.1 kHz/16-bit)"))
+    );
+    server.stop(true).await;
+    let _ = std::fs::remove_dir_all(&directory);
 }

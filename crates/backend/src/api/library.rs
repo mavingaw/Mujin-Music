@@ -1820,6 +1820,7 @@ fn transcode_cache_path_for(
         dsp,
         sample_rate,
         bit_depth,
+        ..
     } = format
     {
         // Files made before the high-quality resampler and 24-bit lossy
@@ -1829,9 +1830,9 @@ fn transcode_cache_path_for(
             hasher.update(b"gain");
             hasher.update(gain_tenths_db.to_le_bytes());
         }
-        if let Some(filter) = dsp.ffmpeg_filter() {
-            hasher.update(b"dsp");
-            hasher.update(filter.as_bytes());
+        if dsp != 0 {
+            hasher.update(b"dsp-chain");
+            hasher.update(dsp.to_le_bytes());
         }
         if sample_rate > 48_000 || bit_depth > 24 {
             // Hi-res renderer conversions (Sonos keys stay unchanged).
@@ -1872,22 +1873,171 @@ enum TranscodeFormat {
         bit_depth: u8,
         /// Volume leveling gain in tenths of a dB (0: none).
         gain_tenths_db: i16,
-        dsp: crate::zones::ZoneDsp,
+        /// Fingerprint of the server DSP chain the samples ran through (0:
+        /// none); the chain itself feeds the encoder (see [`ChainInput`]).
+        dsp: u64,
+        /// FLAC, or uncompressed PCM for renderers that take no FLAC.
+        container: RenderContainer,
     },
+}
+
+/// What a renderer gets when Parson converts for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RenderContainer {
+    Flac,
+    /// RIFF WAV, little-endian PCM.
+    Wav,
+    /// Raw big-endian PCM (`audio/L16`, `audio/L24`), as DLNA's LPCM.
+    Lpcm,
+}
+
+/// The MIME type of LPCM at `rate` and `bits` (stereo), as DLNA writes it.
+pub(crate) fn lpcm_mime(rate: u32, bits: u8) -> &'static str {
+    match (bits > 16, rate) {
+        (false, 44_100) => "audio/L16;rate=44100;channels=2",
+        (false, 48_000) => "audio/L16;rate=48000;channels=2",
+        (false, 88_200) => "audio/L16;rate=88200;channels=2",
+        (false, 96_000) => "audio/L16;rate=96000;channels=2",
+        (false, 176_400) => "audio/L16;rate=176400;channels=2",
+        (false, 192_000) => "audio/L16;rate=192000;channels=2",
+        (true, 44_100) => "audio/L24;rate=44100;channels=2",
+        (true, 48_000) => "audio/L24;rate=48000;channels=2",
+        (true, 88_200) => "audio/L24;rate=88200;channels=2",
+        (true, 96_000) => "audio/L24;rate=96000;channels=2",
+        (true, 176_400) => "audio/L24;rate=176400;channels=2",
+        (true, 192_000) => "audio/L24;rate=192000;channels=2",
+        (false, _) => "audio/L16",
+        (true, _) => "audio/L24",
+    }
+}
+
+/// PCM from the server's own pipeline (decoded to 64-bit float, leveled
+/// and run through the zone's DSP chain, resampled and dithered to the
+/// renderer's format), which the encoder reads from stdin instead of
+/// decoding the file itself.
+pub(crate) struct ChainInput {
+    pub open: parson_output::player::PcmOpener,
+    pub sample_rate: u32,
+    pub channels: u8,
+    /// `s16le` or `s32le`.
+    pub format: &'static str,
+}
+
+/// A fingerprint of a DSP chain for cache keys: 0 when it does nothing.
+pub(crate) fn dsp_fingerprint(dsp: &crate::zones::DspSettings) -> u64 {
+    if !dsp.processes() {
+        return 0;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_vec(dsp).unwrap_or_default());
+    let digest = hasher.finalize();
+    u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8])).max(1)
+}
+
+/// The server pipeline's output for `song` as FLAC at `sample_rate` and
+/// `bit_depth` will carry it, with leveling and the DSP chain applied in
+/// 64-bit float; `None` when nothing needs processing.
+pub(crate) fn chain_input(
+    song: &crate::domain::Song,
+    sample_rate: u32,
+    bit_depth: u8,
+    gain_db: Option<f32>,
+    dsp: &crate::zones::DspSettings,
+) -> Option<ChainInput> {
+    use parson_output::{DeviceCaps, OutputSettings, SampleFormat};
+    let pipeline = crate::outputs::pipeline::global();
+    let channels = song
+        .audio
+        .as_ref()
+        .and_then(|audio| audio.channels)
+        .filter(|channels| *channels > 0)
+        .unwrap_or(2);
+    let container = match bit_depth {
+        depth if depth > 24 => SampleFormat::S32,
+        depth if depth > 16 => SampleFormat::S24Packed,
+        _ => SampleFormat::S16,
+    };
+    // The renderer's format, as one fixed rate and depth: the chain
+    // converts to exactly what the FLAC promises.
+    let caps = DeviceCaps {
+        sample_rates: vec![sample_rate],
+        sample_formats: vec![container],
+        min_channels: 1,
+        max_channels: channels,
+        dsd_formats: Vec::new(),
+        dsd_rates: Vec::new(),
+    };
+    let settings = OutputSettings {
+        dsd_strategy: parson_output::DsdStrategy::Pcm,
+        ..OutputSettings::default()
+    };
+    let leveling = gain_db.map(|gain| crate::outputs::pipeline::TrackLeveling {
+        gain_db: f64::from(gain),
+        source: "zone leveling".to_string(),
+    });
+    let samples = pipeline
+        .plan_samples(
+            Some(&caps),
+            &settings,
+            dsp,
+            song.audio.as_ref(),
+            leveling.as_ref(),
+        )
+        .ok()?;
+    samples.processing.as_ref()?;
+    let open = pipeline.opener(
+        PathBuf::from(&song.path),
+        &samples,
+        Arc::new(parson_output::dsp::DspStats::default()),
+    );
+    Some(ChainInput {
+        open,
+        sample_rate: samples.plan.sample_rate,
+        channels: samples.plan.channels,
+        format: if container == SampleFormat::S16 {
+            "s16le"
+        } else {
+            "s32le"
+        },
+    })
 }
 
 impl TranscodeFormat {
     fn extension(self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
-            Self::SonosFlac { .. } => "flac",
+            Self::SonosFlac {
+                container: RenderContainer::Flac,
+                ..
+            } => "flac",
+            Self::SonosFlac {
+                container: RenderContainer::Wav,
+                ..
+            } => "wav",
+            Self::SonosFlac {
+                container: RenderContainer::Lpcm,
+                ..
+            } => "pcm",
         }
     }
 
     fn content_type(self) -> &'static str {
         match self {
             Self::Mp3 => "audio/mpeg",
-            Self::SonosFlac { .. } => "audio/flac",
+            Self::SonosFlac {
+                container: RenderContainer::Flac,
+                ..
+            } => "audio/flac",
+            Self::SonosFlac {
+                container: RenderContainer::Wav,
+                ..
+            } => "audio/wav",
+            Self::SonosFlac {
+                container: RenderContainer::Lpcm,
+                sample_rate,
+                bit_depth,
+                ..
+            } => lpcm_mime(sample_rate, bit_depth),
         }
     }
 }
@@ -1896,9 +2046,10 @@ impl TranscodeFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RendererStreamPlan {
     pub mime_type: &'static str,
-    /// `None` streams the original file; otherwise FLAC at this rate/depth
-    /// (or MP3, see `lossy`).
+    /// `None` streams the original file; otherwise `container` at this
+    /// rate/depth (or MP3, see `lossy`).
     pub convert_to: Option<(u32, u8)>,
+    pub container: RenderContainer,
     /// The renderer takes no lossless format: convert to 320 kbps MP3.
     pub lossy: bool,
 }
@@ -1973,30 +2124,43 @@ pub(crate) fn renderer_stream_plan(
         return RendererStreamPlan {
             mime_type,
             convert_to: None,
+            container: RenderContainer::Flac,
             lossy: false,
         };
     }
-    if !limits.flac {
+    // FLAC when it takes it, else uncompressed PCM, else MP3.
+    let container = if limits.flac {
+        RenderContainer::Flac
+    } else if limits.wav {
+        RenderContainer::Wav
+    } else if limits.lpcm {
+        RenderContainer::Lpcm
+    } else {
         return RendererStreamPlan {
             mime_type: "audio/mpeg",
             convert_to: None,
+            container: RenderContainer::Flac,
             lossy: true,
         };
-    }
+    };
     let depth_limit = limits.max_bit_depth.clamp(16, 24);
+    let rate = renderer_rate(sample_rate, limits.max_sample_rate);
+    let depth = if processed || !lossless_codec(&codec) {
+        // 24 bits keep the resolution a gain change would otherwise lose,
+        // and everything a lossy decoder puts out (it decodes to floating
+        // point, not to 16 bits).
+        depth_limit
+    } else {
+        bit_depth.clamp(16, depth_limit)
+    };
     RendererStreamPlan {
-        mime_type: "audio/flac",
-        convert_to: Some((
-            renderer_rate(sample_rate, limits.max_sample_rate),
-            if processed || !lossless_codec(&codec) {
-                // 24 bits keep the resolution a gain change would otherwise
-                // lose, and everything a lossy decoder puts out (it decodes
-                // to floating point, not to 16 bits).
-                depth_limit
-            } else {
-                bit_depth.clamp(16, depth_limit)
-            },
-        )),
+        mime_type: match container {
+            RenderContainer::Flac => "audio/flac",
+            RenderContainer::Wav => "audio/wav",
+            RenderContainer::Lpcm => lpcm_mime(rate, depth),
+        },
+        convert_to: Some((rate, depth)),
+        container,
         lossy: false,
     }
 }
@@ -2643,7 +2807,7 @@ async fn stream_cached_transcode(
     etag_key: &str,
     bitrate: u32,
     audio_effect: StreamAudioEffect,
-    format: TranscodeFormat,
+    (format, chain): (TranscodeFormat, Option<ChainInput>),
 ) -> HttpResponse {
     if tokio::fs::metadata(cache_path).await.is_ok() {
         return stream_file_range(req, cache_path, etag_key, format.content_type()).await;
@@ -2690,7 +2854,34 @@ async fn stream_cached_transcode(
     let bitrate_arg = format!("{}k", bitrate);
     let mut command = Command::new("ffmpeg");
     command.kill_on_drop(true);
-    command.args(["-y", "-i"]).arg(input_path);
+    // The server's chain feeds the encoder through a pipe, from a thread of
+    // its own (it decodes and processes as fast as ffmpeg reads).
+    let mut feeder = None;
+    if let Some(chain) = chain {
+        let fed = std::io::pipe().and_then(|(reader, writer)| {
+            let mut open = chain.open;
+            let source = open(0)?;
+            Ok((reader, writer, source))
+        });
+        let Ok((reader, writer, source)) = fed else {
+            drop(cache_guard);
+            release_transcode_lock(cache_path, &cache_lock).await;
+            return internal_server_error("Failed to start transcoder.", "transcode_failed");
+        };
+        command
+            .args(["-y", "-f", chain.format, "-ar"])
+            .arg(chain.sample_rate.to_string())
+            .arg("-ac")
+            .arg(chain.channels.to_string())
+            .args(["-i", "pipe:0"])
+            .stdin(std::process::Stdio::from(reader));
+        feeder = Some((writer, source));
+    } else {
+        command
+            .args(["-y", "-i"])
+            .arg(input_path)
+            .stdin(Stdio::null());
+    }
     match format {
         TranscodeFormat::Mp3 => {
             command.args([
@@ -2714,7 +2905,8 @@ async fn stream_cached_transcode(
             sample_rate,
             bit_depth,
             gain_tenths_db,
-            dsp,
+            dsp: _,
+            container,
         } => {
             if let Some(filter) = audio_effect.ffmpeg_filter() {
                 command.args([
@@ -2727,26 +2919,51 @@ async fn stream_cached_transcode(
                 command.args(["-map", "0:a:0"]);
             }
             let sample_format = if bit_depth > 16 { "s32" } else { "s16" };
-            let mut filters = Vec::new();
-            if gain_tenths_db != 0 {
-                filters.push(format!("volume={:.1}dB", f32::from(gain_tenths_db) / 10.0));
+            if feeder.is_none() {
+                let mut filters = Vec::new();
+                if gain_tenths_db != 0 {
+                    filters.push(format!("volume={:.1}dB", f32::from(gain_tenths_db) / 10.0));
+                }
+                // A long linear-phase filter for any rate change, and TPDF
+                // dither (high-passed) when the result is cut to 16 bits,
+                // instead of ffmpeg's short default filter and truncation.
+                filters.push(renderer_resample_filter(sample_rate, bit_depth));
+                if audio_effect.ffmpeg_filter().is_none() {
+                    command.args(["-af", &filters.join(",")]);
+                }
             }
-            if let Some(filter) = dsp.ffmpeg_filter() {
-                filters.push(filter);
+            // With a chain, it already leveled, processed, resampled and
+            // dithered: the encoder only packs the samples.
+            match container {
+                RenderContainer::Flac => {
+                    command
+                        .args(["-vn", "-c:a", "flac", "-ar"])
+                        .arg(sample_rate.to_string())
+                        .args(["-sample_fmt", sample_format, "-bits_per_raw_sample"])
+                        .arg(bit_depth.to_string())
+                        .args(["-compression_level", "5", "-f", "flac"]);
+                }
+                RenderContainer::Wav => {
+                    command
+                        .args(["-vn", "-ac", "2", "-ar"])
+                        .arg(sample_rate.to_string())
+                        .args(if bit_depth > 16 {
+                            ["-c:a", "pcm_s24le", "-f", "wav"]
+                        } else {
+                            ["-c:a", "pcm_s16le", "-f", "wav"]
+                        });
+                }
+                RenderContainer::Lpcm => {
+                    command
+                        .args(["-vn", "-ac", "2", "-ar"])
+                        .arg(sample_rate.to_string())
+                        .args(if bit_depth > 16 {
+                            ["-c:a", "pcm_s24be", "-f", "s24be"]
+                        } else {
+                            ["-c:a", "pcm_s16be", "-f", "s16be"]
+                        });
+                }
             }
-            // A long linear-phase filter for any rate change, and TPDF
-            // dither (high-passed) when the result is cut to 16 bits,
-            // instead of ffmpeg's short default filter and truncation.
-            filters.push(renderer_resample_filter(sample_rate, bit_depth));
-            if audio_effect.ffmpeg_filter().is_none() {
-                command.args(["-af", &filters.join(",")]);
-            }
-            command
-                .args(["-vn", "-c:a", "flac", "-ar"])
-                .arg(sample_rate.to_string())
-                .args(["-sample_fmt", sample_format, "-bits_per_raw_sample"])
-                .arg(bit_depth.to_string())
-                .args(["-compression_level", "5", "-f", "flac"]);
         }
     }
     command.args([
@@ -2758,15 +2975,21 @@ async fn stream_cached_transcode(
         "error",
         "pipe:1",
     ]);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    command.stdout(Stdio::piped()).stderr(Stdio::null());
     let Ok(mut child) = command.spawn() else {
         drop(cache_guard);
         release_transcode_lock(cache_path, &cache_lock).await;
         return internal_server_error("Failed to start transcoder.", "transcode_failed");
     };
+    // The command holds the pipe's read end; drop it so the encoder sees
+    // the end of the input when the feeder finishes.
+    drop(command);
+    if let Some((mut writer, mut source)) = feeder {
+        std::thread::spawn(move || {
+            // A closed pipe (the encoder stopped) ends the copy.
+            let _ = std::io::copy(&mut source, &mut writer);
+        });
+    }
     let Some(stdout) = child.stdout.take() else {
         drop(cache_guard);
         release_transcode_lock(cache_path, &cache_lock).await;
@@ -3055,8 +3278,6 @@ pub struct SignalPathQuery {
     pub slowed_reverb: Option<bool>,
     pub audio_effect: Option<StreamAudioEffect>,
     pub target: Option<StreamTarget>,
-    /// Server output device, for `target=native`.
-    pub device: Option<String>,
     /// The player's formats, as sent with the stream request (see
     /// [`BitrateQueryParams`]).
     pub accept: Option<String>,
@@ -3073,7 +3294,6 @@ pub async fn song_signal_path(
     path: web::Path<String>,
     query: web::Query<SignalPathQuery>,
     lifecycle: web::Data<LibraryLifecycle>,
-    native: Option<web::Data<crate::native_output::NativeOutputs>>,
 ) -> HttpResponse {
     let bitrate = query.bitrate;
     if bitrate > MAX_STREAM_BITRATE || (bitrate > 0 && bitrate < MIN_STREAM_BITRATE) {
@@ -3095,24 +3315,12 @@ pub async fn song_signal_path(
     };
     let target = query.target.unwrap_or(StreamTarget::Direct);
     if target == StreamTarget::Native {
-        let Some(device) = query.device.clone().filter(|device| !device.is_empty()) else {
-            return bad_request("A server output device is required.", "device_required");
-        };
-        let outputs = native
-            .map(|data| data.into_inner())
-            .unwrap_or_else(crate::native_output::global);
-        let song = song.clone();
-        return match web::block(move || outputs.describe(&device, &song)).await {
-            Ok(Ok((_, path))) => HttpResponse::Ok().json(path),
-            Ok(Err(error @ crate::native_output::NativeError::UnknownDevice)) => {
-                not_found(error.to_string(), error.code())
-            }
-            Ok(Err(error)) => bad_request(error.to_string(), error.code()),
-            Err(_) => crate::api::error::internal_server_error(
-                "The audio output task stopped.",
-                "native_output_task_failed",
-            ),
-        };
+        // The server plays its own outputs as zones; each zone reports the
+        // path of what it plays (`output.stream.signal_path`).
+        return bad_request(
+            "Server outputs are zones now; read the zone's signal path.",
+            "native_target_is_a_zone",
+        );
     }
     let song_path = Path::new(&song.path);
     let extension = song_path
@@ -3270,7 +3478,7 @@ async fn stream_song_planned(
                 &format!("{}-{}k", cache_identity, bitrate),
                 *bitrate,
                 audio_effect,
-                TranscodeFormat::Mp3,
+                (TranscodeFormat::Mp3, None),
             )
             .await
         }
@@ -3607,7 +3815,7 @@ pub(crate) async fn stream_sonos_compatible(
         lifecycle,
         crate::outputs::FormatLimits::SONOS,
         gain_db,
-        crate::zones::ZoneDsp::default(),
+        crate::zones::DspSettings::default(),
     )
     .await
 }
@@ -3621,25 +3829,21 @@ pub(crate) async fn stream_renderer_compatible(
     lifecycle: &web::Data<LibraryLifecycle>,
     limits: crate::outputs::FormatLimits,
     gain_db: Option<f32>,
-    dsp: crate::zones::ZoneDsp,
+    dsp: crate::zones::DspSettings,
 ) -> HttpResponse {
     let gain_tenths_db = gain_db
         .map(|gain| (gain * 10.0).round().clamp(-480.0, 240.0) as i16)
         .unwrap_or(0);
-    let dsp = if dsp.is_active() {
-        dsp
-    } else {
-        crate::zones::ZoneDsp::default()
-    };
-    let processed = gain_db.is_some() || dsp.is_active();
-    let plan = lifecycle.cache().await.ok().and_then(|cache| {
-        cache
-            .song(song_key)
-            .map(|song| renderer_stream_plan(song, limits, processed))
-    });
-    let Some(plan) = plan else {
+    let processed = gain_db.is_some() || dsp.processes();
+    let song = lifecycle
+        .cache()
+        .await
+        .ok()
+        .and_then(|cache| cache.song(song_key).cloned());
+    let Some(song) = song else {
         return not_found("Song not found.", "song_not_found");
     };
+    let plan = renderer_stream_plan(&song, limits, processed);
     let (song_id, song_path) = match resolve_stream_song_with_refresh(song_key, lifecycle).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
@@ -3653,32 +3857,40 @@ pub(crate) async fn stream_renderer_compatible(
             &format!("{song_id}-renderer-mp3"),
             MAX_STREAM_BITRATE,
             StreamAudioEffect::None,
-            TranscodeFormat::Mp3,
+            (TranscodeFormat::Mp3, None),
         )
         .await;
     }
     match plan.convert_to {
         None => stream_file_range(req, &song_path, &song_id, plan.mime_type).await,
         Some((sample_rate, bit_depth)) => {
+            let chain = processed
+                .then(|| {
+                    let song = crate::domain::Song {
+                        path: song_path.to_string_lossy().to_string(),
+                        ..song.clone()
+                    };
+                    chain_input(&song, sample_rate, bit_depth, gain_db, &dsp)
+                })
+                .flatten();
+            let dsp = if chain.is_some() {
+                dsp_fingerprint(&dsp)
+            } else {
+                0
+            };
             let format = TranscodeFormat::SonosFlac {
                 sample_rate,
                 bit_depth,
                 gain_tenths_db,
                 dsp,
+                container: plan.container,
             };
             let cache_path = transcode_cache_path_for(&song_id, &song_path, 0, format);
-            let dsp_key = dsp
-                .ffmpeg_filter()
-                .map(|filter| {
-                    let mut hasher = Sha256::new();
-                    hasher.update(filter.as_bytes());
-                    let digest = hasher.finalize();
-                    format!(
-                        "-dsp{:02x}{:02x}{:02x}{:02x}",
-                        digest[0], digest[1], digest[2], digest[3]
-                    )
-                })
-                .unwrap_or_default();
+            let dsp_key = if dsp == 0 {
+                String::new()
+            } else {
+                format!("-dsp{:08x}", dsp as u32)
+            };
             stream_cached_transcode(
                 req,
                 &song_path,
@@ -3686,7 +3898,7 @@ pub(crate) async fn stream_renderer_compatible(
                 &format!("{song_id}-sonos-{sample_rate}-{bit_depth}-{gain_tenths_db}{dsp_key}"),
                 0,
                 StreamAudioEffect::None,
-                format,
+                (format, chain),
             )
             .await
         }
@@ -3800,6 +4012,103 @@ mod delivery_tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body()).await.unwrap().to_vec();
         (cache, body)
+    }
+
+    /// Peak of a file's samples, as a fraction of full scale.
+    fn peak(path: &Path) -> f64 {
+        let decoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(path)
+            .args(["-f", "s32le", "-"])
+            .output()
+            .unwrap()
+            .stdout;
+        decoded
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|sample| f64::from(i32::from_le_bytes(*sample)).abs() / f64::from(i32::MAX))
+            .fold(0.0, f64::max)
+    }
+
+    #[actix_web::test]
+    async fn served_streams_run_the_zone_dsp_chain_before_the_encoder() {
+        if !ffmpeg_available() {
+            return;
+        }
+        let directory = scratch();
+        let input = directory.join("tone.flac");
+        assert!(
+            std::process::Command::new("ffmpeg")
+                .args(["-v", "error", "-f", "lavfi", "-i"])
+                .arg("sine=frequency=1000:sample_rate=44100:duration=1")
+                .args(["-af", "volume=-6dB", "-ac", "2", "-sample_fmt", "s16", "-y"])
+                .arg(&input)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let song = crate::domain::Song {
+            id: "tone".into(),
+            path: input.to_string_lossy().to_string(),
+            duration: 1.0,
+            audio: Some(AudioProperties {
+                codec: Some("flac".into()),
+                container: Some("flac".into()),
+                sample_rate: Some(44_100),
+                bit_depth: Some(16),
+                channels: Some(2),
+                bitrate_kbps: None,
+                lossless: Some(true),
+            }),
+            ..crate::domain::Song::default()
+        };
+        // Nothing to process: no chain, the encoder reads the file.
+        let flat = crate::zones::DspSettings::default();
+        assert!(super::chain_input(&song, 48_000, 24, None, &flat).is_none());
+        assert_eq!(super::dsp_fingerprint(&flat), 0);
+        // 6 dB of headroom halves the level, in the server's own chain,
+        // which also converts to the renderer's 48 kHz/24-bit.
+        let mut dsp = crate::zones::DspSettings::default();
+        dsp.headroom.enabled = true;
+        dsp.headroom.gain_db = -6.0;
+        assert_ne!(super::dsp_fingerprint(&dsp), 0);
+        let chain = super::chain_input(&song, 48_000, 24, None, &dsp).expect("a chain");
+        assert_eq!((chain.sample_rate, chain.format), (48_000, "s32le"));
+        let cache = directory.join("processed.flac");
+        let request = actix_web::test::TestRequest::get().to_http_request();
+        let response = super::stream_cached_transcode(
+            &request,
+            &input,
+            &cache,
+            "tone-processed",
+            0,
+            super::StreamAudioEffect::None,
+            (
+                super::TranscodeFormat::SonosFlac {
+                    sample_rate: 48_000,
+                    bit_depth: 24,
+                    gain_tenths_db: 0,
+                    dsp: super::dsp_fingerprint(&dsp),
+                    container: super::RenderContainer::Flac,
+                },
+                Some(chain),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body()).await.unwrap();
+        assert!(!body.is_empty());
+        let (codec, rate, bits, channels, samples) = probe(&cache);
+        assert_eq!(
+            (codec.as_str(), rate, bits, channels),
+            ("flac", 48_000, 24, 2)
+        );
+        assert!((47_000..=49_000).contains(&samples), "{samples} samples");
+        let (source, processed) = (peak(&input), peak(&cache));
+        let ratio = processed / source;
+        assert!((0.48..0.52).contains(&ratio), "{source} -> {processed}");
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[actix_web::test]

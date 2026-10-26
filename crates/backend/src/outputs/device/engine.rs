@@ -1,21 +1,31 @@
 //! The playback thread of one audio device.
 //!
-//! ffmpeg decodes each track to raw PCM at the format chosen for the
-//! device (the file's own rate and depth when the device takes it, so
-//! nothing is resampled or requantised). The thread writes frames to the
-//! device, starts the next track on the same open stream for gapless
-//! playback, and reports position, format and signal path.
+//! Each track goes through the server's one pipeline
+//! ([`crate::outputs::pipeline`]): planned against the device's formats
+//! and the zone's device setup, run through the zone's DSP chain when it
+//! has one, and decoded (or, for DSD, read) to exactly the format the
+//! device is opened with. The thread writes frames to the device, starts
+//! the next track on the same open stream for gapless playback, and
+//! reports position and the signal path the pipeline described.
 
 use std::io::Read;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{Backend, DeviceInfo, SampleFormat, Sink, StreamFormat, choose_format};
+use parson_output::dsp::DspStats;
+use parson_output::player::{InputFormat, PcmSource};
+
+use super::{Backend, DeviceInfo, SampleFormat, Sink, StreamFormat};
+use crate::outputs::pipeline::{DevicePlace, Pipeline, PlannedTrack, TrackSource};
 use crate::outputs::renderer::{PlayState, RendererSettings, RendererState, TrackRequest};
 use crate::outputs::{describe_source, format_rate};
-use crate::zones::{VolumeMode, ZoneStreamInfo};
+use crate::signal_path::{
+    ServerSignalPath, SignalQuality, SignalStage, StageKind, add_hardware_report,
+    carry_lossy_generation, overall,
+};
+use crate::zones::{StreamQuality, VolumeMode, ZoneStreamInfo};
 
 /// Frames per write: about 20 ms at 192 kHz, so controls stay responsive.
 const CHUNK_FRAMES: usize = 4_096;
@@ -46,9 +56,11 @@ pub enum Control {
 /// Where the device is, for the signal path.
 #[derive(Clone, Debug, Default)]
 pub struct Route {
+    /// The machine the device is attached to; this server when `None`.
+    pub host: Option<String>,
     /// After the device name, e.g. `on kitchen-pi via Parson Bridge`.
     pub suffix: Option<String>,
-    /// A step every stream takes.
+    /// A step every stream takes (sync corrections of a group).
     pub step: Option<String>,
     /// The output has no exclusive/shared mode (AirPlay).
     pub modeless: bool,
@@ -57,6 +69,8 @@ pub struct Route {
 struct Shared {
     state: RendererState,
     settings: RendererSettings,
+    /// Live measurements of the playing track's DSP chain.
+    stats: Option<Arc<DspStats>>,
 }
 
 /// Handle to a device's playback thread.
@@ -77,10 +91,11 @@ impl Engine {
         device: DeviceInfo,
         changed: tokio::sync::broadcast::Sender<()>,
         route: Route,
+        pipeline: Arc<Pipeline>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let settings = RendererSettings {
-            exclusive: true,
+            output: parson_output::OutputSettings::default(),
             volume_mode: if device.hardware_volume.is_some() {
                 VolumeMode::Hardware
             } else {
@@ -94,6 +109,7 @@ impl Engine {
                 ..RendererState::default()
             },
             settings,
+            stats: None,
         }));
         let thread_shared = shared.clone();
         let name = format!("parson-audio-{}", device.id);
@@ -102,6 +118,7 @@ impl Engine {
                 backend,
                 device,
                 route,
+                pipeline,
                 receiver,
                 shared: thread_shared,
                 changed,
@@ -132,8 +149,21 @@ impl Engine {
             .send(control);
     }
 
+    /// The device's state, with the DSP chain's live measurements.
     pub fn state(&self) -> RendererState {
-        lock(&self.shared).state.clone()
+        let shared = lock(&self.shared);
+        let mut state = shared.state.clone();
+        if let (Some(stats), Some(processing)) = (
+            shared.stats.as_ref(),
+            state
+                .stream
+                .as_mut()
+                .and_then(|stream| stream.signal_path.as_mut())
+                .and_then(|path| path.processing.as_mut()),
+        ) {
+            processing.status = Some(stats.snapshot());
+        }
+        state
     }
 
     pub fn settings(&self) -> RendererSettings {
@@ -148,81 +178,39 @@ impl Engine {
     }
 }
 
-struct Decoder {
-    child: Child,
-    stdout: ChildStdout,
-    /// Bytes of a frame ffmpeg writes (s16 or s32 per channel).
-    frame_bytes: usize,
-    pending: Vec<u8>,
+/// Bytes of one decoded frame as the pipeline writes it.
+fn input_frame_bytes(input: InputFormat, stream: &StreamFormat) -> usize {
+    let sample = match input {
+        InputFormat::S16 => 2,
+        InputFormat::S32 => 4,
+        InputFormat::Raw => stream.sample_format.bytes(),
+    };
+    sample * usize::from(stream.channels.max(1))
 }
 
-impl Decoder {
-    /// Starts ffmpeg for `track` at `position_ms`, producing `format`.
-    fn start(
-        track: &TrackRequest,
-        position_ms: i64,
-        format: StreamFormat,
-        exact: bool,
-    ) -> Result<Self, String> {
-        let wide = format.sample_format != SampleFormat::S16;
-        let mut command = Command::new("ffmpeg");
-        command.args(["-nostdin", "-hide_banner", "-v", "error"]);
-        if position_ms > 0 {
-            command
-                .arg("-ss")
-                .arg(format!("{:.3}", position_ms as f64 / 1_000.0));
-        }
-        command.arg("-i").arg(&track.path);
-        command.args(["-map", "0:a:0", "-vn"]);
-        let mut filters = Vec::new();
-        if let Some(gain) = track.gain_db.filter(|gain| gain.abs() >= 0.05) {
-            filters.push(format!("volume={gain:.2}dB"));
-        }
-        if let Some(dsp) = track.dsp.ffmpeg_filter() {
-            filters.push(dsp);
-        }
-        if !filters.is_empty() {
-            command.arg("-af").arg(filters.join(","));
-        }
-        if !exact || !filters.is_empty() {
-            command
-                .arg("-ar")
-                .arg(format.sample_rate.to_string())
-                .arg("-ac")
-                .arg(format.channels.to_string());
-        }
-        if wide {
-            command.args(["-c:a", "pcm_s32le", "-f", "s32le"]);
-        } else {
-            command.args(["-c:a", "pcm_s16le", "-f", "s16le"]);
-        }
-        command
-            .arg("pipe:1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("could not start the decoder: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "decoder has no output".to_string())?;
-        Ok(Self {
-            child,
-            stdout,
-            frame_bytes: (if wide { 4 } else { 2 }) * usize::from(format.channels),
-            pending: Vec::new(),
-        })
-    }
+struct Active {
+    track: TrackRequest,
+    planned: PlannedTrack,
+    pcm: PcmSource,
+    /// Bytes of a decoded frame.
+    frame_bytes: usize,
+    /// A partial frame left over from the last read.
+    pending: Vec<u8>,
+    /// Where the decoder started, in the track.
+    start_ms: i64,
+    frames_written: u64,
+    /// The stream was dropped on pause: restart here on play.
+    resume_at: Option<i64>,
+}
 
+impl Active {
     /// Reads up to `frames` whole frames; an empty result is the end.
     fn read(&mut self, frames: usize) -> Vec<u8> {
         let wanted = frames * self.frame_bytes;
         let mut buffer = std::mem::take(&mut self.pending);
         let mut chunk = vec![0_u8; wanted.saturating_sub(buffer.len()).max(self.frame_bytes)];
         while buffer.len() < wanted {
-            match self.stdout.read(&mut chunk) {
+            match self.pcm.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(read) => buffer.extend_from_slice(&chunk[..read]),
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -239,37 +227,19 @@ impl Decoder {
     }
 }
 
-impl Drop for Decoder {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-struct Active {
-    track: TrackRequest,
-    decoder: Decoder,
-    format: StreamFormat,
-    exact: bool,
-    /// Where the decoder started, in the track.
-    start_ms: i64,
-    frames_written: u64,
-    /// The stream was dropped on pause: restart here on play.
-    resume_at: Option<i64>,
-}
-
 struct Player {
     backend: Arc<dyn Backend>,
     device: DeviceInfo,
     route: Route,
+    pipeline: Arc<Pipeline>,
     receiver: Receiver<Control>,
     shared: Arc<Mutex<Shared>>,
     changed: tokio::sync::broadcast::Sender<()>,
     current: Option<Active>,
     next: Option<TrackRequest>,
     stream: Option<Box<dyn Sink>>,
-    /// The format `stream` was opened with.
-    stream_format: Option<StreamFormat>,
+    /// The format and mode `stream` was opened with.
+    stream_format: Option<(StreamFormat, bool)>,
     paused: bool,
     software_volume: u8,
     muted: bool,
@@ -377,6 +347,7 @@ impl Player {
                 shared.state.state = PlayState::Stopped;
                 shared.state.position_ms = 0;
                 shared.state.stream = None;
+                shared.stats = None;
                 drop(shared);
                 self.notify();
             }
@@ -395,13 +366,13 @@ impl Player {
                 }
             }
             Control::Configure(settings) => {
-                let reopen = settings.exclusive != self.settings().exclusive;
+                let replan = settings.output != self.settings().output;
                 lock(&self.shared).settings = settings;
                 if settings.volume_mode != VolumeMode::Software {
                     self.software_volume = 100;
                 }
-                if reopen {
-                    // Reopen in the new mode at the heard position.
+                if replan {
+                    // Replan in the new setup at the heard position.
                     if let Some(active) = self.current.as_ref() {
                         let track = active.track.clone();
                         let position = self.position_ms();
@@ -428,17 +399,51 @@ impl Player {
         true
     }
 
+    /// Plans `track` and starts decoding it at `position_ms`.
+    fn plan(&self, track: &TrackRequest) -> Result<PlannedTrack, String> {
+        let settings = self.settings();
+        let host = self
+            .route
+            .host
+            .as_deref()
+            .unwrap_or_else(|| crate::outputs::pipeline::host_name());
+        self.pipeline
+            .plan(
+                &self.device,
+                &settings.output,
+                &track.dsp,
+                TrackSource {
+                    song_id: &track.song_id,
+                    path: &track.path,
+                    audio: track.audio.as_ref(),
+                },
+                track.leveling.as_ref(),
+                DevicePlace { host },
+            )
+            .map_err(|error| error.to_string())
+    }
+
     /// Starts decoding `track` at `position_ms`.
     fn begin(&mut self, track: TrackRequest, position_ms: i64) {
-        let settings = self.settings();
-        let (format, exact) = choose_format(&self.device, &track.source, settings.limits);
-        match Decoder::start(&track, position_ms, format, exact) {
-            Ok(decoder) => {
+        let started = self.plan(&track).and_then(|planned| {
+            let stats = Arc::new(DspStats::default());
+            let mut opener = self.pipeline.opener(
+                PathBuf::from(&track.path),
+                &planned.samples,
+                Arc::clone(&stats),
+            );
+            let pcm = opener(position_ms.max(0) as u64)
+                .map_err(|error| format!("could not start the decoder: {error}"))?;
+            Ok((planned, pcm, stats))
+        });
+        match started {
+            Ok((planned, pcm, stats)) => {
                 self.current = Some(Active {
+                    frame_bytes: input_frame_bytes(planned.input, &planned.stream),
                     track: track.clone(),
-                    decoder,
-                    format,
-                    exact,
+                    planned,
+                    pcm,
+                    pending: Vec::new(),
                     start_ms: position_ms,
                     frames_written: 0,
                     resume_at: None,
@@ -456,12 +461,13 @@ impl Player {
                         PlayState::Playing
                     };
                     shared.state.reachable = true;
+                    shared.stats = Some(stats);
                 }
                 self.refresh_stream_info();
                 self.notify();
             }
             Err(error) => {
-                tracing::warn!(%error, device = self.device.id, "could not decode track");
+                tracing::warn!(%error, device = self.device.id, "could not play track");
                 self.current = None;
                 lock(&self.shared).state.serial = Some(track.serial);
                 self.finish();
@@ -485,7 +491,8 @@ impl Player {
             return 0;
         };
         let heard = active.frames_written.saturating_sub(delay);
-        active.start_ms + (heard as i64 * 1_000) / i64::from(active.format.sample_rate.max(1))
+        active.start_ms
+            + (heard as i64 * 1_000) / i64::from(active.planned.stream.sample_rate.max(1))
     }
 
     fn set_state(&self, state: PlayState) {
@@ -514,90 +521,33 @@ impl Player {
         shared.state.position_ms = 0;
         shared.state.stream = None;
         shared.state.finished_serial = ended.or(shared.state.serial);
+        shared.stats = None;
         drop(shared);
         self.notify();
     }
 
-    fn refresh_stream_info(&self) {
+    /// Software volume is scaling the samples.
+    fn software_gain_active(&self) -> bool {
+        self.settings().volume_mode == VolumeMode::Software
+            && (self.software_volume < 100 || self.muted)
+    }
+
+    fn refresh_stream_info(&mut self) {
+        let hardware = match (self.current.as_ref(), self.stream_format) {
+            (Some(active), Some((format, _))) if format == active.planned.stream => self
+                .backend
+                .hardware_status(&self.device.id, &active.planned.stream),
+            _ => None,
+        };
         let info = self.current.as_ref().map(|active| {
-            let settings = self.settings();
-            let mut steps = Vec::new();
-            let source_rate = active
-                .track
-                .source
-                .sample_rate
-                .unwrap_or(active.format.sample_rate);
-            if source_rate != active.format.sample_rate {
-                steps.push(format!(
-                    "Resampled {} to {} (the device does not take {})",
-                    format_rate(source_rate),
-                    format_rate(active.format.sample_rate),
-                    format_rate(source_rate)
-                ));
-            }
-            if let Some(bits) = active.track.source.bit_depth
-                && active.track.source.lossless()
-                && bits > active.format.sample_format.bits()
-            {
-                steps.push(format!(
-                    "Reduced to {}-bit (the device takes at most {}-bit)",
-                    active.format.sample_format.bits(),
-                    active.format.sample_format.bits()
-                ));
-            }
-            if !active.track.source.lossless() {
-                steps.push("Decoded from a lossy file".to_string());
-            }
-            if let Some(gain) = active.track.gain_db.filter(|gain| gain.abs() >= 0.05) {
-                steps.push(format!("Volume leveling {gain:+.1} dB"));
-            }
-            if active.track.dsp.is_active() {
-                steps.push(format!("DSP: {}", active.track.dsp.summary()));
-            }
-            if let Some(step) = &self.route.step {
-                steps.push(step.clone());
-            }
-            let software = settings.volume_mode == VolumeMode::Software
-                && (self.software_volume < 100 || self.muted);
-            if software {
-                steps.push("Software volume (Parson scales the samples)".to_string());
-            }
-            let bit_perfect =
-                active.exact && steps.is_empty() && settings.volume_mode != VolumeMode::Software;
-            let reduced = active
-                .track
-                .source
-                .bit_depth
-                .is_some_and(|bits| bits > active.format.sample_format.bits());
-            let quality = crate::zones::StreamQuality::rate(
-                active.track.source.lossless(),
-                source_rate != active.format.sample_rate || reduced || software,
-                active.track.gain_db.is_some_and(|gain| gain.abs() >= 0.05)
-                    || active.track.dsp.is_active(),
-            );
-            ZoneStreamInfo {
-                source: describe_source(&active.track.source),
-                output: format!(
-                    "{}/{}-bit ({}) to {}{}{}",
-                    format_rate(active.format.sample_rate),
-                    active.format.sample_format.bits(),
-                    active.format.sample_format.alsa_name(),
-                    self.device.name,
-                    self.route
-                        .suffix
-                        .as_ref()
-                        .map(|suffix| format!(" {suffix}"))
-                        .unwrap_or_default(),
-                    match (self.route.modeless, settings.exclusive) {
-                        (true, _) => "",
-                        (false, true) => ", exclusive",
-                        (false, false) => ", shared",
-                    }
-                ),
-                bit_perfect,
-                steps,
-                quality,
-            }
+            stream_info(
+                active,
+                &self.device,
+                &self.route,
+                self.settings(),
+                self.software_gain_active(),
+                hardware.as_ref(),
+            )
         });
         lock(&self.shared).state.stream = info;
     }
@@ -607,23 +557,23 @@ impl Player {
         let Some(active) = self.current.as_mut() else {
             return;
         };
-        let pcm = active.decoder.read(CHUNK_FRAMES);
-        let frame_bytes = active.decoder.frame_bytes;
-        let format = active.format;
+        let pcm = active.read(CHUNK_FRAMES);
+        let frame_bytes = active.frame_bytes;
+        let format = active.planned.stream;
+        let exclusive = active.planned.exclusive;
+        let input = active.planned.input;
         if pcm.is_empty() {
             self.track_ended();
             return;
         }
-        if self.stream.is_none() || self.stream_format != Some(format) {
+        if self.stream.is_none() || self.stream_format != Some((format, exclusive)) {
             // New format (or first track): drain the old stream, reopen.
             self.close_stream(true);
-            match self
-                .backend
-                .open(&self.device.id, format, self.settings().exclusive)
-            {
+            match self.backend.open(&self.device.id, format, exclusive) {
                 Ok(stream) => {
                     self.stream = Some(stream);
-                    self.stream_format = Some(format);
+                    self.stream_format = Some((format, exclusive));
+                    self.refresh_stream_info();
                 }
                 Err(error) => {
                     tracing::warn!(%error, device = self.device.id, "could not open audio device");
@@ -634,6 +584,7 @@ impl Player {
                     shared.state.reachable = false;
                     shared.state.state = PlayState::Stopped;
                     shared.state.stream = None;
+                    shared.stats = None;
                     drop(shared);
                     self.notify();
                     return;
@@ -655,7 +606,7 @@ impl Player {
             None
         };
         let frames = pcm.len() / frame_bytes;
-        let data = convert(&pcm, format.sample_format, gain);
+        let data = convert(&pcm, input, format.sample_format, gain);
         let Some(stream) = self.stream.as_mut() else {
             return;
         };
@@ -673,6 +624,7 @@ impl Player {
                 shared.state.state = PlayState::Stopped;
                 shared.state.position_ms = 0;
                 shared.state.stream = None;
+                shared.stats = None;
                 drop(shared);
                 self.notify();
                 return;
@@ -701,11 +653,133 @@ impl Player {
     }
 }
 
-/// Turns decoder output (s16 or s32) into the device format, applying a
-/// software gain when set. With no gain the samples pass unchanged.
-fn convert(pcm: &[u8], format: SampleFormat, gain: Option<f64>) -> Vec<u8> {
-    match format {
-        SampleFormat::S16 => match gain {
+/// The zone's view of what plays: the pipeline's signal path, with what
+/// the engine itself adds (software volume, a group's sync) and what the
+/// driver reports.
+fn stream_info(
+    active: &Active,
+    device: &DeviceInfo,
+    route: &Route,
+    settings: RendererSettings,
+    software_gain: bool,
+    hardware: Option<&parson_output::procfs::HardwareStatus>,
+) -> ZoneStreamInfo {
+    let planned = &active.planned;
+    let mut path: ServerSignalPath = planned.signal_path.clone();
+    let mut added = Vec::new();
+    if let Some(step) = &route.step {
+        let detail = step.strip_prefix("Sync: ").unwrap_or(step);
+        added.push(SignalStage {
+            id: "sync",
+            kind: StageKind::Transport,
+            title: "Sync".into(),
+            detail: detail.to_string(),
+            quality: Some(SignalQuality::HighQuality),
+            explanation: format!(
+                "{detail}. A repeated or skipped frame is inaudible but changes the samples, so the path is not bit-perfect."
+            ),
+        });
+    }
+    if software_gain {
+        added.push(SignalStage {
+            id: "software-volume",
+            kind: StageKind::Dsp,
+            title: "Software volume".into(),
+            detail: "Parson scales the samples".into(),
+            quality: Some(SignalQuality::HighQuality),
+            explanation: "The zone's volume is set to Software, so Parson lowers the level by scaling every sample before the device. Set it to Hardware (the device's own control) or Fixed for a bit-perfect path.".into(),
+        });
+    }
+    if !added.is_empty() {
+        // Before the transport and output stages at the end.
+        let at = path
+            .stages
+            .iter()
+            .position(|stage| stage.id == "native-transport")
+            .unwrap_or(path.stages.len());
+        path.stages.splice(at..at, added);
+    }
+    if let Some(hardware) = hardware {
+        add_hardware_report(&mut path, &device.name, hardware, &planned.stream);
+    }
+    carry_lossy_generation(&mut path.stages);
+    path.quality = overall(&path.stages);
+    let steps = path
+        .stages
+        .iter()
+        .filter(|stage| {
+            !matches!(
+                stage.id,
+                "source" | "native-decode" | "native-transport" | "native-output"
+            ) && stage.kind != StageKind::Source
+        })
+        .map(|stage| format!("{}: {}", stage.title, stage.detail))
+        .collect();
+    let quality = match path.quality {
+        SignalQuality::Lossless => StreamQuality::Lossless,
+        SignalQuality::Enhanced => StreamQuality::Enhanced,
+        SignalQuality::HighQuality => StreamQuality::High,
+        SignalQuality::LowQuality => StreamQuality::Low,
+    };
+    // The samples reach the output unchanged (an AirPlay receiver's own
+    // processing after that still rates the path High quality).
+    let bit_perfect = planned.samples.plan.bit_perfect
+        && planned.samples.processing.is_none()
+        && settings.volume_mode != VolumeMode::Software
+        && route.step.is_none()
+        && path.hardware_confirmed != Some(false);
+    let format = &planned.stream;
+    let sent = match planned.samples.plan.dsd.as_ref() {
+        Some(dsd) if dsd.mode == parson_output::DsdMode::Native => format!(
+            "{} ({}, {} frames)",
+            dsd.dsd_label,
+            format.sample_format.alsa_name(),
+            format_rate(format.sample_rate)
+        ),
+        Some(dsd) if dsd.mode == parson_output::DsdMode::Dop => format!(
+            "{} as DoP in {}/{}-bit ({})",
+            dsd.dsd_label,
+            format_rate(format.sample_rate),
+            format.sample_format.bits(),
+            format.sample_format.alsa_name()
+        ),
+        _ => format!(
+            "{}/{}-bit ({})",
+            format_rate(format.sample_rate),
+            format.sample_format.bits(),
+            format.sample_format.alsa_name()
+        ),
+    };
+    ZoneStreamInfo {
+        source: describe_source(&active.track.source),
+        output: format!(
+            "{sent} to {}{}{}",
+            device.name,
+            route
+                .suffix
+                .as_ref()
+                .map(|suffix| format!(" {suffix}"))
+                .unwrap_or_default(),
+            match (route.modeless, planned.exclusive) {
+                (true, _) => "",
+                (false, true) => ", exclusive",
+                (false, false) => ", shared",
+            }
+        ),
+        bit_perfect,
+        steps,
+        quality,
+        signal_path: Some(path),
+    }
+}
+
+/// Turns decoded PCM into the device's container, applying a software
+/// gain when set. With no gain the samples pass unchanged; DSD (`Raw`) is
+/// never scaled.
+fn convert(pcm: &[u8], input: InputFormat, container: SampleFormat, gain: Option<f64>) -> Vec<u8> {
+    match input {
+        InputFormat::Raw => pcm.to_vec(),
+        InputFormat::S16 => match gain {
             None => pcm.to_vec(),
             Some(gain) => pcm
                 .as_chunks::<2>()
@@ -717,29 +791,31 @@ fn convert(pcm: &[u8], format: SampleFormat, gain: Option<f64>) -> Vec<u8> {
                 })
                 .collect(),
         },
-        SampleFormat::S32 | SampleFormat::S24Packed | SampleFormat::S24In32 => {
-            let mut out = Vec::with_capacity(pcm.len() / 4 * format.bytes());
-            for sample in pcm.as_chunks::<4>().0 {
-                let mut value = i32::from_le_bytes(*sample);
-                if let Some(gain) = gain {
-                    value = (f64::from(value) * gain)
-                        .round()
-                        .clamp(f64::from(i32::MIN), f64::from(i32::MAX))
-                        as i32;
+        InputFormat::S32 => {
+            let scaled;
+            let words = match gain {
+                None => pcm,
+                Some(gain) => {
+                    scaled = pcm
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .flat_map(|sample| {
+                            let value = f64::from(i32::from_le_bytes(*sample)) * gain;
+                            (value
+                                .round()
+                                .clamp(f64::from(i32::MIN), f64::from(i32::MAX))
+                                as i32)
+                                .to_le_bytes()
+                        })
+                        .collect::<Vec<u8>>();
+                    &scaled
                 }
-                let bytes = value.to_le_bytes();
-                match format {
-                    // The top 24 bits; 24-bit sources leave the low byte 0.
-                    SampleFormat::S24Packed => out.extend_from_slice(&bytes[1..4]),
-                    // The top 24 bits in the low bits of the word (S24_LE).
-                    SampleFormat::S24In32 => out.extend_from_slice(&(value >> 8).to_le_bytes()),
-                    _ => out.extend_from_slice(&bytes),
-                }
-            }
+            };
+            let mut out = Vec::with_capacity(words.len());
+            parson_output::pack_samples(words, container, &mut out);
             out
         }
-        // Native DSD is never decoded here; it passes through untouched.
-        _ => pcm.to_vec(),
     }
 }
 
@@ -747,6 +823,7 @@ fn convert(pcm: &[u8], format: SampleFormat, gain: Option<f64>) -> Vec<u8> {
 mod tests {
     use super::convert;
     use crate::outputs::device::SampleFormat;
+    use parson_output::player::InputFormat;
 
     #[test]
     fn conversion_keeps_samples_unless_a_gain_is_set() {
@@ -754,18 +831,30 @@ mod tests {
             .iter()
             .flat_map(|value| value.to_le_bytes())
             .collect();
-        assert_eq!(convert(&s32, SampleFormat::S32, None), s32);
         assert_eq!(
-            convert(&s32, SampleFormat::S24Packed, None),
+            convert(&s32, InputFormat::S32, SampleFormat::S32, None),
+            s32
+        );
+        assert_eq!(
+            convert(&s32, InputFormat::S32, SampleFormat::S24Packed, None),
             vec![0x34, 0x12, 0x00, 0x00, 0x00, 0xff]
         );
         let s16: Vec<u8> = [1000_i16, -1000]
             .iter()
             .flat_map(|v| v.to_le_bytes())
             .collect();
-        assert_eq!(convert(&s16, SampleFormat::S16, None), s16);
-        let halved = convert(&s16, SampleFormat::S16, Some(0.5));
+        assert_eq!(
+            convert(&s16, InputFormat::S16, SampleFormat::S16, None),
+            s16
+        );
+        let halved = convert(&s16, InputFormat::S16, SampleFormat::S16, Some(0.5));
         assert_eq!(i16::from_le_bytes([halved[0], halved[1]]), 500);
         assert_eq!(i16::from_le_bytes([halved[2], halved[3]]), -500);
+        let dsd = vec![0x69_u8; 8];
+        assert_eq!(
+            convert(&dsd, InputFormat::Raw, SampleFormat::DsdU32Be, Some(0.5)),
+            dsd,
+            "DSD is never scaled"
+        );
     }
 }
