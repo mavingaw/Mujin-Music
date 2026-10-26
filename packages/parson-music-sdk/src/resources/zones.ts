@@ -1,4 +1,27 @@
 import api, { getApiWebSocketURL } from "../core/http";
+import {
+  activeConvolutionFilter,
+  activeEqBands,
+  crossfeedActive,
+  crossfeedStrengthLabels,
+  describeEqBand,
+  dspProcesses,
+  headroomActive,
+  normalizeDspSettings,
+  type DspSettings,
+} from "../player/dsp";
+import {
+  buildSignalPath,
+  type ServerSignalPath,
+  type SignalPath,
+} from "../player/signal-path";
+import type {
+  DsdStrategy,
+  NetworkOutputInfo,
+  OutputDspSupport,
+  OutputFormatSupport,
+  OutputHardwareInfo,
+} from "./outputs";
 
 /**
  * Zones are every place music can play: each running Parson app (web,
@@ -36,15 +59,6 @@ export interface DeviceVolumeRange {
   current?: number | null;
 }
 
-/** Per-zone DSP: preamp, bass/treble shelves and headphone crossfeed. */
-export interface ZoneDsp {
-  enabled: boolean;
-  preamp_db: number;
-  bass_db: number;
-  treble_db: number;
-  crossfeed: boolean;
-}
-
 /** Signal path of the playing track, from file to device. */
 /**
  * Roon-style rating of a signal path, worst stage first: `low` when a lossy
@@ -65,6 +79,11 @@ export interface ZoneStreamInfo {
   steps: string[];
   /** Missing from servers older than the rating. */
   quality?: ZoneStreamQuality;
+  /**
+   * Every stage from the file to the device, for zones the server decodes
+   * for (audio devices, bridges, AirPlay).
+   */
+  signal_path?: ServerSignalPath;
 }
 
 /** What a zone plays as-is and what happens to everything else. */
@@ -137,19 +156,24 @@ export interface ZoneSettingsView {
   leveling_adjustment_db: number;
   /** Only the device the zone runs on sees and controls it. */
   private: boolean;
-  dsp?: ZoneDsp;
+  /** The zone's DSP chain (the same engine the DSP panel edits). */
+  dsp?: DspSettings;
   /** Audio devices: exclusive (bit-perfect) access. */
   exclusive?: boolean;
   volume_mode?: ZoneVolumeMode;
   volume_control?: ZoneVolumeControl;
   max_sample_rate?: number | null;
   max_bit_depth?: number | null;
+  dsd_strategy?: DsdStrategy;
+  max_dsd_rate?: number | null;
   supports: {
     crossfade: boolean;
     leveling: boolean;
     volume_limits: boolean;
     private: boolean;
     dsp?: boolean;
+    /** How DSD reaches the device can be chosen. */
+    dsd?: boolean;
     exclusive?: boolean;
     volume_modes?: ZoneVolumeMode[];
     max_format?: boolean;
@@ -175,12 +199,14 @@ export interface ZoneSettingsPatch {
   safety_min_volume?: number | null;
   safety_max_volume?: number | null;
   private?: boolean;
-  dsp?: ZoneDsp;
+  dsp?: DspSettings;
   exclusive?: boolean;
   volume_mode?: ZoneVolumeMode;
   volume_control?: ZoneVolumeControl;
   max_sample_rate?: number | null;
   max_bit_depth?: number | null;
+  dsd_strategy?: DsdStrategy;
+  max_dsd_rate?: number | null;
 }
 
 export interface ZoneGroupMember {
@@ -264,7 +290,50 @@ export interface Zone {
   settings?: ZoneSettingsView;
   /** Format limits and the signal path (Sonos, Chromecast, UPnP, devices). */
   output?: ZoneOutputInfo | null;
+  /**
+   * The physical outputs the zone plays through (Roon's endpoints): one
+   * DAC or player, or each member of a group. Missing from older servers.
+   */
+  endpoints?: ZoneEndpoint[];
   notes: string[];
+}
+
+/**
+ * One physical output: a DAC on the server or a Parson Bridge, an AirPlay
+ * receiver, a UPnP or OpenHome player, a Sonos room, an app.
+ */
+export interface ZoneEndpoint {
+  /** The zone it plays as on its own (a group member's id). */
+  id: string;
+  name: string;
+  /** e.g. `USB · hw:1,0` or `Linn Klimax DS`. */
+  detail: string;
+  /** The audio API or protocol, e.g. `ALSA`, `AirPlay`, `OpenHome`. */
+  driver: string | null;
+  /** e.g. `ALSA hw:1,0 exclusive`, following the zone's Exclusive Mode. */
+  mode_label: string | null;
+  /** e.g. `hw:1,0` or `192.168.1.40:7000`. */
+  address: string | null;
+  exclusive_capable: boolean;
+  /** Why its formats could not be read (another app holds it). */
+  probe_error: string | null;
+  /** Every standard rate, depth and DSD rate; `null` when not probed. */
+  formats: OutputFormatSupport | null;
+  /** Sample containers, e.g. `24-bit packed`. */
+  sample_formats: string[];
+  /** `[min, max]` channels. */
+  channels: [number, number] | null;
+  /** Native DSD containers the driver accepts, e.g. `DSD_U32_BE`. */
+  dsd_formats: string[];
+  hardware: OutputHardwareInfo | null;
+  /** A network player's protocol, identity and what it was tested with. */
+  network: NetworkOutputInfo | null;
+  /** What the server's DSP chain can do for it. */
+  dsp_support: OutputDspSupport | null;
+  /** Its own volume (a group member's, or the zone's). */
+  volume: ZoneVolume | null;
+  /** It has its own picture (`zoneIconUrl(id)`). */
+  has_icon: boolean;
 }
 
 /** A Parson Bridge: another machine whose audio devices are zones. */
@@ -772,44 +841,47 @@ export function anyZonePlaying(zones: Zone[]): boolean {
   );
 }
 
-const signed = (value: number) =>
-  value > 0 ? `+${value}` : value < 0 ? `\u2212${Math.abs(value)}` : "0";
-
-/** Headroom management: the level drops by the largest boost. */
-export function dspEffectivePreamp(dsp: ZoneDsp): number {
-  const boost = Math.max(dsp.bass_db, dsp.treble_db, 0);
-  return Math.min(dsp.preamp_db, -boost);
+/**
+ * Short DSP description, matching the server's signal path wording, e.g.
+ * `Headroom −3.0 dB, EQ 100 Hz low shelf +3.0 dB, Crossfeed (medium)`.
+ */
+/**
+ * The signal path of what a zone plays, as the server planned it: the
+ * server's leg covers the whole chain to the zone's output (device,
+ * bridge, network player or served stream), so no client leg is added.
+ * `null` while nothing from Parson plays there.
+ */
+export function zoneSignalPath(
+  zone: Pick<Zone, "name" | "output">,
+): SignalPath | null {
+  const server = zone.output?.stream?.signal_path;
+  if (!server) return null;
+  return buildSignalPath(server, {
+    platform: "web",
+    engine: "native",
+    playbackRate: 1,
+    preservePitch: true,
+    reverbWet: 0,
+    output: { kind: "native", name: zone.name },
+  });
 }
 
-export function isDspActive(dsp: ZoneDsp | null | undefined): boolean {
-  return Boolean(
-    dsp?.enabled &&
-    (dsp.preamp_db !== 0 ||
-      dsp.bass_db !== 0 ||
-      dsp.treble_db !== 0 ||
-      dsp.crossfeed),
-  );
-}
-
-/** Short DSP description, matching the server's signal path wording. */
-export function dspSummary(dsp: ZoneDsp | null | undefined): string {
-  if (!dsp || !isDspActive(dsp)) return "Off";
+export function dspSummary(dsp: DspSettings | null | undefined): string {
+  if (!dsp || !dspProcesses(dsp)) return "Off";
   const parts: string[] = [];
-  const preamp = dspEffectivePreamp(dsp);
-  if (preamp !== 0) parts.push(`Preamp ${signed(preamp)} dB`);
-  if (dsp.bass_db !== 0) parts.push(`Bass ${signed(dsp.bass_db)} dB`);
-  if (dsp.treble_db !== 0) parts.push(`Treble ${signed(dsp.treble_db)} dB`);
-  if (dsp.crossfeed) parts.push("Crossfeed");
+  if (headroomActive(dsp)) {
+    const db = Math.abs(Math.round(dsp.headroom.gainDb * 10) / 10);
+    parts.push(`Headroom ${db === 0 ? "0.0" : `\u2212${db.toFixed(1)}`} dB`);
+  }
+  const bands = activeEqBands(dsp);
+  if (bands.length) parts.push(`EQ ${bands.map(describeEqBand).join(", ")}`);
+  if (crossfeedActive(dsp))
+    parts.push(
+      `Crossfeed (${crossfeedStrengthLabels[dsp.crossfeed.strength].toLowerCase()})`,
+    );
+  if (activeConvolutionFilter(dsp)) parts.push("Convolution");
   return parts.join(", ");
 }
-
-export const DEFAULT_ZONE_DSP: ZoneDsp = {
-  enabled: false,
-  preamp_db: 0,
-  bass_db: 0,
-  treble_db: 0,
-  crossfeed: false,
-};
 
 export function volumeModeLabel(mode: ZoneVolumeMode): string {
   switch (mode) {
@@ -1186,12 +1258,14 @@ export interface ZoneSettingsDraft {
   safety_min_volume: number | null;
   safety_max_volume: number | null;
   private: boolean;
-  dsp: ZoneDsp;
+  dsp: DspSettings;
   exclusive: boolean;
   volume_mode: ZoneVolumeMode;
   volume_control: ZoneVolumeControl;
   max_sample_rate: number | null;
   max_bit_depth: number | null;
+  dsd_strategy: DsdStrategy;
+  max_dsd_rate: number | null;
 }
 
 /** The form's starting values for `zone`. */
@@ -1210,12 +1284,14 @@ export function zoneSettingsDraft(zone: Zone): ZoneSettingsDraft {
     safety_min_volume: volume && volume.min > 0 ? volume.min : null,
     safety_max_volume: volume && volume.max < 100 ? volume.max : null,
     private: settings?.private ?? false,
-    dsp: { ...DEFAULT_ZONE_DSP, ...settings?.dsp },
+    dsp: normalizeDspSettings(settings?.dsp),
     exclusive: settings?.exclusive ?? true,
     volume_mode: settings?.volume_mode ?? "hardware",
     volume_control: settings?.volume_control ?? "parson",
     max_sample_rate: settings?.max_sample_rate ?? null,
     max_bit_depth: settings?.max_bit_depth ?? null,
+    dsd_strategy: settings?.dsd_strategy ?? "auto",
+    max_dsd_rate: settings?.max_dsd_rate ?? null,
   };
 }
 
@@ -1254,21 +1330,16 @@ export function zoneSettingsPatch(
     "volume_control",
     "max_sample_rate",
     "max_bit_depth",
+    "dsd_strategy",
+    "max_dsd_rate",
   ] as const;
   for (const key of keys) {
     if (draft[key] !== initial[key]) {
       (patch as Record<string, unknown>)[key] = draft[key];
     }
   }
-  const dspKeys = [
-    "enabled",
-    "preamp_db",
-    "bass_db",
-    "treble_db",
-    "crossfeed",
-  ] as const;
-  if (dspKeys.some((key) => draft.dsp[key] !== initial.dsp[key])) {
-    patch.dsp = { ...draft.dsp };
+  if (JSON.stringify(draft.dsp) !== JSON.stringify(initial.dsp)) {
+    patch.dsp = normalizeDspSettings(draft.dsp);
   }
   return patch;
 }

@@ -60,6 +60,7 @@ export interface SignalFormat {
   summary: string;
 }
 
+/** `native`: the server plays the zone's output itself. */
 export type SignalStreamTarget = "direct" | "cast" | "native";
 
 /** Live measurements of the server's DSP chain while it plays. */

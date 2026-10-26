@@ -1,13 +1,18 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import api from "../core/http";
 import {
-  getNativeOutputSession,
-  getNativeOutputs,
-  nativeFormatLabel,
-  playOnNativeOutput,
-  refreshNativeOutputs,
-  sendNativeOutputCommand,
-  updateNativeOutputSettings,
+  addNetworkPlayer,
+  deleteConvolutionFilter,
+  dsdRateLabel,
+  getConvolutionFilterFile,
+  getConvolutionFilters,
+  getNetworkPlayers,
+  networkOutputIdentity,
+  outputErrorMessage,
+  removeNetworkPlayer,
+  uploadConvolutionFilter,
+  zoneIconUrl,
+  type NetworkOutputInfo,
 } from "./outputs";
 
 afterEach(() => mock.restore());
@@ -15,73 +20,85 @@ afterEach(() => mock.restore());
 const ok = (data: unknown) =>
   ({ data, status: 200, headers: new Headers() }) as never;
 
-test("lists and refreshes the server's devices", async () => {
-  const view = {
-    supported: true,
-    driver: "alsa",
-    simulated: false,
-    devices: [],
-  };
-  const get = spyOn(api, "get").mockResolvedValue(ok(view));
-  const post = spyOn(api, "post").mockResolvedValue(ok(view));
-  expect(await getNativeOutputs()).toBe(view as never);
-  expect(get).toHaveBeenCalledWith("/outputs/native");
-  await refreshNativeOutputs();
-  expect(post).toHaveBeenCalledWith("/outputs/native/admin/refresh", {});
-});
-
-test("saves a device's exclusive mode and format caps", async () => {
-  const put = spyOn(api, "put").mockResolvedValue(ok({ id: "alsa:USB:0" }));
-  await updateNativeOutputSettings("alsa:USB:0", {
-    exclusive: true,
-    max_sample_rate: 192_000,
-    max_bit_depth: 24,
+test("lists, adds and removes network players by address", async () => {
+  const players = { discovery: true, manual: [] };
+  const get = spyOn(api, "get").mockResolvedValue(ok(players));
+  const post = spyOn(api, "post").mockResolvedValue(ok(players));
+  const del = spyOn(api, "delete").mockResolvedValue(ok(players));
+  expect(await getNetworkPlayers()).toBe(players as never);
+  expect(get).toHaveBeenCalledWith("/zones/outputs/network");
+  await addNetworkPlayer({
+    protocol: "air_play",
+    address: " 10.0.0.9:7000 ",
+    name: " Kitchen ",
   });
-  expect(put).toHaveBeenCalledWith("/outputs/native/admin/settings", {
-    device_id: "alsa:USB:0",
-    settings: { exclusive: true, max_sample_rate: 192_000, max_bit_depth: 24 },
-  });
-});
-
-test("plays, controls and stops the native session", async () => {
-  const session = { device_id: "alsa:USB:0", state: "playing" };
-  const post = spyOn(api, "post").mockResolvedValue(ok(session));
-  const get = spyOn(api, "get").mockResolvedValue(ok(null));
-  expect(await getNativeOutputSession()).toBeNull();
-  expect(get).toHaveBeenCalledWith("/outputs/native/session");
-  await playOnNativeOutput({
-    device_id: "alsa:USB:0",
-    song_id: "song-1",
-    position_ms: 1234.6,
-  });
-  expect(post).toHaveBeenLastCalledWith("/outputs/native/session", {
-    device_id: "alsa:USB:0",
-    song_id: "song-1",
-    position_ms: 1235,
-  });
-  await playOnNativeOutput({
-    device_id: "alsa:USB:0",
-    song_id: "song-1",
-    leveling: { gain_db: -6.4, source: "album" },
-  });
-  expect(post).toHaveBeenLastCalledWith("/outputs/native/session", {
-    device_id: "alsa:USB:0",
-    song_id: "song-1",
-    position_ms: 0,
-    leveling: { gain_db: -6.4, source: "album" },
-  });
-  expect(await sendNativeOutputCommand("seek", -5)).toBe(session as never);
-  expect(post).toHaveBeenLastCalledWith("/outputs/native/session/commands", {
-    command: "seek",
-    position_ms: 0,
-  });
-  expect(await sendNativeOutputCommand("stop")).toBeNull();
-  expect(post).toHaveBeenLastCalledWith("/outputs/native/session/commands", {
-    command: "stop",
+  expect(post).toHaveBeenCalledWith(
+    "/zones/outputs/network",
+    { protocol: "air_play", address: "10.0.0.9:7000", name: "Kitchen" },
+    { timeout: 30_000 },
+  );
+  await addNetworkPlayer({ protocol: "upnp_av", address: "10.0.0.40" });
+  expect(post).toHaveBeenLastCalledWith(
+    "/zones/outputs/network",
+    { protocol: "upnp_av", address: "10.0.0.40", name: null },
+    { timeout: 30_000 },
+  );
+  await removeNetworkPlayer("10.0.0.9:7000");
+  expect(del).toHaveBeenCalledWith("/zones/outputs/network", {
+    data: { address: "10.0.0.9:7000" },
+    timeout: 30_000,
   });
 });
 
-test("labels rates like the format support list", () => {
-  expect(nativeFormatLabel(44_100)).toBe("44.1kHz");
-  expect(nativeFormatLabel(192_000)).toBe("192kHz");
+test("names network players and their pictures", () => {
+  expect(zoneIconUrl("upnp:abc def")).toEndWith("/zones/upnp%3Aabc%20def/icon");
+  const network = {
+    protocol: "open_home",
+    manufacturer: "Linn",
+    model: "Klimax DSM",
+  } as NetworkOutputInfo;
+  expect(networkOutputIdentity(network)).toBe("Linn Klimax DSM · OpenHome");
+  expect(
+    networkOutputIdentity({
+      ...network,
+      protocol: "air_play",
+      manufacturer: "Apple",
+      model: "Apple TV 4K",
+    }),
+  ).toBe("Apple TV 4K · AirPlay");
+  expect(dsdRateLabel(5_644_800)).toBe("DSD128");
+});
+
+test("uploads, lists, fetches and deletes convolution filters", async () => {
+  const filter = { id: "ab12", name: "Room" };
+  const post = spyOn(api, "post").mockResolvedValue(ok(filter));
+  const get = spyOn(api, "get").mockResolvedValue(ok([filter]));
+  const del = spyOn(api, "delete").mockResolvedValue(ok(undefined));
+  const file = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" });
+  expect(
+    await uploadConvolutionFilter(file, {
+      name: " Room ",
+      fileName: "room.wav",
+    }),
+  ).toBe(filter as never);
+  expect(post).toHaveBeenCalledWith("/outputs/admin/convolution", file, {
+    params: { name: "Room", file_name: "room.wav" },
+    headers: { "Content-Type": "audio/wav" },
+    timeout: 120_000,
+  });
+  expect(await getConvolutionFilters()).toEqual([filter] as never);
+  expect(get).toHaveBeenCalledWith("/outputs/convolution");
+  get.mockResolvedValue(ok(new Blob([new Uint8Array([7])])));
+  expect((await getConvolutionFilterFile("ab12")).byteLength).toBe(1);
+  expect(get).toHaveBeenLastCalledWith("/outputs/convolution/ab12/file", {
+    responseType: "blob",
+    timeout: 60_000,
+  });
+  await deleteConvolutionFilter("ab12");
+  expect(del).toHaveBeenCalledWith("/outputs/admin/convolution/ab12");
+});
+
+test("explains failed requests in the server's words", () => {
+  expect(outputErrorMessage(new Error("offline"), "fallback")).toBe("offline");
+  expect(outputErrorMessage("nope", "fallback")).toBe("fallback");
 });

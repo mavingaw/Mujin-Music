@@ -2,7 +2,7 @@
 
 import { usePlayer, usePlayerClock } from "@/features/player/player-context";
 import { defaultCover } from "@/lib/images/default-cover";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   useCloseLyricsOnNavigation,
   useFullscreenDismiss,
@@ -31,11 +31,13 @@ import { RadioThumbs } from "./radio/radio-controls";
 import { RadioNotices } from "./radio/radio-notices";
 import { useSignalPath } from "./signal-path";
 import { SignalPathLight } from "./signal-path-popover";
-import { DspPanel, isDspShortcut } from "./dsp-panel";
+import { DspPanel, isDspShortcut, type DspPanelTarget } from "./dsp-panel";
+import { useZoneDsp, zoneDspSupport } from "./zones/use-zone-dsp";
 import getBaseURL from "@/lib/api/server-url";
 import {
   nextRepeatMode,
   previewQueueEdit,
+  zoneSignalPath,
   zoneStatusLabel,
   type ZoneCommand,
 } from "@parson/music-sdk";
@@ -90,8 +92,6 @@ export default function PlayerBar() {
     signal,
     volumeLevelingMode,
     setVolumeLevelingMode,
-    dsp,
-    setDsp,
     output,
   } = usePlayer();
   const currentTime = usePlayerClock();
@@ -314,8 +314,14 @@ export default function PlayerBar() {
     Boolean(remote) || casting,
   );
   const signalSongId = castItem?.song_id || song.id;
+  // A zone the server plays (a device, bridge or network player) carries
+  // its whole planned chain; other remote zones show their own summary.
+  const remotePath = useMemo(
+    () => (remote ? zoneSignalPath(remote) : null),
+    [remote],
+  );
   // TIDAL and Qobuz tracks show the format their stream delivered instead.
-  const hideSignalPath = Boolean(remote) || isStreamingId(signalSongId);
+  const hideSignalPath = remote ? !remotePath : isStreamingId(signalSongId);
   const { path: signalPath, loading: signalLoading } = useSignalPath({
     audio: effectiveSong.audio,
     castDeviceName: cast.session?.receiver_name,
@@ -326,25 +332,52 @@ export default function PlayerBar() {
     songId: signalSongId,
     volume: effectiveVolume,
   });
-  const [dspOpen, setDspOpen] = useState(false);
-  const openDsp = useCallback(() => setDspOpen(true), []);
+  // The DSP engine edits the chain of the zone the bar controls (or one
+  // picked in the zone picker): this browser's own, or a remote zone's,
+  // which the server runs before that zone's output.
+  const { closeDsp, dspPanel, localDsp, openDsp: openZoneDsp } = zones;
+  const dspZone =
+    dspPanel.zoneId && dspPanel.zoneId !== zones.localZoneId
+      ? (zones.zones.find((zone) => zone.id === dspPanel.zoneId) ?? null)
+      : null;
+  const remoteDsp = useZoneDsp(dspZone);
+  const remoteId = remote?.id ?? null;
+  const dspAvailable = remote
+    ? Boolean(remote.settings?.supports.dsp)
+    : !casting;
+  const openDsp = useCallback(
+    () => openZoneDsp(remoteId),
+    [openZoneDsp, remoteId],
+  );
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!isDspShortcut(event) || event.defaultPrevented) return;
       event.preventDefault();
-      setDspOpen((value) => !value);
+      if (dspPanel.open) closeDsp();
+      else openZoneDsp(remoteId);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [closeDsp, dspPanel.open, openZoneDsp, remoteId]);
+  const dspTarget: DspPanelTarget = dspZone
+    ? {
+        kind: "server",
+        name: dspZone.name,
+        supported: Boolean(dspZone.settings?.supports.dsp),
+        support: zoneDspSupport(dspZone),
+      }
+    : casting
+      ? { kind: "cast" }
+      : { kind: "client", output };
   const signalProps = {
     casting,
-    onOpenDsp: casting || remote ? undefined : openDsp,
+    onOpenDsp: dspAvailable ? openDsp : undefined,
     levelingMode: volumeLevelingMode,
-    loading: signalLoading,
+    loading: remote ? false : signalLoading,
     onLevelingModeChange: setVolumeLevelingMode,
-    path: signalPath,
+    path: remote ? remotePath : signalPath,
     streamBitrate: signal.streamBitrate,
+    zoneId: remote?.id ?? null,
   };
 
   usePlayerShortcuts({
@@ -600,17 +633,19 @@ export default function PlayerBar() {
       ) : null}
 
       <DspPanel
-        casting={casting}
-        onChange={setDsp}
-        onOpenChange={setDspOpen}
-        open={dspOpen}
-        output={output}
-        path={signalPath}
-        settings={dsp}
+        error={dspZone ? remoteDsp.error : localDsp.error}
+        onChange={dspZone ? remoteDsp.setSettings : localDsp.setSettings}
+        onOpenChange={(open) => {
+          if (!open) closeDsp();
+        }}
+        open={dspPanel.open}
+        path={dspZone ? zoneSignalPath(dspZone) : signalPath}
+        settings={dspZone ? remoteDsp.settings : localDsp.settings}
+        target={dspTarget}
       />
 
       <PlayerFooter
-        onOpenDsp={casting || remote ? undefined : openDsp}
+        onOpenDsp={dspAvailable ? openDsp : undefined}
         albumCover={effectiveSong.album_object.cover_url}
         albumId={effectiveSong.album_object.id || album.id}
         albumName={effectiveSong.album_object.name || album.name}
@@ -659,7 +694,11 @@ export default function PlayerBar() {
         volume={effectiveVolume}
         zonePicker={<ZonePickerButton />}
         zoneLabel={remote ? remote.name : null}
-        zoneSignal={remote ? <ZoneQualityLight compact zone={remote} /> : null}
+        zoneSignal={
+          remote && !remotePath ? (
+            <ZoneQualityLight compact zone={remote} />
+          ) : null
+        }
       />
       {!casting && !fullscreenOpen && !queueOpen && <RadioNotices />}
       {handoffOpen && (

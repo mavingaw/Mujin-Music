@@ -1,11 +1,13 @@
 import {
   CROSSFADE_CHOICES,
+  DSD_RATES,
+  DSD_STRATEGIES,
   LEVELING_ADJUSTMENT_RANGE,
   LEVELING_TARGET_RANGE,
   SAMPLE_RATE_CHOICES,
   ZONE_ICONS,
   deviceVolumeLabel,
-  dspSummary,
+  dsdRateLabel,
   formatSampleRate,
   levelingModeLabel,
   streamQuality,
@@ -18,7 +20,7 @@ import {
   type Zone,
   type ZoneIconName,
   type ZoneLevelingMode,
-  type ZoneDsp,
+  type DsdStrategy,
   type ZoneSettingsDraft,
   type ZoneStreamInfo,
   type ZoneStreamQuality,
@@ -63,6 +65,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { palette } from "@/constants/colors";
+import { DspControls } from "./signal-path";
 import { signedLabel, steppedValue } from "@/lib/zones";
 import { useZones } from "@/providers/zones-provider";
 
@@ -148,8 +151,9 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
   const changed = Object.keys(patch).length > 0;
   const problem = zoneSettingsProblem(draft);
   const isThisPhone = zone.id === zones.localZoneId;
-  const updateDsp = (change: Partial<ZoneDsp>) =>
-    update({ dsp: { ...draft.dsp, ...change } });
+  const dspSupport =
+    zone.endpoints?.find((endpoint) => endpoint.dsp_support)?.dsp_support ??
+    null;
   const volumeModes = supports?.volume_modes ?? [];
   const stream = zone.output?.stream;
   const defaultName = zone.settings?.default_name ?? zone.name;
@@ -389,55 +393,25 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
 
         {supports?.dsp ? (
           <Section title="DSP">
-            <View style={styles.switchRow}>
-              <View style={styles.switchText}>
-                <Text style={styles.rowTitle}>Use DSP</Text>
-                <Text style={styles.note}>{dspSummary(draft.dsp)}</Text>
-              </View>
-              <Switch
-                accessibilityLabel="DSP enabled"
-                onValueChange={(enabled) => updateDsp({ enabled })}
-                value={draft.dsp.enabled}
-              />
-            </View>
-            {draft.dsp.enabled ? (
-              <>
-                <Stepper
-                  label="Bass"
-                  onChange={(bass_db) => updateDsp({ bass_db })}
-                  range={{ min: -12, max: 12 }}
-                  text={signedLabel(draft.dsp.bass_db, "dB")}
-                  value={draft.dsp.bass_db}
-                />
-                <Stepper
-                  label="Treble"
-                  onChange={(treble_db) => updateDsp({ treble_db })}
-                  range={{ min: -12, max: 12 }}
-                  text={signedLabel(draft.dsp.treble_db, "dB")}
-                  value={draft.dsp.treble_db}
-                />
-                <Stepper
-                  label="Preamp"
-                  onChange={(preamp_db) => updateDsp({ preamp_db })}
-                  range={{ min: -24, max: 0 }}
-                  text={signedLabel(draft.dsp.preamp_db, "dB")}
-                  value={draft.dsp.preamp_db}
-                />
-                <View style={styles.switchRow}>
-                  <Text style={styles.rowTitle}>Headphone crossfeed</Text>
-                  <Switch
-                    accessibilityLabel="Headphone crossfeed"
-                    onValueChange={(crossfeed) => updateDsp({ crossfeed })}
-                    value={draft.dsp.crossfeed}
-                  />
-                </View>
-              </>
-            ) : null}
+            <DspControls
+              crossfeed={dspSupport ? dspSupport.crossfeed : true}
+              onChange={(dsp) => update({ dsp })}
+              settings={draft.dsp}
+              title={
+                isThisPhone
+                  ? "DSP engine (this phone)"
+                  : "DSP engine (server, 64-bit)"
+              }
+              unavailable={
+                dspSupport && !dspSupport.available ? dspSupport.reason : null
+              }
+            />
           </Section>
         ) : null}
 
         {supports?.exclusive ||
         supports?.max_format ||
+        supports?.dsd ||
         volumeModes.length > 1 ? (
           <Section title="Device setup">
             {supports?.exclusive ? (
@@ -500,6 +474,54 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
                       : String(draft.max_sample_rate)
                   }
                 />
+              </>
+            ) : null}
+            {supports?.dsd ? (
+              <>
+                <Text style={[styles.label, styles.spaced]}>DSD playback</Text>
+                <Chips
+                  onSelect={(value) =>
+                    update({ dsd_strategy: value as DsdStrategy })
+                  }
+                  options={DSD_STRATEGIES.map((strategy) => ({
+                    value: strategy.value,
+                    label: strategy.label,
+                  }))}
+                  selected={draft.dsd_strategy}
+                />
+                <Text style={styles.note}>
+                  {
+                    DSD_STRATEGIES.find(
+                      (strategy) => strategy.value === draft.dsd_strategy,
+                    )?.description
+                  }
+                </Text>
+                {draft.dsd_strategy !== "pcm" ? (
+                  <>
+                    <Text style={[styles.label, styles.spaced]}>
+                      Max DSD rate
+                    </Text>
+                    <Chips
+                      onSelect={(value) =>
+                        update({
+                          max_dsd_rate: value === "none" ? null : Number(value),
+                        })
+                      }
+                      options={[
+                        { value: "none", label: "Device max" },
+                        ...DSD_RATES.map((rate) => ({
+                          value: String(rate),
+                          label: dsdRateLabel(rate),
+                        })),
+                      ]}
+                      selected={
+                        draft.max_dsd_rate === null
+                          ? "none"
+                          : String(draft.max_dsd_rate)
+                      }
+                    />
+                  </>
+                ) : null}
               </>
             ) : null}
           </Section>

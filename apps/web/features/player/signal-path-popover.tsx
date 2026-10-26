@@ -43,9 +43,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
-import { useOutputDeviceChoice } from "./dsp-store";
 import { OutputArtwork } from "./output-artwork";
-import { serverOutputId } from "./use-native-outputs";
 import {
   volumeLevelingModeLabels,
   volumeLevelingModes,
@@ -133,6 +131,8 @@ type PopoverProps = {
   onOpenDsp?: () => void;
   path: SignalPath | null;
   streamBitrate: number;
+  /** The zone the path belongs to when the server plays it. */
+  zoneId?: string | null;
 };
 
 /**
@@ -297,6 +297,7 @@ function SignalPathPanel({
   onOpenDsp,
   path,
   streamBitrate,
+  zoneId = null,
 }: PopoverProps & {
   anchor: React.RefObject<HTMLButtonElement | null>;
   id: string;
@@ -308,8 +309,6 @@ function SignalPathPanel({
   const style = usePanelPosition(anchor, panelRef, wide);
   const [selected, setSelected] = useState<string | null>(null);
   const titleId = `${id}-title`;
-  const [outputChoice] = useOutputDeviceChoice();
-  const deviceId = serverOutputId(outputChoice);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -395,7 +394,7 @@ function SignalPathPanel({
         {serverOutput && network ? (
           <OutputArtwork
             className="mt-1"
-            deviceId={deviceId}
+            zoneId={zoneId}
             hasIcon={network.has_icon}
             kind={network.kind}
             protocol={network.protocol}
@@ -516,8 +515,8 @@ function SignalPathPanel({
           {path && !serverOutput && !casting ? (
             <p className="mt-1 text-[11px] leading-4 text-zinc-500">
               Browsers only reach the device in shared mode. For exclusive,
-              bit-perfect playback, play on a server output (Settings → Audio
-              outputs).
+              bit-perfect playback, pick one of the server&apos;s zones in the
+              zone picker.
             </p>
           ) : null}
         </div>
@@ -597,7 +596,7 @@ function SignalPathPanel({
         </div>
       ) : null}
       <footer className="shrink-0 space-y-2 border-t border-white/6 px-5 py-2.5">
-        {!casting ? (
+        {!casting && !serverOutput ? (
           <LevelingControl
             mode={levelingMode}
             onChange={onLevelingModeChange}

@@ -1,4 +1,3 @@
-import type { ZoneDspChain } from "./zone-dsp";
 import {
   type DspChain,
   defaultProcessedAudioPreset,
@@ -24,8 +23,6 @@ export type AudioGraph = {
   source: MediaElementAudioSourceNode;
   wetGain: GainNode;
   wetConnected: boolean;
-  /** Per-zone DSP between the mix and the speakers. */
-  zoneDsp?: ZoneDspChain;
 };
 
 type PitchControllableMedia = {

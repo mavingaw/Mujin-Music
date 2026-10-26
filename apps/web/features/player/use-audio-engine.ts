@@ -23,13 +23,8 @@ import {
   requestedContextSampleRate,
   type DspAudioContext,
   type DspSettings,
-  type NativeOutputLeveling,
-  type NativeOutputSession,
 } from "@parson/music-sdk";
-import { NativeOutputElement } from "./native-output-element";
 import { crossfadeGains, leveledVolume } from "./crossfade";
-import { createZoneDspChain, dspParameters } from "./zone-dsp";
-import type { ZoneDsp } from "@parson/music-sdk";
 
 const CROSSFADE_TICK_MS = 50;
 
@@ -101,8 +96,6 @@ export function useAudioEngine() {
   const zoneLevelFactor = useRef<number | null>(null);
   /** Zone crossfade time in seconds (0: off). */
   const crossfadeSeconds = useRef(0);
-  /** Zone DSP for this device (preamp, shelves, crossfeed). */
-  const zoneDspRef = useRef<ZoneDsp | null>(null);
   /** The next source change should crossfade instead of cutting. */
   const crossfadeArmed = useRef(false);
   const crossfade = useRef<Crossfade | null>(null);
@@ -130,17 +123,10 @@ export function useAudioEngine() {
   const sinkIdRef = useRef("");
   const [activeSinkId, setActiveSinkId] = useState("");
   const [deviceSampleRate, setDeviceSampleRate] = useState<number | null>(null);
-  // Set while a server output plays: `audio.current` is then a
-  // NativeOutputElement and nothing is decoded in the browser.
-  const nativeRef = useRef<NativeOutputElement | null>(null);
-  const nativeLevelingRef = useRef<NativeOutputLeveling | null>(null);
-  const [nativeSession, setNativeSession] =
-    useState<NativeOutputSession | null>(null);
   const needsGraph = useCallback(
     () =>
       presetRef.current.wet > 0 ||
-      dspNeedsGraph(dspRef.current, sourceRateRef.current) ||
-      dspParameters(zoneDspRef.current).active,
+      dspNeedsGraph(dspRef.current, sourceRateRef.current),
     [],
   );
   const wantedRate = useCallback(
@@ -195,7 +181,7 @@ export function useAudioEngine() {
 
   const preloadAudioSource = useCallback(
     (next: string | null) => {
-      if (!next || typeof window === "undefined" || nativeRef.current) {
+      if (!next || typeof window === "undefined") {
         discardPreloadedAudio();
         return;
       }
@@ -265,7 +251,6 @@ export function useAudioEngine() {
   }, []);
 
   const ensureAudioGraph = useCallback(() => {
-    if (nativeRef.current) return null;
     recoverAudioElement();
     const element = audio.current;
     if (!element || graph.current || typeof window === "undefined")
@@ -301,17 +286,13 @@ export function useAudioEngine() {
       const wetGain = context.createGain();
       const convolver = context.createConvolver();
       convolver.buffer = buildReverbImpulse(context);
-      // Per-zone DSP runs after the preset mix, just before the speakers.
-      const zoneDsp = createZoneDspChain(context);
       mediaSource.connect(chain.input as unknown as AudioNode);
       chainOutput.connect(dryGain);
       convolver.connect(wetGain);
-      dryGain.connect(zoneDsp.input);
-      wetGain.connect(zoneDsp.input);
-      zoneDsp.output.connect(context.destination);
+      dryGain.connect(context.destination);
+      wetGain.connect(context.destination);
       dryGain.gain.value = 1;
       wetGain.gain.value = 0;
-      zoneDsp.apply(zoneDspRef.current);
       graph.current = {
         chain,
         convolver,
@@ -321,7 +302,6 @@ export function useAudioEngine() {
         source: mediaSource,
         wetConnected: false,
         wetGain,
-        zoneDsp,
       };
       setGraphSampleRate(context.sampleRate);
       loadImpulse(dspRef.current);
@@ -383,7 +363,6 @@ export function useAudioEngine() {
       const audioGraph =
         graph.current ?? (needsGraph() ? ensureAudioGraph() : null);
       if (!audioGraph) return;
-      audioGraph.zoneDsp?.apply(zoneDspRef.current);
       const chainOutput = audioGraph.chain.output as unknown as AudioNode;
       if (preset.wet > 0 && !audioGraph.wetConnected) {
         chainOutput.connect(audioGraph.convolver);
@@ -574,90 +553,6 @@ export function useAudioEngine() {
       .finally(() => window.clearTimeout(startTimeout));
   }, [applyPreset, recoverAudioElement]);
 
-  /**
-   * Plays through a server output (`deviceId`) or back through this
-   * browser (`null`), keeping the track, position and play state.
-   */
-  const setNativeOutput = useCallback(
-    (deviceId: string | null) => {
-      const current = nativeRef.current;
-      if ((current?.deviceId ?? null) === deviceId) return;
-      if (typeof window === "undefined") return;
-      finishCrossfade();
-      const element = audio.current;
-      const wasPlaying = Boolean(element && !element.paused);
-      const position = element?.currentTime ?? 0;
-      discardPreloadedAudio();
-      if (graph.current) {
-        graph.current.chain.dispose();
-        void graph.current.context.close().catch(() => {});
-        graph.current = null;
-        setGraphSampleRate(null);
-      }
-      if (current) {
-        current.dispose();
-      } else if (element) {
-        element.pause();
-        element.removeAttribute("src");
-        element.load();
-      }
-      playbackAttempt.current += 1;
-      let next: HTMLAudioElement;
-      if (deviceId) {
-        const native = new NativeOutputElement(deviceId, {
-          onSession: setNativeSession,
-        });
-        native.leveling = nativeLevelingRef.current;
-        nativeRef.current = native;
-        if (source.current) native.src = source.current;
-        native.currentTime = position;
-        next = native as unknown as HTMLAudioElement;
-      } else {
-        nativeRef.current = null;
-        setNativeSession(null);
-        next = createAudioElement();
-        configureAudioElement(next);
-        const sinkTarget = next as HTMLAudioElement & SinkTarget;
-        if (sinkIdRef.current && sinkTarget.setSinkId)
-          void sinkTarget.setSinkId(sinkIdRef.current).catch(() => {});
-        if (source.current) {
-          next.addEventListener(
-            "loadedmetadata",
-            () => {
-              try {
-                if (position > 0) next.currentTime = position;
-              } catch {}
-            },
-            { once: true },
-          );
-          next.src = source.current;
-        }
-      }
-      audio.current = next;
-      recovered.current = true;
-      setIsPlaying(false);
-      setAudioVersion((version) => version + 1);
-      if (wasPlaying) window.setTimeout(() => playAudioSource(), 0);
-    },
-    [
-      configureAudioElement,
-      discardPreloadedAudio,
-      finishCrossfade,
-      playAudioSource,
-    ],
-  );
-
-  useEffect(() => () => nativeRef.current?.dispose(), []);
-
-  /** Leveling the server applies while a server output plays. */
-  const setNativeLeveling = useCallback(
-    (leveling: NativeOutputLeveling | null) => {
-      nativeLevelingRef.current = leveling;
-      if (nativeRef.current) nativeRef.current.leveling = leveling;
-    },
-    [],
-  );
-
   /** Rebuilds the playback path after a graph change, keeping position. */
   const resetAudioGraph = useCallback(() => {
     const wasPlaying = Boolean(audio.current && !audio.current.paused);
@@ -727,18 +622,17 @@ export function useAudioEngine() {
   );
 
   /**
-   * Zone settings for this device: crossfade time, the zone's leveling
-   * factor (`null` when the zone does not level) and its DSP.
+   * Zone settings for this device: crossfade time and the zone's leveling
+   * factor (`null` when the zone does not level). The zone's DSP chain
+   * arrives through `setDspSettings`.
    */
   const setOutputSettings = useCallback(
     ({
       crossfadeSeconds: seconds,
       levelingFactor: factor,
-      dsp,
     }: {
       crossfadeSeconds: number;
       levelingFactor: number | null;
-      dsp?: ZoneDsp | null;
     }) => {
       crossfadeSeconds.current = Math.max(0, seconds);
       zoneLevelFactor.current =
@@ -748,14 +642,8 @@ export function useAudioEngine() {
       if (audio.current && !crossfade.current) {
         audio.current.volume = elementVolume();
       }
-      zoneDspRef.current = dsp ?? null;
-      if (nativeRef.current) return;
-      const audioGraph =
-        graph.current ??
-        (dspParameters(dsp).active ? ensureAudioGraph() : null);
-      audioGraph?.zoneDsp?.apply(zoneDspRef.current);
     },
-    [elementVolume, ensureAudioGraph],
+    [elementVolume],
   );
 
   const setAudioVolume = useCallback(
@@ -857,15 +745,12 @@ export function useAudioEngine() {
     isPlaying,
     loadedImpulse,
     muted,
-    nativeSession,
     playAudioSource,
     preloadAudioSource,
     reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
     setDspSettings,
-    setNativeLeveling,
-    setNativeOutput,
     setOutputDevice,
     setOutputSettings,
     setAudioSource,

@@ -37,6 +37,23 @@ test("step icons follow the server's wording", () => {
   );
   expect(stepIcon("Resampled 192 kHz to 96 kHz")).toBe("rate");
   expect(stepIcon("DSP: Bass +3 dB")).toBe("dsp");
+  expect(stepIcon("Parametric EQ: 1 band: 100 Hz low shelf +3.0 dB")).toBe(
+    "dsp",
+  );
+  expect(stepIcon("Headroom: -3.0 dB")).toBe("dsp");
+  expect(stepIcon("Crossfeed: Medium")).toBe("dsp");
+  expect(stepIcon("Convolution: Room correction")).toBe("dsp");
+  expect(
+    stepIcon("Sample rate conversion: 44.1kHz to 48kHz (linear phase)"),
+  ).toBe("rate");
+  expect(stepIcon("Bit depth reduction: 24bit to 16bit, TPDF dither")).toBe(
+    "depth",
+  );
+  expect(
+    stepIcon(
+      "Renderer reports: decoding FLAC 96 kHz/24-bit, exactly what Parson sends",
+    ),
+  ).toBe("decode");
   expect(
     stepIcon("Sync: Living Room is the clock master and gets every sample"),
   ).toBe("sync");

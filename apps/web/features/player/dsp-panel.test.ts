@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { NativeOutputDevice } from "@parson/music-sdk";
+import type { OutputDspSupport } from "@parson/music-sdk";
 import { isDspShortcut, panelAvailability } from "./dsp-panel";
 
 const key = (overrides: Partial<KeyboardEvent>) => ({
@@ -32,63 +32,52 @@ describe("DSP engine shortcut", () => {
   });
 });
 
+const support: OutputDspSupport = {
+  available: true,
+  reason: null,
+  engine: "Parson DSP, 64-bit float",
+  crossfeed: true,
+  sample_rates: [44_100, 48_000, 88_200, 96_000],
+  output_bits: 32,
+};
 const dac = {
-  id: "alsa:USB:0",
+  kind: "server" as const,
   name: "USB DAC",
-  dsp_support: {
-    available: true,
-    reason: null,
-    engine: "Parson DSP, 64-bit float",
-    crossfeed: true,
-    sample_rates: [44_100, 48_000, 88_200, 96_000],
-    output_bits: 32,
-  },
-} as unknown as NativeOutputDevice;
+  supported: true,
+  support,
+};
+const browser = { kind: "client" as const, output: {} as never };
 
 describe("where the DSP engine runs", () => {
-  test("a server output runs the chain on the server in 64-bit float", () => {
-    const availability = panelAvailability(
-      { serverOutputId: dac.id, serverDevices: [dac] },
-      false,
-      false,
-    );
+  test("a server zone runs the chain on the server in 64-bit float", () => {
+    const availability = panelAvailability(dac, false);
     expect(availability.available).toBeTrue();
     expect(availability.precision).toBe("64-bit float");
+    expect(availability.engine).toContain("before USB DAC");
     expect(availability.sampleRates).toEqual([44_100, 48_000, 88_200, 96_000]);
   });
 
   test("controls grey out only when the chain truly cannot apply", () => {
-    expect(
-      panelAvailability({ serverOutputId: null, serverDevices: [] }, true)
-        .available,
-    ).toBeFalse();
-    expect(
-      panelAvailability(
-        { serverOutputId: null, serverDevices: [] },
-        false,
-        false,
-      ).available,
-    ).toBeFalse();
-    const unprobed = {
+    expect(panelAvailability({ kind: "cast" }).available).toBeFalse();
+    expect(panelAvailability(browser, false).available).toBeFalse();
+    const blocked = panelAvailability({
       ...dac,
-      dsp_support: {
-        ...dac.dsp_support!,
+      support: {
+        ...support,
         available: false,
         reason: "Parson could not read the formats USB DAC accepts.",
       },
-    };
-    const blocked = panelAvailability(
-      { serverOutputId: dac.id, serverDevices: [unprobed] },
-      false,
-    );
+    });
     expect(blocked.available).toBeFalse();
     expect(blocked.reason).toContain("USB DAC");
-    expect(
-      panelAvailability(
-        { serverOutputId: null, serverDevices: [] },
-        false,
-        true,
-      ).available,
-    ).toBeTrue();
+    const unsupported = panelAvailability({
+      kind: "server",
+      name: "Kitchen",
+      supported: false,
+      support: null,
+    });
+    expect(unsupported.available).toBeFalse();
+    expect(unsupported.reason).toContain("Kitchen");
+    expect(panelAvailability(browser, true).available).toBeTrue();
   });
 });

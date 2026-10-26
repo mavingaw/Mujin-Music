@@ -17,7 +17,6 @@ import {
   formatFrequency,
   formatRealtimeFactor,
   formatSampleRate,
-  isNetworkDriver,
   recommendedHeadroomDb,
   SIGNAL_CLIPPING_COLOR,
   signalLightColor,
@@ -28,6 +27,7 @@ import {
   type DspSettings,
   type EqBand,
   type EqFilterType,
+  type OutputDspSupport,
   type SignalPath,
 } from "@parson/music-sdk";
 import {
@@ -359,21 +359,41 @@ function hasWebAudio() {
   );
 }
 
-/** Where the chain runs for the chosen output, and what it can do there. */
+/**
+ * Where a zone's DSP chain runs: in this browser (its own zone, with the
+ * browser's output device picker), on the server before a zone's output
+ * (devices, bridges, network players, served streams), or nowhere (Cast).
+ */
+export type DspPanelTarget =
+  | { kind: "client"; output: PlayerOutputState }
+  | {
+      kind: "server";
+      /** The zone's name. */
+      name: string;
+      /** The zone takes a DSP chain at all. */
+      supported: boolean;
+      /** What the engine can do for the zone's output. */
+      support: OutputDspSupport | null;
+    }
+  | { kind: "cast" };
+
+/** Where the chain runs for the chosen zone, and what it can do there. */
 export function panelAvailability(
-  output: Pick<PlayerOutputState, "serverOutputId" | "serverDevices">,
-  casting: boolean,
+  target: DspPanelTarget,
   webAudio = hasWebAudio(),
 ): DspAvailability {
-  if (casting) return dspAvailability({ kind: "cast" });
-  if (output.serverOutputId) {
-    const device = output.serverDevices.find(
-      (item) => item.id === output.serverOutputId,
-    );
+  if (target.kind === "cast") return dspAvailability({ kind: "cast" });
+  if (target.kind === "server") {
+    if (!target.supported)
+      return {
+        ...dspAvailability({ kind: "cast" }),
+        reason: `${target.name} plays what its own app sends, so Parson cannot process it.`,
+        engine: "Not available on this zone",
+      };
     return dspAvailability({
       kind: "server",
-      deviceName: device?.name ?? "the server output",
-      support: device?.dsp_support,
+      deviceName: target.name,
+      support: target.support ?? undefined,
     });
   }
   return dspAvailability({ kind: "client", webAudio });
@@ -386,25 +406,27 @@ function sampleRateLabel(mode: DspSampleRateMode, deviceLabel: string) {
 }
 
 export function DspPanel({
-  casting = false,
+  error = null,
   open,
   onOpenChange,
-  output,
   path,
   settings,
   onChange,
+  target,
 }: {
-  casting?: boolean;
+  /** Saving the zone's chain failed. */
+  error?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  output: PlayerOutputState;
   path: SignalPath | null;
   settings: DspSettings;
   onChange: (settings: DspSettings) => void;
+  target: DspPanelTarget;
 }) {
-  const availability = panelAvailability(output, casting);
+  const availability = panelAvailability(target);
   const blocked = availability.available ? null : availability.reason;
-  const serverRun = Boolean(output.serverOutputId) && availability.available;
+  const serverRun = target.kind === "server" && availability.available;
+  const output = target.kind === "client" ? target.output : null;
   const status = path?.processing?.status ?? null;
   const outputSelectId = useId();
   const headroomId = useId();
@@ -414,7 +436,10 @@ export function DspPanel({
     update({ eq: { ...settings.eq, preset, bands } });
   const clipping = dspMayClip(settings);
   const recommended = recommendedHeadroomDb(settings);
-  const outputName = output.label ?? "System default output";
+  const outputName =
+    target.kind === "server"
+      ? target.name
+      : (output?.label ?? "System default output");
   const quality = path?.quality ?? null;
 
   return (
@@ -432,7 +457,7 @@ export function DspPanel({
             <DialogDescription className="mt-0.5 text-xs text-zinc-500">
               Processing for <span className="text-zinc-300">{outputName}</span>
               {availability.precision ? `, ${availability.engine}` : ""}. Each
-              output device keeps its own settings.
+              zone keeps its own settings.
             </DialogDescription>
           </div>
           <div className="flex items-center gap-2 pt-1 text-xs text-zinc-400">
@@ -533,79 +558,50 @@ export function DspPanel({
 
         <div className="space-y-3 px-5 py-4">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <label
-              className="text-xs font-medium text-zinc-300"
-              htmlFor={outputSelectId}
-            >
-              Output device
-            </label>
-            <select
-              className={cn(fieldClass, "min-w-0 flex-1")}
-              disabled={!output.selectable && !output.serverDevices.length}
-              id={outputSelectId}
-              onChange={(event) => output.select(event.target.value)}
-              value={output.selectedId}
-            >
-              <option value="">
-                System default
-                {output.devices.find((device) => device.id === "default")?.label
-                  ? ` (${output.devices
-                      .find((device) => device.id === "default")!
-                      .label.replace(/^Default\s*[-–]\s*/i, "")})`
-                  : ""}
-              </option>
-              {output.selectable
-                ? output.devices
-                    .filter((device) => device.id !== "default")
-                    .map((device, index) => (
-                      <option key={device.id} value={device.id}>
-                        {device.label || `Output ${index + 1}`}
-                      </option>
-                    ))
-                : null}
-              {output.serverDevices.some(
-                (device) => !isNetworkDriver(device.driver),
-              ) ? (
-                <optgroup label="Server outputs (exclusive, bit-perfect)">
-                  {output.serverDevices
-                    .filter((device) => !isNetworkDriver(device.driver))
-                    .map((device) => (
-                      <option
-                        disabled={!device.formats}
-                        key={device.id}
-                        value={`server:${device.id}`}
-                      >
-                        {device.name} · {device.mode_label}
-                      </option>
-                    ))}
-                </optgroup>
-              ) : null}
-              {output.serverDevices.some((device) =>
-                isNetworkDriver(device.driver),
-              ) ? (
-                <optgroup label="Network players (server DSP, then the network)">
-                  {output.serverDevices
-                    .filter((device) => isNetworkDriver(device.driver))
-                    .map((device) => (
-                      <option
-                        disabled={!device.formats}
-                        key={device.id}
-                        value={`server:${device.id}`}
-                      >
-                        {device.name} · {device.mode_label}
-                      </option>
-                    ))}
-                </optgroup>
-              ) : null}
-            </select>
-            {output.labelsHidden ? (
-              <button
-                className="h-8 rounded-md border border-white/10 px-2.5 text-xs text-zinc-300 hover:bg-white/6"
-                onClick={() => void output.requestLabels()}
-                type="button"
-              >
-                Show device names
-              </button>
+            {output ? (
+              <>
+                <label
+                  className="text-xs font-medium text-zinc-300"
+                  htmlFor={outputSelectId}
+                >
+                  Output device
+                </label>
+                <select
+                  className={cn(fieldClass, "min-w-0 flex-1")}
+                  disabled={!output.selectable}
+                  id={outputSelectId}
+                  onChange={(event) => output.select(event.target.value)}
+                  value={output.selectedId}
+                >
+                  <option value="">
+                    System default
+                    {output.devices.find((device) => device.id === "default")
+                      ?.label
+                      ? ` (${output.devices
+                          .find((device) => device.id === "default")!
+                          .label.replace(/^Default\s*[-–]\s*/i, "")})`
+                      : ""}
+                  </option>
+                  {output.selectable
+                    ? output.devices
+                        .filter((device) => device.id !== "default")
+                        .map((device, index) => (
+                          <option key={device.id} value={device.id}>
+                            {device.label || `Output ${index + 1}`}
+                          </option>
+                        ))
+                    : null}
+                </select>
+                {output.labelsHidden ? (
+                  <button
+                    className="h-8 rounded-md border border-white/10 px-2.5 text-xs text-zinc-300 hover:bg-white/6"
+                    onClick={() => void output.requestLabels()}
+                    type="button"
+                  >
+                    Show device names
+                  </button>
+                ) : null}
+              </>
             ) : null}
             {blocked ? (
               <p
@@ -615,22 +611,17 @@ export function DspPanel({
                 {blocked}
               </p>
             ) : null}
-            {output.serverDspError ? (
-              <p className="w-full text-[11px] text-red-300">
-                {output.serverDspError}
-              </p>
+            {error ? (
+              <p className="w-full text-[11px] text-red-300">{error}</p>
             ) : null}
-            {output.serverOutputId ? (
+            {serverRun ? (
               <p className="flex w-full items-start gap-1.5 text-[11px] leading-4 text-zinc-500">
                 <Server className="mt-px h-3 w-3 shrink-0" />
                 <span>
-                  {isNetworkDriver(
-                    output.serverDevices.find(
-                      (device) => device.id === output.serverOutputId,
-                    )?.driver,
-                  )
-                    ? "The server runs this chain itself, in 64-bit float, then sends the result over the network to the player; nothing on the way mixes it. Set the player's format limits in "
-                    : "The server runs this chain itself, in 64-bit float, before the device. In exclusive mode the result reaches it with no mixer or second resampler after Parson. Set Exclusive Mode and format limits in "}
+                  The server runs this chain itself, in 64-bit float, before{" "}
+                  {target.name}; nothing after Parson mixes or resamples it
+                  again. Set the zone's device mode and format limits in its
+                  zone settings or in{" "}
                   <a
                     className="text-zinc-300 underline underline-offset-2"
                     href="/settings?tab=outputs"
@@ -640,7 +631,8 @@ export function DspPanel({
                   .
                 </span>
               </p>
-            ) : !output.selectable ? (
+            ) : null}
+            {output && !output.selectable ? (
               <p className="w-full text-[11px] text-zinc-500">
                 This browser always plays through the system default output.
               </p>
