@@ -10,6 +10,9 @@
 #          the same test after approving the sign-in), optionally
 #          PARSON_LIVE_TIDAL_CLIENT_SECRET
 #   Either: PARSON_LIVE_*_TRACK to test a particular track id.
+#   Subscriber-only: PARSON_LIVE_KEY_SERVICE_URL (a Parson key service)
+#          in place of the app and client ids, with only the Qobuz email
+#          and password and the TIDAL refresh token.
 #
 # The test signs in, syncs favorites, streams a favorite at the highest
 # quality through Parson's proxy and fails unless the delivered format
@@ -44,23 +47,29 @@ jobs:
       PARSON_LIVE_TIDAL_CLIENT_SECRET: ${{ secrets.PARSON_LIVE_TIDAL_CLIENT_SECRET }}
       PARSON_LIVE_TIDAL_REFRESH_TOKEN: ${{ secrets.PARSON_LIVE_TIDAL_REFRESH_TOKEN }}
       PARSON_LIVE_TIDAL_TRACK: ${{ secrets.PARSON_LIVE_TIDAL_TRACK }}
+      PARSON_LIVE_KEY_SERVICE_URL: ${{ secrets.PARSON_LIVE_KEY_SERVICE_URL }}
     steps:
       - name: Check for account secrets
         id: accounts
         run: |
           qobuz=false
           tidal=false
-          if [ -n "$PARSON_LIVE_QOBUZ_APP_ID" ] && [ -n "$PARSON_LIVE_QOBUZ_APP_SECRET" ] \
-            && [ -n "$PARSON_LIVE_QOBUZ_EMAIL" ] && [ -n "$PARSON_LIVE_QOBUZ_PASSWORD" ]; then
+          keys=false
+          if [ -n "$PARSON_LIVE_KEY_SERVICE_URL" ] || { [ -n "$PARSON_LIVE_QOBUZ_APP_ID" ] && [ -n "$PARSON_LIVE_QOBUZ_APP_SECRET" ]; }; then
+            keys=true
+          fi
+          if [ "$keys" = true ] && [ -n "$PARSON_LIVE_QOBUZ_EMAIL" ] && [ -n "$PARSON_LIVE_QOBUZ_PASSWORD" ]; then
             qobuz=true
           fi
           # TIDAL needs a refresh token here: nobody can approve a sign-in
           # code in CI.
-          if [ -n "$PARSON_LIVE_TIDAL_CLIENT_ID" ] && [ -n "$PARSON_LIVE_TIDAL_REFRESH_TOKEN" ]; then
+          if { [ -n "$PARSON_LIVE_TIDAL_CLIENT_ID" ] || [ -n "$PARSON_LIVE_KEY_SERVICE_URL" ]; } \
+            && [ -n "$PARSON_LIVE_TIDAL_REFRESH_TOKEN" ]; then
             tidal=true
-          elif [ -n "$PARSON_LIVE_TIDAL_CLIENT_ID" ]; then
-            echo "::warning::PARSON_LIVE_TIDAL_CLIENT_ID is set without PARSON_LIVE_TIDAL_REFRESH_TOKEN; TIDAL is skipped."
+          elif [ -n "$PARSON_LIVE_TIDAL_CLIENT_ID" ] || [ -n "$PARSON_LIVE_KEY_SERVICE_URL" ]; then
+            echo "::warning::TIDAL keys are set without PARSON_LIVE_TIDAL_REFRESH_TOKEN; TIDAL is skipped."
             echo "PARSON_LIVE_TIDAL_CLIENT_ID=" >> "$GITHUB_ENV"
+            echo "PARSON_LIVE_TIDAL_SKIP=1" >> "$GITHUB_ENV"
           fi
           if [ "$qobuz" = false ] && [ "$tidal" = false ]; then
             echo "::notice::No live account secrets; real TIDAL and Qobuz streaming was not tested."

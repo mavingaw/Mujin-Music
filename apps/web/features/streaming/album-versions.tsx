@@ -4,14 +4,13 @@ import {
   SOURCE_PREFERENCES,
   SOURCE_PREFERENCE_LABELS,
   STREAMING_PROVIDER_NAMES,
-  getAlbumInfo,
+  albumPlayChoice,
+  findAlbumVersions,
   getSourcePreference,
-  localAlbumFormat,
   rankAlbumVersions,
-  searchLibrary,
-  searchStreaming,
   setSourcePreference,
   type AlbumVersion,
+  type AlbumVersionSubject,
   type RankedAlbumVersion,
   type StreamingAlbum,
   type StreamingSourcePreference,
@@ -33,88 +32,59 @@ export function useSourcePreference() {
   });
 }
 
-const comparable = (value: string) =>
-  value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/\(.*?\)|\[.*?\]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+/** A streaming album page's album, as the subject of a versions search. */
+export function streamingAlbumSubject(
+  album: StreamingAlbum,
+): AlbumVersionSubject {
+  return {
+    id: album.id,
+    title: album.title,
+    artistName: album.artist.name,
+    source: album.provider,
+    format: album.format ?? null,
+  };
+}
+
+export function albumVersionsKey(subjectId: string, connected: string[]) {
+  return ["streaming", "versions", subjectId, connected.join(",")] as const;
+}
 
 /**
- * Every place this album lives (this service, the other one, local files),
- * ordered by the listener's source preference.
+ * Every place this album lives (local files, TIDAL, Qobuz), ordered by the
+ * listener's source preference. Nothing is searched until a service is
+ * connected: with none, this page's copy is the only one.
  */
-export function useAlbumVersions(album: StreamingAlbum) {
+export function useAlbumVersions(subject: AlbumVersionSubject | null) {
   const { connected } = useStreamingProviders();
   const preference = useSourcePreference();
-  const others = connected
-    .map((provider) => provider.id)
-    .filter((provider) => provider !== album.provider);
-  const query = `${album.artist.name} ${album.title}`;
+  const providers = connected.map((provider) => provider.id);
   const versions = useQuery({
-    queryKey: ["streaming", "versions", album.id, others.join(",")],
-    queryFn: async (): Promise<AlbumVersion[]> => {
-      const [remote, local] = await Promise.all([
-        others.length
-          ? searchStreaming(query, { providers: others, limit: 10 })
-          : Promise.resolve({ query, services: [] }),
-        searchLibrary(album.title).catch(() => []),
-      ]);
-      const title = comparable(album.title);
-      const artist = comparable(album.artist.name);
-      const streaming = remote.services.flatMap((service) =>
-        (service.results?.albums ?? []).filter(
-          (candidate) =>
-            comparable(candidate.title) === title &&
-            comparable(candidate.artist.name) === artist,
-        ),
-      );
-      const localAlbums = local.filter(
-        (item) =>
-          item.item_type === "album" &&
-          comparable(item.name) === title &&
-          comparable(item.artist_object?.name ?? "") === artist,
-      );
-      // The local files' format comes from the indexer's technical read.
-      const localVersions = await Promise.all(
-        localAlbums.map(async (item): Promise<AlbumVersion> => {
-          const info = await getAlbumInfo(item.id, false).catch(() => null);
-          const songs =
-            info && "songs" in info && Array.isArray(info.songs)
-              ? info.songs
-              : [];
-          return {
-            id: item.id,
-            title: item.name,
-            source: "local",
-            format: localAlbumFormat(songs),
-          };
-        }),
-      );
-      return [
-        {
-          id: album.id,
-          title: album.title,
-          source: album.provider,
-          format: album.format ?? null,
-        },
-        ...streaming.map((version): AlbumVersion => ({
-          id: version.id,
-          title: version.title,
-          source: version.provider,
-          format: version.format ?? null,
-        })),
-        ...localVersions,
-      ];
-    },
+    queryKey: albumVersionsKey(subject?.id ?? "", providers),
+    queryFn: (): Promise<AlbumVersion[]> =>
+      findAlbumVersions(subject!, providers),
+    enabled: Boolean(subject) && providers.length > 0,
     staleTime: 5 * 60_000,
   });
-  const ranked = versions.data
-    ? rankAlbumVersions(versions.data, preference.data ?? "highest_quality")
-    : [];
-  return { ranked, preference: preference.data ?? "highest_quality" };
+  const current = preference.data ?? "highest_quality";
+  const ranked = versions.data ? rankAlbumVersions(versions.data, current) : [];
+  return {
+    ranked,
+    preference: current,
+    /** True while the copies are still being looked up. */
+    pending: Boolean(subject) && providers.length > 0 && versions.isPending,
+    /** What album-level Play starts; null when this is the only copy. */
+    choice: subject ? albumPlayChoice(subject.id, ranked) : null,
+    /** Resolves the ranking for a Play pressed before it was ready. */
+    async resolve(): Promise<RankedAlbumVersion[]> {
+      if (!subject || !providers.length) return [];
+      if (versions.data) return ranked;
+      const settled = await Promise.race([
+        versions.refetch().then((result) => result.data ?? null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000)),
+      ]);
+      return settled ? rankAlbumVersions(settled, current) : [];
+    },
+  };
 }
 
 function sourceName(version: RankedAlbumVersion) {
@@ -124,17 +94,21 @@ function sourceName(version: RankedAlbumVersion) {
 }
 
 /** Points at the copy the preference would play when it is not this one. */
-export function BetterVersionNotice({ album }: { album: StreamingAlbum }) {
-  const { ranked } = useAlbumVersions(album);
+export function BetterVersionNotice({
+  subject,
+}: {
+  subject: AlbumVersionSubject;
+}) {
+  const { ranked } = useAlbumVersions(subject);
   const best = ranked[0];
-  if (!best || ranked.length < 2 || best.id === album.id) return null;
+  if (!best || ranked.length < 2 || best.id === subject.id) return null;
   return (
     <Link
       className="mb-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/4 px-4 py-3 text-sm text-zinc-300 transition-colors hover:bg-white/7"
       href={`/album?id=${encodeURIComponent(best.id)}`}
     >
       <span className="min-w-0 flex-1">
-        Your preferred copy is in {sourceName(best)}
+        Play starts your preferred copy, in {sourceName(best)}
         {best.format?.label ? ` (${best.format.label})` : ""}.{" "}
         <span className="text-zinc-500">{best.reason}</span>
       </span>
@@ -146,8 +120,9 @@ export function BetterVersionNotice({ album }: { album: StreamingAlbum }) {
   );
 }
 
-export function AlbumVersions({ album }: { album: StreamingAlbum }) {
-  const { ranked, preference } = useAlbumVersions(album);
+export function AlbumVersions({ subject }: { subject: AlbumVersionSubject }) {
+  const album = subject;
+  const { ranked, preference } = useAlbumVersions(subject);
   if (ranked.length < 2) return null;
   return (
     <section className="mt-10">

@@ -2748,6 +2748,7 @@ mod tests {
             crate::providers::ClientCredentials {
                 client_id: "deployment-client".into(),
                 client_secret: None,
+                ..Default::default()
             },
         )]);
         let hub = StreamingHub::new(
@@ -3782,12 +3783,18 @@ mod tests {
     /// preview fails. TIDAL uses `PARSON_LIVE_TIDAL_REFRESH_TOKEN` when set
     /// (unattended); otherwise it prints a link to approve within five
     /// minutes and, outside CI, the refresh token to save as that secret.
+    ///
+    /// With `PARSON_LIVE_KEY_SERVICE_URL` (a Parson key service) instead of
+    /// app or client ids, it signs in the way a subscriber does: a Qobuz
+    /// email and password only, and TIDAL by refresh token or, when the
+    /// service's client allows it, a device code.
     #[actix_web::test]
     #[ignore = "needs real TIDAL or Qobuz accounts; see the doc comment"]
     async fn live_accounts_sign_in_sync_favorites_and_stream_hi_res() {
         let pool = pool();
         let transport =
             Arc::new(crate::providers::transport::ReqwestTransport::new().expect("http client"));
+        let key_service = live("PARSON_LIVE_KEY_SERVICE_URL");
         let hub = StreamingHub::new(
             pool,
             TokenVault::new([5; 32]),
@@ -3795,20 +3802,23 @@ mod tests {
             false,
             HashMap::new(),
         )
+        .with_key_service(key_service.clone())
         .with_media(Arc::new(
             crate::providers::media::ReqwestMedia::new().expect("media client"),
         ));
         let mut ran = false;
-        if let (Some(app), Some(secret), Some(email), Some(password)) = (
-            live("PARSON_LIVE_QOBUZ_APP_ID"),
-            live("PARSON_LIVE_QOBUZ_APP_SECRET"),
+        let qobuz_app = live("PARSON_LIVE_QOBUZ_APP_ID").zip(live("PARSON_LIVE_QOBUZ_APP_SECRET"));
+        if let (true, Some(email), Some(password)) = (
+            qobuz_app.is_some() || key_service.is_some(),
             live("PARSON_LIVE_QOBUZ_EMAIL"),
             live("PARSON_LIVE_QOBUZ_PASSWORD"),
         ) {
             ran = true;
-            hub.save_credentials(1, ProviderId::Qobuz, Some(app), Some(secret), false)
-                .await
-                .expect("qobuz credentials");
+            if let Some((app, secret)) = qobuz_app {
+                hub.save_credentials(1, ProviderId::Qobuz, Some(app), Some(secret), false)
+                    .await
+                    .expect("qobuz credentials");
+            }
             hub.qobuz_sign_in(1, &email, &password)
                 .await
                 .expect("qobuz sign-in");
@@ -3821,17 +3831,22 @@ mod tests {
             let delivered = check.delivery.and_then(|delivery| delivery.delivered);
             assert!(delivered.is_some_and(|format| format.lossless));
         }
-        if let Some(client) = live("PARSON_LIVE_TIDAL_CLIENT_ID") {
+        let tidal_client = live("PARSON_LIVE_TIDAL_CLIENT_ID");
+        if (tidal_client.is_some() || key_service.is_some())
+            && live("PARSON_LIVE_TIDAL_SKIP").is_none()
+        {
             ran = true;
-            hub.save_credentials(
-                1,
-                ProviderId::Tidal,
-                Some(client),
-                live("PARSON_LIVE_TIDAL_CLIENT_SECRET"),
-                false,
-            )
-            .await
-            .expect("tidal credentials");
+            if let Some(client) = tidal_client {
+                hub.save_credentials(
+                    1,
+                    ProviderId::Tidal,
+                    Some(client),
+                    live("PARSON_LIVE_TIDAL_CLIENT_SECRET"),
+                    false,
+                )
+                .await
+                .expect("tidal credentials");
+            }
             if let Some(token) = live("PARSON_LIVE_TIDAL_REFRESH_TOKEN") {
                 hub.tidal_sign_in_with_refresh_token(1, &token)
                     .await
@@ -3883,8 +3898,275 @@ mod tests {
         }
         assert!(
             ran,
-            "set PARSON_LIVE_QOBUZ_* or PARSON_LIVE_TIDAL_CLIENT_ID"
+            "set PARSON_LIVE_QOBUZ_*, PARSON_LIVE_TIDAL_CLIENT_ID or PARSON_LIVE_KEY_SERVICE_URL"
         );
+    }
+
+    const KEY_SERVICE: &str = "https://keys.parson.test";
+
+    fn partner_keys() -> crate::providers::key_service::ServiceKeys {
+        crate::providers::key_service::ServiceKeys {
+            issuer: "Parson".into(),
+            public_url: KEY_SERVICE.into(),
+            tidal_client_id: Some("parson-tidal-client".into()),
+            tidal_device_code: false,
+            qobuz_app_id: Some("100000001".into()),
+            qobuz_app_secret: Some("partner-secret".into()),
+        }
+    }
+
+    /// A hub whose server has no keys of its own and uses a key service,
+    /// played by the real service code in-process.
+    fn key_service_hub(
+        pool: DbPool,
+    ) -> (
+        StreamingHub,
+        Arc<crate::providers::key_service::InProcessKeyService<FixtureTransport>>,
+    ) {
+        let transport = Arc::new(crate::providers::key_service::InProcessKeyService::new(
+            partner_keys(),
+            crate::providers::sandbox::transport(),
+        ));
+        let hub = StreamingHub::new(
+            pool,
+            TokenVault::new([5; 32]),
+            transport.clone(),
+            false,
+            HashMap::new(),
+        )
+        .with_key_service(Some(KEY_SERVICE.into()));
+        (hub, transport)
+    }
+
+    fn url_value(url: &str, key: &str) -> String {
+        let raw = url
+            .split(['?', '&'])
+            .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
+            .unwrap_or_default();
+        percent_encoding::percent_decode_str(raw)
+            .decode_utf8_lossy()
+            .into_owned()
+    }
+
+    #[actix_web::test]
+    async fn a_subscriber_signs_in_to_qobuz_with_only_email_and_password() {
+        let pool = pool();
+        let (hub, transport) = key_service_hub(pool.clone());
+        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, HIRES_192_FLAC.to_vec()));
+        let data = web::Data::new(hub.with_media(media));
+        let listener = app_as!(data, 2, "user");
+
+        // Nobody configured anything: the key service supplies the app.
+        let (_, body) = call!(&listener, test::TestRequest::get().uri("/providers")).await;
+        let qobuz = &body["providers"][1];
+        assert_eq!(qobuz["id"], "qobuz");
+        assert_eq!(qobuz["server_credentials_available"], true, "{body}");
+        assert_eq!(qobuz["server_credentials_source"], "key_service");
+        assert_eq!(qobuz["key_service"]["issuer"], "Parson");
+        assert_eq!(qobuz["key_service"]["offers"], true);
+        assert_eq!(qobuz["key_service"]["error"], Value::Null);
+        assert_eq!(qobuz["credentials"]["configured"], false);
+
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::post()
+                .uri("/providers/qobuz/sign-in")
+                .set_json(json!({"username": "listener@example.test", "password": "pw"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "signed_in");
+        assert_eq!(body["credentials"]["uses_server_credentials"], true);
+
+        let response = test::call_service(
+            &listener,
+            test::TestRequest::get()
+                .uri("/media/songs/qobuz:7700001/stream")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = transport.inner().requests();
+        let file_url = requests
+            .iter()
+            .find(|request| request.url.ends_with("track/getFileUrl"))
+            .expect("getFileUrl");
+        assert_eq!(file_url.header_value("x-app-id"), Some("100000001"));
+        let timestamp: i64 = file_url
+            .query_value("request_ts")
+            .and_then(|value| value.parse().ok())
+            .expect("timestamp");
+        // Signed by the service with the partner secret, which never
+        // reached this server.
+        assert_eq!(
+            file_url.query_value("request_sig"),
+            Some(
+                crate::providers::qobuz::file_url_signature(
+                    27,
+                    "7700001",
+                    timestamp,
+                    "partner-secret"
+                )
+                .as_str()
+            )
+        );
+        assert!(
+            !format!("{requests:?}").contains("partner-secret"),
+            "the secret is never sent from this server"
+        );
+        let sealed: Vec<Vec<u8>> = {
+            use diesel::RunQueryDsl;
+            #[derive(diesel::QueryableByName)]
+            struct Blob {
+                #[diesel(sql_type = diesel::sql_types::Binary)]
+                sealed_credentials: Vec<u8>,
+            }
+            let mut connection = pool.get().expect("connection");
+            diesel::sql_query("SELECT sealed_credentials FROM provider_account")
+                .load::<Blob>(&mut connection)
+                .expect("rows")
+                .into_iter()
+                .map(|row| row.sealed_credentials)
+                .collect()
+        };
+        let opened = sealed
+            .iter()
+            .filter_map(|blob| {
+                TokenVault::new([5; 32])
+                    .open::<crate::providers::ClientCredentials>(
+                        2,
+                        ProviderId::Qobuz,
+                        crate::providers::vault::SealPurpose::Credentials,
+                        blob,
+                    )
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(opened.len(), 1);
+        assert_eq!(opened[0].client_id, "@server", "only a marker is stored");
+    }
+
+    #[actix_web::test]
+    async fn a_subscriber_signs_in_to_tidal_through_the_key_service_relay() {
+        let pool = pool();
+        let (hub, transport) = key_service_hub(pool);
+        let data = web::Data::new(hub);
+        let listener = app_as!(data, 2, "user");
+        let callback = "https://music.example.test/settings/services/tidal-callback";
+
+        let (_, body) = call!(&listener, test::TestRequest::get().uri("/providers")).await;
+        assert_eq!(
+            body["providers"][0]["server_credentials_source"],
+            "key_service"
+        );
+        assert_eq!(body["providers"][0]["key_service"]["device_code"], false);
+
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser")
+                .insert_header(("host", "music.example.test"))
+                .set_json(json!({ "redirect_uri": callback })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let url = body["authorize_url"].as_str().expect("url");
+        assert!(url.starts_with("https://login.tidal.com/authorize?"));
+        assert_eq!(url_value(url, "client_id"), "parson-tidal-client");
+        let relay = format!("{KEY_SERVICE}/v1/tidal/callback");
+        assert_eq!(url_value(url, "redirect_uri"), relay);
+        assert_eq!(body["redirect_uri"], relay.as_str());
+
+        // TIDAL sends the listener to the relay, which forwards the code to
+        // this server's callback named in the state.
+        let state = url_value(url, "state");
+        let location = crate::providers::key_service::relay_location(&[
+            ("code".to_string(), "relayed-code".to_string()),
+            ("state".to_string(), state.clone()),
+        ])
+        .expect("relay");
+        assert!(location.starts_with(&format!("{callback}?code=relayed-code&state=")));
+        assert_eq!(url_value(&location, "state"), state);
+
+        let (status, body) = call!(
+            &listener,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser/finish")
+                .set_json(json!({ "state": state, "code": "relayed-code" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "signed_in");
+        assert_eq!(body["credentials"]["uses_server_credentials"], true);
+        let exchange = transport
+            .inner()
+            .requests()
+            .into_iter()
+            .rev()
+            .find(|request| request.form_value("grant_type") == Some("authorization_code"))
+            .expect("token exchange");
+        assert_eq!(
+            exchange.form_value("client_id"),
+            Some("parson-tidal-client")
+        );
+        assert_eq!(exchange.form_value("client_secret"), None);
+        assert_eq!(
+            exchange.form_value("redirect_uri"),
+            Some(relay.as_str()),
+            "TIDAL checks the exchange against the registered relay URI"
+        );
+    }
+
+    #[actix_web::test]
+    async fn the_owner_overrides_the_key_service_and_an_outage_is_reported() {
+        let pool = pool();
+        let (hub, _) = key_service_hub(pool.clone());
+        let data = web::Data::new(hub);
+        let admin = app_as!(data, 1, "admin");
+        let (status, _) = call!(
+            &admin,
+            test::TestRequest::put()
+                .uri("/providers/qobuz/server-credentials")
+                .set_json(json!({"client_id": "100000001", "client_secret": "owner-secret"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = call!(&admin, test::TestRequest::get().uri("/providers")).await;
+        assert_eq!(
+            body["providers"][1]["server_credentials_source"],
+            "settings"
+        );
+        assert_eq!(
+            body["providers"][0]["server_credentials_source"],
+            "key_service"
+        );
+
+        // A key service that cannot be reached offers nothing, says why,
+        // and the listener is asked for credentials as before.
+        let unreachable = StreamingHub::new(
+            pool,
+            TokenVault::new([5; 32]),
+            Arc::new(crate::providers::sandbox::transport()),
+            false,
+            HashMap::new(),
+        )
+        .with_key_service(Some("https://down.parson.test".into()));
+        let status = unreachable
+            .provider_status(2, ProviderId::Qobuz)
+            .await
+            .expect("status");
+        assert!(!status.server_credentials_available);
+        let key_service = status.key_service.expect("key service");
+        assert!(!key_service.offers);
+        assert!(key_service.error.is_some());
+        assert!(matches!(
+            unreachable
+                .qobuz_sign_in(2, "listener@example.test", "pw")
+                .await,
+            Err(crate::providers::hub::HubError::CredentialsRequired(
+                ProviderId::Qobuz
+            ))
+        ));
     }
 
     #[actix_web::test]

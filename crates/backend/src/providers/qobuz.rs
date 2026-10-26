@@ -1,8 +1,10 @@
 //! Qobuz: app-credential + user login, catalog, favorites and signed stream
 //! URL resolution (`track/getFileUrl`).
 //!
-//! Qobuz issues app ids and secrets only to partners, so the listener (or the
-//! server owner) supplies both. Parson never extracts them from Qobuz's apps.
+//! Qobuz issues app ids and secrets only to partners. The secret comes from
+//! the listener or the server owner, or stays with a Parson key service that
+//! signs stream requests (see `key_service`). Parson never extracts either
+//! from Qobuz's apps.
 
 use std::sync::Arc;
 
@@ -550,6 +552,60 @@ impl QobuzClient {
         }
     }
 
+    /// Asks a Parson key service to sign one `track/getFileUrl` request.
+    /// It receives the app id, track id, format and time, never the
+    /// listener's session token.
+    async fn service_signature(
+        &self,
+        service: &str,
+        app_id: &str,
+        format: u8,
+        raw_id: &str,
+        timestamp: i64,
+    ) -> ProviderResult<String> {
+        let request = ApiRequest::post(format!("{service}/v1/qobuz/sign"))
+            .form("app_id", app_id)
+            .form("track_id", raw_id)
+            .form("format_id", format.to_string())
+            .form("intent", "stream")
+            .form("request_ts", timestamp.to_string());
+        let reply = self.transport.send(request).await.map_err(|error| {
+            ProviderError::Unavailable(format!(
+                "Parson's key service could not be reached to sign this Qobuz stream ({error})."
+            ))
+        })?;
+        match reply.status {
+            200..=299 => {}
+            400 | 401 | 403 | 404 => {
+                return Err(ProviderError::InvalidCredentials(
+                    "Parson's key service declined to sign this Qobuz stream.".into(),
+                ));
+            }
+            429 => return Err(ProviderError::RateLimited),
+            status => {
+                return Err(ProviderError::Unavailable(format!(
+                    "Parson's key service is unavailable (HTTP {status}). Try again shortly."
+                )));
+            }
+        }
+        #[derive(Deserialize)]
+        struct Signed {
+            request_sig: String,
+        }
+        let signed: Signed = decode_json(&reply.body)?;
+        let well_formed = signed.request_sig.len() == 32
+            && signed
+                .request_sig
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit());
+        if !well_formed {
+            return Err(ProviderError::Decode(
+                "the key service sent a malformed signature".into(),
+            ));
+        }
+        Ok(signed.request_sig.to_ascii_lowercase())
+    }
+
     /// Signs in with the listener's Qobuz email or username and password.
     /// The password is sent once as Qobuz's protocol requires and is never
     /// stored; only the resulting user token is kept (sealed).
@@ -986,19 +1042,31 @@ impl StreamingProvider for QobuzClient {
         quality: StreamQuality,
     ) -> BoxFuture<'a, ProviderResult<ResolvedStream>> {
         Box::pin(async move {
-            let Some(secret) = context
+            let format = format_id(quality);
+            let timestamp = unix_now();
+            let secret = context
                 .credentials
                 .client_secret
                 .as_deref()
-                .filter(|secret| !secret.is_empty())
-            else {
-                return Err(ProviderError::InvalidCredentials(
-                    "Add your Qobuz app secret to play music.".into(),
-                ));
+                .filter(|secret| !secret.is_empty());
+            let signature = match (secret, context.credentials.signing_service.as_deref()) {
+                (Some(secret), _) => file_url_signature(format, raw_id, timestamp, secret),
+                (None, Some(service)) => {
+                    self.service_signature(
+                        service,
+                        &context.credentials.client_id,
+                        format,
+                        raw_id,
+                        timestamp,
+                    )
+                    .await?
+                }
+                (None, None) => {
+                    return Err(ProviderError::InvalidCredentials(
+                        "Add your Qobuz app secret to play music.".into(),
+                    ));
+                }
             };
-            let format = format_id(quality);
-            let timestamp = unix_now();
-            let signature = file_url_signature(format, raw_id, timestamp, secret);
             let body = self
                 .get(
                     context,
@@ -1208,6 +1276,7 @@ mod tests {
         ClientCredentials {
             client_id: "100000001".into(),
             client_secret: Some("listener-app-secret".into()),
+            ..Default::default()
         }
     }
 

@@ -1,4 +1,6 @@
 import api from "../core/http";
+import { getAlbumInfo } from "./albums";
+import { searchLibrary } from "./search";
 import type {
   Album,
   Artist,
@@ -208,6 +210,10 @@ export interface StreamingProviderStatus {
     uses_server_credentials: boolean;
   };
   server_credentials_available: boolean;
+  /** Where the server's credentials for this service come from. */
+  server_credentials_source?: StreamingCredentialSource | null;
+  /** The Parson key service this server uses, if any. */
+  key_service?: StreamingKeyService | null;
   pending: StreamingPendingSignIn | null;
   library: { albums: number; tracks: number };
   sandbox: boolean;
@@ -418,8 +424,98 @@ export interface StreamingPlaylistCopy {
   playlist?: Omit<StreamingPlaylist, "saved_copy_at">;
 }
 
-/** Where the server-wide credentials came from. */
-export type StreamingCredentialSource = "environment" | "settings";
+/**
+ * Where the server-wide credentials came from: the owner's environment
+ * variables or Settings, or a Parson key service (nobody set anything up).
+ */
+export type StreamingCredentialSource =
+  "environment" | "settings" | "key_service";
+
+/**
+ * A Parson key service: it holds a licensed TIDAL client and Qobuz app for
+ * every server that uses it, so listeners sign in with only their
+ * subscription. It signs Qobuz stream requests and relays TIDAL's
+ * redirect; it never sees passwords or session tokens.
+ */
+export interface StreamingKeyService {
+  url: string;
+  /** Who holds the licence; null until the service has answered. */
+  issuer: string | null;
+  /** Whether it holds a key for this service. */
+  offers: boolean;
+  /** TIDAL only: whether its client may sign in with a device code. */
+  device_code: boolean;
+  /** Why it could not be read, when it could not. */
+  error: string | null;
+}
+
+/** How a listener signs in to a service on this server. */
+export type StreamingSignInPath =
+  /** Only their subscription, with a key service's licensed app. */
+  | { kind: "subscription"; via: "key_service"; issuer: string }
+  /** Only their subscription, with the server owner's app. */
+  | { kind: "subscription"; via: "server" }
+  /** With API credentials they entered themselves. */
+  | { kind: "own_credentials" }
+  /** Nobody has an app yet: an owner or the listener must add one. */
+  | { kind: "setup_needed"; keyServiceError: string | null };
+
+export function streamingSignInPath(
+  provider: Pick<
+    StreamingProviderStatus,
+    | "credentials"
+    | "server_credentials_available"
+    | "server_credentials_source"
+    | "key_service"
+  >,
+): StreamingSignInPath {
+  if (
+    provider.credentials.configured &&
+    !provider.credentials.uses_server_credentials
+  ) {
+    return { kind: "own_credentials" };
+  }
+  if (provider.server_credentials_available) {
+    if (provider.server_credentials_source === "key_service") {
+      return {
+        kind: "subscription",
+        via: "key_service",
+        issuer: provider.key_service?.issuer ?? "Parson's key service",
+      };
+    }
+    return { kind: "subscription", via: "server" };
+  }
+  return {
+    kind: "setup_needed",
+    keyServiceError: provider.key_service?.error ?? null,
+  };
+}
+
+/**
+ * Which TIDAL sign-in to offer first. A key service's client uses the
+ * browser (its relay brings the listener back) unless TIDAL lets it use
+ * device codes; other clients keep the device code first.
+ */
+export function tidalSignInMethods(
+  provider: Pick<
+    StreamingProviderStatus,
+    | "credentials"
+    | "server_credentials_available"
+    | "server_credentials_source"
+    | "key_service"
+  >,
+): {
+  primary: "device_code" | "browser";
+  secondary: "device_code" | "browser" | null;
+} {
+  const path = streamingSignInPath(provider);
+  if (path.kind === "subscription" && path.via === "key_service") {
+    return provider.key_service?.device_code
+      ? { primary: "device_code", secondary: "browser" }
+      : { primary: "browser", secondary: null };
+  }
+  return { primary: "device_code", secondary: "browser" };
+}
 
 /** Server-wide credentials as admins see them: never the values. */
 export interface StreamingServerCredential {
@@ -1432,4 +1528,159 @@ export function localAlbumFormat(
 function formatKhz(rate: number): string {
   const khz = rate / 1000;
   return Number.isInteger(khz) ? String(khz) : khz.toFixed(1);
+}
+
+/** The album an album page shows, as the starting point for its other copies. */
+export interface AlbumVersionSubject {
+  id: string;
+  title: string;
+  artistName: string;
+  source: AlbumVersionSource;
+  format: AlbumVersion["format"];
+}
+
+/** Title or artist reduced for matching: case, accents, edition notes and punctuation dropped. */
+export function comparableAlbumText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\(.*?\)|\[.*?\]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** A local album found by search, with the format its files are in. */
+export interface LocalAlbumCandidate {
+  id: string;
+  title: string;
+  artistName: string;
+  format: AlbumVersion["format"];
+}
+
+/**
+ * The copies of `subject` among search results: the same title and artist
+ * once normalized. The subject comes first and no copy appears twice.
+ */
+export function matchAlbumVersions(
+  subject: AlbumVersionSubject,
+  streaming: readonly Pick<
+    StreamingAlbum,
+    "id" | "title" | "provider" | "artist" | "format"
+  >[],
+  local: readonly LocalAlbumCandidate[],
+): AlbumVersion[] {
+  const title = comparableAlbumText(subject.title);
+  const artist = comparableAlbumText(subject.artistName);
+  const same = (candidateTitle: string, candidateArtist: string) =>
+    comparableAlbumText(candidateTitle) === title &&
+    comparableAlbumText(candidateArtist) === artist;
+  const versions: AlbumVersion[] = [
+    {
+      id: subject.id,
+      title: subject.title,
+      source: subject.source,
+      format: subject.format,
+    },
+  ];
+  const seen = new Set([subject.id]);
+  for (const album of streaming) {
+    if (seen.has(album.id) || !same(album.title, album.artist.name)) continue;
+    seen.add(album.id);
+    versions.push({
+      id: album.id,
+      title: album.title,
+      source: album.provider,
+      format: album.format ?? null,
+    });
+  }
+  for (const album of local) {
+    if (seen.has(album.id) || !same(album.title, album.artistName)) continue;
+    seen.add(album.id);
+    versions.push({
+      id: album.id,
+      title: album.title,
+      source: "local",
+      format: album.format,
+    });
+  }
+  return versions;
+}
+
+/**
+ * Finds every copy of an album: on each connected service and in the local
+ * library. A failed search leaves that source out rather than failing.
+ */
+export async function findAlbumVersions(
+  subject: AlbumVersionSubject,
+  connected: readonly StreamingProviderId[],
+): Promise<AlbumVersion[]> {
+  const services = connected.filter((provider) => provider !== subject.source);
+  const query = `${subject.artistName} ${subject.title}`;
+  const [remote, localItems] = await Promise.all([
+    services.length
+      ? searchStreaming(query, { providers: [...services], limit: 10 }).catch(
+          () => null,
+        )
+      : Promise.resolve(null),
+    subject.source === "local"
+      ? Promise.resolve([])
+      : searchLibrary(subject.title).catch(() => []),
+  ]);
+  const streaming = (remote?.services ?? []).flatMap(
+    (service) => service.results?.albums ?? [],
+  );
+  const title = comparableAlbumText(subject.title);
+  const artist = comparableAlbumText(subject.artistName);
+  const localMatches = localItems.filter(
+    (item) =>
+      item.item_type === "album" &&
+      comparableAlbumText(item.name) === title &&
+      comparableAlbumText(item.artist_object?.name ?? "") === artist,
+  );
+  // The local files' format comes from the indexer's technical read.
+  const local = await Promise.all(
+    localMatches.map(async (item): Promise<LocalAlbumCandidate> => {
+      const info = await getAlbumInfo(item.id, false).catch(() => null);
+      const songs =
+        info && "songs" in info && Array.isArray(info.songs) ? info.songs : [];
+      return {
+        id: item.id,
+        title: item.name,
+        artistName: item.artist_object?.name ?? subject.artistName,
+        format: localAlbumFormat(songs),
+      };
+    }),
+  );
+  return matchAlbumVersions(subject, streaming, local);
+}
+
+/** What an album page's Play starts. */
+export interface AlbumPlayChoice {
+  version: RankedAlbumVersion;
+  /** Whether the preferred copy is the one this page shows. */
+  isThisCopy: boolean;
+  /** Short label for the Play button's caption, e.g. "TIDAL · 24/192 FLAC". */
+  label: string;
+}
+
+/**
+ * The copy album-level Play starts under the listener's source preference.
+ * Null until the versions are known or when there is only this copy.
+ */
+export function albumPlayChoice(
+  subjectId: string,
+  ranked: readonly RankedAlbumVersion[],
+): AlbumPlayChoice | null {
+  const best = ranked[0];
+  if (!best || ranked.length < 2) return null;
+  const source =
+    best.source === "local"
+      ? "Your files"
+      : STREAMING_PROVIDER_NAMES[best.source];
+  return {
+    version: best,
+    isThisCopy: best.id === subjectId,
+    label: best.format?.label ? `${source} · ${best.format.label}` : source,
+  };
 }

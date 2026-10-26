@@ -18,14 +18,27 @@ export function CredentialsGuide() {
       <h3 className="text-sm font-semibold text-zinc-200">
         How to get credentials
       </h3>
-      <GuideSection title="Why a subscription alone is not enough">
+      <GuideSection title="Signing in with only your subscription">
         <p>
-          Apps that sign you in with only your TIDAL or Qobuz password are
-          partners the services licensed, or they reuse the keys built into the
-          services&apos; own apps. Neither service has licensed Parson, and
-          Parson does not reuse their apps&apos; keys. So someone on this server
-          adds a TIDAL client and a Qobuz app once, under Server credentials;
-          after that every listener signs in with just their own subscription.
+          TIDAL and Qobuz license their APIs to apps, not to listeners. Apps
+          that need only your password are licensed partners, or they reuse the
+          keys inside the services&apos; own apps. Parson does not reuse those
+          keys. Instead, whoever holds a licence runs a{" "}
+          <span className="text-zinc-200">Parson key service</span>: it
+          publishes the licensed TIDAL client and Qobuz app ID, signs each Qobuz
+          stream request so the Qobuz secret never leaves it, and relays
+          TIDAL&apos;s sign-in back to your server. It never sees your password
+          or session. Every server that uses one lets listeners sign in with
+          nothing but their subscription.
+        </p>
+        <p className="mt-2">
+          Neither service has issued Parson a licence yet, so this build names
+          no key service, and until one exists somebody on this server adds a
+          TIDAL client and a Qobuz app once, as described below. A server that
+          holds keys can serve them to others: set PARSON_KEY_SERVICE_PUBLIC_URL
+          and the PARSON_KEY_SERVICE_TIDAL_CLIENT_ID or
+          PARSON_KEY_SERVICE_QOBUZ_APP_ID and _APP_SECRET variables there, and
+          PARSON_KEY_SERVICE_URL on each server that uses it.
         </p>
       </GuideSection>
       <GuideSection title="TIDAL: register your own client (free, self-service)">

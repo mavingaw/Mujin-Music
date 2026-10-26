@@ -1,5 +1,7 @@
-import type {
-  StreamingAlbum,
+import {
+  streamingSignInPath,
+  tidalSignInMethods,
+  type StreamingAlbum,
   StreamingDelivery,
   StreamingArtistSummary,
   StreamingProviderId,
@@ -182,4 +184,56 @@ export function subscriberSetupText(
       : "enter your Qobuz email and password";
   const credential = provider === "tidal" ? "a TIDAL client" : "a Qobuz app";
   return `With a ${name} subscription you only need to ${step}, once this server has ${credential}. It has none yet: ask the person who runs this Parson server to add one in Settings, Services, Server credentials on the web. ${name} does not issue credentials to Parson, and Parson never copies keys out of ${name}'s own apps.`;
+}
+
+/** The line under a service's sign-in saying whose app it signs in through. */
+export function signInThroughText(provider: StreamingProviderStatus): string {
+  const path = streamingSignInPath(provider);
+  switch (path.kind) {
+    case "own_credentials":
+      return `Your credentials ${provider.credentials.client_id_hint ?? ""} · Change`;
+    case "subscription":
+      return path.via === "key_service"
+        ? `Signs in through ${path.issuer}'s licensed ${provider.name} app · Use your own`
+        : "Signs in through this server's credentials · Use your own";
+    default:
+      return "Use your own credentials";
+  }
+}
+
+/**
+ * Whether the phone can start this TIDAL sign-in itself. A key service's
+ * client that TIDAL allows no device codes signs in through tidal.com in a
+ * browser signed in to Parson, so the phone points there instead.
+ */
+export function tidalPhoneSignIn(provider: StreamingProviderStatus): {
+  canStart: boolean;
+  note: string | null;
+} {
+  if (tidalSignInMethods(provider).primary === "browser") {
+    return {
+      canStart: false,
+      note: "TIDAL signs in on tidal.com for this server. Open Parson on the web or desktop, go to Settings, Services, TIDAL and choose Sign in with TIDAL. You only log in with your TIDAL account; afterwards this phone plays TIDAL too.",
+    };
+  }
+  return { canStart: true, note: null };
+}
+
+/** The Services footnote: how listeners on this server sign in, and why. */
+export function keysNoticeText(providers: StreamingProviderStatus[]): string {
+  const viaService = providers.filter((provider) => {
+    const path = streamingSignInPath(provider);
+    return path.kind === "subscription" && path.via === "key_service";
+  });
+  if (viaService.length) {
+    const issuer = viaService[0]?.key_service?.issuer ?? "Parson's key service";
+    return `Sign in to ${viaService.map((provider) => provider.name).join(" and ")} with just your subscription: this server uses ${issuer}'s key service, which holds the licensed apps. It signs stream requests and relays TIDAL's sign-in, and never sees your password or session. Tokens are encrypted on your server and never stored on this phone.`;
+  }
+  const failing = providers.find(
+    (provider) => provider.key_service?.error,
+  )?.key_service;
+  if (failing) {
+    return `Parson's key service (${failing.url}) is not answering, so your server owner's own apps are needed until it does. Tokens are encrypted on your server and never stored on this phone.`;
+  }
+  return "This server has no key service. TIDAL and Qobuz license their APIs to apps, and neither has issued keys to Parson yet; Parson never extracts keys from their apps. Your server owner adds them once, then you only sign in. Tokens are encrypted on your server and never stored on this phone.";
 }

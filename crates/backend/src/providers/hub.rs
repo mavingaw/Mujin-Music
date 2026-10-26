@@ -8,6 +8,7 @@ use diesel::sqlite::SqliteConnection;
 use serde::Serialize;
 
 use super::artwork::ArtworkMode;
+use super::key_service::{self, InProcessKeyService, KeyServiceManifest, ServiceKeys};
 use super::media::{self, MediaTransport, ReqwestMedia};
 use super::probe::{PROBE_BYTES, ProbedFormat};
 use super::qobuz::QobuzClient;
@@ -180,6 +181,10 @@ pub struct ProviderStatus {
     pub last_library_sync: Option<i64>,
     pub credentials: CredentialSummary,
     pub server_credentials_available: bool,
+    /// Where the server's credentials for this service come from.
+    pub server_credentials_source: Option<CredentialSource>,
+    /// The Parson key service this server uses, if any.
+    pub key_service: Option<KeyServiceStatus>,
     pub pending: Option<PendingSignIn>,
     pub library: LibraryCounts,
     pub sandbox: bool,
@@ -306,6 +311,9 @@ pub enum CredentialSource {
     Environment,
     /// Saved by an admin in Settings > Services.
     Settings,
+    /// Published by the Parson key service this server uses, so neither
+    /// the owner nor the listener registers anything.
+    KeyService,
 }
 
 #[derive(Clone, Debug)]
@@ -486,6 +494,39 @@ pub struct StreamingHub {
     genre_hints: Mutex<HashMap<String, String>>,
     /// Browser sign-ins waiting for the listener to come back, by state.
     browser_sign_ins: Mutex<HashMap<String, (i32, BrowserAuthorization)>>,
+    /// For key service requests (its manifest); the provider clients hold
+    /// their own handle to the same transport.
+    transport: Arc<dyn Transport>,
+    /// The Parson key service this server uses, if any.
+    key_service_url: Option<String>,
+    key_service: RwLock<KeyServiceState>,
+}
+
+/// What this server last learned from its key service.
+#[derive(Clone, Debug, Default)]
+struct KeyServiceState {
+    manifest: Option<KeyServiceManifest>,
+    /// Unix seconds of the last attempt, successful or not.
+    checked_at: i64,
+    error: Option<String>,
+}
+
+/// A failed manifest read is retried after this long.
+const KEY_SERVICE_RETRY_SECONDS: i64 = 60;
+/// A manifest is re-read after this long, in case the service rotates ids.
+const KEY_SERVICE_REFRESH_SECONDS: i64 = 12 * 60 * 60;
+
+/// What a listener's Services page says about the key service.
+#[derive(Clone, Debug, Serialize)]
+pub struct KeyServiceStatus {
+    pub url: String,
+    pub issuer: Option<String>,
+    /// Whether the service holds a key for this provider.
+    pub offers: bool,
+    /// TIDAL only: whether the service's client may use device-code sign-in.
+    pub device_code: bool,
+    /// Why the service could not be read, when it could not.
+    pub error: Option<String>,
 }
 
 /// Genre lists by listener and service, with when each was read.
@@ -510,6 +551,7 @@ fn server_credentials_from_env() -> HashMap<ProviderId, ClientCredentials> {
             ClientCredentials {
                 client_id,
                 client_secret: env_value("PARSON_TIDAL_CLIENT_SECRET"),
+                ..Default::default()
             },
         );
     }
@@ -519,6 +561,7 @@ fn server_credentials_from_env() -> HashMap<ProviderId, ClientCredentials> {
             ClientCredentials {
                 client_id,
                 client_secret: env_value("PARSON_QOBUZ_APP_SECRET"),
+                ..Default::default()
             },
         );
     }
@@ -571,6 +614,7 @@ fn validated_credentials(
     Ok(ClientCredentials {
         client_id,
         client_secret,
+        ..Default::default()
     })
 }
 
@@ -585,18 +629,28 @@ impl StreamingHub {
             tracing::warn!(
                 "streaming services run in sandbox mode: recorded responses, synthesized audio"
             );
-            Arc::new(sandbox_media::SandboxTransport::new(
-                sandbox::transport(),
-                streams.clone(),
+            Arc::new(InProcessKeyService::new(
+                ServiceKeys::sandbox(),
+                sandbox_media::SandboxTransport::new(sandbox::transport(), streams.clone()),
             ))
         } else if sandbox {
             tracing::warn!(
                 "streaming services run in sandbox mode with recorded responses; \
                  ffmpeg is missing, so streams are a 16/44.1 placeholder tone"
             );
-            Arc::new(sandbox::transport())
+            Arc::new(InProcessKeyService::new(
+                ServiceKeys::sandbox(),
+                sandbox::transport(),
+            ))
         } else {
             Arc::new(ReqwestTransport::new().map_err(|error| error.to_string())?)
+        };
+        // The sandbox simulates a key service so its listeners see the
+        // subscriber-only sign-in; a real server uses the configured one.
+        let key_service_url = if sandbox {
+            Some(key_service::SANDBOX_KEY_SERVICE_URL.to_string())
+        } else {
+            key_service::configured_url()
         };
         let hub = Self::new(
             pool,
@@ -604,7 +658,8 @@ impl StreamingHub {
             transport,
             sandbox,
             server_credentials_from_env(),
-        );
+        )
+        .with_key_service(key_service_url);
         let hub = if rendered {
             hub.with_rendered_sandbox(Arc::new(sandbox_media::SandboxMedia::new(streams)))
         } else {
@@ -645,7 +700,10 @@ impl StreamingHub {
             pool,
             vault,
             tidal: TidalClient::new(transport.clone(), artwork),
-            qobuz: QobuzClient::new(transport, artwork),
+            qobuz: QobuzClient::new(transport.clone(), artwork),
+            transport,
+            key_service_url: None,
+            key_service: RwLock::new(KeyServiceState::default()),
             sandbox,
             sandbox_tone: sandbox,
             server_credentials: RwLock::new(server_credentials),
@@ -657,6 +715,131 @@ impl StreamingHub {
             genre_hints: Mutex::new(HashMap::new()),
             browser_sign_ins: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Uses a Parson key service (its base URL) for TIDAL and Qobuz keys
+    /// when neither the owner nor the listener has their own.
+    pub fn with_key_service(mut self, url: Option<String>) -> Self {
+        self.key_service_url = url.and_then(|url| key_service::normalized_service_url(&url));
+        self
+    }
+
+    /// Reads the key service's manifest when it has not been read yet, or
+    /// is due for a refresh. Cheap when there is nothing to do.
+    async fn ensure_key_service(&self) {
+        let Some(url) = self.key_service_url.clone() else {
+            return;
+        };
+        let now = unix_now();
+        let due = self
+            .key_service
+            .read()
+            .map(|state| {
+                let age = now - state.checked_at;
+                if state.manifest.is_some() {
+                    age >= KEY_SERVICE_REFRESH_SECONDS
+                } else {
+                    age >= KEY_SERVICE_RETRY_SECONDS
+                }
+            })
+            .unwrap_or(false);
+        if !due {
+            return;
+        }
+        if let Ok(mut state) = self.key_service.write() {
+            // Claim this attempt so concurrent requests do not all fetch.
+            state.checked_at = now;
+        }
+        let result = match self
+            .transport
+            .send(super::transport::ApiRequest::get(format!("{url}/v1/apps")))
+            .await
+        {
+            Ok(reply) if (200..300).contains(&reply.status) => {
+                key_service::parse_manifest(&reply.body)
+            }
+            Ok(reply) => Err(format!("it answered HTTP {}", reply.status)),
+            Err(error) => Err(error.to_string()),
+        };
+        if let Ok(mut state) = self.key_service.write() {
+            match result {
+                Ok(manifest) => {
+                    state.manifest = Some(manifest);
+                    state.error = None;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not read the Parson key service");
+                    // A refresh failure keeps the last good manifest.
+                    state.error = Some(error);
+                }
+            }
+        }
+    }
+
+    fn key_service_manifest(&self) -> Option<KeyServiceManifest> {
+        self.key_service
+            .read()
+            .ok()
+            .and_then(|state| state.manifest.clone())
+    }
+
+    /// The credentials the key service publishes for a provider.
+    fn key_service_credential(&self, provider: ProviderId) -> Option<ServerCredential> {
+        let manifest = self.key_service_manifest()?;
+        let credentials = match provider {
+            ProviderId::Tidal => ClientCredentials {
+                client_id: manifest.tidal?.client_id,
+                client_secret: None,
+                signing_service: None,
+            },
+            ProviderId::Qobuz => ClientCredentials {
+                client_id: manifest.qobuz?.app_id,
+                client_secret: None,
+                signing_service: self.key_service_url.clone(),
+            },
+        };
+        Some(ServerCredential {
+            credentials,
+            source: CredentialSource::KeyService,
+            updated_at: None,
+        })
+    }
+
+    fn key_service_status(&self, provider: ProviderId) -> Option<KeyServiceStatus> {
+        let url = self.key_service_url.clone()?;
+        let state = self.key_service.read().ok()?.clone();
+        let manifest = state.manifest.as_ref();
+        Some(KeyServiceStatus {
+            url,
+            issuer: manifest.map(|manifest| manifest.issuer.clone()),
+            offers: match provider {
+                ProviderId::Tidal => manifest.is_some_and(|manifest| manifest.tidal.is_some()),
+                ProviderId::Qobuz => manifest.is_some_and(|manifest| manifest.qobuz.is_some()),
+            },
+            device_code: provider == ProviderId::Tidal
+                && manifest
+                    .and_then(|manifest| manifest.tidal.as_ref())
+                    .is_some_and(|tidal| tidal.device_code),
+            error: state.error,
+        })
+    }
+
+    /// Whether this listener's account signs in with the key service's
+    /// keys (it uses the server's credentials, and those come from there).
+    fn uses_key_service(&self, user_id: i32, provider: ProviderId, row: &AccountRow) -> bool {
+        let uses_server = self
+            .vault
+            .open::<ClientCredentials>(
+                user_id,
+                provider,
+                SealPurpose::Credentials,
+                &row.sealed_credentials,
+            )
+            .is_ok_and(|stored| stored.client_id == SERVER_CREDENTIALS_MARKER);
+        uses_server
+            && self
+                .server_credential(provider)
+                .is_some_and(|credential| credential.source == CredentialSource::KeyService)
     }
 
     /// Replaces how stream bytes are fetched (live HTTP in the server,
@@ -749,11 +932,14 @@ impl StreamingHub {
         Ok(())
     }
 
+    /// The owner's credentials for a provider (environment, then Settings),
+    /// else the key service's.
     fn server_credential(&self, provider: ProviderId) -> Option<ServerCredential> {
         self.server_credentials
             .read()
             .ok()
             .and_then(|map| map.get(&provider).cloned())
+            .or_else(|| self.key_service_credential(provider))
     }
 
     fn has_server_credentials(&self, provider: ProviderId) -> bool {
@@ -893,6 +1079,7 @@ impl StreamingHub {
     }
 
     async fn row(&self, user_id: i32, provider: ProviderId) -> HubResult<Option<AccountRow>> {
+        self.ensure_key_service().await;
         self.db(move |connection| store::account(connection, user_id, provider))
             .await
     }
@@ -964,6 +1151,7 @@ impl StreamingHub {
     }
 
     pub async fn status(&self, user_id: i32) -> HubResult<Vec<ProviderStatus>> {
+        self.ensure_key_service().await;
         let rows = self
             .db(move |connection| {
                 let rows = store::accounts(connection, user_id)?;
@@ -997,6 +1185,7 @@ impl StreamingHub {
         user_id: i32,
         provider: ProviderId,
     ) -> HubResult<ProviderStatus> {
+        self.ensure_key_service().await;
         let (row, counts) = self
             .db(move |connection| {
                 Ok((
@@ -1051,6 +1240,10 @@ impl StreamingHub {
             last_library_sync: row.and_then(|row| row.last_library_sync),
             credentials: self.summarize(user_id, provider, row),
             server_credentials_available: self.has_server_credentials(provider),
+            server_credentials_source: self
+                .server_credential(provider)
+                .map(|credential| credential.source),
+            key_service: self.key_service_status(provider),
             pending,
             library,
             sandbox: self.sandbox,
@@ -1079,6 +1272,7 @@ impl StreamingHub {
             ClientCredentials {
                 client_id: SERVER_CREDENTIALS_MARKER.to_string(),
                 client_secret: None,
+                ..Default::default()
             }
         } else {
             validated_credentials(provider, client_id, client_secret)?
@@ -1126,19 +1320,31 @@ impl StreamingHub {
         let redirect_uri = validated_redirect_uri(redirect_uri, origins)?;
         let row = self.account_for_sign_in(user_id, ProviderId::Tidal).await?;
         let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
-        let (pending, mut authorize_url) =
-            TidalClient::browser_authorization(&credentials, &redirect_uri);
+        // A key service's TIDAL client has the service's relay registered as
+        // its redirect URI; the relay forwards back to `redirect_uri`.
+        let relay = self
+            .uses_key_service(user_id, ProviderId::Tidal, &row)
+            .then(|| self.key_service_manifest())
+            .flatten()
+            .and_then(|manifest| manifest.tidal)
+            .map(|tidal| tidal.redirect_uri);
+        let (pending, mut authorize_url) = match &relay {
+            Some(relay) => {
+                TidalClient::relayed_browser_authorization(&credentials, relay, &redirect_uri)
+            }
+            None => TidalClient::browser_authorization(&credentials, &redirect_uri),
+        };
         if self.sandbox {
             // There is no TIDAL login page to visit in the sandbox, so the
             // listener comes straight back as if they had approved.
             authorize_url = format!(
                 "{redirect_uri}?code=sandbox-authorization-code&state={}",
-                pending.state
+                super::transport::form_encode(&pending.state)
             );
         }
         let sign_in = BrowserSignIn {
             authorize_url,
-            redirect_uri,
+            redirect_uri: pending.redirect_uri.clone(),
             expires_at: pending.expires_at,
             sandbox: self.sandbox,
         };
@@ -1174,10 +1380,7 @@ impl StreamingHub {
         if refresh_token.is_empty() || refresh_token.len() > 4096 {
             return Err(HubError::Invalid("That TIDAL refresh token is not usable."));
         }
-        let row = self
-            .row(user_id, ProviderId::Tidal)
-            .await?
-            .ok_or(HubError::Provider(ProviderError::NotConnected))?;
+        let row = self.account_for_sign_in(user_id, ProviderId::Tidal).await?;
         let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
         let seed = ProviderSession {
             access_token: String::new(),

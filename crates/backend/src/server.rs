@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    providers, search, setup, song, user,
+    album, artist, cast, data, filesystem, genres, home, key_service, lyrics, metadata, playback,
+    playlist, providers, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -266,6 +266,12 @@ pub async fn build_server_with_shutdown_timeout(
         crate::providers::hub::StreamingHub::from_env(database.get_ref().clone())
             .map_err(std::io::Error::other)?,
     );
+    // A server that holds TIDAL or Qobuz keys can serve them to other
+    // Parson servers as a key service.
+    let key_service_app = crate::providers::key_service::ServiceKeys::from_env().map(|keys| {
+        tracing::info!(url = %keys.public_url, "serving the Parson key service");
+        web::Data::new(key_service::KeyServiceApp::new(keys))
+    });
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
@@ -365,6 +371,11 @@ pub async fn build_server_with_shutdown_timeout(
             )
             .route("/health/ready", web::get().to(readiness))
             .route("/.well-known/parson", web::get().to(discovery_manifest))
+            .configure(|config| {
+                if let Some(app) = key_service_app.clone() {
+                    key_service::configure(config, app);
+                }
+            })
             .route(
                 "/{filename:.*}",
                 web::head().to(assets::serve_embedded_file),

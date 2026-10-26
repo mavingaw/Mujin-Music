@@ -1,6 +1,7 @@
 import {
   getAlbumInfo,
   isStreamingId,
+  localAlbumFormat,
   type LibraryAlbum,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
@@ -21,6 +22,10 @@ import { Artwork } from "@/components/artwork";
 import { AlbumActions } from "@/components/album-actions";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { Screen, SongRow } from "@/components/music-ui";
+import {
+  PreferredPlayCaption,
+  usePreferredAlbumPlay,
+} from "@/components/preferred-album-play";
 import { StreamingAlbumScreen } from "@/components/streaming-album-screen";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
@@ -45,6 +50,22 @@ function LibraryAlbumScreen({ id }: { id: string }) {
     enabled: !!id,
   });
   const [actionsOpen, setActionsOpen] = useState(false);
+  const loaded = album.data;
+  const preferred = usePreferredAlbumPlay(
+    loaded
+      ? {
+          id: String(loaded.id),
+          title: loaded.name,
+          artistName:
+            loaded.artist_object?.name ??
+            loaded.contributing_artists?.[0] ??
+            "",
+          source: "local",
+          format: localAlbumFormat(loaded.songs ?? []),
+        }
+      : null,
+    loaded?.songs ?? [],
+  );
   if (album.isPending)
     return (
       <Screen>
@@ -71,8 +92,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
   const totalDuration = formatCollectionDuration(
     data.songs.reduce((sum, song) => sum + (song.duration || 0), 0),
   );
-  const albumPlaying =
-    player.isPlaying && player.current?.album_object?.id === data.id;
+  const albumPlaying = preferred.playing;
   return (
     <Screen>
       <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
@@ -126,14 +146,9 @@ function LibraryAlbumScreen({ id }: { id: string }) {
                 {...immediatePressFeedback}
                 accessibilityLabel={albumPlaying ? "Pause album" : "Play album"}
                 accessibilityRole="button"
-                disabled={!data.songs.length}
+                disabled={!data.songs.length || preferred.starting}
                 style={styles.circle}
-                onPress={() =>
-                  albumPlaying
-                    ? player.toggle()
-                    : data.songs[0] &&
-                      player.playSong(data.songs[0], data.songs)
-                }
+                onPress={() => void preferred.play()}
               >
                 {albumPlaying ? (
                   <PauseGlyph color="black" size={25} />
@@ -152,6 +167,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
                 <Shuffle color={palette.secondary} size={21} />
               </Pressable>
             </View>
+            <PreferredPlayCaption play={preferred} />
           </View>
           {data.songs.map((song, index) => (
             <SongRow

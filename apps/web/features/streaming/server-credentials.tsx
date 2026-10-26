@@ -99,11 +99,19 @@ export function ServerCredentialsPanel() {
                     size="sm"
                     variant="secondary"
                   >
-                    {credential.configured ? "Replace" : "Add"}
+                    {credential.source === "key_service"
+                      ? "Use your own"
+                      : credential.configured
+                        ? "Replace"
+                        : "Add"}
                   </Button>
-                  {credential.configured && (
-                    <RemoveButton credential={credential} onRemoved={update} />
-                  )}
+                  {credential.configured &&
+                    credential.source !== "key_service" && (
+                      <RemoveButton
+                        credential={credential}
+                        onRemoved={update}
+                      />
+                    )}
                 </div>
               )}
             </div>
@@ -135,6 +143,9 @@ function describe(credential: StreamingServerCredential) {
   const id = `${fields[credential.provider].id} ${credential.client_id_hint ?? ""}`;
   if (credential.source === "environment") {
     return `${id} · set by environment variables`;
+  }
+  if (credential.source === "key_service") {
+    return `${id} · from the Parson key service. Nothing to set up; add your own only to override it.`;
   }
   return `${id}${credential.updated_at ? ` · saved ${formatLastSync(credential.updated_at)}` : ""}`;
 }
