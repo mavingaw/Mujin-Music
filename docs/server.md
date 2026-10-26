@@ -10,18 +10,21 @@ Parson has two parts:
   Android app, and any web browser. Every remote shows the same library,
   queue and zones, and they stay in sync.
 
-One computer can be both. Parson Desktop runs the server for you unless you
-tell it to be a remote only. A headless machine (a NAS, a Raspberry Pi, a
+One computer can be both. Parson Desktop can install the server as a
+background service on the same computer, and the desktop window is then a
+remote for it like any other. A headless machine (a NAS, a Raspberry Pi, a
 home server, a Windows PC in a cupboard) can run only the server.
 
 ## Choosing on Parson Desktop
 
 On first start, Parson Desktop asks where your music lives:
 
-- **Run the server on this computer.** The desktop app starts the server in
-  the background. Phones and other computers on your network connect to it.
-  Settings → Connections shows its network address and a QR code to scan
-  with your phone.
+- **Run the server on this computer.** Parson Desktop installs the server as
+  a background service (see below) and connects to it on `127.0.0.1`. The
+  window is only a remote: close or quit it and phones, browsers and other
+  computers keep their library and zones. Settings → Connections shows the
+  server's network address, a QR code for your phone, and controls to start,
+  stop or restart the server and to launch it at startup.
 - **Connect to a server on my network.** The desktop app becomes a remote.
   It never starts a server of its own. Servers on your network show up on
   their own (Bonjour/mDNS, `_parson._tcp`). You can also type an address such
@@ -38,14 +41,41 @@ back, Parson Desktop returns to the page you were on. If a different Parson
 library answers at the same address, Parson asks you before connecting to
 it.
 
+### The background server on a desktop computer
+
+| System  | How the server runs                                                                                                                                                                                                                                                         |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows | The Parson server tray host (`ParsonMusicServer.exe`, shipped with Parson Desktop) is copied to `%LOCALAPPDATA%\Programs\Parson Server` and starts at sign-in from `HKCU\…\Run` (its **Start with Windows** item).                                                          |
+| macOS   | A LaunchAgent, `~/Library/LaunchAgents/com.parsonlabs.parson.server.plist`, runs Parson in `--server-host` mode. A menu-bar item shows that it is running and offers **Launch at startup** and **Quit Parson Server**. launchd restarts it after a crash, never after Quit. |
+| Linux   | A systemd user service, `~/.config/systemd/user/parson-server.service` (`systemctl --user status parson-server`). Without a systemd user session, an XDG autostart entry runs Parson in `--server-host` mode instead.                                                       |
+
+All three use the same data folder as before, so an existing library carries
+over. Parson Desktop leaves `server.env` (mode 600) in the data folder: it
+holds a key that lets the desktop recognise the server it installed, and
+`PARSON_LOCAL_AUDIO=on`, so this computer's DACs are zones. Edit that line to
+turn them off; Parson keeps your change. A systemd user service stops when
+you sign out unless lingering is on: `loginctl enable-linger $USER`.
+
+What has been tested: the Linux background host end to end (pick “Use this
+computer”, pair a phone over the API, quit Parson Desktop, and the phone's
+status, library and zone calls still succeed); systemd, launchd and the
+Windows tray through their exact command lines against recorded fakes; and
+the Windows package is built on every pull request. The macOS menu bar and
+the Windows tray have not been run on real hardware by these tests.
+
+Sign-in belongs to a server, not to an address. Two servers on one computer
+(different ports) never share a sign-in, and a server you signed in to at
+`127.0.0.1` stays signed in when you reach it at its network address.
+
 Command-line options and environment variables (for kiosks, shared machines
 and scripted installs):
 
-| Option               | Environment                       | Effect                            |
-| -------------------- | --------------------------------- | --------------------------------- |
-| `--server=<address>` | `PARSON_DESKTOP_SERVER=<address>` | Start as a remote for this server |
-| `--local`            | `PARSON_DESKTOP_MODE=local`       | Run the server on this computer   |
-| `--choose-server`    |                                   | Show the server chooser           |
+| Option               | Environment                       | Effect                             |
+| -------------------- | --------------------------------- | ---------------------------------- |
+| `--server=<address>` | `PARSON_DESKTOP_SERVER=<address>` | Start as a remote for this server  |
+| `--local`            | `PARSON_DESKTOP_MODE=local`       | Run the server on this computer    |
+| `--choose-server`    |                                   | Show the server chooser            |
+|                      | `PARSON_PORT`, `PARSON_DATA_DIR`  | Passed on to the background server |
 
 ## Connecting a phone
 
@@ -151,6 +181,9 @@ Firewall on private networks, so that remotes can reach it.
 | `PARSON_PUBLIC_URL`   |                                            | The address remotes should use behind a reverse proxy, e.g. `https://music.example.com` (enables secure cookies) |
 | `PARSON_LIBRARY_NAME` | `Parson Library`                           | Name shown to remotes and in discovery                                                                           |
 | `PARSON_LOCAL_AUDIO`  | off                                        | `on` makes this machine's audio devices zones                                                                    |
+
+`PARSON_LIBRARY_NAME` and `PARSON_LOCAL_AUDIO` can also be set in `server.env`
+in the data folder (one `KEY=value` per line). The environment wins.
 
 Remotes can check which server they are talking to. The address
 `/.well-known/parson` returns the server's name, a stable `instanceId`, and a

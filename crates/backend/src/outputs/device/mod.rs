@@ -385,7 +385,7 @@ impl DeviceManager {
     /// macOS), `simulated` two simulated DACs (tests and demos), anything
     /// else (or unset) keeps device zones off.
     pub fn from_env() -> Option<Self> {
-        let value = std::env::var("PARSON_LOCAL_AUDIO").ok()?;
+        let value = crate::settings::host_setting("PARSON_LOCAL_AUDIO")?;
         match value.trim().to_ascii_lowercase().as_str() {
             "simulated" | "simulate" => Some(Self::new(
                 Arc::new(simulated::SimulatedBackend::with_default_devices(1.0)),

@@ -376,6 +376,16 @@
         font-size: 11px;
         font-weight: 600;
       }
+      .local-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-height: 20px;
+        margin: -4px 0 10px;
+      }
+      .local-meta:empty {
+        display: none;
+      }
       .badge.good {
         border-color: rgba(52, 211, 153, 0.4);
         color: #6ee7b7;
@@ -644,10 +654,14 @@
               </svg>
             </div>
             <h2>Run the server on this computer</h2>
+            <div class="local-meta" id="local-meta"></div>
             <ul>
               <li>Your library and its database stay on this computer</li>
               <li>Plays to this computer’s DACs and every network zone</li>
-              <li>Phones, tablets and other computers connect to it</li>
+              <li>
+                Runs in the background, so phones and other computers keep
+                playing after you close this window
+              </li>
             </ul>
             <div class="spacer"></div>
             <div>
@@ -948,6 +962,19 @@
               ),
         );
         $("local-card").classList.toggle("current", state.mode === "local");
+        $("local-meta").replaceChildren(
+          ...(local.running
+            ? [
+                el("span", {
+                  class: "badge good",
+                  text: "Running in the background",
+                }),
+              ]
+            : []),
+          ...(local.running && local.signedIn
+            ? [el("span", { class: "badge", text: "Signed in" })]
+            : []),
+        );
         if (!local.available) {
           $("use-local").title =
             "This copy of Parson was installed without the server.";
@@ -974,6 +1001,9 @@
           state?.view === "reconnecting" ? "reconnecting" : "choose";
         if (!reconnect) return;
         $("reconnect-title").textContent = `Reconnecting to ${reconnect.name}`;
+        $("retry-now").textContent = reconnect.local
+          ? "Start server"
+          : "Try now";
         const lost = reconnect.lastSeenAt
           ? `Lost connection at ${new Date(reconnect.lastSeenAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. `
           : "";
@@ -986,7 +1016,7 @@
             ? `${lost}Checking now…`
             : `${lost}Trying again ${next > 0 ? `in ${next}s` : "now"} · attempt ${reconnect.attempt + 1}`;
         $("reconnect-hint").textContent = reconnect.local
-          ? "The Parson server on this computer stopped. It is being restarted; if this keeps happening, open the logs from the error screen."
+          ? "The Parson server on this computer isn’t answering. It runs in the background on its own; “Start server” asks it to start again."
           : "Parson will pick up where you left off as soon as the server is back. Check that it is switched on and on the same network.";
       }
 

@@ -201,7 +201,7 @@ jobs:
           }
       - name: Build native Windows release
         run: bun --filter parson-music-desktop desktop:build
-      - name: Verify Windows package license payload
+      - name: Verify Windows package payload (licenses, server and tray host)
         shell: pwsh
         run: |
           $unpacked = Get-ChildItem target\release\bundle\electron -Directory |
@@ -213,6 +213,8 @@ jobs:
           foreach ($relativePath in @(
             "resources\LICENSE",
             "resources\THIRD_PARTY_NOTICES.md",
+            "resources\parson-music-server.exe",
+            "resources\ParsonMusicServer.exe",
             "LICENSE.electron.txt",
             "LICENSES.chromium.html"
           )) {
