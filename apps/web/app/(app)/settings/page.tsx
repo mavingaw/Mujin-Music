@@ -6,13 +6,15 @@ import AdvancedSettings from "@/features/settings/advanced-settings";
 import LibrarySettings from "@/features/settings/library-settings";
 import UserForm from "@/features/settings/user-form";
 import { useSession } from "@/features/account/session-provider";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
+import ConnectionsSettings from "@/features/settings/connections-settings";
 
 const settingsTabs = [
   "account",
   "playback",
+  "connections",
   "library",
   "data",
   "users",
@@ -23,6 +25,7 @@ type SettingsTab = (typeof settingsTabs)[number];
 const labels: Record<SettingsTab, string> = {
   account: "Account",
   playback: "Playback",
+  connections: "Connections",
   library: "Library",
   data: "Data",
   users: "Users",
@@ -35,7 +38,15 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
   const availableTabs = isAdmin
     ? settingsTabs
-    : (["account", "playback", "data"] as const);
+    : (["account", "playback", "connections", "data"] as const);
+  useEffect(() => {
+    // Deep links such as /settings?tab=connections (the phone app's pairing
+    // help points there).
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && (settingsTabs as readonly string[]).includes(requested)) {
+      setActiveTab(requested as SettingsTab);
+    }
+  }, []);
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -72,6 +83,7 @@ export default function SettingsPage() {
           {activeTab === "playback" && (
             <BitrateForm initialBitrate={session?.bitrate ?? 0} />
           )}
+          {activeTab === "connections" && <ConnectionsSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && <LibrarySettings />}
           {isAdmin && activeTab === "users" && <UserForm />}

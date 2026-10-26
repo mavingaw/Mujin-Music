@@ -44,6 +44,7 @@ const MENU_DATA: usize = 1006;
 const MENU_AUTOSTART: usize = 1007;
 const MENU_EXIT: usize = 1008;
 const MENU_UPDATE: usize = 1009;
+const MENU_CONNECT: usize = 1010;
 
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static COMMAND_TX: OnceLock<mpsc::Sender<ServerCommand>> = OnceLock::new();
@@ -514,6 +515,7 @@ fn set_update_status(status: UpdateStatus) {
 fn handle_menu_command(hwnd: HWND, command_id: usize) {
     match command_id {
         MENU_OPEN => open_current_url(),
+        MENU_CONNECT => open_connections_page(),
         MENU_START => command("start"),
         MENU_STOP => command("stop"),
         MENU_RESTART => command("restart"),
@@ -652,7 +654,13 @@ fn show_context_menu(hwnd: HWND) {
         &status_label(&status),
     );
     unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
-    append_menu(menu, item_flags(!running), MENU_OPEN, "Open Parson");
+    append_menu(menu, item_flags(running), MENU_OPEN, "Open Parson");
+    append_menu(
+        menu,
+        item_flags(running),
+        MENU_CONNECT,
+        "Connect a phone or another computer…",
+    );
     append_menu(
         menu,
         item_flags(!running && !transitioning),
@@ -748,6 +756,23 @@ fn open_current_url() {
         })
         .unwrap_or_else(default_url);
     open_url(url);
+}
+
+/// Opens Settings → Connections, which shows this server's network address
+/// and a QR code for the Parson phone app.
+fn open_connections_page() {
+    let url = MODEL
+        .get()
+        .and_then(|model| model.lock().ok())
+        .and_then(|model| match model.status {
+            ServerStatus::Running(port) => Some(url_for_port(port)),
+            _ => None,
+        })
+        .unwrap_or_else(default_url);
+    open_url(format!(
+        "{}/settings?tab=connections",
+        url.trim_end_matches('/')
+    ));
 }
 
 fn open_url(url: String) {

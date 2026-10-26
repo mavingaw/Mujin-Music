@@ -9,6 +9,7 @@ export * from "./resources/data";
 export * from "./resources/filesystem";
 export * from "./resources/genres";
 export * from "./resources/home";
+export * from "./resources/host";
 export * from "./resources/images";
 export * from "./resources/library";
 export * from "./resources/lyrics";

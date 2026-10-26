@@ -41,6 +41,10 @@ services:
 
 Open `http://localhost:1993`, create your account, and choose `/music`.
 
+## Server and remotes
+
+The Parson server holds your library. Parson Desktop, the Android app, and any browser are remotes for it. Parson Desktop can run the server itself, or be a remote for a server on your NAS or another computer. See [docs/server.md](docs/server.md) for headless installs on Linux, NAS, Docker and Windows, and for how to connect phones.
+
 ## Privacy
 
 Parson does not upload analytics or crash reports.

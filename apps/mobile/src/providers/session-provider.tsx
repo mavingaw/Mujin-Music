@@ -45,6 +45,12 @@ import {
   setSecureItem,
 } from "@/lib/secure-storage";
 import {
+  forgetLibrary as forgetKnownLibrary,
+  parseKnownLibraries,
+  rememberLibrary,
+  type KnownLibrary,
+} from "@/lib/known-libraries";
+import {
   accountKey,
   parseStoredAccounts,
   renameStoredAccount,
@@ -58,6 +64,7 @@ const REFRESH_TOKEN_KEY = "parson.refresh-token";
 const INSTANCE_KEY = "parson.instance-id";
 const LIBRARY_KEY = "parson.library-name";
 const ACCOUNTS_KEY = "parson.saved-accounts";
+const LIBRARIES_KEY = "parson.known-libraries";
 
 export type SessionPhase =
   | "loading"
@@ -79,6 +86,10 @@ type SessionContextValue = {
   origin: string | null;
   pairing: { code: string; expiresAt: number } | null;
   savedAccounts: { current: boolean; key: string; username: string }[];
+  /** Every library this phone has used, most recent first. */
+  knownLibraries: KnownLibrary[];
+  /** Instance ids of every saved account (one entry per account). */
+  accountLibraryIds: string[];
   phase: SessionPhase;
   setupStatus: SetupStatus | null;
   connect: (origin: string, manifest?: DiscoveryManifest) => Promise<boolean>;
@@ -91,6 +102,12 @@ type SessionContextValue = {
   switchAccount: (key: string) => Promise<boolean>;
   logout: () => Promise<void>;
   changeServer: () => Promise<void>;
+  /**
+   * Moves to another library without signing out of this one, signing in
+   * with that library's most recent saved account when there is one.
+   */
+  switchLibrary: (origin: string) => Promise<boolean>;
+  forgetLibrary: (instanceId: string) => Promise<void>;
   changeUsername: (
     username: string,
     currentPassword: string,
@@ -135,6 +152,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     expiresAt: number;
   } | null>(null);
   const [storedAccounts, setStoredAccounts] = useState<StoredAccount[]>([]);
+  const [knownLibraries, setKnownLibraries] = useState<KnownLibrary[]>([]);
+  const knownLibrariesRef = useRef<KnownLibrary[]>([]);
   const [serverReplacementPending, setServerReplacementPending] =
     useState(false);
   const generation = useRef(0);
@@ -158,6 +177,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     storedAccountsRef.current = accounts;
     setStoredAccounts(accounts);
     void setSecureItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  }, []);
+
+  const replaceKnownLibraries = useCallback((libraries: KnownLibrary[]) => {
+    knownLibrariesRef.current = libraries;
+    setKnownLibraries(libraries);
+    void setSecureItem(LIBRARIES_KEY, JSON.stringify(libraries));
   }, []);
 
   const updateStoredAccountToken = useCallback(
@@ -310,6 +335,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setSecureItem(INSTANCE_KEY, manifest.instanceId),
           setSecureItem(LIBRARY_KEY, manifest.name),
         ]);
+        replaceKnownLibraries(
+          rememberLibrary(knownLibrariesRef.current, {
+            instanceId: manifest.instanceId,
+            origin: nextOrigin,
+            name: manifest.name,
+          }),
+        );
         await resolveSetup(setup, currentGeneration);
         return true;
       } catch (cause) {
@@ -325,7 +357,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         return false;
       }
     },
-    [clearAuthentication, resolveSetup],
+    [clearAuthentication, replaceKnownLibraries, resolveSetup],
   );
 
   const retry = useCallback(async () => {
@@ -343,6 +375,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         savedInstance,
         savedLibrary,
         savedAccounts,
+        savedLibraries,
       ] = await Promise.all([
         getSecureItem(SERVER_KEY),
         getSecureItem(TOKEN_KEY),
@@ -350,8 +383,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
         getSecureItem(INSTANCE_KEY),
         getSecureItem(LIBRARY_KEY),
         getSecureItem(ACCOUNTS_KEY),
+        getSecureItem(LIBRARIES_KEY),
       ]);
       if (cancelled) return;
+      let libraries = parseKnownLibraries(savedLibraries);
+      if (!libraries.length && savedOrigin && savedInstance && savedLibrary) {
+        // Upgrading from a version that only remembered one library.
+        libraries = rememberLibrary([], {
+          instanceId: savedInstance,
+          origin: savedOrigin,
+          name: savedLibrary,
+        });
+      }
+      knownLibrariesRef.current = libraries;
+      setKnownLibraries(libraries);
       const accounts = parseStoredAccounts(savedAccounts);
       storedAccountsRef.current = accounts;
       setStoredAccounts(accounts);
@@ -840,6 +885,61 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setTimeout(() => queryClient.clear(), 0);
   }, [clearAuthentication, queryClient]);
 
+  const switchLibrary = useCallback(
+    async (target: string) => {
+      if (userOperationInFlight.current) return false;
+      if (!(await connect(target))) return false;
+      const identity = serverIdentity.current;
+      const account = storedAccountsRef.current.find(
+        (item) =>
+          item.instanceId === identity.instanceId &&
+          item.origin === identity.origin,
+      );
+      if (!account) return true;
+      const expectedGeneration = generation.current;
+      userOperationInFlight.current = true;
+      try {
+        await storeNativeAuthentication(
+          account.accessToken,
+          account.refreshToken,
+        );
+        activeAccountRef.current = {
+          instanceId: account.instanceId,
+          sub: account.sub,
+        };
+        const restored = await isValid();
+        if (expectedGeneration !== generation.current) return false;
+        if (restored.status && restored.claims) {
+          setClaims(restored.claims);
+          setError(null);
+          setPhase("ready");
+          setTimeout(() => queryClient.clear(), 0);
+        }
+        return true;
+      } catch {
+        // The library is connected; the user can pick or pair an account.
+        return true;
+      } finally {
+        userOperationInFlight.current = false;
+      }
+    },
+    [connect, queryClient, storeNativeAuthentication],
+  );
+
+  const forgetLibrary = useCallback(
+    async (target: string) => {
+      replaceKnownLibraries(
+        forgetKnownLibrary(knownLibrariesRef.current, target),
+      );
+      replaceStoredAccounts(
+        storedAccountsRef.current.filter(
+          (account) => account.instanceId !== target,
+        ),
+      );
+    },
+    [replaceKnownLibraries, replaceStoredAccounts],
+  );
+
   const value = useMemo<SessionContextValue>(
     () => ({
       claims,
@@ -858,9 +958,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
           key: accountKey(account),
           username: account.username,
         })),
+      knownLibraries,
+      accountLibraryIds: storedAccounts.map((account) => account.instanceId),
       phase,
       setupStatus,
       cancelPairing,
+      forgetLibrary,
+      switchLibrary,
       cancelServerReplacement,
       changeServer,
       changeUsername,
@@ -885,7 +989,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
       confirmServerReplacement,
       connect,
       error,
+      forgetLibrary,
       instanceId,
+      knownLibraries,
       libraryName,
       login,
       logout,
@@ -896,6 +1002,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       startPairing,
       storedAccounts,
       switchAccount,
+      switchLibrary,
       updateBitrate,
       setupAccount,
       setupLibrary,

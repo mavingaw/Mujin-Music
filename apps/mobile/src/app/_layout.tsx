@@ -67,6 +67,8 @@ function SessionNavigationGuard() {
     session.phase === "ready" || session.phase === "offline";
 
   useEffect(() => {
+    // The connect-link screen redirects itself once it has read the link.
+    if (topLevelRoute === "connect") return;
     if (!authenticated && topLevelRoute) {
       router.replace("/");
     } else if (
@@ -136,6 +138,10 @@ export default function RootLayout() {
                     />
                     <Stack.Screen
                       name="(tabs)"
+                      options={{ animation: "fade" }}
+                    />
+                    <Stack.Screen
+                      name="connect"
                       options={{ animation: "fade" }}
                     />
                     <Stack.Screen

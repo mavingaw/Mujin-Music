@@ -13,9 +13,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { validPasswordLength } from "@parson/music-sdk";
 
+import { LibraryList, SearchingIndicator } from "@/components/library-list";
 import { palette } from "@/constants/colors";
 import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
 import { SERVER_REPLACEMENT_WARNING } from "@/lib/discovery-manifest";
+import { libraryRows } from "@/lib/known-libraries";
 import { useSession } from "@/providers/session-provider";
 
 export default function EntryScreen() {
@@ -31,6 +33,7 @@ export default function EntryScreen() {
     null,
   );
   const pairingStartedFor = useRef<string | null>(null);
+  const [connectingOrigin, setConnectingOrigin] = useState<string | null>(null);
   const passwordLogin = passwordLoginOrigin === session.origin;
   const serverValue = serverEdited ? server : (session.origin ?? server);
   useEffect(() => {
@@ -47,6 +50,21 @@ export default function EntryScreen() {
     void session.startPairing();
   }, [passwordLogin, session]);
   if (session.phase === "ready" || session.phase === "offline") return null;
+
+  const libraries = libraryRows({
+    known: session.knownLibraries,
+    nearby: nearbyLibraries.map((library) => ({
+      instanceId: library.manifest.instanceId,
+      origin: library.origin,
+      name: library.manifest.name,
+    })),
+    currentInstanceId: null,
+    accountInstanceIds: session.accountLibraryIds,
+  });
+  const openLibrary = (origin: string) => {
+    setConnectingOrigin(origin);
+    void session.switchLibrary(origin).finally(() => setConnectingOrigin(null));
+  };
 
   const busy =
     session.phase === "loading" ||
@@ -407,37 +425,32 @@ export default function EntryScreen() {
             session.phase === "connecting" ||
             session.phase === "loading" ? (
             <View style={styles.form}>
-              {nearbyLibraries.length ? (
+              {libraries.length ? (
                 <View style={styles.nearbySection}>
-                  <Text style={styles.sectionLabel}>Nearby</Text>
-                  {nearbyLibraries.map((library) => (
-                    <Pressable
-                      accessibilityHint="Connects to this Parson library"
-                      accessibilityRole="button"
-                      disabled={busy}
-                      key={library.manifest.instanceId}
-                      style={({ pressed }) => [
-                        styles.libraryCard,
-                        pressed && styles.libraryCardPressed,
-                        busy && styles.disabledPrimary,
-                      ]}
-                      onPress={() =>
-                        void session.connect(library.origin, library.manifest)
-                      }
-                    >
-                      <Text style={styles.libraryName}>
-                        {library.manifest.name}
-                      </Text>
-                      <Text selectable style={styles.libraryAddress}>
-                        {library.origin}
-                      </Text>
-                    </Pressable>
-                  ))}
+                  <Text style={styles.sectionLabel}>
+                    {libraries.some((library) => library.known)
+                      ? "Your libraries"
+                      : "Nearby"}
+                  </Text>
+                  <LibraryList
+                    busy={busy}
+                    connectingOrigin={connectingOrigin}
+                    onForget={(row) =>
+                      void session.forgetLibrary(row.instanceId)
+                    }
+                    onSelect={(row) => openLibrary(row.origin)}
+                    rows={libraries}
+                  />
                 </View>
-              ) : session.phase === "discovering" ? (
-                <Text style={styles.discoveryStatus}>
-                  Looking for Parson libraries nearby…
-                </Text>
+              ) : null}
+              {session.phase === "discovering" ? (
+                <SearchingIndicator
+                  label={
+                    libraries.some((library) => library.nearby)
+                      ? "Still looking for more…"
+                      : "Looking for Parson libraries on this Wi‑Fi…"
+                  }
+                />
               ) : null}
               <Text style={styles.sectionLabel}>Manual address</Text>
               <TextInput
