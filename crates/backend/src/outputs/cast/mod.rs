@@ -558,6 +558,7 @@ impl Renderer for CastZone {
             gapless: false,
             exclusive_capable: false,
             network: true,
+            endpoint: None,
             notes: vec![CAST_NOTE.to_string()],
         }
     }

@@ -248,61 +248,19 @@ pub fn device_info(receiver: &Receiver) -> DeviceInfo {
             manual: receiver.manual,
             verification: AIRPLAY_VERIFICATION.to_string(),
         }),
-        hardware_volume: None,
+        hardware_volume: Some(AIRPLAY_VOLUME),
         busy: false,
     }
 }
 
-/// Browses mDNS for `_raop._tcp` receivers for `wait`.
-pub fn browse(wait: Duration) -> Vec<Receiver> {
-    let Ok(daemon) = mdns_sd::ServiceDaemon::new() else {
-        return Vec::new();
-    };
-    let Ok(events) = daemon.browse(SERVICE_TYPE) else {
-        let _ = daemon.shutdown();
-        return Vec::new();
-    };
-    let deadline = Instant::now() + wait;
-    let mut found: HashMap<String, Receiver> = HashMap::new();
-    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-        let Ok(event) = events.recv_timeout(remaining) else {
-            break;
-        };
-        let mdns_sd::ServiceEvent::ServiceResolved(info) = event else {
-            continue;
-        };
-        let Some(ip) = info
-            .get_addresses_v4()
-            .into_iter()
-            .find(|ip| !ip.is_unspecified())
-        else {
-            continue;
-        };
-        let txt = RaopTxt::from_pairs(
-            info.get_properties()
-                .iter()
-                .map(|property| (property.key(), property.val_str())),
-        );
-        let instance = info.get_fullname().to_string();
-        let (mac, name) = split_instance(&instance);
-        let id = format!(
-            "airplay:{}",
-            mac.unwrap_or_else(|| format!("{ip}:{}", info.get_port()))
-        );
-        found.insert(
-            id.clone(),
-            Receiver {
-                id,
-                name,
-                address: SocketAddr::new(IpAddr::V4(ip), info.get_port()),
-                txt,
-                manual: false,
-            },
-        );
-    }
-    let _ = daemon.stop_browse(SERVICE_TYPE);
-    let _ = daemon.shutdown();
-    found.into_values().collect()
+/// A receiver's device id: `airplay:` and its MAC address in lower case,
+/// or its address when the instance name has none.
+pub fn receiver_id(mac: Option<&str>, address: SocketAddr) -> String {
+    format!(
+        "airplay:{}",
+        mac.map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| address.to_string())
+    )
 }
 
 /* ------------------------------------------------------------------ */
@@ -616,9 +574,33 @@ impl Shared {
     }
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The receiver's own volume, in dB on AirPlay's -30..0 scale; at or below
+/// -30 dB (or muted) it is sent as -144, AirPlay's mute.
+pub fn volume_parameter(db: f32, muted: bool) -> String {
+    let value = if muted || db <= -30.0 {
+        -144.0
+    } else {
+        db.min(0.0)
+    };
+    format!("volume: {value:.6}\r\n")
+}
+
+/// The volume scale every AirPlay receiver takes.
+pub const AIRPLAY_VOLUME: crate::HardwareVolume = crate::HardwareVolume {
+    min_db: -30.0,
+    max_db: 0.0,
+    step_db: 0.5,
+};
+
 /// An RTSP session and its RTP stream to one receiver.
 pub struct RaopSink {
-    rtsp: Rtsp,
+    rtsp: Arc<Mutex<Rtsp>>,
     audio: UdpSocket,
     shared: Arc<Shared>,
     threads: Vec<JoinHandle<()>>,
@@ -740,7 +722,7 @@ impl RaopSink {
                 .spawn(move || control_loop(&control_shared))?,
         );
         Ok(Self {
-            rtsp,
+            rtsp: Arc::new(Mutex::new(rtsp)),
             audio,
             shared,
             threads,
@@ -823,8 +805,7 @@ impl RaopSink {
     /// packet starts a new run.
     fn flush_receiver(&mut self) -> io::Result<()> {
         let info = format!("seq={};rtptime={}", self.seq, self.rtptime);
-        self.rtsp
-            .request("FLUSH", None, &[("RTP-Info", info)], None, &[])?;
+        lock(&self.rtsp).request("FLUSH", None, &[("RTP-Info", info)], None, &[])?;
         let mut timeline = self.shared.timeline();
         timeline.start = None;
         self.marker = true;
@@ -917,7 +898,7 @@ impl Sink for RaopSink {
 
 impl Drop for RaopSink {
     fn drop(&mut self) {
-        let _ = self.rtsp.request("TEARDOWN", None, &[], None, &[]);
+        let _ = lock(&self.rtsp).request("TEARDOWN", None, &[], None, &[]);
         self.shared.stop.store(true, Ordering::Relaxed);
         for thread in self.threads.drain(..) {
             let _ = thread.join();
@@ -941,7 +922,7 @@ pub fn probe_manual(endpoint: &ManualEndpoint) -> Receiver {
         .to_socket_addrs()
         .ok()
         .and_then(|mut addresses| addresses.next());
-    let id = format!("airplay-manual:{}", endpoint.address.trim());
+    let id = format!("airplay:manual:{}", endpoint.address.trim());
     let mut txt = RaopTxt::default();
     let Some(address) = address else {
         return Receiver {
@@ -984,24 +965,145 @@ pub fn probe_manual(endpoint: &ManualEndpoint) -> Receiver {
     }
 }
 
+/// Called when the receivers a backend knows change.
+pub type ChangeListener = Arc<dyn Fn() + Send + Sync>;
+
 /// Plays to AirPlay receivers.
 pub struct RaopBackend {
     registry: Arc<NetworkRegistry>,
-    discover: bool,
-    browse_wait: Duration,
+    /// Receivers found by mDNS, kept up to date by [`RaopBackend::browse`].
+    discovered: Mutex<HashMap<String, Receiver>>,
+    /// Every receiver of the last listing, for `open`.
     receivers: Mutex<HashMap<String, Receiver>>,
     tracks: Mutex<HashMap<String, TrackInfo>>,
+    /// The receiver's own volume (dB) and mute, kept across sessions.
+    volume: Mutex<HashMap<String, f32>>,
+    muted: Mutex<HashMap<String, bool>>,
+    /// The RTSP connection of each receiver's open session.
+    active: Mutex<HashMap<String, std::sync::Weak<Mutex<Rtsp>>>>,
+    listener: Mutex<Option<ChangeListener>>,
 }
 
 impl RaopBackend {
-    pub fn new(registry: Arc<NetworkRegistry>, discover: bool) -> Self {
+    /// Receivers added by address (in `registry`) and those
+    /// [`RaopBackend::browse`] finds.
+    pub fn new(registry: Arc<NetworkRegistry>) -> Self {
         Self {
             registry,
-            discover,
-            browse_wait: Duration::from_millis(1500),
+            discovered: Mutex::new(HashMap::new()),
             receivers: Mutex::new(HashMap::new()),
             tracks: Mutex::new(HashMap::new()),
+            volume: Mutex::new(HashMap::new()),
+            muted: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
+            listener: Mutex::new(None),
         }
+    }
+
+    /// Calls `listener` whenever a receiver appears or changes.
+    pub fn on_change(&self, listener: ChangeListener) {
+        *lock(&self.listener) = Some(listener);
+    }
+
+    fn changed(&self) {
+        let listener = lock(&self.listener).clone();
+        if let Some(listener) = listener {
+            listener();
+        }
+    }
+
+    /// Adds or updates a receiver (as mDNS found it); true when something
+    /// changed.
+    pub fn upsert(&self, receiver: Receiver) -> bool {
+        let changed = {
+            let mut discovered = lock(&self.discovered);
+            if discovered.get(&receiver.id) == Some(&receiver) {
+                false
+            } else {
+                discovered.insert(receiver.id.clone(), receiver);
+                true
+            }
+        };
+        if changed {
+            self.changed();
+        }
+        changed
+    }
+
+    /// Every receiver found so far, playable or not, by name.
+    pub fn found(&self) -> Vec<Receiver> {
+        let mut receivers: Vec<Receiver> = lock(&self.discovered).values().cloned().collect();
+        receivers.sort_by_key(|receiver| receiver.name.to_lowercase());
+        receivers
+    }
+
+    /// Keeps browsing mDNS in the background for as long as the backend
+    /// lives, adding receivers as they answer.
+    pub fn browse(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        let _ = std::thread::Builder::new()
+            .name("parson-airplay-browse".into())
+            .spawn(move || {
+                let Ok(daemon) = mdns_sd::ServiceDaemon::new() else {
+                    return;
+                };
+                let Ok(events) = daemon.browse(SERVICE_TYPE) else {
+                    let _ = daemon.shutdown();
+                    return;
+                };
+                loop {
+                    let event = events.recv_timeout(Duration::from_secs(5));
+                    let Some(backend) = weak.upgrade() else {
+                        let _ = daemon.shutdown();
+                        return;
+                    };
+                    let Ok(mdns_sd::ServiceEvent::ServiceResolved(info)) = event else {
+                        continue;
+                    };
+                    let Some(ip) = info
+                        .get_addresses_v4()
+                        .into_iter()
+                        .find(|ip| !ip.is_unspecified() && !ip.is_loopback())
+                    else {
+                        continue;
+                    };
+                    let txt = RaopTxt::from_pairs(
+                        info.get_properties()
+                            .iter()
+                            .map(|property| (property.key(), property.val_str())),
+                    );
+                    let (mac, name) = split_instance(info.get_fullname());
+                    let address = SocketAddr::new(IpAddr::V4(ip), info.get_port());
+                    backend.upsert(Receiver {
+                        id: receiver_id(mac.as_deref(), address),
+                        name,
+                        address,
+                        txt,
+                        manual: false,
+                    });
+                }
+            });
+    }
+
+    /// Sends the stored volume to the receiver's open session, if any.
+    fn apply_volume(&self, device_id: &str) -> io::Result<()> {
+        let Some(rtsp) = lock(&self.active)
+            .get(device_id)
+            .and_then(std::sync::Weak::upgrade)
+        else {
+            return Ok(());
+        };
+        let db = lock(&self.volume).get(device_id).copied().unwrap_or(-15.0);
+        let muted = lock(&self.muted).get(device_id).copied().unwrap_or(false);
+        lock(&rtsp)
+            .request(
+                "SET_PARAMETER",
+                None,
+                &[],
+                Some("text/parameters"),
+                volume_parameter(db, muted).as_bytes(),
+            )
+            .map(|_| ())
     }
 }
 
@@ -1017,24 +1119,17 @@ impl Backend for RaopBackend {
             .into_iter()
             .filter(|endpoint| endpoint.protocol == NetworkProtocol::AirPlay)
             .collect();
-        let (mut receivers, manual_receivers) = std::thread::scope(|scope| {
-            let discovered = self
-                .discover
-                .then(|| scope.spawn(|| browse(self.browse_wait)));
+        let manual_receivers: Vec<Receiver> = std::thread::scope(|scope| {
             let probed: Vec<_> = manual
                 .iter()
                 .map(|endpoint| scope.spawn(move || probe_manual(endpoint)))
                 .collect();
-            (
-                discovered
-                    .and_then(|handle| handle.join().ok())
-                    .unwrap_or_default(),
-                probed
-                    .into_iter()
-                    .filter_map(|handle| handle.join().ok())
-                    .collect::<Vec<_>>(),
-            )
+            probed
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect()
         });
+        let mut receivers = self.found();
         for receiver in manual_receivers {
             if !receivers
                 .iter()
@@ -1070,19 +1165,15 @@ impl Backend for RaopBackend {
             })
             .collect();
         devices.sort_by_key(|device| device.name.to_lowercase());
-        if let Ok(mut cache) = self.receivers.lock() {
-            *cache = receivers
-                .into_iter()
-                .map(|receiver| (receiver.id.clone(), receiver))
-                .collect();
-        }
+        *lock(&self.receivers) = receivers
+            .into_iter()
+            .map(|receiver| (receiver.id.clone(), receiver))
+            .collect();
         devices
     }
 
     fn prepare(&self, device_id: &str, track: &TrackInfo) {
-        if let Ok(mut tracks) = self.tracks.lock() {
-            tracks.insert(device_id.to_string(), track.clone());
-        }
+        lock(&self.tracks).insert(device_id.to_string(), track.clone());
     }
 
     fn open(
@@ -1100,11 +1191,10 @@ impl Backend for RaopBackend {
                 "AirPlay carries 44.1kHz 16-bit stereo only",
             ));
         }
-        let receiver = self
-            .receivers
-            .lock()
-            .ok()
-            .and_then(|receivers| receivers.get(device_id).cloned())
+        let receiver = lock(&self.receivers)
+            .get(device_id)
+            .cloned()
+            .or_else(|| lock(&self.discovered).get(device_id).cloned())
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
@@ -1114,12 +1204,22 @@ impl Backend for RaopBackend {
         if let Some(reason) = receiver.txt.unsupported_reason() {
             return Err(io::Error::new(io::ErrorKind::Unsupported, reason));
         }
-        let track = self
-            .tracks
-            .lock()
-            .ok()
-            .and_then(|tracks| tracks.get(device_id).cloned());
-        Ok(Box::new(RaopSink::open(&receiver, track.as_ref())?))
+        let track = lock(&self.tracks).get(device_id).cloned();
+        let sink = RaopSink::open(&receiver, track.as_ref())?;
+        lock(&self.active).insert(device_id.to_string(), Arc::downgrade(&sink.rtsp));
+        // The receiver starts at its own level; set Parson's.
+        let _ = self.apply_volume(device_id);
+        Ok(Box::new(sink))
+    }
+
+    fn set_hardware_volume(&self, device_id: &str, db: f32) -> io::Result<()> {
+        lock(&self.volume).insert(device_id.to_string(), db);
+        self.apply_volume(device_id)
+    }
+
+    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> io::Result<()> {
+        lock(&self.muted).insert(device_id.to_string(), muted);
+        self.apply_volume(device_id)
     }
 }
 

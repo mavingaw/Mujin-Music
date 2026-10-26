@@ -1130,12 +1130,12 @@ pub fn describe_native_leg(
                 kind: StageKind::Dsp,
                 title: "Volume leveling".into(),
                 detail: format!(
-                    "{}, {} ReplayGain",
+                    "{}, {}",
                     format_decibels(gain_db),
                     target.leveling.map_or("track", |leveling| leveling.source)
                 ),
                 quality: Some(SignalQuality::Enhanced),
-                explanation: "Volume leveling, which you turned on, is applied by the server in 64-bit float using the track's ReplayGain tags, so tracks play at a similar loudness. The device's volume stays fixed.".into(),
+                explanation: "Volume leveling, which you turned on, is applied by the server in 64-bit float, so tracks play at a similar loudness. The device's volume stays fixed.".into(),
             });
         }
         if let Some(headroom) = processing.headroom_db {
@@ -1979,7 +1979,7 @@ mod tests {
             accepts: vec!["L16 44.1/48kHz".into()],
             reports_format: false,
             manual: false,
-            verification: parson_output::network::UPNP_VERIFICATION.into(),
+            verification: crate::outputs::upnp::UPNP_VERIFICATION.into(),
         };
         let audio = flac(44_100, 16, 2);
         let caps = parson_output::DeviceCaps {
@@ -2536,7 +2536,7 @@ mod tests {
         let target = NativeOutputTarget {
             leveling: Some(NativeLeveling {
                 gain_db: -6.43,
-                source: "track",
+                source: "track ReplayGain",
             }),
             ..DAC
         };

@@ -58,9 +58,6 @@ pub enum Driver {
     /// A software device that consumes audio in real time without a sound
     /// card, for testing and demonstrations (`PARSON_NATIVE_OUTPUT_SIMULATE`).
     Simulated,
-    /// A UPnP AV or OpenHome renderer on the network, which pulls the
-    /// server's processed PCM over HTTP.
-    Upnp,
     /// An AirPlay receiver, sent ALAC over RTP (AirPlay 1 / RAOP).
     #[serde(rename = "airplay")]
     AirPlay,
@@ -81,7 +78,6 @@ impl Driver {
             (Self::CoreAudio, false) => "CoreAudio, shared",
             (Self::Simulated, true) => "Simulated exclusive output",
             (Self::Simulated, false) => "Simulated shared output",
-            (Self::Upnp, _) => "UPnP AV stream over HTTP",
             (Self::AirPlay, _) => "AirPlay (RAOP), ALAC 44.1kHz 16bit",
             (Self::Bridge, true) => "Parson Bridge, exclusive",
             (Self::Bridge, false) => "Parson Bridge, shared",
@@ -95,7 +91,6 @@ impl Driver {
             Self::Wasapi => "WASAPI",
             Self::CoreAudio => "CoreAudio",
             Self::Simulated => "Simulated",
-            Self::Upnp => "UPnP",
             Self::AirPlay => "AirPlay",
             Self::Bridge => "Parson Bridge",
         }
@@ -103,7 +98,7 @@ impl Driver {
 
     /// Plays over the network rather than to a device on this machine.
     pub fn is_network(self) -> bool {
-        matches!(self, Self::Upnp | Self::AirPlay)
+        matches!(self, Self::AirPlay)
     }
 }
 
@@ -378,7 +373,7 @@ impl DeviceInfo {
 }
 
 /// Per-device user settings, mirroring Roon's device setup.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputSettings {
     /// Open the device exclusively (bit-perfect); off lets the system
     /// convert or mix.

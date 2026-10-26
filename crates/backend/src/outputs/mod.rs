@@ -1,20 +1,25 @@
 //! Outputs the server plays itself, one track at a time, from a queue the
-//! zone service holds:
+//! zone service holds. Every output is discovered once, by one
+//! implementation of its protocol, and becomes one zone:
 //!
-//! - [`upnp`]: UPnP/DLNA media renderers on the network (SSDP discovery,
-//!   AVTransport/RenderingControl/ConnectionManager over SOAP, gapless with
-//!   `SetNextAVTransportURI`, signed media URLs).
-//! - [`device`]: the audio devices of the machine running the server (the
-//!   desktop app's own computer): each USB DAC or output is its own zone,
-//!   with exclusive, bit-perfect playback and the device's own volume.
+//! - [`device`]: the audio devices of the machine running the server: each
+//!   USB DAC or output is its own zone, with exclusive, bit-perfect
+//!   playback through [`pipeline`] and the device's own volume.
+//! - [`bridge`]: audio devices of other machines running Parson Bridge.
+//! - [`airplay`]: AirPlay receivers, fed by the same pipeline over RAOP.
+//! - [`upnp`]: UPnP AV and OpenHome renderers on the network (SSDP or an
+//!   address, gapless, signed media URLs that the same DSP chain feeds).
+//! - [`cast`]: Chromecasts the server drives.
 //!
-//! Both implement [`renderer::Renderer`], so the zone service drives them
+//! All implement [`renderer::Renderer`], so the zone service drives them
 //! the same way.
 
 pub mod airplay;
 pub mod bridge;
 pub mod cast;
 pub mod device;
+pub mod network;
+pub mod pipeline;
 pub mod renderer;
 pub mod upnp;
 
@@ -34,6 +39,8 @@ pub struct FormatLimits {
     pub alac: bool,
     pub mp3: bool,
     pub aac: bool,
+    /// Raw big-endian PCM (`audio/L16`, `audio/L24` up to 24-bit).
+    pub lpcm: bool,
 }
 
 impl FormatLimits {
@@ -46,6 +53,7 @@ impl FormatLimits {
         alac: true,
         mp3: true,
         aac: true,
+        lpcm: false,
     };
 
     /// Google Cast's Default Media Receiver: FLAC up to 96 kHz/24-bit, MP3
@@ -58,6 +66,7 @@ impl FormatLimits {
         alac: false,
         mp3: true,
         aac: true,
+        lpcm: false,
     };
 
     /// Applies a user's maximum (Roon's "Max sample rate" in device setup).
@@ -102,6 +111,11 @@ impl FormatLimits {
         let rest = if self.flac {
             format!(
                 "Anything else is sent as FLAC: higher sample rates become the nearest rate it takes in the same family (44.1 or 48 kHz multiples), lossless files keep their own bit depth up to {depth}-bit, and lossy files (Ogg Vorbis, Opus) are decoded to {depth}-bit."
+            )
+        } else if self.wav || self.lpcm {
+            format!(
+                "Anything else is sent as uncompressed PCM ({}): higher sample rates become the nearest rate it takes in the same family, at up to {depth}-bit.",
+                if self.wav { "WAV" } else { "LPCM" }
             )
         } else {
             "Anything else is converted to 320 kbps MP3.".to_string()
@@ -159,26 +173,27 @@ pub struct Outputs {
     pub airplay: Option<Arc<airplay::AirplayController>>,
     /// Chromecast devices and Google Home groups, driven by the server.
     pub cast: Option<Arc<cast::CastController>>,
+    /// UPnP and AirPlay players added by address.
+    pub network: Option<Arc<network::NetworkPlayers>>,
 }
 
 impl Outputs {
     /// Builds the outputs from the environment: UPnP unless `PARSON_UPNP=off`,
-    /// local audio devices when `PARSON_LOCAL_AUDIO` asks for them (the
-    /// desktop app sets it).
+    /// this machine's audio devices unless `PARSON_LOCAL_AUDIO=off`.
     pub fn from_env() -> Self {
-        let upnp =
-            upnp::UpnpConfig::from_env().and_then(|config| {
-                match upnp::UpnpController::new(config) {
-                    Ok(controller) => Some(Arc::new(controller)),
-                    Err(error) => {
-                        tracing::warn!(%error, "UPnP renderer support is unavailable");
-                        None
-                    }
+        let network = Arc::new(network::NetworkPlayers::from_env());
+        let upnp = upnp::UpnpConfig::from_env(network.discovery()).and_then(|config| {
+            match upnp::UpnpController::new(config, Some(network.registry())) {
+                Ok(controller) => Some(Arc::new(controller)),
+                Err(error) => {
+                    tracing::warn!(%error, "UPnP renderer support is unavailable");
+                    None
                 }
-            });
+            }
+        });
         let devices = device::DeviceManager::from_env().map(Arc::new);
         let bridges = bridge::BridgeHub::from_env();
-        let airplay = airplay::AirplayController::from_env();
+        let airplay = airplay::AirplayController::from_env(network.registry(), network.discovery());
         let cast = cast::CastController::from_env();
         Self {
             upnp,
@@ -186,6 +201,19 @@ impl Outputs {
             bridges,
             airplay,
             cast,
+            network: Some(network),
+        }
+    }
+
+    /// Re-reads the players added by address after the list changed.
+    pub async fn network_changed(&self) {
+        if let Some(airplay) = self.airplay.clone() {
+            let _ = tokio::task::spawn_blocking(move || airplay.refresh()).await;
+        }
+        if let Some(upnp) = &self.upnp
+            && let Err(error) = upnp.discover().await
+        {
+            tracing::debug!(%error, "UPnP discovery failed");
         }
     }
 
@@ -299,12 +327,14 @@ impl Outputs {
                 "enabled": false,
                 "backend": null,
                 "devices": 0,
-                "note": "Audio devices of this computer show as zones in the Parson desktop app.",
+                "note": "Audio devices of the server's computer are off (PARSON_LOCAL_AUDIO=off).",
             })),
             "airplay": self.airplay.as_ref().map(|airplay| airplay.status())
                 .unwrap_or_else(|| serde_json::json!({"enabled": false, "receivers": [], "note": null})),
             "chromecast": self.cast.as_ref().map(|cast| cast.status())
                 .unwrap_or_else(|| serde_json::json!({"enabled": false, "devices": [], "note": null})),
+            "network": self.network.as_ref().map(|network| serde_json::json!(network.view()))
+                .unwrap_or_else(|| serde_json::json!({"discovery": false, "manual": []})),
             "bridges": self.bridges.as_ref().map(|bridges| serde_json::json!({
                 "enabled": true,
                 "bridges": bridges.status(),

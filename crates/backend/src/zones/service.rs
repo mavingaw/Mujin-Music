@@ -118,7 +118,8 @@ pub struct ZoneSettings {
     pub safety_max_volume: Option<u8>,
     /// Only the device the zone runs on can see and control it.
     pub private: bool,
-    pub dsp: ZoneDsp,
+    /// The zone's DSP chain.
+    pub dsp: DspSettings,
     /// Device zones: open the device exclusively (bit-perfect).
     pub exclusive: bool,
     /// Server-driven zones: `None` uses the device's best mode.
@@ -128,6 +129,9 @@ pub struct ZoneSettings {
     /// Device setup: highest sample rate and bit depth to send.
     pub max_sample_rate: Option<u32>,
     pub max_bit_depth: Option<u8>,
+    /// Device setup: how DSD reaches the device, and up to which rate.
+    pub dsd_strategy: DsdStrategy,
+    pub max_dsd_rate: Option<u32>,
 }
 
 impl Default for ZoneSettings {
@@ -143,12 +147,14 @@ impl Default for ZoneSettings {
             safety_min_volume: None,
             safety_max_volume: None,
             private: false,
-            dsp: ZoneDsp::default(),
+            dsp: DspSettings::default(),
             exclusive: true,
             volume_mode: None,
             volume_control: VolumeControl::Parson,
             max_sample_rate: None,
             max_bit_depth: None,
+            dsd_strategy: DsdStrategy::Auto,
+            max_dsd_rate: None,
         }
     }
 }
@@ -159,6 +165,17 @@ impl ZoneSettings {
             comfort: self.comfort_volume,
             safety_min: self.safety_min_volume,
             safety_max: self.safety_max_volume,
+        }
+    }
+
+    /// The device setup a device zone plays with.
+    pub fn output(&self) -> parson_output::OutputSettings {
+        parson_output::OutputSettings {
+            exclusive: self.exclusive,
+            max_sample_rate: self.max_sample_rate,
+            max_bit_depth: self.max_bit_depth,
+            dsd_strategy: self.dsd_strategy,
+            max_dsd_rate: self.max_dsd_rate,
         }
     }
 }
@@ -207,9 +224,9 @@ pub struct ZoneSettingsPatch {
     pub max_volume: Option<Option<u8>>,
     #[serde(default)]
     pub private: Option<bool>,
-    /// The whole DSP block (replaces it).
+    /// The whole DSP chain (replaces it).
     #[serde(default)]
-    pub dsp: Option<ZoneDsp>,
+    pub dsp: Option<DspSettings>,
     #[serde(default)]
     pub exclusive: Option<bool>,
     #[serde(default)]
@@ -220,11 +237,19 @@ pub struct ZoneSettingsPatch {
     pub max_sample_rate: Option<Option<u32>>,
     #[serde(default, deserialize_with = "nullable")]
     pub max_bit_depth: Option<Option<u8>>,
+    #[serde(default)]
+    pub dsd_strategy: Option<DsdStrategy>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub max_dsd_rate: Option<Option<u32>>,
 }
 
 impl ZoneSettingsPatch {
     fn touches_max_format(&self) -> bool {
         self.max_sample_rate.is_some() || self.max_bit_depth.is_some()
+    }
+
+    fn touches_dsd(&self) -> bool {
+        self.dsd_strategy.is_some() || self.max_dsd_rate.is_some()
     }
 
     fn touches_volume_limits(&self) -> bool {
@@ -322,9 +347,8 @@ pub fn apply_settings_patch(
     if let Some(private) = patch.private {
         next.private = private;
     }
-    if let Some(dsp) = patch.dsp {
-        dsp.validate().map_err(ZoneError::Invalid)?;
-        next.dsp = dsp;
+    if let Some(dsp) = &patch.dsp {
+        next.dsp = dsp.clone().normalized();
     }
     if let Some(exclusive) = patch.exclusive {
         next.exclusive = exclusive;
@@ -350,6 +374,17 @@ pub fn apply_settings_patch(
             return Err(ZoneError::Invalid("invalid_max_bit_depth"));
         }
         next.max_bit_depth = depth;
+    }
+    if let Some(strategy) = patch.dsd_strategy {
+        next.dsd_strategy = strategy;
+    }
+    if let Some(rate) = patch.max_dsd_rate {
+        if let Some(rate) = rate
+            && !DSD_RATE_CHOICES.contains(&rate)
+        {
+            return Err(ZoneError::Invalid("invalid_max_dsd_rate"));
+        }
+        next.max_dsd_rate = rate;
     }
     Ok(next)
 }
@@ -621,7 +656,10 @@ impl ZoneService {
             return;
         };
         match load_settings(&mut connection) {
-            Ok(settings) => self.lock().settings = settings,
+            Ok(mut settings) => {
+                import_legacy_outputs(&mut connection, &mut settings);
+                self.lock().settings = settings;
+            }
             Err(error) => tracing::warn!(%error, "could not load zone settings"),
         }
     }
@@ -918,6 +956,7 @@ impl ZoneService {
                 .map(|(id, _)| id.clone());
         }
         zones.extend(linked_views);
+        fill_endpoints(&mut zones);
         zones
     }
 
@@ -1005,6 +1044,7 @@ impl ZoneService {
                 setting_notes,
             ),
             output: None,
+            endpoints: Vec::new(),
             notes: Vec::new(),
         }
     }
@@ -1134,7 +1174,7 @@ impl ZoneService {
                     song,
                     crate::outputs::FormatLimits::SONOS,
                     hosted::cached_leveling_gain(&self.loudness, cache, song_id, leveling),
-                    &ZoneDsp::default(),
+                    &DspSettings::default(),
                     &target,
                 ))
             });
@@ -1222,6 +1262,7 @@ impl ZoneService {
                 volume_mode: None,
                 stream,
             }),
+            endpoints: Vec::new(),
             notes,
         }
     }
@@ -2583,7 +2624,7 @@ impl ZoneService {
         if patch.touches_volume_limits() && !supports.volume_limits {
             return Err(ZoneError::Unsupported("volume_limits_not_supported_here"));
         }
-        if patch.dsp.is_some_and(|dsp| dsp.is_active()) && !supports.dsp {
+        if patch.dsp.as_ref().is_some_and(DspSettings::processes) && !supports.dsp {
             return Err(ZoneError::Unsupported("dsp_not_supported_here"));
         }
         if patch.exclusive.is_some() && !supports.exclusive {
@@ -2598,6 +2639,9 @@ impl ZoneService {
         }
         if patch.touches_max_format() && !supports.max_format {
             return Err(ZoneError::Unsupported("max_format_not_supported_here"));
+        }
+        if patch.touches_dsd() && !supports.dsd {
+            return Err(ZoneError::Unsupported("dsd_strategy_not_supported_here"));
         }
         if patch
             .volume_control
@@ -3242,8 +3286,48 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
             ],
         ),
         output: None,
+        endpoints: Vec::new(),
         notes: vec![LINKED_SYNC_NOTE.to_string()],
     })
+}
+
+/// Every zone lists the outputs it plays through: a group its members'
+/// (with each member's own volume), a single output itself.
+fn fill_endpoints(zones: &mut [Zone]) {
+    let singles: HashMap<String, Vec<ZoneEndpoint>> = zones
+        .iter()
+        .filter(|zone| zone.group.is_none() && !zone.endpoints.is_empty())
+        .map(|zone| (zone.id.clone(), zone.endpoints.clone()))
+        .collect();
+    for zone in zones.iter_mut() {
+        if !zone.endpoints.is_empty() {
+            continue;
+        }
+        zone.endpoints = match &zone.group {
+            Some(group) => group
+                .members
+                .iter()
+                .flat_map(|member| {
+                    let mut endpoints = singles.get(&member.id).cloned().unwrap_or_else(|| {
+                        vec![ZoneEndpoint::named(
+                            &member.id,
+                            &member.name,
+                            member.kind.label(),
+                        )]
+                    });
+                    if let [endpoint] = endpoints.as_mut_slice() {
+                        endpoint.volume = member.volume.clone();
+                    }
+                    endpoints
+                })
+                .collect(),
+            None => {
+                let mut endpoint = ZoneEndpoint::named(&zone.id, &zone.name, &zone.device);
+                endpoint.volume = zone.volume.clone();
+                vec![endpoint]
+            }
+        };
+    }
 }
 
 fn zone_icon(settings: &ZoneSettings, kind: ZoneKind) -> String {
@@ -3306,12 +3390,14 @@ fn settings_view(
         leveling_target_lufs: settings.leveling_target_lufs,
         leveling_adjustment_db: settings.leveling_adjustment_db,
         private: settings.private,
-        dsp: settings.dsp,
+        dsp: settings.dsp.clone(),
         exclusive: settings.exclusive,
         volume_mode: settings.volume_mode.unwrap_or_default(),
         volume_control: settings.volume_control,
         max_sample_rate: settings.max_sample_rate,
         max_bit_depth: settings.max_bit_depth,
+        dsd_strategy: settings.dsd_strategy,
+        max_dsd_rate: settings.max_dsd_rate,
         supports,
         notes,
     }
@@ -3461,6 +3547,8 @@ struct StoredOutput {
     volume_mode: Option<VolumeMode>,
     max_sample_rate: Option<u32>,
     max_bit_depth: Option<u8>,
+    dsd_strategy: Option<DsdStrategy>,
+    max_dsd_rate: Option<u32>,
 }
 
 fn load_settings(
@@ -3482,8 +3570,8 @@ fn load_settings(
             let dsp = row
                 .dsp
                 .as_deref()
-                .and_then(|json| serde_json::from_str::<ZoneDsp>(json).ok())
-                .filter(|dsp| dsp.validate().is_ok())
+                .and_then(|json| serde_json::from_str::<DspSettings>(json).ok())
+                .map(DspSettings::normalized)
                 .unwrap_or_default();
             let output = row
                 .output
@@ -3521,10 +3609,92 @@ fn load_settings(
                     max_bit_depth: output
                         .max_bit_depth
                         .filter(|depth| BIT_DEPTH_CHOICES.contains(depth)),
+                    dsd_strategy: output.dsd_strategy.unwrap_or_default(),
+                    max_dsd_rate: output
+                        .max_dsd_rate
+                        .filter(|rate| DSD_RATE_CHOICES.contains(rate)),
                 },
             )
         })
         .collect())
+}
+
+/// The zone a device of the old server-output picker plays as.
+fn legacy_output_zone(device_id: &str) -> String {
+    if let Some(mac) = device_id.strip_prefix("airplay:") {
+        format!("airplay:{}", mac.to_ascii_lowercase())
+    } else if device_id.starts_with("upnp:") {
+        device_id.to_string()
+    } else {
+        format!("device:{device_id}")
+    }
+}
+
+/// Moves the old server-output picker's device setup and DSP chains into
+/// the settings of the zones those devices are now, once: a zone that
+/// already has settings keeps them, and the old files are retired.
+fn import_legacy_outputs(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    settings: &mut HashMap<String, ZoneSettings>,
+) {
+    use crate::settings::DataFile;
+    let outputs = DataFile::LegacyNativeOutputs.read().map(|bytes| {
+        serde_json::from_slice::<HashMap<String, parson_output::OutputSettings>>(&bytes)
+            .unwrap_or_default()
+    });
+    let chains = DataFile::LegacyNativeDsp.read().map(|bytes| {
+        serde_json::from_slice::<HashMap<String, DspSettings>>(&bytes).unwrap_or_default()
+    });
+    if outputs.is_none() && chains.is_none() {
+        return;
+    }
+    let mut imported: HashMap<String, ZoneSettings> = HashMap::new();
+    for (device_id, output) in outputs.iter().flatten().take(64) {
+        let zone_id = legacy_output_zone(device_id);
+        if settings.contains_key(&zone_id) || output.validate().is_err() {
+            continue;
+        }
+        let entry = imported.entry(zone_id).or_default();
+        entry.exclusive = output.exclusive;
+        entry.max_sample_rate = output
+            .max_sample_rate
+            .filter(|rate| SAMPLE_RATE_CHOICES.contains(rate));
+        entry.max_bit_depth = output
+            .max_bit_depth
+            .filter(|depth| BIT_DEPTH_CHOICES.contains(depth));
+        entry.dsd_strategy = output.dsd_strategy;
+        entry.max_dsd_rate = output
+            .max_dsd_rate
+            .filter(|rate| DSD_RATE_CHOICES.contains(rate));
+    }
+    for (device_id, chain) in chains.iter().flatten().take(64) {
+        let zone_id = legacy_output_zone(device_id);
+        if settings.contains_key(&zone_id) {
+            continue;
+        }
+        imported.entry(zone_id).or_default().dsp = chain.clone().normalized();
+    }
+    let mut saved = true;
+    for (zone_id, zone) in imported {
+        match save_setting(connection, &zone_id, &zone) {
+            Ok(()) => {
+                settings.insert(zone_id, zone);
+            }
+            Err(error) => {
+                saved = false;
+                tracing::warn!(%error, zone_id, "could not import an output's settings");
+            }
+        }
+    }
+    if saved {
+        for file in [DataFile::LegacyNativeOutputs, DataFile::LegacyNativeDsp] {
+            if file.read().is_some()
+                && let Err(error) = file.retire()
+            {
+                tracing::warn!(%error, ?file, "could not retire an imported settings file");
+            }
+        }
+    }
 }
 
 fn save_setting(
@@ -3562,7 +3732,7 @@ fn save_setting(
     .bind::<Nullable<Integer>, _>(settings.safety_max_volume.map(i32::from))
     .bind::<Integer, _>(i32::from(settings.private))
     .bind::<Nullable<Text>, _>(
-        (settings.dsp != ZoneDsp::default())
+        (settings.dsp != DspSettings::default())
             .then(|| serde_json::to_string(&settings.dsp).ok())
             .flatten(),
     )
@@ -3572,10 +3742,122 @@ fn save_setting(
             volume_mode: settings.volume_mode,
             max_sample_rate: settings.max_sample_rate,
             max_bit_depth: settings.max_bit_depth,
+            dsd_strategy: (settings.dsd_strategy != DsdStrategy::Auto)
+                .then_some(settings.dsd_strategy),
+            max_dsd_rate: settings.max_dsd_rate,
         })
         .ok(),
     )
     .bind::<Text, _>(settings.volume_control.as_str())
     .execute(connection)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod settings_storage_tests {
+    use diesel::Connection;
+    use diesel::RunQueryDsl;
+    use diesel_migrations::MigrationHarness;
+
+    use super::*;
+
+    #[derive(diesel::QueryableByName)]
+    struct DspRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        dsp: Option<String>,
+    }
+
+    fn stored_dsp(connection: &mut diesel::sqlite::SqliteConnection) -> serde_json::Value {
+        let row = diesel::sql_query("SELECT dsp FROM zone_setting WHERE zone_id = 'device:dac'")
+            .get_result::<DspRow>(connection)
+            .expect("row");
+        serde_json::from_str(&row.dsp.expect("dsp")).expect("json")
+    }
+
+    #[test]
+    fn the_old_dsp_block_moves_into_the_dsp_chain_and_back() {
+        let mut connection =
+            diesel::sqlite::SqliteConnection::establish(":memory:").expect("database");
+        connection
+            .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
+            .expect("migrations");
+        connection
+            .revert_last_migration(crate::persistence::connection::MIGRATIONS)
+            .expect("before the DSP chain");
+        diesel::sql_query(
+            "INSERT INTO zone_setting (zone_id, crossfade_seconds, leveling, leveling_target_lufs,
+                 leveling_adjustment_db, private, dsp)
+             VALUES ('device:dac', 0, 'off', -14, 0, 0,
+                 '{\"enabled\":true,\"preamp_db\":-2,\"bass_db\":3,\"treble_db\":-1,\"crossfeed\":true}')",
+        )
+        .execute(&mut connection)
+        .expect("old row");
+        connection
+            .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
+            .expect("the DSP chain migration");
+        let settings = load_settings(&mut connection).expect("settings");
+        let dsp = &settings["device:dac"].dsp;
+        // The largest boost (3 dB) set the old block's level.
+        assert_eq!(dsp.headroom_db(), Some(-3.0));
+        let bands = dsp.active_bands();
+        assert_eq!(bands.len(), 2);
+        assert_eq!(
+            (bands[0].frequency, bands[0].gain_db),
+            (100.0, 3.0),
+            "bass is a 100 Hz shelf"
+        );
+        assert_eq!((bands[1].frequency, bands[1].gain_db), (10_000.0, -1.0));
+        assert_eq!(
+            dsp.crossfeed(),
+            Some(parson_output::dsp::CrossfeedStrength::Strong)
+        );
+        assert_eq!(
+            crate::zones::dsp_summary(dsp),
+            "Headroom \u{2212}3.0 dB, EQ 100 Hz low shelf +3.0 dB, 10 kHz high shelf \u{2212}1.0 dB, Crossfeed (strong)"
+        );
+        // Back to the five knobs on the way down.
+        connection
+            .revert_last_migration(crate::persistence::connection::MIGRATIONS)
+            .expect("revert");
+        assert_eq!(
+            stored_dsp(&mut connection),
+            serde_json::json!({"enabled": true, "preamp_db": -3, "bass_db": 3, "treble_db": -1, "crossfeed": true})
+        );
+    }
+
+    #[test]
+    fn the_old_server_output_picker_devices_become_zone_settings() {
+        assert_eq!(legacy_output_zone("alsa:USB:0"), "device:alsa:USB:0");
+        assert_eq!(
+            legacy_output_zone("airplay:AABBCCDDEEFF"),
+            "airplay:aabbccddeeff"
+        );
+        assert_eq!(legacy_output_zone("upnp:uuid-1"), "upnp:uuid-1");
+        let settings = ZoneSettings {
+            max_sample_rate: Some(96_000),
+            dsd_strategy: DsdStrategy::Dop,
+            max_dsd_rate: Some(5_644_800),
+            exclusive: false,
+            ..ZoneSettings::default()
+        };
+        assert_eq!(
+            settings.output(),
+            parson_output::OutputSettings {
+                exclusive: false,
+                max_sample_rate: Some(96_000),
+                max_bit_depth: None,
+                dsd_strategy: DsdStrategy::Dop,
+                max_dsd_rate: Some(5_644_800),
+            }
+        );
+        let patched = apply_settings_patch(
+            &settings,
+            &ZoneSettingsPatch {
+                max_dsd_rate: Some(Some(1)),
+                ..ZoneSettingsPatch::default()
+            },
+            "DAC",
+        );
+        assert_eq!(patched, Err(ZoneError::Invalid("invalid_max_dsd_rate")));
+    }
 }

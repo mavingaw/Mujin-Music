@@ -417,9 +417,11 @@ impl BridgeHub {
             prefix: format!("{BRIDGE_PREFIX}{}:", info.bridge_id),
             kind: ZoneKind::Bridge,
             host: Some(format!("{} · Parson Bridge", info.name)),
+            machine: Some(info.name.clone()),
             route: Some(format!("on {} via Parson Bridge", info.name)),
             step: None,
             notes: vec![bridge_note(info.backend.as_deref())],
+            playable_only: false,
         };
         let devices = Arc::new(DeviceManager::placed(
             Arc::new(link.clone()),
@@ -548,6 +550,7 @@ impl BridgeHub {
                     prefix: GROUP_PREFIX.to_string(),
                     kind: ZoneKind::Bridge,
                     host: Some("Sample-synced group".to_string()),
+                    machine: None,
                     route: Some("(sample-synced group)".to_string()),
                     step: (zone_ids.len() > 1).then(|| {
                         format!(
@@ -555,6 +558,7 @@ impl BridgeHub {
                         )
                     }),
                     notes: vec![BRIDGE_NOTE.to_string()],
+                    playable_only: false,
                 },
             ),
             id: id.to_string(),

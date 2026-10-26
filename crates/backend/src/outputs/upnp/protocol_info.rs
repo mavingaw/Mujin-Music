@@ -26,6 +26,7 @@ pub fn parse_sink(sink: &str) -> SinkCapabilities {
         alac: false,
         mp3: false,
         aac: false,
+        lpcm: false,
     };
     let mut reported_rate = 0;
     let mut pcm24 = false;
@@ -53,8 +54,11 @@ pub fn parse_sink(sink: &str) -> SinkCapabilities {
         match mime.as_str() {
             "audio/flac" | "audio/x-flac" => limits.flac = true,
             "audio/wav" | "audio/x-wav" | "audio/wave" | "audio/vnd.wave" => limits.wav = true,
-            "audio/l16" => {}
-            "audio/l24" => pcm24 = true,
+            "audio/l16" => limits.lpcm = true,
+            "audio/l24" => {
+                limits.lpcm = true;
+                pcm24 = true;
+            }
             "audio/mpeg" | "audio/mp3" | "audio/x-mpeg" => limits.mp3 = true,
             "audio/mp4" | "audio/aac" | "audio/x-aac" | "audio/m4a" | "audio/x-m4a" => {
                 limits.aac = true
@@ -63,7 +67,7 @@ pub fn parse_sink(sink: &str) -> SinkCapabilities {
             _ => {}
         }
     }
-    let lossless = limits.flac || limits.wav || limits.alac;
+    let lossless = limits.flac || limits.wav || limits.alac || limits.lpcm;
     limits.max_sample_rate = if reported_rate > 0 {
         reported_rate
     } else if lossless {
@@ -71,7 +75,12 @@ pub fn parse_sink(sink: &str) -> SinkCapabilities {
     } else {
         48_000
     };
-    limits.max_bit_depth = if pcm24 || lossless { 24 } else { 16 };
+    // L16 alone carries 16 bits; L24, FLAC, WAV and ALAC carry 24.
+    limits.max_bit_depth = if pcm24 || limits.flac || limits.wav || limits.alac {
+        24
+    } else {
+        16
+    };
     SinkCapabilities {
         limits,
         rate_reported: reported_rate > 0,

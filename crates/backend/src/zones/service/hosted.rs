@@ -59,7 +59,7 @@ pub fn render_scope(zone_id: &str) -> String {
 pub struct HostedStream {
     pub limits: FormatLimits,
     pub leveling: Option<StreamLeveling>,
-    pub dsp: ZoneDsp,
+    pub dsp: DspSettings,
 }
 
 fn source_format(song: &crate::domain::Song) -> SourceFormat {
@@ -90,7 +90,7 @@ fn renderer_settings(info: &RendererInfo, settings: &ZoneSettings) -> RendererSe
         .or_else(|| info.volume_modes.first().copied())
         .unwrap_or(VolumeMode::Fixed);
     RendererSettings {
-        exclusive: settings.exclusive,
+        output: settings.output(),
         volume_mode,
         limits: info
             .limits
@@ -185,7 +185,7 @@ impl ZoneService {
         Some(HostedStream {
             limits: renderer_settings(&info, &settings).limits,
             leveling: sonos_leveling(&settings, &queue.song_ids, index, cache),
-            dsp: settings.dsp,
+            dsp: settings.dsp.clone(),
         })
     }
 
@@ -221,6 +221,7 @@ impl ZoneService {
             path: song.path.clone(),
             duration_ms,
             source: source_format(song),
+            audio: song.audio.clone(),
             uri: String::new(),
             metadata: String::new(),
             mime_type: String::new(),
@@ -228,13 +229,13 @@ impl ZoneService {
             artist: song.artist.clone(),
             album: String::new(),
             art_uri: None,
-            gain_db: None,
-            dsp: settings.dsp,
+            leveling: None,
+            dsp: settings.dsp.clone(),
         };
         if !info.network {
             // The device decodes the file itself; leveling becomes a gain.
             if let Some(leveling) = leveling {
-                request.gain_db = self
+                request.leveling = self
                     .loudness
                     .gain_for(
                         cache,
@@ -243,7 +244,15 @@ impl ZoneService {
                         leveling.target_lufs,
                         leveling.adjustment_db,
                     )
-                    .await;
+                    .await
+                    .map(|gain| crate::outputs::pipeline::TrackLeveling {
+                        gain_db: f64::from(gain),
+                        source: format!(
+                            "{} loudness, {} LUFS target",
+                            leveling.by.as_str(),
+                            leveling.target_lufs
+                        ),
+                    });
             }
             return Ok(request);
         }
@@ -260,7 +269,7 @@ impl ZoneService {
         let plan = crate::api::library::renderer_stream_plan(
             song,
             effective.limits,
-            leveling.is_some() || settings.dsp.is_active(),
+            leveling.is_some() || settings.dsp.processes(),
         );
         let album = cache
             .song_map
@@ -889,17 +898,30 @@ fn hosted_zone_view(
     // Parson decodes for these itself and opens the DAC exclusively.
     let is_device = matches!(info.kind, ZoneKind::Device | ZoneKind::Bridge);
     let stream = if info.network {
-        current_song.and_then(|song_id| {
-            network_stream_info(
-                cache?,
-                loudness,
-                song_id,
-                &settings,
-                effective.limits,
-                &info.name,
-                queue?,
-            )
-        })
+        current_song
+            .and_then(|song_id| {
+                network_stream_info(
+                    cache?,
+                    loudness,
+                    song_id,
+                    &settings,
+                    effective.limits,
+                    &info.name,
+                    queue?,
+                )
+            })
+            .map(|stream| {
+                let sent = current_song
+                    .and_then(|song_id| cache?.song(song_id))
+                    .and_then(|song| {
+                        served_format(
+                            song,
+                            effective.limits,
+                            settings.leveling != LevelingMode::Off || settings.dsp.processes(),
+                        )
+                    });
+                with_renderer_report(stream, renderer_state.decoding.as_ref(), sent)
+            })
     } else {
         renderer_state.stream.clone()
     };
@@ -924,6 +946,7 @@ fn hosted_zone_view(
             volume_limits: !fixed,
             private: info.kind == ZoneKind::Device,
             dsp: true,
+            dsd: is_device,
             exclusive: info.exclusive_capable,
             volume_modes: info.volume_modes.clone(),
             max_format: true,
@@ -954,6 +977,10 @@ fn hosted_zone_view(
     }
     if source == ZoneSource::External {
         notes.push("Another app is playing here. Playing from Parson replaces it.".to_string());
+    }
+    let mut endpoints = renderer.endpoints(&effective.output);
+    if let [endpoint] = endpoints.as_mut_slice() {
+        endpoint.volume = Some(volume.clone());
     }
     Zone {
         id: id.clone(),
@@ -1009,6 +1036,7 @@ fn hosted_zone_view(
             volume_mode: Some(effective.volume_mode),
             stream,
         }),
+        endpoints,
         notes,
     }
 }
@@ -1032,6 +1060,71 @@ fn network_stream_info(
         &settings.dsp,
         renderer,
     ))
+}
+
+/// The rate and depth a renderer gets for `song`: the FLAC Parson makes,
+/// or the file's own; `None` for MP3.
+fn served_format(
+    song: &crate::domain::Song,
+    limits: FormatLimits,
+    processed: bool,
+) -> Option<(u32, Option<u8>)> {
+    let plan = crate::api::library::renderer_stream_plan(song, limits, processed);
+    if plan.lossy {
+        return None;
+    }
+    match plan.convert_to {
+        Some((rate, depth)) => Some((rate, Some(depth))),
+        None => {
+            let source = source_format(song);
+            Some((source.sample_rate?, source.bit_depth))
+        }
+    }
+}
+
+/// Adds what the renderer itself says it decodes (OpenHome `Info.Details`)
+/// to a served stream's path: confirmation when it matches what Parson
+/// sends (`sent`, rate and depth), a conversion when it does not.
+fn with_renderer_report(
+    mut stream: ZoneStreamInfo,
+    decoding: Option<&crate::outputs::renderer::RendererDecoding>,
+    sent: Option<(u32, Option<u8>)>,
+) -> ZoneStreamInfo {
+    let Some(decoding) = decoding else {
+        return stream;
+    };
+    let depth = if decoding.bit_depth > 0 {
+        format!("/{}-bit", decoding.bit_depth)
+    } else {
+        String::new()
+    };
+    let decoded = format!(
+        "{} {}{depth}",
+        decoding.codec,
+        format_rate(decoding.sample_rate)
+    );
+    let matches = sent.is_some_and(|(rate, bits)| {
+        rate == decoding.sample_rate
+            && (decoding.bit_depth == 0 || bits.is_none_or(|bits| bits == decoding.bit_depth))
+    });
+    if matches && decoding.lossless {
+        stream.steps.push(format!(
+            "Renderer reports: decoding {decoded}, lossless, exactly what Parson sends"
+        ));
+    } else {
+        stream.steps.push(format!(
+            "Renderer reports: decoding {decoded}{}, not what Parson sends (the renderer converts it)",
+            if decoding.lossless { ", lossless" } else { "" }
+        ));
+        stream.bit_perfect = false;
+        if matches!(
+            stream.quality,
+            StreamQuality::Lossless | StreamQuality::Enhanced
+        ) {
+            stream.quality = StreamQuality::High;
+        }
+    }
+    stream
 }
 
 /// Leveling as a signal path shows it: `None` when off, `Some(None)` while
@@ -1064,12 +1157,12 @@ pub(super) fn served_stream_info(
     song: &crate::domain::Song,
     limits: FormatLimits,
     leveling_gain: Option<Option<f32>>,
-    dsp: &ZoneDsp,
+    dsp: &DspSettings,
     target: &str,
 ) -> ZoneStreamInfo {
     let source = source_format(song);
     let lossless = source.lossless();
-    let processed = leveling_gain.is_some() || dsp.is_active();
+    let processed = leveling_gain.is_some() || dsp.processes();
     let plan = crate::api::library::renderer_stream_plan(song, limits, processed);
     let codec = codec_name(&source);
     let mut steps = Vec::new();
@@ -1090,8 +1183,8 @@ pub(super) fn served_stream_info(
             ),
             None => {}
         }
-        if dsp.is_active() {
-            steps.push(format!("DSP: {}", dsp.summary()));
+        if dsp.processes() {
+            steps.push(format!("DSP: {}", dsp_summary(dsp)));
         }
     }
     let output = if plan.lossy {
@@ -1121,14 +1214,26 @@ pub(super) fn served_stream_info(
                 ));
             }
         }
-        steps.push(if !lossless {
-            format!("Sent as lossless FLAC {}/{depth}-bit", format_rate(rate))
-        } else if source.codec.as_deref() == Some("flac") {
-            "Re-encoded as FLAC (lossless)".to_string()
-        } else {
-            format!("Transcoded {codec} to FLAC (lossless)")
+        use crate::api::library::RenderContainer;
+        let container = match plan.container {
+            RenderContainer::Flac => "FLAC",
+            RenderContainer::Wav => "WAV",
+            RenderContainer::Lpcm => "LPCM",
+        };
+        steps.push(match plan.container {
+            RenderContainer::Flac if !lossless => {
+                format!("Sent as lossless FLAC {}/{depth}-bit", format_rate(rate))
+            }
+            RenderContainer::Flac if source.codec.as_deref() == Some("flac") => {
+                "Re-encoded as FLAC (lossless)".to_string()
+            }
+            RenderContainer::Flac => format!("Transcoded {codec} to FLAC (lossless)"),
+            RenderContainer::Wav | RenderContainer::Lpcm => format!(
+                "Sent as uncompressed PCM ({container}, {}/{depth}-bit): the renderer takes no FLAC",
+                format_rate(rate)
+            ),
         });
-        format!("FLAC {}/{depth}-bit to {target}", format_rate(rate))
+        format!("{container} {}/{depth}-bit to {target}", format_rate(rate))
     } else {
         format!("Original {codec} file, untouched, to {target}")
     };
@@ -1138,6 +1243,7 @@ pub(super) fn served_stream_info(
         bit_perfect: plan.convert_to.is_none() && !plan.lossy && lossless,
         steps,
         quality: StreamQuality::rate(lossless && !plan.lossy, converted, processed && decodes),
+        signal_path: None,
     }
 }
 
@@ -1165,7 +1271,7 @@ mod signal_path_tests {
             &song("a.m4a", "alac", 192_000, Some(32)),
             FormatLimits::SONOS,
             Some(Some(-6.4)),
-            &ZoneDsp::default(),
+            &DspSettings::default(),
             "Living Room + Kitchen (Sonos Five, Sonos One)",
         );
         assert_eq!(path.source, "ALAC 192 kHz/32-bit");
@@ -1196,7 +1302,7 @@ mod signal_path_tests {
             &song("a.flac", "flac", 48_000, Some(24)),
             limits,
             None,
-            &ZoneDsp::default(),
+            &DspSettings::default(),
             "Den",
         );
         assert_eq!(
@@ -1219,7 +1325,7 @@ mod signal_path_tests {
             &song("a.flac", "flac", 44_100, Some(16)),
             mp3_only,
             None,
-            &ZoneDsp::default(),
+            &DspSettings::default(),
             "Radio",
         );
         assert_eq!(path.output, "MP3 320 kbps to Radio");

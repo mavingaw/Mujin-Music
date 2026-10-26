@@ -3,8 +3,13 @@
 use futures::future::BoxFuture;
 use serde::Serialize;
 
+use parson_output::OutputSettings;
+use parson_output::dsp::DspSettings;
+
 use super::FormatLimits;
-use crate::zones::{DeviceVolumeRange, VolumeMode, ZoneDsp, ZoneKind, ZoneStreamInfo};
+use super::pipeline::TrackLeveling;
+use crate::domain::AudioProperties;
+use crate::zones::{DeviceVolumeRange, VolumeMode, ZoneKind, ZoneStreamInfo};
 
 /// Transport state of a renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -45,6 +50,9 @@ pub struct TrackRequest {
     pub path: String,
     pub duration_ms: i64,
     pub source: SourceFormat,
+    /// What the library indexed about the file (device outputs plan the
+    /// track from it, DSD included).
+    pub audio: Option<AudioProperties>,
     /// Signed media URL (network renderers fetch it).
     pub uri: String,
     /// DIDL-Lite metadata for `uri`.
@@ -56,9 +64,11 @@ pub struct TrackRequest {
     pub album: String,
     /// Signed cover URL, for network renderers.
     pub art_uri: Option<String>,
-    /// Volume leveling gain for this track, in dB.
-    pub gain_db: Option<f32>,
-    pub dsp: ZoneDsp,
+    /// Volume leveling for this track (device outputs apply it in their
+    /// DSP chain; network renderers get it in the media URL).
+    pub leveling: Option<TrackLeveling>,
+    /// The zone's DSP chain.
+    pub dsp: DspSettings,
 }
 
 /// Static facts about a renderer.
@@ -81,7 +91,19 @@ pub struct RendererInfo {
     pub exclusive_capable: bool,
     /// The renderer fetches signed URLs (network) rather than files.
     pub network: bool,
+    /// A network player's protocol, address and identity (UPnP, OpenHome,
+    /// AirPlay), and its picture when it offers one.
+    pub endpoint: Option<parson_output::network::NetworkInfo>,
     pub notes: Vec<String>,
+}
+
+/// What a renderer says it is decoding (OpenHome `Info.Details`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererDecoding {
+    pub codec: String,
+    pub sample_rate: u32,
+    pub bit_depth: u8,
+    pub lossless: bool,
 }
 
 /// What a renderer reports.
@@ -108,6 +130,8 @@ pub struct RendererState {
     pub reachable: bool,
     /// Signal path of the playing track, when the renderer knows it.
     pub stream: Option<ZoneStreamInfo>,
+    /// The renderer's own report of what it decodes, while it plays.
+    pub decoding: Option<RendererDecoding>,
 }
 
 impl Default for RendererState {
@@ -126,6 +150,7 @@ impl Default for RendererState {
             finished_serial: None,
             reachable: true,
             stream: None,
+            decoding: None,
         }
     }
 }
@@ -133,7 +158,8 @@ impl Default for RendererState {
 /// Per-zone settings a renderer applies itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererSettings {
-    pub exclusive: bool,
+    /// Device setup: exclusive mode, format maximums, DSD strategy.
+    pub output: OutputSettings,
     pub volume_mode: VolumeMode,
     pub limits: FormatLimits,
 }
@@ -171,6 +197,11 @@ pub trait Renderer: Send + Sync {
     fn poll(&self) -> BoxFuture<'_, ()>;
     /// Zone ids of the members, for a group that plays as one renderer.
     fn group_members(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// The physical outputs it plays through, under the zone's device
+    /// setup (a group lists its members instead).
+    fn endpoints(&self, _output: &OutputSettings) -> Vec<crate::zones::ZoneEndpoint> {
         Vec::new()
     }
 }
