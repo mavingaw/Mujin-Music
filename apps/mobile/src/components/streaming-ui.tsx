@@ -67,16 +67,22 @@ export function SourceTag({
  */
 export function StreamDeliveryLine({ songId }: { songId: string }) {
   const parsed = parseStreamingId(songId);
+  const player = usePlayer();
+  // Only the loaded track has a play to ask about; a new play (track,
+  // replay or quality) has no report until its own bytes arrive.
+  const play = player.current?.id === songId ? player.streamPlay : null;
+  const trackSeconds =
+    player.current?.id === songId ? player.current.duration : null;
   const delivery = useQuery({
-    queryKey: ["streaming", "delivery", songId],
-    queryFn: () => getStreamDelivery(songId),
+    queryKey: ["streaming", "delivery", songId, play],
+    queryFn: () => getStreamDelivery(songId, play),
     enabled: Boolean(parsed),
     staleTime: 10_000,
     refetchInterval: (query) =>
       query.state.data || query.state.dataUpdateCount >= 20 ? false : 1500,
   });
   if (!parsed) return null;
-  const text = delivery.data ? deliveryText(delivery.data) : null;
+  const text = delivery.data ? deliveryText(delivery.data, trackSeconds) : null;
   return (
     <View
       accessibilityLabel={

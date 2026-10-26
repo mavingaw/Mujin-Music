@@ -7,7 +7,9 @@ import {
   editorialParagraphs,
   isEditedCopyConflict,
   radioPlaylistTitle,
+  deliveryQueryKey,
   deliverySummary,
+  deliveredFullLength,
   needsOwnCredentials,
   serviceAction,
   formatTone,
@@ -236,6 +238,82 @@ test("the player shows what the stream actually delivered", () => {
   expect(deliverySummary(delivery({ delivered: null })).badge).toBe(
     "Format unknown",
   );
+});
+
+test("a short lossy bitrate is flagged with what disagrees", () => {
+  const aac = (kbps: number) => ({
+    codec: "aac",
+    lossless: false,
+    bit_depth: null,
+    sample_rate: 44100,
+    bitrate_kbps: kbps,
+    channels: 2,
+    label: `AAC ${kbps}`,
+  });
+  const summary = deliverySummary(
+    delivery({
+      requested: "high",
+      announced: aac(320),
+      delivered: aac(255),
+      matches_announced: false,
+      mismatches: ["255 kbps, not 320"],
+    }),
+  );
+  expect(summary.badge).toBe("AAC 255");
+  expect(summary.warning).toBe(
+    "The service announced AAC 320 (255 kbps, not 320)",
+  );
+});
+
+test("the signal path says whether the whole track arrived", () => {
+  // The server knew the catalog length.
+  const full = deliverySummary(
+    delivery({
+      delivered_seconds: 241.2,
+      track_seconds: 241,
+      full_length: true,
+    }),
+  );
+  expect(full.lines).toContain("Full length, 4:01");
+  expect(full.warning).toBeNull();
+
+  // Otherwise the player's own track length is compared.
+  const preview = delivery({ delivered_seconds: 30, full_length: null });
+  expect(deliveredFullLength(preview, 241)).toBeFalse();
+  const summary = deliverySummary(preview, 241);
+  expect(summary.badge).toBe("Preview · 24/192 FLAC");
+  expect(summary.warning).toBe(
+    "Only 0:30 of 4:01 arrived: a preview, not the full track",
+  );
+  expect(deliveredFullLength(preview, null)).toBeNull();
+  expect(
+    deliveredFullLength(delivery({ delivered_seconds: null }), 241),
+  ).toBeNull();
+
+  // The sandbox renders 30 seconds by design and says so.
+  const sandbox = delivery({
+    sandbox: true,
+    tone: false,
+    delivered_seconds: 30,
+  });
+  expect(deliveredFullLength(sandbox, 241)).toBeNull();
+  const sandboxSummary = deliverySummary(sandbox, 241);
+  expect(sandboxSummary.warning).toBeNull();
+  expect(sandboxSummary.lines.at(-1)).toBe(
+    "Sandbox renders 0:30 of each track; full length is checked on a live account",
+  );
+});
+
+test("each play has its own delivery cache entry", () => {
+  expect(deliveryQueryKey("tidal:1", "pa")).not.toEqual(
+    deliveryQueryKey("tidal:1", "pb"),
+  );
+  expect(deliveryQueryKey("tidal:1")).toEqual([
+    "streaming",
+    "delivery",
+    "tidal:1",
+    null,
+  ]);
 });
 
 test("genre tiles use service artwork or a stable gradient", () => {

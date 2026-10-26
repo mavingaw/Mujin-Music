@@ -526,6 +526,10 @@ pub struct ResolvedStream {
     pub source: StreamSource,
     pub format: AudioFormat,
     pub requested: StreamQuality,
+    /// The length of the media the service handed over, when its manifest
+    /// lists it (a DASH `SegmentTimeline`). Byte-level lengths come from
+    /// the probe instead.
+    pub stream_seconds: Option<f64>,
 }
 
 /// User-supplied API credentials. For TIDAL these are an OAuth client id and

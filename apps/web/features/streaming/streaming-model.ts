@@ -204,8 +204,46 @@ export type DeliverySummary = {
   warning: string | null;
 };
 
+/**
+ * The cache key for a delivery report: one per play when the player names
+ * its play, so a new stream never reuses an earlier stream's answer.
+ */
+export function deliveryQueryKey(
+  songId: string | null | undefined,
+  play?: string | null,
+) {
+  return ["streaming", "delivery", songId ?? null, play ?? null] as const;
+}
+
+/** `4:01` style length. */
+function clockLabel(seconds: number) {
+  const total = Math.max(0, Math.round(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Whether the whole track arrived. The server decides when it knew the
+ * catalog length; otherwise the player's own track length is compared with
+ * the stream's stated length. `null` when either is unknown, and always in
+ * the sandbox, which renders 30 seconds of every track.
+ */
+export function deliveredFullLength(
+  delivery: StreamingDelivery,
+  trackSeconds?: number | null,
+): boolean | null {
+  if (delivery.sandbox) return null;
+  if (typeof delivery.full_length === "boolean") return delivery.full_length;
+  const delivered = delivery.delivered_seconds;
+  const track = delivery.track_seconds ?? trackSeconds;
+  if (!delivered || !track || track <= 0) return null;
+  return delivered + 2 >= track;
+}
+
 /** Describes a stream's delivered format for the player. */
-export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
+export function deliverySummary(
+  delivery: StreamingDelivery,
+  trackSeconds?: number | null,
+): DeliverySummary {
   const format = delivery.delivered;
   const requested = qualityNames[delivery.requested] ?? delivery.requested;
   if (!format) {
@@ -230,7 +268,9 @@ export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
           : null;
   const container =
     delivery.container === "mp4"
-      ? "in MP4 segments"
+      ? format.lossless
+        ? "in MP4 segments"
+        : "in an MP4 file"
       : delivery.container === "flac"
         ? "as a FLAC file"
         : null;
@@ -241,6 +281,11 @@ export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
   if (delivery.frame_verified) lines.push("First audio frame verified");
   // Servers before `tone` existed only had the placeholder tone.
   const placeholder = delivery.tone ?? delivery.sandbox;
+  const fullLength = deliveredFullLength(delivery, trackSeconds);
+  const track = delivery.track_seconds ?? trackSeconds ?? null;
+  if (fullLength && delivery.delivered_seconds) {
+    lines.push(`Full length, ${clockLabel(delivery.delivered_seconds)}`);
+  }
   if (placeholder) {
     lines.push("Sandbox preview tone, not a real stream");
   }
@@ -248,16 +293,33 @@ export function deliverySummary(delivery: StreamingDelivery): DeliverySummary {
     lines.push(
       "Sandbox: recorded service reply and synthesized audio, rendered in this format and read back through the real stream proxy",
     );
+    if (delivery.delivered_seconds) {
+      lines.push(
+        `Sandbox renders ${clockLabel(delivery.delivered_seconds)} of each track; full length is checked on a live account`,
+      );
+    }
   }
-  const warning =
+  const mismatch =
     !placeholder && !delivery.matches_announced
-      ? `The service announced ${delivery.announced.label}`
+      ? `The service announced ${delivery.announced.label}${
+          delivery.mismatches?.length
+            ? ` (${delivery.mismatches.join(", ")})`
+            : ""
+        }`
+      : null;
+  const preview =
+    fullLength === false && delivery.delivered_seconds && track
+      ? `Only ${clockLabel(delivery.delivered_seconds)} of ${clockLabel(track)} arrived: a preview, not the full track`
       : null;
   return {
-    badge: placeholder ? `Preview ${format.label}` : format.label,
+    badge: placeholder
+      ? `Preview ${format.label}`
+      : preview
+        ? `Preview · ${format.label}`
+        : format.label,
     tone: formatTone(format),
     lines,
-    warning,
+    warning: [mismatch, preview].filter(Boolean).join(". ") || null,
   };
 }
 

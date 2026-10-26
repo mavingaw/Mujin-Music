@@ -1,5 +1,21 @@
 [
   {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/sessions",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "sessionId": "recorded-session",
+          "userId": 5550101,
+          "countryCode": "GB",
+          "channelId": 1,
+          "partnerId": 1
+        }
+      }
+    ]
+  },
+  {
     "method": "POST",
     "url": "https://auth.tidal.com/v1/oauth2/token",
     "form": [["grant_type", "authorization_code"]],

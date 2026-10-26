@@ -128,6 +128,41 @@ test("the player line names the delivered format", () => {
   expect(deliveryText({ ...delivery, delivered: null }).label).toBe(
     "Format unknown",
   );
+
+  // A short lossy bitrate names what disagrees.
+  const aac = (kbps: number) => ({
+    codec: "aac",
+    lossless: false,
+    bit_depth: null,
+    sample_rate: 44100,
+    bitrate_kbps: kbps,
+    channels: 2,
+    label: `AAC ${kbps}`,
+  });
+  expect(
+    deliveryText({
+      ...delivery,
+      announced: aac(320),
+      delivered: aac(255),
+      matches_announced: false,
+      mismatches: ["255 kbps, not 320"],
+    }).warning,
+  ).toBe("Announced AAC 320 (255 kbps, not 320)");
+
+  // Full length or a preview, against the server's or the player's length.
+  expect(
+    deliveryText({ ...delivery, delivered_seconds: 241, full_length: true })
+      .detail,
+  ).toBe("delivered · stereo · frame verified · full length 4:01");
+  expect(
+    deliveryText({ ...delivery, delivered_seconds: 30 }, 241).warning,
+  ).toBe("Preview: 0:30 of 4:01");
+  expect(
+    deliveryText(
+      { ...delivery, sandbox: true, tone: false, delivered_seconds: 30 },
+      241,
+    ).warning,
+  ).toBeNull();
 });
 
 test("reviews show their first paragraph until expanded", () => {

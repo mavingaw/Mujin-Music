@@ -57,7 +57,9 @@ export function CredentialsGuide() {
           self-registered client gets full-length hi-res playback has not been
           verified: no TIDAL account was available while Parson&apos;s support
           was built. Check connection tells you what your account actually
-          receives.
+          receives, and fails if it is a preview: it compares the length the
+          stream itself states with the track&apos;s length, and the format that
+          arrives with the one TIDAL announced.
         </p>
       </GuideSection>
       <GuideSection title="Qobuz: ask Qobuz for an app ID and secret">
@@ -88,6 +90,23 @@ export function CredentialsGuide() {
         <p className="mt-2 text-zinc-500">
           Whether and how quickly Qobuz grants a key is up to Qobuz. Parson
           never copies the keys built into Qobuz&apos;s own apps.
+        </p>
+      </GuideSection>
+      <GuideSection title="Prove it with your account (for server owners)">
+        <p>
+          Parson&apos;s source includes a test that signs in with your own
+          accounts, syncs favorites and streams a favorite at the highest
+          quality through this proxy. It fails unless the whole track arrives in
+          the announced format. Run it once on your computer:
+        </p>
+        <pre className="mt-2 overflow-x-auto rounded-lg bg-white/6 px-3 py-2 text-[12px] leading-5 text-zinc-300">
+          cargo test -p parson-music live_accounts -- --ignored --nocapture
+        </pre>
+        <p className="mt-2">
+          with your PARSON_LIVE_TIDAL_CLIENT_ID or PARSON_LIVE_QOBUZ_* values
+          set. After you approve TIDAL once it prints a refresh token; saved as
+          a repository secret, it lets the Live Streaming Accounts workflow
+          repeat the check every week without anyone signing in.
         </p>
       </GuideSection>
     </div>
