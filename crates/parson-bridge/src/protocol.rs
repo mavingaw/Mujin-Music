@@ -17,9 +17,8 @@
 
 use std::io::{self, Read, Write};
 
+use parson_output::{DeviceCaps, DeviceInfo, Driver, HardwareVolume, SampleFormat, StreamFormat};
 use serde::{Deserialize, Serialize};
-
-use crate::audio::{DeviceInfo, StreamFormat};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DEFAULT_PORT: u16 = 1994;
@@ -30,6 +29,102 @@ const KIND_JSON: u8 = 1;
 const KIND_AUDIO: u8 = 2;
 /// Largest frame accepted: 4 MiB (about 3.6 s of 768 kHz/32-bit stereo).
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
+
+/// A stream format as the wire carries it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFormat {
+    pub sample_rate: u32,
+    pub format: SampleFormat,
+    pub channels: u8,
+}
+
+impl From<StreamFormat> for WireFormat {
+    fn from(format: StreamFormat) -> Self {
+        Self {
+            sample_rate: format.sample_rate,
+            format: format.sample_format,
+            channels: format.channels,
+        }
+    }
+}
+
+impl From<WireFormat> for StreamFormat {
+    fn from(format: WireFormat) -> Self {
+        Self {
+            sample_rate: format.sample_rate,
+            sample_format: format.format,
+            channels: format.channels,
+        }
+    }
+}
+
+/// One audio output of a bridge, as the wire carries it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WireDevice {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// PCM rates the device takes natively, ascending.
+    pub sample_rates: Vec<u32>,
+    pub formats: Vec<SampleFormat>,
+    pub max_channels: u8,
+    pub hardware_volume: Option<HardwareVolume>,
+    /// Another app holds the device right now.
+    pub busy: bool,
+    /// Native DSD containers and rates (newer bridges only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dsd_formats: Vec<SampleFormat>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dsd_rates: Vec<u32>,
+}
+
+impl WireDevice {
+    /// What a bridge sends for one of its devices (devices that could not
+    /// be probed are listed with no formats).
+    pub fn from_device(device: &DeviceInfo) -> Self {
+        let caps = device.caps.clone().unwrap_or_default();
+        Self {
+            id: device.id.clone(),
+            name: device.name.clone(),
+            description: device.detail.clone(),
+            sample_rates: caps.sample_rates,
+            formats: caps.sample_formats,
+            max_channels: caps.max_channels.max(1),
+            hardware_volume: device.hardware_volume,
+            busy: device.busy,
+            dsd_formats: caps.dsd_formats,
+            dsd_rates: caps.dsd_rates,
+        }
+    }
+
+    /// The device as the server sees it: a Parson Bridge output.
+    pub fn into_device(self) -> DeviceInfo {
+        DeviceInfo {
+            id: self.id,
+            name: self.name,
+            detail: self.description,
+            driver: Driver::Bridge,
+            exclusive_capable: true,
+            caps: Some(DeviceCaps {
+                sample_rates: self.sample_rates,
+                sample_formats: self.formats,
+                min_channels: 1,
+                max_channels: self.max_channels.max(1),
+                dsd_formats: self.dsd_formats,
+                dsd_rates: self.dsd_rates,
+            }),
+            probe_error: self
+                .busy
+                .then(|| "in use by another app on the bridge".to_string()),
+            is_default: false,
+            hardware: None,
+            address: None,
+            network: None,
+            hardware_volume: self.hardware_volume,
+            busy: self.busy,
+        }
+    }
+}
 
 /// How a stream starts when it plays in a sample-synced group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +151,7 @@ pub enum ServerMessage {
     Open {
         stream: u32,
         device: String,
-        format: StreamFormat,
+        format: WireFormat,
         exclusive: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sync: Option<SyncStart>,
@@ -110,7 +205,7 @@ pub enum BridgeMessage {
         backend: Option<String>,
         /// Why there are no devices, when there are none.
         note: Option<String>,
-        devices: Vec<DeviceInfo>,
+        devices: Vec<WireDevice>,
     },
     Pong {
         id: u64,
@@ -118,7 +213,7 @@ pub enum BridgeMessage {
         bridge_us: i64,
     },
     Devices {
-        devices: Vec<DeviceInfo>,
+        devices: Vec<WireDevice>,
     },
     Opened {
         stream: u32,
@@ -224,7 +319,6 @@ pub fn read_frame<R: Read, M: for<'de> Deserialize<'de>>(reader: &mut R) -> io::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::SampleFormat;
 
     #[test]
     fn frames_round_trip_and_bad_input_is_refused() {
@@ -232,7 +326,7 @@ mod tests {
         let open = ServerMessage::Open {
             stream: 7,
             device: "hw-2-0".into(),
-            format: StreamFormat {
+            format: WireFormat {
                 sample_rate: 192_000,
                 format: SampleFormat::S24Packed,
                 channels: 2,
@@ -264,5 +358,36 @@ mod tests {
         assert!(read_frame::<_, ServerMessage>(&mut huge.as_slice()).is_err());
         let unknown = [0, 0, 0, 1, 9];
         assert!(read_frame::<_, ServerMessage>(&mut unknown.as_slice()).is_err());
+    }
+
+    #[test]
+    fn devices_keep_their_version_1_shape_on_the_wire() {
+        let device = WireDevice {
+            id: "hw-2-0".into(),
+            name: "E30".into(),
+            description: "USB Audio".into(),
+            sample_rates: vec![44_100, 96_000],
+            formats: vec![SampleFormat::S16, SampleFormat::S24Packed],
+            max_channels: 2,
+            hardware_volume: None,
+            busy: false,
+            dsd_formats: Vec::new(),
+            dsd_rates: Vec::new(),
+        };
+        let json = serde_json::to_value(&device).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "id": "hw-2-0", "name": "E30", "description": "USB Audio",
+                "sample_rates": [44_100, 96_000], "formats": ["s16", "s24_packed"],
+                "max_channels": 2, "hardware_volume": null, "busy": false
+            }),
+            "what bridges and servers of version 1 exchange"
+        );
+        let back: WireDevice = serde_json::from_value(json).unwrap();
+        let info = back.into_device();
+        assert_eq!(info.driver, Driver::Bridge);
+        assert_eq!(info.sample_rates(), [44_100, 96_000]);
+        assert_eq!(WireDevice::from_device(&info), device);
     }
 }

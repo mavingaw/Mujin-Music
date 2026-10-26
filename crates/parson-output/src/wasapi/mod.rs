@@ -18,10 +18,14 @@ pub mod com;
 pub mod fake;
 
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{DeviceBackend, DeviceInfo, HardwareVolume, OutputStream, SampleFormat, StreamFormat};
+use crate::{
+    Backend, DeviceCaps, DeviceInfo, Driver, HardwareVolume, STANDARD_RATES, SampleFormat, Sink,
+    StreamFormat,
+};
 
 pub type HResult = i32;
 
@@ -41,9 +45,7 @@ pub const AUDCLNT_E_INVALID_SIZE: HResult = 0x8889_0011_u32 as i32;
 pub const AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED: HResult = 0x8889_0019_u32 as i32;
 
 /// Rates probed on every endpoint.
-const PROBE_RATES: &[u32] = &[
-    44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000, 705_600, 768_000,
-];
+const PROBE_RATES: &[u32] = &STANDARD_RATES;
 
 /// Shared-mode buffer, in 100 ns units (200 ms).
 const SHARED_BUFFER_HNS: i64 = 2_000_000;
@@ -91,18 +93,23 @@ impl WaveFormat {
         usize::from(self.channels) * usize::from(self.container_bits / 8)
     }
 
-    fn of(format: StreamFormat, valid_bits_32: u16) -> Self {
-        let (container_bits, valid_bits) = match format.format {
+    /// The PCM wave format for a stream; `None` for DSD, which WASAPI only
+    /// carries as DoP (already PCM by the time it gets here).
+    fn of(format: StreamFormat) -> Option<Self> {
+        let (container_bits, valid_bits) = match format.sample_format {
             SampleFormat::S16 => (16, 16),
             SampleFormat::S24Packed => (24, 24),
-            SampleFormat::S32 => (32, valid_bits_32),
+            // 24 valid bits in a 32-bit container, as many USB DACs take.
+            SampleFormat::S24In32 => (32, 24),
+            SampleFormat::S32 => (32, 32),
+            _ => return None,
         };
-        Self {
+        Some(Self {
             sample_rate: format.sample_rate,
             channels: u16::from(format.channels),
             container_bits,
             valid_bits,
-        }
+        })
     }
 }
 
@@ -178,11 +185,12 @@ pub trait WasapiClient: Send + 'static {
 struct Probe {
     info: DeviceInfo,
     endpoint: String,
-    /// Valid bits Parson opens a 32-bit container with (32, or 24 for DACs
-    /// that only take 24 bits in 32).
-    valid_bits_32: u16,
     /// Exclusive mode is off for the device: only shared streams work.
     shared_only: bool,
+}
+
+fn io_error(message: String) -> io::Error {
+    io::Error::other(message)
 }
 
 pub struct WasapiBackend<A: WasapiApi> {
@@ -236,12 +244,11 @@ impl<A: WasapiApi> WasapiBackend<A> {
         let candidates: [(SampleFormat, u16, u16); 4] = [
             (SampleFormat::S16, 16, 16),
             (SampleFormat::S24Packed, 24, 24),
+            (SampleFormat::S24In32, 32, 24),
             (SampleFormat::S32, 32, 32),
-            (SampleFormat::S32, 32, 24),
         ];
         let mut rates = Vec::new();
         let mut formats: Vec<SampleFormat> = Vec::new();
-        let mut valid_bits_32 = 0;
         let mut busy = false;
         let mut not_allowed = false;
         let channels = endpoint.mix.channels.clamp(1, 2);
@@ -263,9 +270,6 @@ impl<A: WasapiApi> WasapiBackend<A> {
                         if !formats.contains(&format) {
                             formats.push(format);
                         }
-                        if format == SampleFormat::S32 && valid_bits > valid_bits_32 {
-                            valid_bits_32 = valid_bits;
-                        }
                     }
                     AUDCLNT_E_DEVICE_IN_USE => busy = true,
                     AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED => not_allowed = true,
@@ -285,9 +289,9 @@ impl<A: WasapiApi> WasapiBackend<A> {
                 SampleFormat::S24Packed,
                 SampleFormat::S32,
             ];
-            valid_bits_32 = 32;
         }
-        formats.sort_by_key(|format| format.bits());
+        // Narrowest first; a packed 24-bit container before 24-in-32.
+        formats.sort_by_key(|format| (format.bits(), format.bytes()));
         let hardware_volume = self
             .api
             .endpoint_volume(&endpoint.id)
@@ -315,23 +319,32 @@ impl<A: WasapiApi> WasapiBackend<A> {
         } else {
             format!("{adapter} · WASAPI exclusive")
         };
+        let max_channels = u8::try_from(endpoint.mix.channels.max(1)).unwrap_or(u8::MAX);
         Probe {
             info: DeviceInfo {
                 id,
                 name: endpoint.name.clone(),
-                description,
-                sample_rates: rates,
-                formats,
-                max_channels: u8::try_from(endpoint.mix.channels.max(1)).unwrap_or(u8::MAX),
+                detail: description,
+                driver: Driver::Wasapi,
+                exclusive_capable: !shared_only,
+                caps: Some(DeviceCaps {
+                    sample_rates: rates,
+                    sample_formats: formats,
+                    min_channels: 1,
+                    max_channels,
+                    // DSD reaches WASAPI only as DoP, which cannot be probed.
+                    dsd_formats: Vec::new(),
+                    dsd_rates: Vec::new(),
+                }),
+                probe_error: busy.then(|| describe(AUDCLNT_E_DEVICE_IN_USE)),
+                is_default: false,
+                hardware: None,
+                address: None,
+                network: None,
                 hardware_volume,
                 busy,
             },
             endpoint: endpoint.id.clone(),
-            valid_bits_32: if valid_bits_32 == 0 {
-                32
-            } else {
-                valid_bits_32
-            },
             shared_only,
         }
     }
@@ -372,9 +385,9 @@ impl<A: WasapiApi> WasapiBackend<A> {
     }
 }
 
-impl<A: WasapiApi> DeviceBackend for WasapiBackend<A> {
-    fn name(&self) -> &'static str {
-        "WASAPI"
+impl<A: WasapiApi> Backend for WasapiBackend<A> {
+    fn driver(&self) -> Driver {
+        Driver::Wasapi
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {
@@ -395,12 +408,13 @@ impl<A: WasapiApi> DeviceBackend for WasapiBackend<A> {
                 continue;
             }
             let probe = self.probe(&endpoint);
-            if probe.info.sample_rates.is_empty() {
+            if probe.info.sample_rates().is_empty() {
                 if let Some(previous) = probes.get(&id).filter(|_| probe.info.busy) {
                     // Another app holds it exclusively: list what it took
                     // before, marked busy.
                     let mut info = previous.info.clone();
                     info.busy = true;
+                    info.probe_error = probe.info.probe_error.clone();
                     devices.push(info);
                 }
                 continue;
@@ -416,46 +430,59 @@ impl<A: WasapiApi> DeviceBackend for WasapiBackend<A> {
         device_id: &str,
         format: StreamFormat,
         exclusive: bool,
-    ) -> Result<Box<dyn OutputStream>, String> {
+    ) -> io::Result<Box<dyn Sink>> {
         let probe = self
             .lookup(device_id)
-            .ok_or_else(|| "device unplugged".to_string())?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device unplugged"))?;
         let name = probe.info.name.clone();
-        let wave = WaveFormat::of(format, probe.valid_bits_32);
+        let wave = WaveFormat::of(format).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{name} takes DSD only as DoP over WASAPI, not as {}",
+                    format.sample_format.label()
+                ),
+            )
+        })?;
         let exclusive = exclusive && !probe.shared_only;
         let (client, buffer_frames) = if exclusive {
             let client = self
                 .initialize_exclusive(&probe.endpoint, &wave)
                 .map_err(|hr| {
                     if hr == AUDCLNT_E_UNSUPPORTED_FORMAT {
-                        format!(
-                            "{name} does not take {} Hz {} in exclusive mode",
-                            format.sample_rate,
-                            format.format.name()
+                        io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            format!(
+                                "{name} does not take {} Hz {} in exclusive mode",
+                                format.sample_rate,
+                                format.sample_format.alsa_name()
+                            ),
                         )
                     } else {
-                        format!("{name}: {}", describe(hr))
+                        io_error(format!("{name}: {}", describe(hr)))
                     }
                 })?;
             let frames = client
                 .buffer_frames()
-                .map_err(|hr| format!("{name}: {}", describe(hr)))?;
+                .map_err(|hr| io_error(format!("{name}: {}", describe(hr))))?;
             (client, frames)
         } else {
             let mut client = self
                 .api
                 .activate(&probe.endpoint)
-                .map_err(|hr| format!("{name}: {}", describe(hr)))?;
+                .map_err(|hr| io_error(format!("{name}: {}", describe(hr))))?;
             client
                 .initialize(ShareMode::Shared, false, SHARED_BUFFER_HNS, 0, &wave)
-                .map_err(|hr| format!("{name}: {}", describe(hr)))?;
+                .map_err(|hr| io_error(format!("{name}: {}", describe(hr))))?;
             let frames = client
                 .buffer_frames()
-                .map_err(|hr| format!("{name}: {}", describe(hr)))?;
+                .map_err(|hr| io_error(format!("{name}: {}", describe(hr))))?;
             (client, frames)
         };
         if buffer_frames == 0 {
-            return Err(format!("{name}: the device reported an empty buffer"));
+            return Err(io_error(format!(
+                "{name}: the device reported an empty buffer"
+            )));
         }
         lock(&self.open).insert(device_id.to_string());
         Ok(Box::new(WasapiStream {
@@ -473,24 +500,25 @@ impl<A: WasapiApi> DeviceBackend for WasapiBackend<A> {
         }))
     }
 
-    fn set_hardware_volume(&self, device_id: &str, db: f32) -> Result<(), String> {
+    fn set_hardware_volume(&self, device_id: &str, db: f32) -> io::Result<()> {
         let probe = self
             .lookup(device_id)
-            .ok_or_else(|| "device unplugged".to_string())?;
-        let range = probe
-            .info
-            .hardware_volume
-            .ok_or_else(|| format!("{} has no hardware volume", probe.info.name))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device unplugged"))?;
+        let range = probe.info.hardware_volume.ok_or_else(|| {
+            crate::unsupported(&format!("{} has no hardware volume", probe.info.name))
+        })?;
         self.api
             .set_volume_db(&probe.endpoint, db.clamp(range.min_db, range.max_db))
-            .map_err(describe)
+            .map_err(|hr| io_error(describe(hr)))
     }
 
-    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> Result<(), String> {
+    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> io::Result<()> {
         let probe = self
             .lookup(device_id)
-            .ok_or_else(|| "device unplugged".to_string())?;
-        self.api.set_mute(&probe.endpoint, muted).map_err(describe)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device unplugged"))?;
+        self.api
+            .set_mute(&probe.endpoint, muted)
+            .map_err(|hr| io_error(describe(hr)))
     }
 }
 
@@ -518,11 +546,11 @@ impl<C: WasapiClient> WasapiStream<C> {
         self.format.frame_bytes()
     }
 
-    fn error(&self, hr: HResult) -> String {
-        format!("{}: {}", self.name, describe(hr))
+    fn error(&self, hr: HResult) -> io::Error {
+        io_error(format!("{}: {}", self.name, describe(hr)))
     }
 
-    fn start(&mut self) -> Result<(), String> {
+    fn start(&mut self) -> io::Result<()> {
         if !self.running && !self.paused {
             self.client.start().map_err(|hr| self.error(hr))?;
             self.running = true;
@@ -532,13 +560,13 @@ impl<C: WasapiClient> WasapiStream<C> {
 
     /// Hands the device one whole buffer (exclusive): the first one before
     /// starting, every later one when the device asks for it.
-    fn push_buffer(&mut self, data: &[u8]) -> Result<(), String> {
+    fn push_buffer(&mut self, data: &[u8]) -> io::Result<()> {
         if self.written > 0 && !self.client.wait(EVENT_TIMEOUT_MS) {
-            return Err(format!(
+            return Err(io_error(format!(
                 "{} stopped asking for audio (no buffer event for {} s)",
                 self.name,
                 EVENT_TIMEOUT_MS / 1000
-            ));
+            )));
         }
         self.client
             .render(self.buffer_frames, data)
@@ -558,17 +586,22 @@ impl<C: WasapiClient> WasapiStream<C> {
     }
 }
 
-impl<C: WasapiClient> OutputStream for WasapiStream<C> {
-    fn format(&self) -> StreamFormat {
-        self.format
-    }
-
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+impl<C: WasapiClient> Sink for WasapiStream<C> {
+    fn write(&mut self, data: &[u8]) -> io::Result<()> {
         let frame_bytes = self.frame_bytes();
         if !data.len().is_multiple_of(frame_bytes) {
-            return Err("partial frame".to_string());
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "partial frame"));
         }
-        self.staging.extend_from_slice(data);
+        if self.format.sample_format == SampleFormat::S24In32 {
+            // Parson's 24-in-32 words hold the sample in the low 24 bits
+            // (ALSA's S24_LE); WASAPI wants the valid bits at the top.
+            for word in data.as_chunks::<4>().0 {
+                let value = i32::from_le_bytes(*word) << 8;
+                self.staging.extend_from_slice(&value.to_le_bytes());
+            }
+        } else {
+            self.staging.extend_from_slice(data);
+        }
         if self.exclusive {
             let buffer_bytes = self.buffer_frames as usize * frame_bytes;
             while self.staging.len() >= buffer_bytes {
@@ -584,7 +617,7 @@ impl<C: WasapiClient> OutputStream for WasapiStream<C> {
             if room == 0 {
                 self.start()?;
                 if self.paused || started.elapsed() > Duration::from_secs(5) {
-                    return Err(format!("{} stopped taking audio", self.name));
+                    return Err(io_error(format!("{} stopped taking audio", self.name)));
                 }
                 std::thread::sleep((self.buffer_duration() / 8).max(Duration::from_millis(1)));
                 continue;
@@ -605,7 +638,7 @@ impl<C: WasapiClient> OutputStream for WasapiStream<C> {
         self.written.saturating_sub(self.played()) + staged
     }
 
-    fn pause(&mut self, paused: bool) -> Result<(), String> {
+    fn pause(&mut self, paused: bool) -> io::Result<()> {
         self.paused = paused;
         if paused {
             if self.running {
@@ -618,7 +651,7 @@ impl<C: WasapiClient> OutputStream for WasapiStream<C> {
         Ok(())
     }
 
-    fn drop_buffer(&mut self) {
+    fn flush(&mut self) -> io::Result<()> {
         if self.running {
             let _ = self.client.stop();
             self.running = false;
@@ -626,17 +659,19 @@ impl<C: WasapiClient> OutputStream for WasapiStream<C> {
         let _ = self.client.reset();
         self.staging.clear();
         self.written = 0;
+        Ok(())
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self) -> io::Result<()> {
         let frame_bytes = self.frame_bytes();
         if self.exclusive {
             // The last partial buffer, padded with silence.
             if !self.staging.is_empty() {
                 let mut chunk = std::mem::take(&mut self.staging);
                 chunk.resize(self.buffer_frames as usize * frame_bytes, 0);
-                if self.push_buffer(&chunk).is_err() {
-                    return;
+                if let Err(error) = self.push_buffer(&chunk) {
+                    let _ = self.flush();
+                    return Err(error);
                 }
             }
             // An exclusive device replays stale memory if it is not fed, so
@@ -665,7 +700,7 @@ impl<C: WasapiClient> OutputStream for WasapiStream<C> {
                 }
             }
         }
-        self.drop_buffer();
+        self.flush()
     }
 }
 

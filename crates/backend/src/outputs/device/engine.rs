@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{DeviceBackend, DeviceInfo, OutputStream, SampleFormat, StreamFormat, choose_format};
+use super::{Backend, DeviceInfo, SampleFormat, Sink, StreamFormat, choose_format};
 use crate::outputs::renderer::{PlayState, RendererSettings, RendererState, TrackRequest};
 use crate::outputs::{describe_source, format_rate};
 use crate::zones::{VolumeMode, ZoneStreamInfo};
@@ -73,7 +73,7 @@ fn lock(shared: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
 
 impl Engine {
     pub fn start(
-        backend: Arc<dyn DeviceBackend>,
+        backend: Arc<dyn Backend>,
         device: DeviceInfo,
         changed: tokio::sync::broadcast::Sender<()>,
         route: Route,
@@ -108,6 +108,7 @@ impl Engine {
                 current: None,
                 next: None,
                 stream: None,
+                stream_format: None,
                 paused: false,
                 software_volume: 100,
                 muted: false,
@@ -163,7 +164,7 @@ impl Decoder {
         format: StreamFormat,
         exact: bool,
     ) -> Result<Self, String> {
-        let wide = format.format != SampleFormat::S16;
+        let wide = format.sample_format != SampleFormat::S16;
         let mut command = Command::new("ffmpeg");
         command.args(["-nostdin", "-hide_banner", "-v", "error"]);
         if position_ms > 0 {
@@ -258,7 +259,7 @@ struct Active {
 }
 
 struct Player {
-    backend: Arc<dyn DeviceBackend>,
+    backend: Arc<dyn Backend>,
     device: DeviceInfo,
     route: Route,
     receiver: Receiver<Control>,
@@ -266,7 +267,9 @@ struct Player {
     changed: tokio::sync::broadcast::Sender<()>,
     current: Option<Active>,
     next: Option<TrackRequest>,
-    stream: Option<Box<dyn OutputStream>>,
+    stream: Option<Box<dyn Sink>>,
+    /// The format `stream` was opened with.
+    stream_format: Option<StreamFormat>,
     paused: bool,
     software_volume: u8,
     muted: bool,
@@ -322,7 +325,7 @@ impl Player {
                 self.next = next.map(|next| *next);
                 self.paused = !play;
                 if let Some(stream) = self.stream.as_mut() {
-                    stream.drop_buffer();
+                    let _ = stream.flush();
                 }
                 self.begin(*track, position_ms.max(0));
             }
@@ -352,7 +355,7 @@ impl Player {
                         .unwrap_or(false);
                     if !paused_in_place {
                         if let Some(stream) = self.stream.as_mut() {
-                            stream.drop_buffer();
+                            let _ = stream.flush();
                         }
                         if let Some(active) = self.current.as_mut() {
                             active.resume_at = Some(position);
@@ -381,7 +384,7 @@ impl Player {
                 if let Some(active) = self.current.as_ref() {
                     let track = active.track.clone();
                     if let Some(stream) = self.stream.as_mut() {
-                        stream.drop_buffer();
+                        let _ = stream.flush();
                     }
                     self.begin(track, position_ms.max(0));
                     if self.paused
@@ -491,11 +494,12 @@ impl Player {
     }
 
     fn close_stream(&mut self, drain: bool) {
+        self.stream_format = None;
         if let Some(mut stream) = self.stream.take() {
             if drain {
-                stream.drain();
+                let _ = stream.drain();
             } else {
-                stream.drop_buffer();
+                let _ = stream.flush();
             }
         }
     }
@@ -533,12 +537,12 @@ impl Player {
             }
             if let Some(bits) = active.track.source.bit_depth
                 && active.track.source.lossless()
-                && bits > active.format.format.bits()
+                && bits > active.format.sample_format.bits()
             {
                 steps.push(format!(
                     "Reduced to {}-bit (the device takes at most {}-bit)",
-                    active.format.format.bits(),
-                    active.format.format.bits()
+                    active.format.sample_format.bits(),
+                    active.format.sample_format.bits()
                 ));
             }
             if !active.track.source.lossless() {
@@ -564,7 +568,7 @@ impl Player {
                 .track
                 .source
                 .bit_depth
-                .is_some_and(|bits| bits > active.format.format.bits());
+                .is_some_and(|bits| bits > active.format.sample_format.bits());
             let quality = crate::zones::StreamQuality::rate(
                 active.track.source.lossless(),
                 source_rate != active.format.sample_rate || reduced || software,
@@ -576,8 +580,8 @@ impl Player {
                 output: format!(
                     "{}/{}-bit ({}) to {}{}{}",
                     format_rate(active.format.sample_rate),
-                    active.format.format.bits(),
-                    active.format.format.name(),
+                    active.format.sample_format.bits(),
+                    active.format.sample_format.alsa_name(),
                     self.device.name,
                     self.route
                         .suffix
@@ -610,14 +614,17 @@ impl Player {
             self.track_ended();
             return;
         }
-        if self.stream.as_ref().map(|stream| stream.format()) != Some(format) {
+        if self.stream.is_none() || self.stream_format != Some(format) {
             // New format (or first track): drain the old stream, reopen.
             self.close_stream(true);
             match self
                 .backend
                 .open(&self.device.id, format, self.settings().exclusive)
             {
-                Ok(stream) => self.stream = Some(stream),
+                Ok(stream) => {
+                    self.stream = Some(stream);
+                    self.stream_format = Some(format);
+                }
                 Err(error) => {
                     tracing::warn!(%error, device = self.device.id, "could not open audio device");
                     // Stop rather than skip through the queue.
@@ -648,7 +655,7 @@ impl Player {
             None
         };
         let frames = pcm.len() / frame_bytes;
-        let data = convert(&pcm, format.format, gain);
+        let data = convert(&pcm, format.sample_format, gain);
         let Some(stream) = self.stream.as_mut() else {
             return;
         };
@@ -656,7 +663,10 @@ impl Player {
             tracing::warn!(%error, device = self.device.id, "audio device write failed");
             self.close_stream(false);
             let mut shared = lock(&self.shared);
-            if error.contains(parson_bridge::endpoint::REPLACED) {
+            if error
+                .to_string()
+                .contains(parson_bridge::endpoint::REPLACED)
+            {
                 // Another zone (or a synced group) now plays this DAC: stop
                 // instead of taking it back, so the two never fight.
                 self.current = None;
@@ -707,7 +717,7 @@ fn convert(pcm: &[u8], format: SampleFormat, gain: Option<f64>) -> Vec<u8> {
                 })
                 .collect(),
         },
-        SampleFormat::S32 | SampleFormat::S24Packed => {
+        SampleFormat::S32 | SampleFormat::S24Packed | SampleFormat::S24In32 => {
             let mut out = Vec::with_capacity(pcm.len() / 4 * format.bytes());
             for sample in pcm.as_chunks::<4>().0 {
                 let mut value = i32::from_le_bytes(*sample);
@@ -718,15 +728,18 @@ fn convert(pcm: &[u8], format: SampleFormat, gain: Option<f64>) -> Vec<u8> {
                         as i32;
                 }
                 let bytes = value.to_le_bytes();
-                if format == SampleFormat::S24Packed {
+                match format {
                     // The top 24 bits; 24-bit sources leave the low byte 0.
-                    out.extend_from_slice(&bytes[1..4]);
-                } else {
-                    out.extend_from_slice(&bytes);
+                    SampleFormat::S24Packed => out.extend_from_slice(&bytes[1..4]),
+                    // The top 24 bits in the low bits of the word (S24_LE).
+                    SampleFormat::S24In32 => out.extend_from_slice(&(value >> 8).to_le_bytes()),
+                    _ => out.extend_from_slice(&bytes),
                 }
             }
             out
         }
+        // Native DSD is never decoded here; it passes through untouched.
+        _ => pcm.to_vec(),
     }
 }
 

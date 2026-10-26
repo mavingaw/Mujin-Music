@@ -19,9 +19,10 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use parson_output::{DeviceCaps, Driver};
+
 use super::device::{
-    DeviceBackend, DeviceInfo, DeviceManager, HardwareVolume, OutputStream, Placement,
-    SampleFormat, StreamFormat,
+    Backend, DeviceInfo, DeviceManager, HardwareVolume, Placement, SampleFormat, Sink, StreamFormat,
 };
 use crate::zones::ZoneKind;
 
@@ -123,9 +124,9 @@ impl AirplayBackend {
     }
 }
 
-impl DeviceBackend for AirplayBackend {
-    fn name(&self) -> &'static str {
-        "AirPlay"
+impl Backend for AirplayBackend {
+    fn driver(&self) -> Driver {
+        Driver::AirPlay
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {
@@ -135,13 +136,25 @@ impl DeviceBackend for AirplayBackend {
             .map(|receiver| DeviceInfo {
                 id: receiver.id.clone(),
                 name: receiver.name.clone(),
-                description: match &receiver.model {
+                detail: match &receiver.model {
                     Some(model) => format!("AirPlay · {model}"),
                     None => "AirPlay receiver".to_string(),
                 },
-                sample_rates: vec![raop::SAMPLE_RATE],
-                formats: vec![SampleFormat::S16],
-                max_channels: 2,
+                driver: Driver::AirPlay,
+                exclusive_capable: false,
+                caps: Some(DeviceCaps {
+                    sample_rates: vec![raop::SAMPLE_RATE],
+                    sample_formats: vec![SampleFormat::S16],
+                    min_channels: 2,
+                    max_channels: 2,
+                    dsd_formats: Vec::new(),
+                    dsd_rates: Vec::new(),
+                }),
+                probe_error: None,
+                is_default: false,
+                hardware: None,
+                address: Some(receiver.address.clone()),
+                network: None,
                 hardware_volume: Some(HardwareVolume {
                     min_db: -30.0,
                     max_db: 0.0,
@@ -157,9 +170,26 @@ impl DeviceBackend for AirplayBackend {
         device_id: &str,
         format: StreamFormat,
         _exclusive: bool,
-    ) -> Result<Box<dyn OutputStream>, String> {
+    ) -> std::io::Result<Box<dyn Sink>> {
+        self.open_stream(device_id, format)
+            .map_err(std::io::Error::other)
+    }
+
+    fn set_hardware_volume(&self, device_id: &str, db: f32) -> std::io::Result<()> {
+        lock(&self.volume).insert(device_id.to_string(), db);
+        self.apply_volume(device_id).map_err(std::io::Error::other)
+    }
+
+    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> std::io::Result<()> {
+        lock(&self.muted).insert(device_id.to_string(), muted);
+        self.apply_volume(device_id).map_err(std::io::Error::other)
+    }
+}
+
+impl AirplayBackend {
+    fn open_stream(&self, device_id: &str, format: StreamFormat) -> Result<Box<dyn Sink>, String> {
         if format.sample_rate != raop::SAMPLE_RATE
-            || format.format != SampleFormat::S16
+            || format.sample_format != SampleFormat::S16
             || format.channels != 2
         {
             return Err("AirPlay takes 44.1 kHz/16-bit stereo".into());
@@ -180,52 +210,35 @@ impl DeviceBackend for AirplayBackend {
         }
         Ok(Box::new(Stream {
             active: Active { session },
-            format,
         }))
-    }
-
-    fn set_hardware_volume(&self, device_id: &str, db: f32) -> Result<(), String> {
-        lock(&self.volume).insert(device_id.to_string(), db);
-        self.apply_volume(device_id)
-    }
-
-    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> Result<(), String> {
-        lock(&self.muted).insert(device_id.to_string(), muted);
-        self.apply_volume(device_id)
     }
 }
 
 struct Stream {
     active: Active,
-    format: StreamFormat,
 }
 
-impl OutputStream for Stream {
-    fn format(&self) -> StreamFormat {
-        self.format
-    }
-
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
-        lock(&self.active.session).write(data)
+impl Sink for Stream {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        lock(&self.active.session)
+            .write(data)
+            .map_err(std::io::Error::other)
     }
 
     fn delay_frames(&mut self) -> u64 {
         lock(&self.active.session).delay_frames()
     }
 
-    fn pause(&mut self, _paused: bool) -> Result<(), String> {
-        // RAOP has no pause: flush, and start again on resume.
-        Err("AirPlay flushes on pause".into())
-    }
-
-    fn drop_buffer(&mut self) {
+    fn flush(&mut self) -> std::io::Result<()> {
         if let Err(error) = lock(&self.active.session).flush() {
             tracing::debug!(%error, "AirPlay flush failed");
         }
+        Ok(())
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self) -> std::io::Result<()> {
         lock(&self.active.session).drain();
+        Ok(())
     }
 }
 

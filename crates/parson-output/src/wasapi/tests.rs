@@ -37,22 +37,22 @@ fn lists_every_endpoint_with_its_native_rates_depths_and_hardware_volume() {
     let dac = &devices[0];
     assert_eq!(dac.id, "wasapi-a1b2c3d400004000800000000000e30f");
     assert_eq!(dac.name, "Speakers (Topping E30 II)");
-    assert_eq!(dac.description, "Topping E30 II · WASAPI exclusive");
+    assert_eq!(dac.detail, "Topping E30 II · WASAPI exclusive");
     assert_eq!(
-        dac.sample_rates,
+        dac.sample_rates(),
         vec![
             44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000
         ]
     );
     assert_eq!(
-        dac.formats,
+        dac.sample_formats(),
         vec![
             SampleFormat::S16,
             SampleFormat::S24Packed,
-            SampleFormat::S32
+            SampleFormat::S24In32
         ]
     );
-    assert_eq!(dac.max_bits(), 32);
+    assert_eq!(dac.max_bits(), 24, "24 valid bits, packed or in 32");
     assert_eq!(
         dac.hardware_volume,
         Some(HardwareVolume {
@@ -63,9 +63,9 @@ fn lists_every_endpoint_with_its_native_rates_depths_and_hardware_volume() {
     );
     assert!(!dac.busy);
     let speakers = &devices[1];
-    assert_eq!(speakers.sample_rates, vec![48_000]);
+    assert_eq!(speakers.sample_rates(), vec![48_000]);
     assert_eq!(
-        speakers.formats,
+        speakers.sample_formats(),
         vec![SampleFormat::S16, SampleFormat::S24Packed]
     );
     assert!(
@@ -81,7 +81,7 @@ fn plays_exclusively_at_the_files_own_format_bit_perfect() {
     let id = backend.devices()[0].id.clone();
     let format = StreamFormat {
         sample_rate: 44_100,
-        format: SampleFormat::S24Packed,
+        sample_format: SampleFormat::S24Packed,
         channels: 2,
     };
     let mut stream = backend.open(&id, format, true).expect("exclusive open");
@@ -93,7 +93,7 @@ fn plays_exclusively_at_the_files_own_format_bit_perfect() {
         stream.delay_frames() > 0,
         "audio is buffered while it plays"
     );
-    stream.drain();
+    stream.drain().expect("drain");
     assert_eq!(stream.delay_frames(), 0);
     drop(stream);
     let capture = backend.api().capture(&dac_endpoint());
@@ -125,24 +125,60 @@ fn plays_exclusively_at_the_files_own_format_bit_perfect() {
 }
 
 #[test]
-fn opens_32_bit_containers_with_the_valid_bits_the_dac_takes() {
+fn opens_24_in_32_containers_with_the_valid_bits_at_the_top() {
     let backend = backend(16.0);
     let id = backend.devices()[0].id.clone();
     let format = StreamFormat {
         sample_rate: 192_000,
-        format: SampleFormat::S32,
+        sample_format: SampleFormat::S24In32,
         channels: 2,
     };
+    // Parson's 24-in-32 words: the sample in the low 24 bits, sign-extended.
+    let samples: Vec<i32> = noise(19_200, 4, 3)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| i32::from_le_bytes(*word) >> 8)
+        .collect();
+    let data: Vec<u8> = samples
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
     let mut stream = backend.open(&id, format, true).expect("open");
-    let data = noise(19_200, 4, 3);
     stream.write(&data).expect("write");
-    stream.drain();
+    stream.drain().expect("drain");
     drop(stream);
     let capture = backend.api().capture(&dac_endpoint());
     let (wave, mode, _) = capture.opened[0];
     assert_eq!(mode, ShareMode::Exclusive);
     assert_eq!((wave.container_bits, wave.valid_bits), (32, 24));
-    assert!(capture.bytes[..data.len()] == data[..]);
+    let expected: Vec<u8> = samples
+        .iter()
+        .flat_map(|value| (value << 8).to_le_bytes())
+        .collect();
+    assert!(
+        capture.bytes[..expected.len()] == expected[..],
+        "every 24-bit sample reached the DAC in the top bits, unchanged"
+    );
+}
+
+#[test]
+fn dsd_containers_are_refused_with_the_reason() {
+    let backend = backend(1.0);
+    let id = backend.devices()[0].id.clone();
+    let error = backend
+        .open(
+            &id,
+            StreamFormat {
+                sample_rate: 88_200,
+                sample_format: SampleFormat::DsdU32Be,
+                channels: 2,
+            },
+            true,
+        )
+        .err()
+        .expect("refused");
+    assert!(error.to_string().contains("only as DoP"), "{error}");
 }
 
 #[test]
@@ -155,7 +191,7 @@ fn explains_refusals_instead_of_converting() {
             &speakers,
             StreamFormat {
                 sample_rate: 96_000,
-                format: SampleFormat::S24Packed,
+                sample_format: SampleFormat::S24Packed,
                 channels: 2,
             },
             true,
@@ -163,7 +199,7 @@ fn explains_refusals_instead_of_converting() {
         .err()
         .expect("refused");
     assert_eq!(
-        error,
+        error.to_string(),
         "Speakers (Realtek(R) Audio) does not take 96000 Hz S24_3LE in exclusive mode"
     );
 
@@ -174,20 +210,27 @@ fn explains_refusals_instead_of_converting() {
     });
     let listed = backend.devices();
     assert!(listed[0].busy, "{listed:?}");
-    assert_eq!(listed[0].sample_rates.len(), 8, "keeps what it took before");
+    assert_eq!(
+        listed[0].sample_rates().len(),
+        8,
+        "keeps what it took before"
+    );
     let error = backend
         .open(
             &dac,
             StreamFormat {
                 sample_rate: 44_100,
-                format: SampleFormat::S16,
+                sample_format: SampleFormat::S16,
                 channels: 2,
             },
             true,
         )
         .err()
         .expect("in use");
-    assert!(error.contains("in use by another app"), "{error}");
+    assert!(
+        error.to_string().contains("in use by another app"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -196,7 +239,7 @@ fn one_stream_holds_the_device_and_lets_go_when_dropped() {
     let id = backend.devices()[0].id.clone();
     let format = StreamFormat {
         sample_rate: 48_000,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let stream = backend.open(&id, format, true).expect("first");
@@ -216,7 +259,7 @@ fn pauses_in_place_and_drops_its_buffer_on_seek() {
     let id = backend.devices()[0].id.clone();
     let format = StreamFormat {
         sample_rate: 48_000,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let mut stream = backend.open(&id, format, true).expect("open");
@@ -226,11 +269,11 @@ fn pauses_in_place_and_drops_its_buffer_on_seek() {
     std::thread::sleep(Duration::from_millis(30));
     assert_eq!(stream.delay_frames(), held, "nothing plays while paused");
     stream.pause(false).expect("resume");
-    stream.drop_buffer();
+    stream.flush().expect("flush");
     assert_eq!(stream.delay_frames(), 0, "a seek starts from empty");
     let data = noise(960, 2, 9);
     stream.write(&data).expect("write after seek");
-    stream.drain();
+    stream.drain().expect("drain");
     drop(stream);
     let capture = backend.api().capture(&dac_endpoint());
     let found = capture
@@ -270,17 +313,17 @@ fn a_device_with_exclusive_mode_turned_off_plays_shared_and_says_so() {
     });
     let devices = backend.devices();
     let dac = &devices[0];
-    assert_eq!(dac.sample_rates, vec![48_000]);
-    assert!(dac.description.contains("not bit-perfect"), "{dac:?}");
+    assert_eq!(dac.sample_rates(), vec![48_000]);
+    assert!(dac.detail.contains("not bit-perfect"), "{dac:?}");
     let format = StreamFormat {
         sample_rate: 48_000,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let mut stream = backend.open(&dac.id, format, true).expect("shared open");
     let data = noise(9_600, 2, 4);
     stream.write(&data).expect("write");
-    stream.drain();
+    stream.drain().expect("drain");
     drop(stream);
     let capture = backend.api().capture(&dac_endpoint());
     assert_eq!(capture.opened[0].1, ShareMode::Shared);
@@ -295,7 +338,7 @@ fn unplugged_endpoints_disappear() {
     assert_eq!(backend.devices().len(), 1);
     let format = StreamFormat {
         sample_rate: 44_100,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     assert!(backend.open(&id, format, true).is_err());

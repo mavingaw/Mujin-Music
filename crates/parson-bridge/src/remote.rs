@@ -1,22 +1,23 @@
 //! The server side of a bridge connection: [`RemoteBridge`] is a
-//! [`DeviceBackend`] whose devices are another machine's, so the server's
+//! [`Backend`] whose devices are another machine's, so the server's
 //! playback engine (decoding at each file's own format, gapless, DSP,
 //! leveling, volume modes, signal path) drives a remote DAC exactly as it
 //! drives a local one. [`SyncGroup`] plays one stream on several bridges,
 //! sample-synced to a clock master.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::audio::{DeviceBackend, DeviceInfo, HardwareVolume, OutputStream, StreamFormat};
+use parson_output::{Backend, DeviceCaps, DeviceInfo, Driver, HardwareVolume, Sink, StreamFormat};
+
 use crate::clock::{ClockEstimator, RateEstimator, monotonic_us};
 use crate::protocol::{
-    BridgeMessage, Frame, MAX_FRAME, PROTOCOL_VERSION, ServerMessage, SyncStart, read_frame,
-    write_audio, write_message,
+    BridgeMessage, Frame, MAX_FRAME, PROTOCOL_VERSION, ServerMessage, SyncStart, WireDevice,
+    read_frame, write_audio, write_message,
 };
 
 /// Audio the server keeps ahead of what a bridge has played.
@@ -172,7 +173,8 @@ impl Link {
                 *self
                     .devices
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = devices;
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                    devices.into_iter().map(WireDevice::into_device).collect();
                 self.notify();
             }
             BridgeMessage::Opened { stream } => {
@@ -326,7 +328,7 @@ impl RemoteBridge {
                 note,
                 address,
             }),
-            devices: Mutex::new(devices),
+            devices: Mutex::new(devices.into_iter().map(WireDevice::into_device).collect()),
             clock: Mutex::new(ClockEstimator::default()),
             streams: Mutex::new(HashMap::new()),
             wake: Condvar::new(),
@@ -457,7 +459,7 @@ impl RemoteBridge {
         self.link.send(&ServerMessage::Open {
             stream,
             device: device_id.to_string(),
-            format,
+            format: format.into(),
             exclusive,
             sync,
         })?;
@@ -503,9 +505,9 @@ impl RemoteBridge {
     }
 }
 
-impl DeviceBackend for RemoteBridge {
-    fn name(&self) -> &'static str {
-        "Parson Bridge"
+impl Backend for RemoteBridge {
+    fn driver(&self) -> Driver {
+        Driver::Bridge
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {
@@ -524,23 +526,28 @@ impl DeviceBackend for RemoteBridge {
         device_id: &str,
         format: StreamFormat,
         exclusive: bool,
-    ) -> Result<Box<dyn OutputStream>, String> {
+    ) -> io::Result<Box<dyn Sink>> {
         self.open_stream(device_id, format, exclusive, None)
-            .map(|stream| Box::new(stream) as Box<dyn OutputStream>)
+            .map(|stream| Box::new(stream) as Box<dyn Sink>)
+            .map_err(io::Error::other)
     }
 
-    fn set_hardware_volume(&self, device_id: &str, db: f32) -> Result<(), String> {
-        self.link.send(&ServerMessage::Volume {
-            device: device_id.to_string(),
-            db,
-        })
+    fn set_hardware_volume(&self, device_id: &str, db: f32) -> io::Result<()> {
+        self.link
+            .send(&ServerMessage::Volume {
+                device: device_id.to_string(),
+                db,
+            })
+            .map_err(io::Error::other)
     }
 
-    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> Result<(), String> {
-        self.link.send(&ServerMessage::Mute {
-            device: device_id.to_string(),
-            muted,
-        })
+    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> io::Result<()> {
+        self.link
+            .send(&ServerMessage::Mute {
+                device: device_id.to_string(),
+                muted,
+            })
+            .map_err(io::Error::other)
     }
 }
 
@@ -617,12 +624,8 @@ impl RemoteStream {
     }
 }
 
-impl OutputStream for RemoteStream {
-    fn format(&self) -> StreamFormat {
-        self.format
-    }
-
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+impl RemoteStream {
+    fn put(&mut self, data: &[u8]) -> Result<(), String> {
         let frame_bytes = self.format.frame_bytes();
         if !data.len().is_multiple_of(frame_bytes) {
             return Err("partial frame".into());
@@ -663,14 +666,14 @@ impl OutputStream for RemoteStream {
         Ok(())
     }
 
-    fn delay_frames(&mut self) -> u64 {
+    fn queued(&self) -> u64 {
         let streams = self.link.streams();
         let status = streams.get(&self.stream).cloned().unwrap_or_default();
         drop(streams);
         self.sent.saturating_sub(self.heard_now(&status))
     }
 
-    fn pause(&mut self, paused: bool) -> Result<(), String> {
+    fn hold(&mut self, paused: bool) -> Result<(), String> {
         if self.synced {
             return Err("synced streams restart on resume".into());
         }
@@ -720,7 +723,7 @@ impl OutputStream for RemoteStream {
         Ok(())
     }
 
-    fn drop_buffer(&mut self) {
+    fn discard(&mut self) {
         let _ = self.link.send(&ServerMessage::Flush {
             stream: self.stream,
         });
@@ -731,7 +734,7 @@ impl OutputStream for RemoteStream {
         }
     }
 
-    fn drain(&mut self) {
+    fn play_out(&mut self) {
         if self
             .link
             .send(&ServerMessage::Drain {
@@ -742,7 +745,7 @@ impl OutputStream for RemoteStream {
             return;
         }
         let wait = Duration::from_secs_f64(
-            self.delay_frames() as f64 / f64::from(self.format.sample_rate.max(1)),
+            self.queued() as f64 / f64::from(self.format.sample_rate.max(1)),
         ) + Duration::from_secs(3);
         let deadline = Instant::now() + wait;
         let mut streams = self.link.streams();
@@ -765,6 +768,30 @@ impl OutputStream for RemoteStream {
         if let Some(status) = streams.get_mut(&self.stream) {
             status.drained = false;
         }
+    }
+}
+
+impl Sink for RemoteStream {
+    fn write(&mut self, data: &[u8]) -> io::Result<()> {
+        self.put(data).map_err(io::Error::other)
+    }
+
+    fn delay_frames(&mut self) -> u64 {
+        self.queued()
+    }
+
+    fn pause(&mut self, paused: bool) -> io::Result<()> {
+        self.hold(paused).map_err(io::Error::other)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.discard();
+        Ok(())
+    }
+
+    fn drain(&mut self) -> io::Result<()> {
+        self.play_out();
+        Ok(())
     }
 }
 
@@ -796,13 +823,18 @@ impl GroupMember {
 /// What every member takes: the rates and sample formats they share.
 pub fn common_device(id: &str, name: &str, members: &[DeviceInfo]) -> Option<DeviceInfo> {
     let first = members.first()?;
-    let mut rates = first.sample_rates.clone();
-    let mut formats = first.formats.clone();
-    let mut channels = first.max_channels;
+    let mut rates = first.sample_rates().to_vec();
+    let mut formats: Vec<_> = first
+        .sample_formats()
+        .iter()
+        .copied()
+        .filter(|format| !format.is_dsd())
+        .collect();
+    let mut channels = first.max_channels();
     for member in &members[1..] {
-        rates.retain(|rate| member.sample_rates.contains(rate));
-        formats.retain(|format| member.formats.contains(format));
-        channels = channels.min(member.max_channels);
+        rates.retain(|rate| member.sample_rates().contains(rate));
+        formats.retain(|format| member.sample_formats().contains(format));
+        channels = channels.min(member.max_channels());
     }
     if rates.is_empty() || formats.is_empty() {
         return None;
@@ -815,19 +847,33 @@ pub fn common_device(id: &str, name: &str, members: &[DeviceInfo]) -> Option<Dev
             max_db: 0.0,
             step_db: 0.5,
         });
+    let busy = members.iter().any(|member| member.busy);
     Some(DeviceInfo {
         id: id.to_string(),
         name: name.to_string(),
-        description: members
+        detail: members
             .iter()
             .map(|member| member.name.clone())
             .collect::<Vec<_>>()
             .join(" + "),
-        sample_rates: rates,
-        formats,
-        max_channels: channels,
+        driver: Driver::Bridge,
+        exclusive_capable: true,
+        caps: Some(DeviceCaps {
+            sample_rates: rates,
+            sample_formats: formats,
+            min_channels: 1,
+            max_channels: channels,
+            // Groups play PCM: native DSD cannot be sample-corrected.
+            dsd_formats: Vec::new(),
+            dsd_rates: Vec::new(),
+        }),
+        probe_error: busy.then(|| "a group member is in use by another app".to_string()),
+        is_default: false,
+        hardware: None,
+        address: None,
+        network: None,
         hardware_volume,
-        busy: members.iter().any(|member| member.busy),
+        busy,
     })
 }
 
@@ -857,7 +903,7 @@ impl SyncGroup {
             self.members.iter().map(|member| member.device()).collect();
         let mut device = common_device(&self.id, &self.name, &devices?)?;
         // Which machines play, in order: the clock master first.
-        device.description = self
+        device.detail = self
             .members
             .iter()
             .map(|member| member.bridge.info().name)
@@ -867,7 +913,11 @@ impl SyncGroup {
     }
 }
 
-impl DeviceBackend for SyncGroup {
+impl Backend for SyncGroup {
+    fn driver(&self) -> Driver {
+        Driver::Bridge
+    }
+
     fn name(&self) -> &'static str {
         "Parson Bridge group"
     }
@@ -881,7 +931,7 @@ impl DeviceBackend for SyncGroup {
         _device_id: &str,
         format: StreamFormat,
         exclusive: bool,
-    ) -> Result<Box<dyn OutputStream>, String> {
+    ) -> io::Result<Box<dyn Sink>> {
         Ok(Box::new(GroupStream {
             members: self.members.clone(),
             format,
@@ -893,7 +943,7 @@ impl DeviceBackend for SyncGroup {
         }))
     }
 
-    fn set_hardware_volume(&self, _device_id: &str, db: f32) -> Result<(), String> {
+    fn set_hardware_volume(&self, _device_id: &str, db: f32) -> io::Result<()> {
         // The same level on each member's own scale.
         let mut result = Ok(());
         for member in &self.members {
@@ -917,7 +967,7 @@ impl DeviceBackend for SyncGroup {
         result
     }
 
-    fn set_hardware_mute(&self, _device_id: &str, muted: bool) -> Result<(), String> {
+    fn set_hardware_mute(&self, _device_id: &str, muted: bool) -> io::Result<()> {
         let mut result = Ok(());
         for member in &self.members {
             if let Err(error) = member.bridge.set_hardware_mute(&member.device_id, muted) {
@@ -1039,20 +1089,16 @@ impl GroupStream {
     }
 }
 
-impl OutputStream for GroupStream {
-    fn format(&self) -> StreamFormat {
-        self.format
-    }
-
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+impl Sink for GroupStream {
+    fn write(&mut self, data: &[u8]) -> io::Result<()> {
         if self.streams.is_empty() {
-            self.start()?;
+            self.start().map_err(io::Error::other)?;
         }
         let mut failed = Vec::new();
         for (index, (device, stream)) in self.streams.iter().enumerate() {
-            if let Err(error) = lock_stream(stream).write(data) {
+            if let Err(error) = lock_stream(stream).put(data) {
                 if index == 0 {
-                    return Err(error);
+                    return Err(io::Error::other(error));
                 }
                 tracing::warn!(%error, %device, "group member dropped out");
                 failed.push(index);
@@ -1068,24 +1114,28 @@ impl OutputStream for GroupStream {
     fn delay_frames(&mut self) -> u64 {
         self.streams
             .first()
-            .map(|(_, master)| lock_stream(master).delay_frames())
+            .map(|(_, master)| lock_stream(master).queued())
             .unwrap_or(0)
     }
 
-    fn pause(&mut self, _paused: bool) -> Result<(), String> {
+    fn pause(&mut self, _paused: bool) -> io::Result<()> {
         // Resuming starts the group again on a fresh common start time.
-        Err("synced groups restart on resume".into())
+        Err(parson_output::unsupported(
+            "synced groups restart on resume",
+        ))
     }
 
-    fn drop_buffer(&mut self) {
+    fn flush(&mut self) -> io::Result<()> {
         self.close();
+        Ok(())
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self) -> io::Result<()> {
         for (_, stream) in &self.streams {
-            lock_stream(stream).drain();
+            lock_stream(stream).play_out();
         }
         self.close();
+        Ok(())
     }
 }
 
@@ -1097,11 +1147,11 @@ impl Drop for GroupStream {
 
 impl SyncGroup {
     /// Opens a stream directly (tests and diagnostics); the zone service
-    /// goes through [`DeviceBackend::open`].
+    /// goes through [`Backend::open`].
     pub fn open_probe(
         &self,
         format: StreamFormat,
-    ) -> (Box<dyn OutputStream>, impl Fn() -> Vec<MemberSync>) {
+    ) -> (Box<dyn Sink>, impl Fn() -> Vec<MemberSync>) {
         let stream = GroupStream {
             members: self.members.clone(),
             format,

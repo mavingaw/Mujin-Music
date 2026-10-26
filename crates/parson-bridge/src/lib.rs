@@ -4,10 +4,10 @@
 //! bridge plays it on the DAC in exclusive mode, untouched. Bridges grouped
 //! together play sample-synced.
 //!
-//! The crate also holds the audio-device layer the server uses for its own
-//! outputs ([`audio`]), so local and remote devices behave the same.
+//! The bridge plays to its devices through `parson-output`, the same
+//! device layer the server uses for its own outputs, so local and remote
+//! devices behave the same.
 
-pub mod audio;
 pub mod clock;
 pub mod endpoint;
 pub mod protocol;

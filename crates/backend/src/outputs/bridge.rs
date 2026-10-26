@@ -648,7 +648,7 @@ impl BridgeHub {
                     backend: info.as_ref().and_then(|info| info.backend.clone()),
                     devices: link
                         .map(|link| {
-                            use parson_bridge::audio::DeviceBackend as _;
+                            use parson_output::Backend as _;
                             link.devices().len()
                         })
                         .unwrap_or(0),

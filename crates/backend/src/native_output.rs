@@ -358,11 +358,11 @@ pub fn global() -> Arc<NativeOutputs> {
     Arc::clone(OUTPUTS.get_or_init(|| {
         let simulated = std::env::var(SIMULATE_ENV).is_ok_and(|value| value == "1");
         let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
-        if let Some(backend) = parson_output::platform_backend() {
+        if let Ok(backend) = parson_output::platform_backend() {
             backends.push(Arc::from(backend));
         }
         if simulated {
-            backends.push(Arc::new(parson_output::simulated::SimulatedBackend));
+            backends.push(Arc::new(parson_output::simulated::SimulatedBackend::demo()));
         }
         let settings_path = crate::settings::data_path(&["native-outputs.json"]);
         let manual = std::fs::read_to_string(network_path(&settings_path))
@@ -1560,7 +1560,7 @@ mod tests {
 
     fn outputs(settings_path: Option<PathBuf>) -> NativeOutputs {
         NativeOutputs::new(
-            vec![Arc::new(SimulatedBackend)],
+            vec![Arc::new(SimulatedBackend::dac_up_to_192k())],
             true,
             settings_path,
             Arc::new(|_, _, _, _, _| Ok(Box::new(io::repeat(0)) as PcmSource)),
@@ -1835,6 +1835,7 @@ mod tests {
     /// The simulated DAC with a driver that reports what the hardware runs.
     struct ReportingBackend {
         report: Option<&'static str>,
+        inner: SimulatedBackend,
     }
 
     impl Backend for ReportingBackend {
@@ -1843,7 +1844,7 @@ mod tests {
         }
 
         fn devices(&self) -> Vec<DeviceInfo> {
-            SimulatedBackend.devices()
+            self.inner.devices()
         }
 
         fn open(
@@ -1852,7 +1853,7 @@ mod tests {
             format: StreamFormat,
             exclusive: bool,
         ) -> io::Result<Box<dyn parson_output::Sink>> {
-            SimulatedBackend.open(device_id, format, exclusive)
+            self.inner.open(device_id, format, exclusive)
         }
 
         fn hardware_status(
@@ -1878,7 +1879,10 @@ mod tests {
         use crate::signal_path::SignalQuality;
         let reporting = |report| {
             NativeOutputs::new(
-                vec![Arc::new(ReportingBackend { report })],
+                vec![Arc::new(ReportingBackend {
+                    report,
+                    inner: SimulatedBackend::dac_up_to_192k(),
+                })],
                 true,
                 None,
                 Arc::new(|_, _, _, _, _| Ok(Box::new(io::repeat(0)) as PcmSource)),
