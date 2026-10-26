@@ -16,6 +16,7 @@ import RadioSettings from "@/features/settings/radio-settings";
 import ConnectionsSettings from "@/features/imports/connections-settings";
 import ServicesSettings from "@/features/streaming/services-settings";
 import { useSearchParams } from "next/navigation";
+import HomeAssistantSettings from "@/features/settings/home-assistant-settings";
 
 const settingsTabs = [
   "account",
@@ -25,6 +26,7 @@ const settingsTabs = [
   "services",
   "library",
   "data",
+  "home-assistant",
   "users",
   "advanced",
 ] as const;
@@ -38,6 +40,7 @@ const labels: Record<SettingsTab, string> = {
   services: "Services",
   library: "Library",
   data: "Data",
+  "home-assistant": "Home Assistant",
   users: "Users",
   advanced: "Advanced",
 };
@@ -63,6 +66,7 @@ function SettingsContent() {
         "connections",
         "services",
         "data",
+        "home-assistant",
       ] as const);
   const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
     allowedTabs.includes(requestedTab as SettingsTab)
@@ -122,6 +126,7 @@ function SettingsContent() {
           {activeTab === "connections" && <ConnectionsSettings />}
           {activeTab === "services" && <ServicesSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
+          {activeTab === "home-assistant" && <HomeAssistantSettings />}
           {isAdmin && activeTab === "library" && (
             <>
               <LibrarySettings />

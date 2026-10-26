@@ -16,7 +16,7 @@ use crate::api::library::{
     remove_library_root, song_delivery, song_signal_path, stream_song,
 };
 use crate::api::{
-    album, album_sources, artist, cast, data, editorial, filesystem, focus, genre_pages, genres,
+    album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages, genres,
     home, imports, key_service, lyrics, metadata, outputs, playback, playlist, providers, search,
     setup, song, user, works, zones,
 };
@@ -108,6 +108,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(cast::configure)
         .configure(outputs::configure)
         .configure(zones::configure)
+        .configure(control::configure)
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
@@ -260,7 +261,10 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "credits",
             "works",
             "imports",
-            "streaming_services"
+            "streaming_services",
+            "browse",
+            "ratings",
+            "home_assistant"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
