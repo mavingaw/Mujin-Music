@@ -8,6 +8,7 @@
 //! attribution), keeps freely licensed artist photos, and stores
 //! MusicBrainz relationship credits next to the credits read from tags.
 
+pub mod confidence;
 pub mod fetch;
 pub mod genres;
 pub mod identity;

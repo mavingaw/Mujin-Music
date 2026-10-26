@@ -505,6 +505,8 @@ export interface AlbumAbout {
    * servers leave this out.
    */
   work_texts?: WorkText[];
+  /** The match check behind the MusicBrainz release; older servers leave this out. */
+  release_match?: ReleaseMatchCheck | null;
 }
 
 /** A piece on an album and its Wikipedia About text. */
@@ -800,7 +802,57 @@ export interface ReleaseMatch {
   disambiguation: string | null;
   score: number;
   same_track_count: boolean;
+  /**
+   * The release's track count is known and differs from the album's.
+   * Choosing it pairs tracks by title, so some may get the wrong credits or
+   * piece. Older servers leave this out.
+   */
+  track_count_differs?: boolean;
+  /** How well the release fits the album's files. Older servers leave this out. */
+  fit?: "likely" | "possible" | "unlikely";
+  /** The release automatic matching found and rejected. */
+  suggested?: boolean;
   url: string;
+}
+
+/** One piece of evidence for or against a MusicBrainz release. */
+export interface ReleaseMatchSignal {
+  key:
+    | "tracks"
+    | "lengths"
+    | "year"
+    | "label"
+    | "conductor"
+    | "ensemble"
+    | (string & {});
+  outcome: "match" | "partial" | "mismatch" | "unknown";
+  points: number;
+  /** A sentence a person can check. */
+  detail: string;
+}
+
+/**
+ * The match check behind an album's MusicBrainz release. A release found
+ * automatically is only applied when it passes; an `unverified` one is a
+ * suggestion, and the album keeps its file-tag data.
+ */
+export interface ReleaseMatchCheck {
+  status: "verified" | "unverified";
+  method: "automatic" | "tagged" | "identified";
+  release_mbid: string;
+  release_title: string;
+  release_artist: string;
+  url: string;
+  score: number;
+  threshold: number;
+  /** Whether the evidence passed (a tagged or chosen release is used either way). */
+  passed?: boolean;
+  release_date?: string | null;
+  first_release_date?: string | null;
+  release_type?: string | null;
+  release_track_count?: number;
+  local_track_count?: number;
+  signals?: ReleaseMatchSignal[];
 }
 
 export interface IdentifySearch {

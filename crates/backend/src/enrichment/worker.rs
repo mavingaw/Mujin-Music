@@ -10,6 +10,7 @@ use diesel::sqlite::SqliteConnection;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
+use super::confidence;
 use super::fetch::{BoxError, Fetch, FetchResponse, HttpFetch, MAX_IMAGE_BYTES, MAX_JSON_BYTES};
 use super::musicbrainz as mb;
 use super::store::{
@@ -445,6 +446,13 @@ pub struct AlbumInput {
     /// The release was chosen by a person or named in tags, so tracks may
     /// be matched by position even when the track counts differ.
     pub release_trusted: bool,
+    /// Record label tagged on the files.
+    pub label: Option<String>,
+    /// Conductors and ensembles tagged on the files, for the match check.
+    pub conductors: Vec<String>,
+    pub ensembles: Vec<String>,
+    /// Composers tagged on the files.
+    pub composers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -452,6 +460,119 @@ pub struct TrackInput {
     pub id: String,
     pub title: String,
     pub track_number: u16,
+    /// Length in seconds (0 when unknown).
+    pub duration: f64,
+}
+
+impl AlbumInput {
+    /// What the files say, for [`confidence`].
+    pub fn local(&self) -> confidence::LocalAlbum<'_> {
+        confidence::LocalAlbum {
+            track_count: self.tracks.len(),
+            paired_lengths: Vec::new(),
+            paired_tracks: 0,
+            year: self.year.as_deref(),
+            label: self.label.as_deref(),
+            conductors: &self.conductors,
+            ensembles: &self.ensembles,
+            composers: &self.composers,
+        }
+    }
+}
+
+/// How the release applied to an album was chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMethod {
+    /// Found by searching; it had to pass the match check.
+    Automatic,
+    /// The release id in the files' tags.
+    Tagged,
+    /// Chosen by a person with "Identify album".
+    Identified,
+}
+
+impl MatchMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MatchMethod::Automatic => "automatic",
+            MatchMethod::Tagged => "tagged",
+            MatchMethod::Identified => "identified",
+        }
+    }
+}
+
+/// What a release search for an album came to.
+enum Searched {
+    Verified(Box<mb::ReleaseDetails>),
+    /// The best release looked up, which failed the check.
+    Unverified(Box<mb::ReleaseDetails>, confidence::MatchCheck),
+    NoCandidate,
+    Stop(Outcome),
+}
+
+/// Releases looked up per album search before giving up on a match.
+pub const MAX_RELEASE_CHECKS: usize = 3;
+
+/// Set when a wrong match's fetched cover was removed, so the library is
+/// reloaded to stop showing it.
+static COVERS_REMOVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Checks a looked-up release against the album's files.
+pub fn check_album_release(
+    album: &AlbumInput,
+    release: &mb::ReleaseDetails,
+) -> confidence::MatchCheck {
+    let pairs = match_tracks(album, release);
+    let paired_lengths = pairs
+        .iter()
+        .filter_map(|(index, track_id)| {
+            let local = album.tracks.iter().find(|track| &track.id == track_id)?;
+            let length = release.tracks[*index].length_ms? as f64 / 1000.0;
+            Some((local.duration, length))
+        })
+        .collect();
+    let mut local = album.local();
+    local.paired_tracks = pairs.len();
+    local.paired_lengths = paired_lengths;
+    confidence::check_release(&local, release)
+}
+
+/// The stored record of a check: the release, how it was chosen, and the
+/// evidence a page shows.
+fn release_match_row(
+    method: MatchMethod,
+    release: &mb::ReleaseDetails,
+    album: &AlbumInput,
+    check: &confidence::MatchCheck,
+) -> store::ReleaseMatchRow {
+    // A release from the tags or chosen by hand is used even when the
+    // evidence disagrees; the page then says what differs.
+    let applied = method != MatchMethod::Automatic || check.verified;
+    let artist = release
+        .artists
+        .iter()
+        .map(|(_, name)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    store::ReleaseMatchRow {
+        status: if applied { "verified" } else { "unverified" }.to_string(),
+        method: method.as_str().to_string(),
+        release_mbid: release.mbid.clone(),
+        release_title: release.title.clone(),
+        release_artist: artist,
+        score: check.score,
+        threshold: check.threshold,
+        details_json: json!({
+            "passed": check.verified,
+            "release_date": release.date,
+            "first_release_date": release.first_release_date,
+            "release_type": release.release_group_type,
+            "release_track_count": release.tracks.len(),
+            "local_track_count": album.tracks.len(),
+            "signals": check.signals,
+        })
+        .to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -544,6 +665,11 @@ impl<F: Fetch> Enricher<F> {
     /// The MusicBrainz stage for an album: the release, its credits, works
     /// and the release group's Wikidata item. Text comes later from the
     /// Wikidata and Wikipedia queues.
+    ///
+    /// A release named in the tags or chosen by a person is used as is. A
+    /// release found by searching must first pass the match check
+    /// ([`super::confidence`]); one that does not is kept only as a
+    /// suggestion, and the album keeps its file-tag data.
     pub async fn resolve_album(&self, album: &AlbumInput) -> Result<Outcome, BoxError> {
         let album_id = album.id.clone();
         let identified = db(&self.pool, move |connection| {
@@ -553,8 +679,25 @@ impl<F: Fetch> Enricher<F> {
         .map(|pinned| pinned.release_mbid)
         .filter(|id| mb::is_mbid(id));
         let tagged = album.musicbrainz_id.clone().filter(|id| mb::is_mbid(id));
-        let release_mbid = match identified.clone().or(tagged) {
-            Some(mbid) => mbid,
+        let (method, release) = match identified.clone().or(tagged) {
+            Some(mbid) => {
+                let release = match self.get_json(&mb::release_lookup_url(&mbid)).await? {
+                    Ok(Some(body)) => mb::parse_release(&body),
+                    Ok(None) => None,
+                    Err(outcome) => return Ok(outcome),
+                };
+                let Some(release) = release else {
+                    return Ok(Outcome::Skipped(
+                        "the MusicBrainz release was not found".into(),
+                    ));
+                };
+                let method = if identified.as_deref() == Some(release.mbid.as_str()) {
+                    MatchMethod::Identified
+                } else {
+                    MatchMethod::Tagged
+                };
+                (method, release)
+            }
             None => {
                 if album.artist_name.trim().is_empty() || album.title.trim().is_empty() {
                     return Ok(Outcome::Skipped("the album has no title or artist".into()));
@@ -565,6 +708,7 @@ impl<F: Fetch> Enricher<F> {
                     let album_id = album.id.clone();
                     db(&self.pool, move |connection| {
                         store::clear_editorial(connection, "album", &album_id)?;
+                        store::delete_release_match(connection, &album_id)?;
                         drop_later_stages(connection, "album", &album_id)
                     })
                     .await?;
@@ -572,43 +716,28 @@ impl<F: Fetch> Enricher<F> {
                         "the album artist is a placeholder; use Identify album".into(),
                     ));
                 }
-                let body = match self
-                    .get_json(&mb::release_search_url(&album.title, &album.artist_name))
-                    .await?
-                {
-                    Ok(Some(body)) => body,
-                    Ok(None) => return Ok(Outcome::Retry("release search failed".into())),
-                    Err(outcome) => return Ok(outcome),
-                };
-                let candidates = mb::parse_release_search(&body);
-                match mb::choose_release_in_year(
-                    &album.title,
-                    &album.artist_name,
-                    album.tracks.len(),
-                    album.year.as_deref(),
-                    &candidates,
-                ) {
-                    Some(release) => release.mbid,
-                    None => {
+                match self.search_and_check(album).await? {
+                    Searched::Verified(release) => (MatchMethod::Automatic, *release),
+                    Searched::Unverified(release, check) => {
+                        self.keep_tags_only(album, &release, &check).await?;
+                        return Ok(Outcome::Skipped(format!(
+                            "the closest release, {}, did not pass the match check",
+                            release.title
+                        )));
+                    }
+                    Searched::NoCandidate => {
+                        let album_id = album.id.clone();
+                        db(&self.pool, move |connection| {
+                            store::delete_release_match(connection, &album_id)
+                        })
+                        .await?;
                         return Ok(Outcome::Skipped(
                             "no confident MusicBrainz release match".into(),
                         ));
                     }
+                    Searched::Stop(outcome) => return Ok(outcome),
                 }
             }
-        };
-        let release = match self
-            .get_json(&mb::release_lookup_url(&release_mbid))
-            .await?
-        {
-            Ok(Some(body)) => mb::parse_release(&body),
-            Ok(None) => None,
-            Err(outcome) => return Ok(outcome),
-        };
-        let Some(release) = release else {
-            return Ok(Outcome::Skipped(
-                "the MusicBrainz release was not found".into(),
-            ));
         };
 
         let mut wikidata_id = None;
@@ -626,13 +755,14 @@ impl<F: Fetch> Enricher<F> {
             }
         }
 
-        let trusted = identified.as_deref() == Some(release.mbid.as_str())
-            || album.musicbrainz_id.as_deref() == Some(release.mbid.as_str());
+        let trusted = method != MatchMethod::Automatic;
         let exact = trusted || release.tracks.len() == album.tracks.len();
         let album = &AlbumInput {
             release_trusted: trusted,
             ..album.clone()
         };
+        let check = check_album_release(album, &release);
+        let match_row = release_match_row(method, &release, album, &check);
         let credits = album_credit_rows(album, &release);
         let links = artist_links(album, &release);
         let (works, work_links) = album_work_rows(album, &release);
@@ -674,6 +804,7 @@ impl<F: Fetch> Enricher<F> {
         db(&self.pool, move |connection| {
             let linked = profile.wikidata_id.is_some();
             store::save_profile(connection, "album", &album_id, &profile)?;
+            store::save_release_match(connection, &album_id, &match_row)?;
             store::replace_album_credits(connection, &album_id, "musicbrainz", &credits)?;
             store::save_aliases(connection, &aliases)?;
             store::replace_album_works(connection, &album_id, &works, &work_links)?;
@@ -693,6 +824,89 @@ impl<F: Fetch> Enricher<F> {
         })
         .await?;
         Ok(Outcome::Done)
+    }
+
+    /// Searches MusicBrainz for an album and checks the most likely
+    /// releases (at most [`MAX_RELEASE_CHECKS`] lookups) until one passes.
+    async fn search_and_check(&self, album: &AlbumInput) -> Result<Searched, BoxError> {
+        let body = match self
+            .get_json(&mb::release_search_url(&album.title, &album.artist_name))
+            .await?
+        {
+            Ok(Some(body)) => body,
+            Ok(None) => {
+                return Ok(Searched::Stop(Outcome::Retry(
+                    "release search failed".into(),
+                )));
+            }
+            Err(outcome) => return Ok(Searched::Stop(outcome)),
+        };
+        let candidates = mb::parse_release_search(&body);
+        let ranked = confidence::rank_candidates(
+            &album.title,
+            &album.artist_name,
+            &album.local(),
+            &candidates,
+        );
+        let mut best: Option<(mb::ReleaseDetails, confidence::MatchCheck)> = None;
+        for (_, candidate) in ranked.into_iter().take(MAX_RELEASE_CHECKS) {
+            let release = match self
+                .get_json(&mb::release_lookup_url(&candidate.mbid))
+                .await?
+            {
+                Ok(Some(body)) => mb::parse_release(&body),
+                Ok(None) => None,
+                Err(outcome) => return Ok(Searched::Stop(outcome)),
+            };
+            let Some(release) = release else {
+                continue;
+            };
+            let check = check_album_release(album, &release);
+            if check.verified {
+                return Ok(Searched::Verified(Box::new(release)));
+            }
+            if best
+                .as_ref()
+                .is_none_or(|(_, known)| check.score > known.score)
+            {
+                best = Some((release, check));
+            }
+        }
+        Ok(match best {
+            Some((release, check)) => Searched::Unverified(Box::new(release), check),
+            None => Searched::NoCandidate,
+        })
+    }
+
+    /// An automatic match that failed the check: nothing from the release
+    /// is applied (cover, performers, works, genres, release type, text),
+    /// anything an earlier lookup applied is removed, and the release is
+    /// remembered only as a suggestion for "Identify album".
+    async fn keep_tags_only(
+        &self,
+        album: &AlbumInput,
+        release: &mb::ReleaseDetails,
+        check: &confidence::MatchCheck,
+    ) -> Result<(), BoxError> {
+        let album_id = album.id.clone();
+        let row = release_match_row(MatchMethod::Automatic, release, album, check);
+        let removed_cover = db(&self.pool, move |connection| {
+            let cover = store::load_cover_art(connection, &album_id)?;
+            store::clear_editorial(connection, "album", &album_id)?;
+            store::replace_genre_links(connection, "album", &album_id, "musicbrainz", &[])?;
+            store::save_release_match(connection, &album_id, &row)?;
+            drop_later_stages(connection, "album", &album_id)?;
+            Ok(cover)
+        })
+        .await?;
+        if let Some(cover) = removed_cover {
+            let path = PathBuf::from(&cover.file_path);
+            if path.starts_with(self.covers_directory()) {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            COVERS_REMOVED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     /// The MusicBrainz stage for a work: its Wikipedia and Wikidata links.
@@ -2103,8 +2317,31 @@ fn credited_people(release: &mb::ReleaseDetails, links: &[(String, String)]) -> 
     people
 }
 
+/// The distinct people the album's tags credit in a role.
+fn tagged_people(songs: &[crate::domain::Song], role: &str) -> Vec<String> {
+    let mut people: Vec<String> = Vec::new();
+    for credit in songs
+        .iter()
+        .flat_map(|song| &song.credits)
+        .filter(|credit| credit.role == role)
+    {
+        let normalized = normalize_artist_identity(&credit.name);
+        if !people
+            .iter()
+            .any(|known| normalize_artist_identity(known) == normalized)
+            && people.len() < 8
+        {
+            people.push(credit.name.clone());
+        }
+    }
+    people
+}
+
 /// Builds worker input for an album from the catalog cache.
-fn album_input(cache: &crate::library::state::LibraryCache, album_id: &str) -> Option<AlbumInput> {
+pub fn album_input(
+    cache: &crate::library::state::LibraryCache,
+    album_id: &str,
+) -> Option<AlbumInput> {
     let album = cache.album(album_id)?;
     let owner = cache.album_owner(album_id)?;
     let mut known_artists = Vec::new();
@@ -2139,8 +2376,13 @@ fn album_input(cache: &crate::library::state::LibraryCache, album_id: &str) -> O
                 id: song.id.clone(),
                 title: song.name.clone(),
                 track_number: song.track_number,
+                duration: song.duration,
             })
             .collect(),
+        label: album.songs.iter().find_map(|song| song.label.clone()),
+        conductors: tagged_people(&album.songs, "conductor"),
+        ensembles: tagged_people(&album.songs, "ensemble"),
+        composers: tagged_people(&album.songs, "composer"),
         known_artists,
         year: album
             .first_release_date
@@ -2241,6 +2483,9 @@ async fn run_stage(
                 let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
             }
             Ok(Step::Ran(task, outcome)) => {
+                if COVERS_REMOVED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    show_new_covers(&library).await;
+                }
                 if stage == Stage::CoverArt && outcome == Outcome::Done {
                     covers_waiting += 1;
                     // Show covers in batches while a long queue runs.
@@ -2321,16 +2566,19 @@ mod tests {
                     id: "t1".into(),
                     title: "So What".into(),
                     track_number: 1,
+                    duration: 0.0,
                 },
                 TrackInput {
                     id: "t3".into(),
                     title: "Blue in Green".into(),
                     track_number: 3,
+                    duration: 0.0,
                 },
             ],
             known_artists: vec![("bill evans".into(), "artist-evans".into())],
             year: None,
             release_trusted: false,
+            ..AlbumInput::default()
         }
     }
 
@@ -2785,16 +3033,19 @@ mod tests {
                     id: "k1".into(),
                     title: "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo".into(),
                     track_number: 1,
+                    duration: 0.0,
                 },
                 TrackInput {
                     id: "k4".into(),
                     title: "Symphony No. 9 in D minor, Op. 125: IV. Presto".into(),
                     track_number: 2,
+                    duration: 0.0,
                 },
             ],
             known_artists: Vec::new(),
             year: None,
             release_trusted: false,
+            ..AlbumInput::default()
         }
     }
 
@@ -2908,6 +3159,7 @@ mod tests {
             id: id.into(),
             title: title.into(),
             track_number: number,
+            duration: 0.0,
         };
         let album = AlbumInput {
             tracks: vec![
@@ -2935,6 +3187,7 @@ mod tests {
             position,
             title: title.into(),
             recording_mbid: None,
+            length_ms: None,
             credits: Vec::new(),
             works: Vec::new(),
         };
@@ -4237,6 +4490,354 @@ mod tests {
             Outcome::Skipped(_)
         ));
         std::fs::remove_dir_all(images).unwrap();
+    }
+
+    const BLUE_TRAIN_LP: &str = "4ca248f9-0000-4000-8000-000000000001";
+    const BLUE_TRAIN_SINGLE: &str = "11365fd1-0000-4000-8000-000000000002";
+    const COLTRANE: &str = "b625448e-bf4a-41c3-a421-72ad46cdb831";
+
+    fn blue_train_album() -> AlbumInput {
+        let titles = [
+            "Blue Train",
+            "Moment's Notice",
+            "Locomotion",
+            "I'm Old Fashioned",
+            "Lazy Bird",
+        ];
+        AlbumInput {
+            id: "blue-train".into(),
+            title: "Blue Train".into(),
+            artist_id: "artist-coltrane".into(),
+            artist_name: "John Coltrane".into(),
+            tracks: titles
+                .iter()
+                .enumerate()
+                .map(|(index, title)| TrackInput {
+                    id: format!("bt{}", index + 1),
+                    title: (*title).into(),
+                    track_number: index as u16 + 1,
+                    duration: 4.0,
+                })
+                .collect(),
+            year: Some("1957".into()),
+            ..AlbumInput::default()
+        }
+    }
+
+    fn blue_train_search(releases: Value) -> MockFetch {
+        MockFetch::default().json(
+            &mb::release_search_url("Blue Train", "John Coltrane"),
+            serde_json::json!({ "releases": releases }),
+        )
+    }
+
+    fn search_hit(id: &str, tracks: i64, date: &str, kind: &str) -> Value {
+        serde_json::json!({"id": id, "title": "Blue Train", "score": 100, "track-count": tracks,
+            "date": date, "artist-credit": [{"name": "John Coltrane"}],
+            "release-group": {"primary-type": kind}})
+    }
+
+    fn lookup(id: &str, date: &str, kind: &str, titles: &[&str]) -> Value {
+        serde_json::json!({
+            "id": id, "title": "Blue Train", "date": date,
+            "release-group": {"primary-type": kind, "first-release-date": "1957"},
+            "artist-credit": [{"name": "John Coltrane", "artist": {"id": COLTRANE, "name": "John Coltrane"}}],
+            "media": [{"position": 1, "tracks": titles.iter().enumerate().map(|(index, title)| serde_json::json!({
+                "position": index + 1, "title": title, "length": 540_000,
+                "recording": {"id": id, "relations": [
+                    {"type": "instrument", "target-type": "artist", "attributes": ["trumpet"],
+                     "artist": {"id": EVANS, "name": "Lee Morgan"}}
+                ]}
+            })).collect::<Vec<_>>()}]
+        })
+    }
+
+    /// Blue Train's search answers with the 1957 7-inch single first (the
+    /// earliest date) and the five-track LP: the LP is checked and wins.
+    #[tokio::test]
+    async fn the_album_is_matched_over_a_single_with_its_title() {
+        let pool = migrated_memory_pool();
+        let fetch = blue_train_search(serde_json::json!([
+            search_hit(BLUE_TRAIN_SINGLE, 2, "1957", "Single"),
+            search_hit(BLUE_TRAIN_LP, 5, "1958", "Album"),
+        ]))
+        .json(
+            &mb::release_lookup_url(BLUE_TRAIN_LP),
+            lookup(
+                BLUE_TRAIN_LP,
+                "1958",
+                "Album",
+                &[
+                    "Blue Train",
+                    "Moment's Notice",
+                    "Locomotion",
+                    "I'm Old Fashioned",
+                    "Lazy Bird",
+                ],
+            ),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher.resolve_album(&blue_train_album()).await.unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        // The single was never looked up.
+        assert!(
+            !enricher
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains(BLUE_TRAIN_SINGLE))
+        );
+        let mut connection = pool.get().unwrap();
+        let check = store::load_release_match(&mut connection, "blue-train")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                check.status.as_str(),
+                check.method.as_str(),
+                check.release_mbid.as_str()
+            ),
+            ("verified", "automatic", BLUE_TRAIN_LP)
+        );
+        // Five tracks (+3), shortened files (-1), 1957 first release (+1).
+        assert_eq!(check.score, 3);
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        assert_eq!(details["passed"], true);
+        assert_eq!(details["release_type"], "Album");
+        assert_eq!(
+            details["signals"][0]["detail"],
+            "5 tracks, like your album."
+        );
+        assert_eq!(
+            store::album_credits(&mut connection, "blue-train")
+                .unwrap()
+                .len(),
+            5
+        );
+    }
+
+    /// When the single is all MusicBrainz offers, it fails the check:
+    /// nothing from it is applied, an earlier wrong match is removed, and
+    /// it stays only as a suggestion.
+    #[tokio::test]
+    async fn a_release_that_fails_the_check_is_only_a_suggestion() {
+        let pool = migrated_memory_pool();
+        {
+            // What an earlier version applied from the wrong release.
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "album",
+                "blue-train",
+                &ProfileRow {
+                    musicbrainz_id: Some(BLUE_TRAIN_SINGLE.into()),
+                    profile_json: "{\"release_type\":\"Single\"}".into(),
+                    ..ProfileRow::default()
+                },
+            )
+            .unwrap();
+            store::replace_genre_links(
+                &mut connection,
+                "album",
+                "blue-train",
+                "musicbrainz",
+                &[mb::MbGenre {
+                    name: "hard bop".into(),
+                    mbid: None,
+                    count: 1,
+                }],
+            )
+            .unwrap();
+            store::queue_stage(&mut connection, Stage::CoverArt, "album", "blue-train").unwrap();
+        }
+        let fetch = blue_train_search(serde_json::json!([search_hit(
+            BLUE_TRAIN_SINGLE,
+            2,
+            "1957",
+            "Single"
+        )]))
+        .json(
+            &mb::release_lookup_url(BLUE_TRAIN_SINGLE),
+            lookup(
+                BLUE_TRAIN_SINGLE,
+                "1957",
+                "Single",
+                &["Blue Train", "Lazy Bird"],
+            ),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher.resolve_album(&blue_train_album()).await.unwrap();
+        assert_eq!(
+            outcome,
+            Outcome::Skipped(
+                "the closest release, Blue Train, did not pass the match check".into()
+            )
+        );
+        // No release group, Wikidata or cover requests for a rejected match.
+        assert_eq!(enricher.fetch.requested().len(), 2);
+        let mut connection = pool.get().unwrap();
+        assert_eq!(
+            store::load_profile(&mut connection, "album", "blue-train").unwrap(),
+            None
+        );
+        assert!(
+            store::album_credits(&mut connection, "blue-train")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store::genre_links(&mut connection, "album")
+                .unwrap()
+                .iter()
+                .any(|link| link.entity_id == "blue-train")
+        );
+        assert_eq!(
+            store::task_status(&mut connection, Stage::CoverArt, "album", "blue-train").unwrap(),
+            None
+        );
+        let check = store::load_release_match(&mut connection, "blue-train")
+            .unwrap()
+            .unwrap();
+        assert_eq!(check.status, "unverified");
+        assert_eq!(check.release_mbid, BLUE_TRAIN_SINGLE);
+        assert!(check.score < check.threshold);
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        assert_eq!(
+            details["signals"][0]["detail"],
+            "The release has 2 tracks; your album has 5."
+        );
+        assert_eq!(details["release_track_count"], 2);
+        assert_eq!(details["local_track_count"], 5);
+    }
+
+    /// The 1955 Philharmonia Ninth found only as a 1999 reissue of the
+    /// Berlin recording: the tagged orchestra is not on the release.
+    #[tokio::test]
+    async fn another_orchestras_recording_is_not_applied_to_a_classical_album() {
+        let pool = migrated_memory_pool();
+        let berlin = "c07a0583-0000-4000-8000-000000000003";
+        let album = AlbumInput {
+            year: Some("1955".into()),
+            conductors: vec!["Herbert von Karajan".into()],
+            ensembles: vec!["Philharmonia Orchestra".into()],
+            ..karajan_album()
+        };
+        let fetch = MockFetch::default()
+            .json(
+                &mb::release_search_url(&album.title, &album.artist_name),
+                serde_json::json!({"releases": [{"id": berlin, "title": "Symphony no. 9", "score": 100,
+                    "track-count": 2, "date": "1999-07-01",
+                    "artist-credit": [{"name": "Beethoven", "joinphrase": "; "},
+                                      {"name": "Berliner Philharmoniker", "joinphrase": ", "},
+                                      {"name": "Herbert von Karajan"}]}]}),
+            )
+            .json(
+                &mb::release_lookup_url(berlin),
+                serde_json::json!({
+                    "id": berlin, "title": "Symphony no. 9", "date": "1999-07-01",
+                    "release-group": {"primary-type": "Album", "first-release-date": "1977"},
+                    "artist-credit": [
+                        {"name": "Beethoven", "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}},
+                        {"name": "Berliner Philharmoniker", "artist": {"id": EVANS, "name": "Berliner Philharmoniker"}},
+                        {"name": "Herbert von Karajan", "artist": {"id": MILES, "name": "Herbert von Karajan"}}
+                    ],
+                    "media": [{"position": 1, "tracks": [
+                        {"position": 1, "title": "Symphony no. 9: I. Allegro ma non troppo", "recording": {"id": MOVEMENT_ONE}},
+                        {"position": 2, "title": "Symphony no. 9: IV. Presto", "recording": {"id": MOVEMENT_FOUR}}
+                    ]}]
+                }),
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        assert!(matches!(
+            enricher.resolve_album(&album).await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        let mut connection = pool.get().unwrap();
+        let check = store::load_release_match(&mut connection, "karajan-9")
+            .unwrap()
+            .unwrap();
+        assert_eq!(check.status, "unverified");
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        let signals = details["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|signal| {
+                (
+                    signal["key"].as_str().unwrap().to_string(),
+                    signal["outcome"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(signals.contains(&("ensemble".into(), "mismatch".into())));
+        assert!(signals.contains(&("conductor".into(), "match".into())));
+        assert!(signals.contains(&("year".into(), "mismatch".into())));
+        assert!(
+            store::album_credits(&mut connection, "karajan-9")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A release chosen by hand is used even when its evidence disagrees;
+    /// the stored check says what differs.
+    #[tokio::test]
+    async fn a_release_chosen_by_hand_is_applied_with_its_check() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::set_identification(
+                &mut connection,
+                "blue-train",
+                Some((BLUE_TRAIN_SINGLE, "Blue Train", "John Coltrane")),
+                None,
+            )
+            .unwrap();
+        }
+        let enricher = Enricher {
+            fetch: MockFetch::default().json(
+                &mb::release_lookup_url(BLUE_TRAIN_SINGLE),
+                lookup(
+                    BLUE_TRAIN_SINGLE,
+                    "1957",
+                    "Single",
+                    &["Blue Train", "Lazy Bird"],
+                ),
+            ),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        assert_eq!(
+            enricher.resolve_album(&blue_train_album()).await.unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let check = store::load_release_match(&mut connection, "blue-train")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (check.status.as_str(), check.method.as_str()),
+            ("verified", "identified")
+        );
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        assert_eq!(details["passed"], false);
+        assert!(
+            store::load_profile(&mut connection, "album", "blue-train")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

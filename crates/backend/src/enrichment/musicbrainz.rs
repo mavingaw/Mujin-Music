@@ -64,24 +64,63 @@ pub fn title_variants(title: &str) -> Vec<String> {
     variants
 }
 
+/// The words of a title or name as search terms: letters and digits only,
+/// so no Lucene syntax survives, lower-cased so `AND`/`OR` stay words.
+pub fn search_words(value: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for word in value
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+    {
+        if words.len() < 12 && !words.iter().any(|known| known == word) {
+            words.push(word.to_string());
+        }
+    }
+    words
+}
+
+/// Matches a title as typed, without its composer prefix, or by its
+/// words: "Symphonien Nr. 5 & 7" then also finds "Symphonien nos. 5 & 7".
+/// Exact phrases are boosted so they rank first.
 fn title_clause(title: &str) -> String {
-    let variants = title_variants(title)
+    let mut parts = title_variants(title)
         .iter()
-        .map(|variant| phrase(variant))
+        .map(|variant| format!("{}^3", phrase(variant)))
         .collect::<Vec<_>>();
-    match variants.as_slice() {
-        [only] => format!("release:{only}"),
-        _ => format!("release:({})", variants.join(" OR ")),
+    let words = search_words(title);
+    if words.len() > 1 {
+        parts.push(format!("({})", words.join(" ")));
+    }
+    format!("release:({})", parts.join(" OR "))
+}
+
+/// The artist as a phrase, or with every word required in any order
+/// ("Kleiber, Carlos" or "Wiener Philharmoniker, Carlos Kleiber").
+fn artist_clause(artist: &str) -> String {
+    let words = search_words(artist);
+    if words.len() > 1 {
+        format!(
+            "artist:({} OR ({}))",
+            phrase(artist.trim()),
+            words
+                .iter()
+                .map(|word| format!("+{word}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    } else {
+        format!("artist:{}", phrase(artist.trim()))
     }
 }
 
 pub fn release_search_url(title: &str, artist: &str) -> String {
     format!(
-        "{API_ROOT}/release?query={}&limit=10&fmt=json",
+        "{API_ROOT}/release?query={}&limit=15&fmt=json",
         encode(&format!(
-            "{} AND artist:{}",
+            "{} AND {}",
             title_clause(title),
-            phrase(artist)
+            artist_clause(artist)
         ))
     )
 }
@@ -455,7 +494,7 @@ pub fn release_query_url(query: &str) -> String {
 pub fn identify_query(title: &str, artist: Option<&str>) -> String {
     let title = title_clause(title);
     match artist.filter(|artist| !artist.trim().is_empty()) {
-        Some(artist) => format!("{title} AND artist:{}", phrase(artist.trim())),
+        Some(artist) => format!("{title} AND {}", artist_clause(artist)),
         None => title,
     }
 }
@@ -592,6 +631,8 @@ pub struct ReleaseTrack {
     pub position: i64,
     pub title: String,
     pub recording_mbid: Option<String>,
+    /// The track's length in milliseconds, for the match check.
+    pub length_ms: Option<i64>,
     pub credits: Vec<ExternalCredit>,
     /// Works the recording performs (with their parent work).
     pub works: Vec<super::works::WorkInfo>,
@@ -740,6 +781,11 @@ pub fn parse_release(body: &Value) -> Option<ReleaseDetails> {
                     .or_else(|| text(&recording, "title"))
                     .unwrap_or_default(),
                 recording_mbid: text(&recording, "id").filter(|id| is_mbid(id)),
+                length_ms: track
+                    .get("length")
+                    .and_then(Value::as_i64)
+                    .or_else(|| recording.get("length").and_then(Value::as_i64))
+                    .filter(|length| *length > 0),
                 credits: track_credits,
                 works: super::works::recording_works(&recording),
             });
@@ -790,9 +836,20 @@ mod tests {
             artist_search_url("AC/DC \"live\""),
             "https://musicbrainz.org/ws/2/artist?query=artist%3A%22AC%2FDC%20%5C%22live%5C%22%22&limit=8&fmt=json"
         );
+        assert!(release_search_url("Kind of Blue", "Miles Davis").contains(&encode(
+            "release:(\"Kind of Blue\"^3 OR (kind of blue)) AND artist:(\"Miles Davis\" OR (+miles +davis))"
+        )));
+        // Words keep no search syntax: quotes, colons and operators go.
+        assert_eq!(
+            search_words("AC/DC: \"Live\" AND (1992) Live"),
+            ["ac", "dc", "live", "and", "1992"]
+        );
+        // A forgiving search: the words of "Symphonien Nr. 5 & 7" also find
+        // "Symphonien nos. 5 & 7".
         assert!(
-            release_search_url("Kind of Blue", "Miles Davis")
-                .contains("release%3A%22Kind%20of%20Blue%22%20AND%20artist%3A%22Miles%20Davis%22")
+            release_search_url("Symphonien Nr. 5 & 7", "Carlos Kleiber").contains(&encode(
+                "release:(\"Symphonien Nr. 5 & 7\"^3 OR (symphonien nr 5 7)) AND artist:(\"Carlos Kleiber\" OR (+carlos +kleiber))"
+            ))
         );
         assert!(release_lookup_url(BEATLES).contains("work-level-rels"));
     }
@@ -912,7 +969,7 @@ mod tests {
         assert_eq!(title_variants("1999: Remastered"), ["1999: Remastered"]);
         assert!(
             release_search_url("Beethoven: Symphony No. 9", "Herbert von Karajan").contains(
-                &encode("release:(\"Beethoven: Symphony No. 9\" OR \"Symphony No. 9\")")
+                &encode("release:(\"Beethoven: Symphony No. 9\"^3 OR \"Symphony No. 9\"^3 OR (beethoven symphony no 9))")
             )
         );
         let candidates = parse_release_search(&json!({"releases": [
