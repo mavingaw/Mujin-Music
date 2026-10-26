@@ -3,6 +3,7 @@ import type { NativeOutputDevice } from "@parson/music-sdk";
 import {
   deviceCapabilitySummary,
   formatTone,
+  hardwareSummary,
   maxDepthOptions,
   maxRateOptions,
 } from "./audio-outputs-model";
@@ -73,4 +74,26 @@ test("the capability summary reads like a spec line", () => {
       probe_error: "hw:1,0: the device is in use by another program",
     }),
   ).toContain("in use");
+});
+
+test("an emulated card says it has no DAC behind it", () => {
+  const hardware = {
+    bus: "usb",
+    usb_id: "1209:0001",
+    product: "Parson Bench DAC (kernel ABI emulator)",
+    speed: "high speed",
+    caps_source: "driver" as const,
+    altsets: [],
+  };
+  expect(hardwareSummary({ ...device, hardware })).toBe(
+    "USB 1209:0001 · high speed · formats probed by the driver",
+  );
+  expect(
+    hardwareSummary({
+      ...device,
+      hardware: { ...hardware, kernel_emulator: true },
+    }),
+  ).toBe(
+    "USB 1209:0001 · high speed · formats probed by the driver · kernel ABI emulator, no DAC hardware attached",
+  );
 });

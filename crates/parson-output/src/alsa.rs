@@ -98,6 +98,7 @@ alsa_api! {
     snd_card_next: fn(*mut c_int) -> c_int;
     snd_card_get_name: fn(c_int, *mut *mut c_char) -> c_int;
     snd_card_get_longname: fn(c_int, *mut *mut c_char) -> c_int;
+    snd_card_get_index: fn(*const c_char) -> c_int;
     snd_ctl_open: fn(*mut *mut Ctl, *const c_char, c_int) -> c_int;
     snd_ctl_close: fn(*mut Ctl) -> c_int;
     snd_ctl_card_info_malloc: fn(*mut *mut CardInfo) -> c_int;
@@ -138,6 +139,21 @@ alsa_api! {
     snd_output_buffer_string: fn(*mut Output, *mut *mut c_char) -> usize;
     snd_output_close: fn(*mut Output) -> c_int;
     snd_pcm_dump: fn(*mut Pcm, *mut Output) -> c_int;
+}
+
+/// The card Parson's kernel-ABI emulator answers for, when it is loaded
+/// into this process (`kernel-abi/snd_usb_emulator.c`, via `LD_PRELOAD`):
+/// that card is no kernel driver and no DAC, and Parson says so.
+pub(crate) fn emulated_card() -> Option<c_int> {
+    static CARD: OnceLock<Option<c_int>> = OnceLock::new();
+    *CARD.get_or_init(|| {
+        // SAFETY: dlsym only looks the symbol up; the emulator defines it
+        // as a `const int`.
+        unsafe {
+            let symbol = libc::dlsym(libc::RTLD_DEFAULT, c"parson_snd_usb_emulator_card".as_ptr());
+            (!symbol.is_null()).then(|| *symbol.cast::<c_int>())
+        }
+    })
 }
 
 fn api() -> Option<&'static Api> {
@@ -509,6 +525,7 @@ fn hardware_info(
                 CapsSource::UsbDescriptors
             },
             altsets: stream.playback,
+            kernel_emulator: emulated_card() == Some(found.card),
         },
         caps,
     ))
@@ -532,7 +549,17 @@ fn library_status(report: &OpenReport, stream: &StreamFormat) -> Option<Hardware
         chain: Some(report.chain.clone()),
         params,
         momentary_hz: None,
+        kernel_emulator: false,
     })
+}
+
+/// The index of the card with id `card` (e.g. `BenchDAC` to 1).
+fn card_index(card: &str) -> Option<c_int> {
+    let api = api()?;
+    let name = CString::new(card).ok()?;
+    // SAFETY: `name` is NUL-terminated and outlives the call.
+    let index = unsafe { (api.snd_card_get_index)(name.as_ptr()) };
+    (index >= 0).then_some(index)
 }
 
 /// `alsa:USB:0` to its card id and device number.
@@ -645,13 +672,16 @@ impl Backend for AlsaBackend {
     fn hardware_status(&self, device_id: &str, stream: &StreamFormat) -> Option<HardwareStatus> {
         // A sound card: the kernel's own hw_params first.
         if let Some((card, device)) = card_and_device(device_id)
-            && let Some(status) = procfs::read_status(
+            && let Some(mut status) = procfs::read_status(
                 std::path::Path::new(procfs::PROC_ASOUND),
                 card,
                 device,
                 stream,
             )
         {
+            status.kernel_emulator = emulated_card().is_some_and(|emulated| {
+                card == emulated.to_string() || card_index(card) == Some(emulated)
+            });
             return Some(status);
         }
         let report = lock(&self.open).get(device_id).cloned()?;
@@ -1154,5 +1184,247 @@ mod tests {
             }
         }
         assert_eq!(restored, bytes);
+    }
+
+    /// Set in the child process that runs with the kernel-ABI emulator.
+    const KERNEL_ABI_CHILD: &str = "PARSON_KERNEL_ABI_CHILD";
+    const KERNEL_ABI_CAPTURE: &str = "PARSON_SND_EMULATOR_CAPTURE";
+
+    /// Builds `kernel-abi/snd_usb_emulator.c` with the system C compiler.
+    fn build_kernel_abi_emulator(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let library = dir.join("libparson_snd_usb_emulator.so");
+        let source = concat!(env!("CARGO_MANIFEST_DIR"), "/kernel-abi/snd_usb_emulator.c");
+        let compiler = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+        let built = std::process::Command::new(compiler)
+            .args(["-shared", "-fPIC", "-O2", "-Wall", "-Werror", "-o"])
+            .arg(&library)
+            .arg(source)
+            .args(["-ldl", "-lpthread"])
+            .status()
+            .is_ok_and(|status| status.success());
+        built.then_some(library)
+    }
+
+    /// Plays `samples` (already in the device's container) through the
+    /// real Player and the backend's own `open`, checking the driver's
+    /// report while it plays; returns what the emulated DAC consumed.
+    fn play_through_hw(
+        backend: &AlsaBackend,
+        device_id: &str,
+        format: StreamFormat,
+        input: crate::player::InputFormat,
+        decoded: Vec<u8>,
+        capture: &std::path::Path,
+    ) -> Vec<u8> {
+        let _ = std::fs::remove_file(capture);
+        let opener_backend = AlsaBackend {
+            open: Arc::clone(&backend.open),
+        };
+        let id = device_id.to_string();
+        let player = crate::player::Player::start(
+            Box::new(move || opener_backend.open(&id, format, true)),
+            Box::new(move |_| {
+                Ok(Box::new(io::Cursor::new(decoded.clone())) as crate::player::PcmSource)
+            }),
+            format,
+            input,
+            0,
+        )
+        .expect("the hw PCM opens in exclusive mode");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut confirmed = None;
+        let mut busy = None;
+        while player.status().state != crate::player::PlayerState::Ended {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                player.status()
+            );
+            if confirmed.is_none()
+                && player.status().state == crate::player::PlayerState::Playing
+                && let Some(status) = backend.hardware_status(device_id, &format)
+                && status.momentary_hz.is_some()
+            {
+                confirmed = Some(status);
+                // Exclusive: a second open is refused by the driver.
+                busy = Some(backend.open(device_id, format, true).is_err());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        player.stop();
+        let status = confirmed.expect("the driver reported the stream while it played");
+        assert_eq!(status.reporter, HardwareReporter::Kernel);
+        assert!(
+            status.kernel_emulator,
+            "the emulator is named as the reporter"
+        );
+        assert!(status.matches_stream, "{status:?}");
+        assert_eq!(
+            status.params.format,
+            procfs::alsa_format_name(format.sample_format)
+        );
+        assert_eq!(status.params.rate, format.sample_rate);
+        assert_eq!(status.momentary_hz, Some(format.sample_rate));
+        assert!(
+            status.source.ends_with("/pcm0p/sub0/hw_params"),
+            "{}",
+            status.source
+        );
+        assert_eq!(busy, Some(true), "a hw device takes one stream at a time");
+        std::fs::read(capture).expect("the emulated DAC consumed the stream")
+    }
+
+    fn kernel_abi_child() {
+        let capture = std::path::PathBuf::from(
+            std::env::var_os(KERNEL_ABI_CAPTURE).expect("the parent names the capture file"),
+        );
+        assert_eq!(emulated_card(), Some(1), "the emulator is loaded");
+        let backend = AlsaBackend::load().expect("libasound loads");
+        let devices = backend.devices();
+        let dac = devices
+            .iter()
+            .find(|device| {
+                device
+                    .hardware
+                    .as_ref()
+                    .is_some_and(|hw| hw.kernel_emulator)
+            })
+            .unwrap_or_else(|| panic!("the emulated USB card is listed: {devices:?}"));
+        assert_eq!(dac.id, "alsa:BenchDAC:0");
+        assert_eq!(dac.name, "Parson Bench DAC (kernel ABI emulator)");
+        assert_eq!(dac.address.as_deref(), Some("hw:1,0"));
+        assert_eq!(dac.mode_label(true), "ALSA hw:1,0 exclusive");
+        let hardware = dac.hardware.as_ref().unwrap();
+        assert_eq!(hardware.usb_id.as_deref(), Some("1209:0001"));
+        assert_eq!(hardware.speed.as_deref(), Some("high speed"));
+        assert_eq!(hardware.caps_source, CapsSource::Driver);
+        let caps = dac.caps.as_ref().expect("the driver was probed");
+        assert_eq!(
+            caps.sample_formats,
+            [
+                SampleFormat::S16,
+                SampleFormat::S24Packed,
+                SampleFormat::S32
+            ]
+        );
+        assert!(caps.sample_rates.contains(&44_100) && caps.sample_rates.contains(&384_000));
+        assert_eq!((caps.min_channels, caps.max_channels), (2, 2));
+
+        // A 44.1kHz/16-bit track goes out as S16_LE, untouched.
+        let cd: Vec<u8> = (0..44_100 / 4)
+            .flat_map(|n: i32| {
+                let value = ((n * 7_919) % 65_536 - 32_768) as i16;
+                [value.to_le_bytes(), (!value).to_le_bytes()].concat()
+            })
+            .collect();
+        let cd_format = StreamFormat {
+            sample_rate: 44_100,
+            sample_format: SampleFormat::S16,
+            channels: 2,
+        };
+        let consumed = play_through_hw(
+            &backend,
+            &dac.id,
+            cd_format,
+            crate::player::InputFormat::S16,
+            cd.clone(),
+            &capture,
+        );
+        assert_eq!(consumed.len(), cd.len());
+        assert!(consumed == cd, "the DAC received different 16-bit samples");
+
+        // A 96kHz/24-bit track: 24 significant bits, packed as S24_3LE.
+        let samples: Vec<i32> = (0..96_000 / 4 * 2)
+            .map(|n: i32| ((n.wrapping_mul(2_654_435_761_u32 as i32)) >> 8) << 8)
+            .collect();
+        let decoded: Vec<u8> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        let expected: Vec<u8> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes()[1..].to_vec())
+            .collect();
+        let hires = StreamFormat {
+            sample_rate: 96_000,
+            sample_format: SampleFormat::S24Packed,
+            channels: 2,
+        };
+        let consumed = play_through_hw(
+            &backend,
+            &dac.id,
+            hires,
+            crate::player::InputFormat::S32,
+            decoded,
+            &capture,
+        );
+        assert_eq!(consumed.len(), expected.len());
+        assert!(
+            consumed == expected,
+            "the DAC received different 24-bit samples"
+        );
+
+        // Exclusive mode never converts: a rate the 24-bit altset lacks fails.
+        let unsupported = StreamFormat {
+            sample_rate: 384_000,
+            ..hires
+        };
+        assert!(backend.open(&dac.id, unsupported, true).is_err());
+        // Shared mode reaches it through ALSA's plug, which converts, and
+        // the driver's report shows it: the hardware runs S32_LE.
+        let shared = backend
+            .open(&dac.id, unsupported, false)
+            .expect("plughw converts what the hardware lacks");
+        let report = backend
+            .hardware_status(&dac.id, &unsupported)
+            .expect("the driver reports the shared stream");
+        assert_eq!(report.params.format, "S32_LE");
+        assert!(
+            !report.matches_stream,
+            "a conversion below Parson is caught"
+        );
+        drop(shared);
+    }
+
+    #[test]
+    fn the_hw_path_plays_bit_perfect_through_the_kernel_abi() {
+        // This container class has no sound cards, so the kernel side of a
+        // USB DAC is played by kernel-abi/snd_usb_emulator.c, preloaded
+        // into a child copy of this test: the real libasound hw plugin,
+        // procfs readers, Player and Backend run on top of it unchanged.
+        if std::env::var_os(KERNEL_ABI_CHILD).is_some() {
+            kernel_abi_child();
+            return;
+        }
+        if api().is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("parson-kernel-abi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let Some(library) = build_kernel_abi_emulator(&dir) else {
+            eprintln!("no C compiler or kernel headers; the kernel-ABI path was not exercised");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "alsa::tests::the_hw_path_plays_bit_perfect_through_the_kernel_abi",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(KERNEL_ABI_CHILD, "1")
+            .env(KERNEL_ABI_CAPTURE, dir.join("dac.raw"))
+            .env("LD_PRELOAD", &library)
+            .output()
+            .expect("the child test runs");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 }

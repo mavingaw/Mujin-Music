@@ -323,6 +323,9 @@ pub struct HardwareInfo {
     pub caps_source: CapsSource,
     /// The playback alternate settings the descriptors declare.
     pub altsets: Vec<UsbAltset>,
+    /// The card is answered by Parson's kernel-ABI emulator
+    /// (`kernel-abi/snd_usb_emulator.c`), not by a kernel driver and a DAC.
+    pub kernel_emulator: bool,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -373,6 +376,8 @@ pub struct HardwareStatus {
     /// The hardware runs exactly the container, rate and channels Parson
     /// opened it with (nothing in between converted them).
     pub matches_stream: bool,
+    /// The report came from Parson's kernel-ABI emulator, not a kernel.
+    pub kernel_emulator: bool,
 }
 
 /// `<root>/<card>/pcm<D>p/sub0/hw_params`.
@@ -403,6 +408,7 @@ pub fn read_status(
         matches_stream: params_match(&params, stream),
         params,
         momentary_hz,
+        kernel_emulator: false,
     })
 }
 

@@ -101,6 +101,11 @@ export interface NativeHardwareInfo {
   /** `driver` when libasound probed it; `usb_descriptors` when busy. */
   caps_source: "driver" | "usb_descriptors";
   altsets: UsbAltset[];
+  /**
+   * The card is answered by Parson's kernel-ABI emulator (a test bench
+   * without sound hardware), not by a kernel driver and a DAC.
+   */
+  kernel_emulator?: boolean;
 }
 
 /** The ALSA plugin chain behind an opened PCM, from `snd_pcm_dump`. */
@@ -122,6 +127,8 @@ export interface NativeHardwareStatus {
   source: string;
   /** `kernel` (procfs) or `library` (libasound's opened chain). */
   reporter?: "kernel" | "library";
+  /** The report came from Parson's kernel-ABI emulator, not a kernel. */
+  kernel_emulator?: boolean;
   /** The plugin chain the samples pass through, for libasound reports. */
   chain?: NativePcmChain | null;
   params: {

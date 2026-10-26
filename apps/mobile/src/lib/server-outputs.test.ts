@@ -204,4 +204,20 @@ test("libasound reports name the plugin chain, and the transport names the drive
     "Driver: S32_LE 44.1kHz 2ch, converted after Parson by Linear conversion PCM",
   );
   expect(serverTransportLine({} as NativeOutputSession)).toBeNull();
+  const bench = {
+    signal_path: {
+      output_device: {
+        name: "Parson Bench DAC (kernel ABI emulator)",
+        host: "studio-pc",
+        transport: "ALSA hw:1,0 exclusive",
+        usb_id: "1209:0001",
+        usb_speed: "high speed",
+        simulated: false,
+        kernel_emulator: true,
+      },
+    },
+  } as unknown as NativeOutputSession;
+  expect(serverTransportLine(bench)).toBe(
+    "USB 1209:0001 · high speed · ALSA hw:1,0 exclusive on studio-pc · kernel ABI emulator, no DAC hardware",
+  );
 });

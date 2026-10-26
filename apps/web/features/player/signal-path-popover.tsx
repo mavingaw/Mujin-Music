@@ -437,6 +437,15 @@ function SignalPathPanel({
               {deviceFacts.join(" · ")}
             </p>
           ) : null}
+          {serverOutput && device?.kernel_emulator ? (
+            <p
+              className="mt-0.5 text-[11px] leading-4 text-amber-300/90"
+              data-kernel-emulator
+            >
+              Test bench: Parson&apos;s kernel-ABI emulator answers for the
+              kernel here, so this proves the hw driver path, not a DAC.
+            </p>
+          ) : null}
           {path?.hardwareVerified !== null &&
           path?.hardwareVerified !== undefined ? (
             <p
