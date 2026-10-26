@@ -9,7 +9,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { ReleaseMatch, ReleaseSearchTerms } from "@parson/music-sdk";
-import { Check, ExternalLink, Loader2, Search } from "lucide-react";
+import { trackCountWarning } from "@parson/music-sdk";
+import {
+  AlertTriangle,
+  Check,
+  ExternalLink,
+  Loader2,
+  Search,
+} from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { identifyError, useIdentifyAlbum, useReleaseSearch } from "./use-works";
@@ -49,11 +56,16 @@ export function IdentifyAlbumDialog({
   const current = search.data?.identification?.release_mbid ?? null;
   const error = search.isError ? identifyError(search.error) : null;
   const title = titleDraft ?? search.data?.title ?? "";
+  // A release whose track count differs waits for a second click.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const localTrackCount = search.data?.local_track_count ?? 0;
   const artist = artistDraft ?? search.data?.artist ?? "";
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden">
+      {/* One shrinkable column: long release titles truncate instead of
+          pushing the buttons past the dialog's edge. */}
+      <DialogContent className="max-h-[85vh] max-w-2xl grid-cols-[minmax(0,1fr)] overflow-hidden">
         <DialogHeader>
           <DialogTitle>Identify album</DialogTitle>
           <DialogDescription>
@@ -94,7 +106,7 @@ export function IdentifyAlbumDialog({
           </button>
         </form>
         {search.data?.identification && (
-          <div className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-white/4 px-3 py-2 text-sm">
+          <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-white/10 bg-white/4 px-3 py-2 text-sm">
             <span className="min-w-0 truncate text-zinc-300">
               Matched by hand to{" "}
               <span className="text-white">
@@ -135,66 +147,134 @@ export function IdentifyAlbumDialog({
           )}
           {search.data && search.data.releases.length === 0 && (
             <p className="py-6 text-sm text-zinc-500">
-              No releases found. Try fewer words, the original title, or a
+              No releases found. Parson already searches by each word of the
+              title; try the original title, the conductor or performer, or a
               catalogue number.
             </p>
           )}
           <ul aria-label="MusicBrainz releases" className="space-y-1">
             {search.data?.releases.map((release) => {
               const chosen = current === release.mbid;
+              const differs =
+                release.track_count_differs ??
+                (release.track_count != null &&
+                  release.track_count !== localTrackCount);
+              const warning = differs
+                ? trackCountWarning(release, localTrackCount)
+                : null;
+              const pick = () =>
+                choose.mutate(release, {
+                  onSuccess: () => onOpenChange(false),
+                });
               return (
                 <li
-                  className={`flex items-center gap-3 rounded-md px-3 py-2.5 ${
-                    chosen ? "bg-white/8" : "hover:bg-white/4"
+                  className={`rounded-md px-3 py-2.5 ${
+                    chosen
+                      ? "bg-white/8"
+                      : confirming === release.mbid
+                        ? "bg-amber-300/[0.07]"
+                        : "hover:bg-white/4"
                   }`}
                   key={release.mbid}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-medium text-white">
-                        {release.title}
-                      </span>
-                      {release.same_track_count && (
-                        <span className="shrink-0 rounded border border-emerald-400/30 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
-                          {search.data?.local_track_count} tracks, like yours
+                  <div className="flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium text-white">
+                          {release.title}
                         </span>
-                      )}
+                        {release.same_track_count && (
+                          <span className="shrink-0 rounded border border-emerald-400/30 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                            {localTrackCount} tracks, like yours
+                          </span>
+                        )}
+                        {differs && (
+                          <span className="shrink-0 rounded border border-amber-300/30 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                            {release.track_count} tracks, yours has{" "}
+                            {localTrackCount}
+                          </span>
+                        )}
+                        {release.fit === "likely" && !release.suggested && (
+                          <span className="hidden shrink-0 rounded bg-white/8 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-zinc-300 sm:inline">
+                            Likely match
+                          </span>
+                        )}
+                        {release.suggested && (
+                          <span
+                            className="hidden shrink-0 rounded bg-amber-300/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber-200 sm:inline"
+                            title="Automatic matching found this release, but it did not pass the match check."
+                          >
+                            Failed the check
+                          </span>
+                        )}
+                      </div>
+                      <p className="truncate text-sm text-zinc-400">
+                        {release.artist}
+                        {release.disambiguation &&
+                          ` (${release.disambiguation})`}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {releaseFacts(release).join(" · ")}
+                      </p>
                     </div>
-                    <p className="truncate text-sm text-zinc-400">
-                      {release.artist}
-                      {release.disambiguation && ` (${release.disambiguation})`}
-                    </p>
-                    <p className="truncate text-xs text-zinc-500">
-                      {releaseFacts(release).join(" · ")}
-                    </p>
+                    <a
+                      aria-label={`${release.title} on MusicBrainz`}
+                      className="shrink-0 rounded p-1.5 text-zinc-500 hover:text-white"
+                      href={release.url}
+                      rel="noreferrer"
+                      target="_blank"
+                      title="Open on MusicBrainz"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                    <button
+                      className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        chosen
+                          ? "bg-emerald-400/15 text-emerald-300"
+                          : "bg-white text-black hover:bg-zinc-200"
+                      } disabled:opacity-50`}
+                      disabled={
+                        chosen ||
+                        choose.isPending ||
+                        confirming === release.mbid
+                      }
+                      onClick={() =>
+                        warning ? setConfirming(release.mbid) : pick()
+                      }
+                      type="button"
+                    >
+                      {chosen && <Check className="h-3.5 w-3.5" />}
+                      {chosen ? "Chosen" : "This is it"}
+                    </button>
                   </div>
-                  <a
-                    aria-label={`${release.title} on MusicBrainz`}
-                    className="shrink-0 rounded p-1.5 text-zinc-500 hover:text-white"
-                    href={release.url}
-                    rel="noreferrer"
-                    target="_blank"
-                    title="Open on MusicBrainz"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                  <button
-                    className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
-                      chosen
-                        ? "bg-emerald-400/15 text-emerald-300"
-                        : "bg-white text-black hover:bg-zinc-200"
-                    } disabled:opacity-50`}
-                    disabled={chosen || choose.isPending}
-                    onClick={() =>
-                      choose.mutate(release, {
-                        onSuccess: () => onOpenChange(false),
-                      })
-                    }
-                    type="button"
-                  >
-                    {chosen && <Check className="h-3.5 w-3.5" />}
-                    {chosen ? "Chosen" : "This is it"}
-                  </button>
+                  {confirming === release.mbid && warning && (
+                    <div
+                      className="mt-2.5 flex flex-col gap-2.5 rounded-md border border-amber-300/25 bg-black/30 px-3 py-2.5 sm:flex-row sm:items-center"
+                      role="alert"
+                    >
+                      <p className="flex min-w-0 flex-1 items-start gap-2 text-[13px] leading-5 text-amber-100">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                        {warning}
+                      </p>
+                      <div className="flex shrink-0 gap-2">
+                        <button
+                          className="rounded-full px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:text-white"
+                          onClick={() => setConfirming(null)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="rounded-full bg-amber-200 px-3 py-1.5 text-xs font-semibold text-black hover:bg-amber-100 disabled:opacity-50"
+                          disabled={choose.isPending}
+                          onClick={pick}
+                          type="button"
+                        >
+                          Use it anyway
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </li>
               );
             })}

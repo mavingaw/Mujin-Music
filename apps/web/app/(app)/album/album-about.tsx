@@ -4,9 +4,16 @@ import type { LibraryAlbum } from "@parson/music-sdk";
 import {
   albumTextPanels,
   enrichmentWaitingLabel,
+  releaseMatchFact,
+  releaseMatchSignals,
+  releaseMatchSummary,
+  releaseYearDiffers,
+  UNVERIFIED_MATCH_TEXT,
+  unverifiedMatch,
   workHref,
 } from "@parson/music-sdk";
-import type { AlbumAbout } from "@parson/music-sdk/types";
+import type { AlbumAbout, ReleaseMatchCheck } from "@parson/music-sdk/types";
+import { Check, CircleHelp, ExternalLink, ShieldAlert, X } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { EditorialText } from "@/features/library/credits/editorial-text";
@@ -45,13 +52,18 @@ export function albumFacts(album: LibraryAlbum, about: AlbumAbout | undefined) {
     .join(", ");
   // A release matched by title alone may be a later recording of the same
   // programme; then the year in the tags wins.
-  const released = exact
-    ? (formatPartialDate(facts?.first_release_date) ??
-      formatPartialDate(album.first_release_date))
-    : (formatPartialDate(album.first_release_date) ??
-      formatPartialDate(facts?.first_release_date));
+  // A release from another year than the tags (a later CD of a 1975
+  // recording) is this edition, not the original release.
+  const released =
+    exact && !releaseYearDiffers(about)
+      ? (formatPartialDate(facts?.first_release_date) ??
+        formatPartialDate(album.first_release_date))
+      : (formatPartialDate(album.first_release_date) ??
+        formatPartialDate(facts?.first_release_date));
   const edition =
-    exact && facts?.date && facts.date !== facts.first_release_date
+    exact &&
+    facts?.date &&
+    (facts.date !== facts.first_release_date || releaseYearDiffers(about))
       ? formatPartialDate(facts.date)
       : null;
   const length = album.songs.reduce(
@@ -70,11 +82,113 @@ export function albumFacts(album: LibraryAlbum, about: AlbumAbout | undefined) {
       label: "Format",
       value: albumFormat(album.songs) as string,
     },
-    about?.identification && {
+    releaseMatchFact(about) && {
       label: "Matched",
-      value: "By hand on MusicBrainz",
+      value: releaseMatchFact(about) as string,
     },
   ].filter(Boolean) as { label: string; value: string }[];
+}
+
+const SIGNAL_STYLE = {
+  match: { icon: Check, className: "text-emerald-300" },
+  partial: { icon: CircleHelp, className: "text-amber-200" },
+  mismatch: { icon: X, className: "text-rose-300" },
+  unknown: { icon: CircleHelp, className: "text-zinc-500" },
+} as const;
+
+/**
+ * Shown when the closest MusicBrainz release failed the match check: the
+ * album keeps its tags, and the evidence says why, so a person can decide.
+ */
+export function UnverifiedMatchBanner({
+  check,
+  isAdmin,
+  onIdentify,
+}: {
+  check: ReleaseMatchCheck;
+  isAdmin: boolean;
+  onIdentify?: () => void;
+}) {
+  const summary = releaseMatchSummary(check);
+  return (
+    <div
+      aria-label="Unverified match"
+      className="mb-7 overflow-hidden rounded-xl border border-amber-300/20 bg-gradient-to-br from-amber-300/[0.09] via-amber-300/[0.04] to-transparent"
+      role="status"
+    >
+      <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:p-5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-300/15 text-amber-200">
+          <ShieldAlert className="h-[18px] w-[18px]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+            Unverified match
+          </p>
+          <p className="mt-1 text-sm leading-6 text-zinc-200">
+            Closest release on MusicBrainz:{" "}
+            <a
+              className="font-semibold text-white underline-offset-2 hover:underline"
+              href={check.url}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {check.release_title}
+            </a>
+            {check.release_artist && (
+              <span className="text-zinc-400"> · {check.release_artist}</span>
+            )}
+            {summary && <span className="text-zinc-400"> · {summary}</span>}
+          </p>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">
+            {UNVERIFIED_MATCH_TEXT}
+          </p>
+          <ul aria-label="Match evidence" className="mt-3 grid gap-1.5">
+            {releaseMatchSignals(check).map((signal) => {
+              const style =
+                SIGNAL_STYLE[signal.outcome] ?? SIGNAL_STYLE.unknown;
+              const Icon = style.icon;
+              return (
+                <li
+                  className="flex items-start gap-2 text-[13px] leading-5 text-zinc-300"
+                  key={signal.key}
+                >
+                  <Icon
+                    aria-label={signal.outcome}
+                    className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${style.className}`}
+                  />
+                  <span className="min-w-0">{signal.detail}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:flex-col sm:items-stretch">
+          {isAdmin && onIdentify ? (
+            <button
+              className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition-colors hover:bg-zinc-200"
+              onClick={onIdentify}
+              type="button"
+            >
+              Identify album…
+            </button>
+          ) : (
+            <p className="max-w-[14rem] text-xs leading-5 text-zinc-500">
+              An administrator can identify this album.
+            </p>
+          )}
+          <a
+            className="flex items-center justify-center gap-1.5 rounded-full border border-white/12 px-4 py-2 text-xs font-semibold text-zinc-300 transition-colors hover:border-white/25 hover:text-white"
+            href={check.url}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            MusicBrainz
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -106,12 +220,22 @@ export function AlbumAboutSection({
   const activeText = textPanels.find((panel) => panel.key === active);
   const facts = albumFacts(album, about);
   const hasEditorial = Boolean(textPanels.length || about?.note);
+  const unverified = unverifiedMatch(about);
 
   return (
     <section
       aria-label="About this album"
-      className="mb-9 grid gap-8 md:grid-cols-[minmax(0,1fr)_17rem]"
+      className="mb-9 grid gap-x-8 md:grid-cols-[minmax(0,1fr)_17rem]"
     >
+      {unverified && (
+        <div className="md:col-span-2">
+          <UnverifiedMatchBanner
+            check={unverified}
+            isAdmin={isAdmin}
+            onIdentify={onIdentify}
+          />
+        </div>
+      )}
       <div className="min-w-0">
         <div
           aria-label="Album text"
@@ -184,6 +308,7 @@ export function AlbumAboutSection({
                 onIdentify &&
                 about?.enrichment.enabled &&
                 !about.identification &&
+                !unverified &&
                 about.enrichment.task?.status === "skipped" && (
                   <p className="rounded-md border border-white/8 bg-white/3 px-3 py-2.5 text-sm leading-6 text-zinc-400">
                     Parson found no confident MusicBrainz match for this album
@@ -206,7 +331,7 @@ export function AlbumAboutSection({
         </div>
       </div>
       {facts.length > 0 && (
-        <dl className="grid h-fit grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 text-sm md:border-l md:border-white/8 md:pl-6">
+        <dl className="mt-8 grid h-fit grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 text-sm md:mt-0 md:border-l md:border-white/8 md:pl-6">
           {facts.map((fact) => (
             <div className="contents" key={fact.label}>
               <dt className="font-medium text-zinc-500">{fact.label}</dt>

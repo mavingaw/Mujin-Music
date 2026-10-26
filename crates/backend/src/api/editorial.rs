@@ -86,6 +86,44 @@ pub struct AlbumAbout {
     /// About the pieces on the album, from their own Wikipedia articles:
     /// what a classical album shows when the release has no article.
     pub work_texts: Vec<WorkText>,
+    /// The match check behind the MusicBrainz release: how it was chosen,
+    /// whether it passed, and the evidence. An unverified match is a
+    /// suggestion only; nothing from it is shown as fact.
+    pub release_match: Option<ReleaseMatchView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseMatchView {
+    /// `verified` (applied) or `unverified` (only suggested).
+    pub status: String,
+    /// `automatic`, `tagged` or `identified`.
+    pub method: String,
+    pub release_mbid: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub url: String,
+    pub score: i32,
+    pub threshold: i32,
+    /// `passed`, `release_date`, `first_release_date`, `release_type`,
+    /// `release_track_count`, `local_track_count` and `signals`.
+    #[serde(flatten)]
+    pub details: serde_json::Map<String, Value>,
+}
+
+impl From<store::ReleaseMatchRow> for ReleaseMatchView {
+    fn from(row: store::ReleaseMatchRow) -> Self {
+        ReleaseMatchView {
+            url: crate::enrichment::musicbrainz::release_page_url(&row.release_mbid),
+            details: serde_json::from_str(&row.details_json).unwrap_or_default(),
+            status: row.status,
+            method: row.method,
+            release_mbid: row.release_mbid,
+            release_title: row.release_title,
+            release_artist: row.release_artist,
+            score: row.score,
+            threshold: row.threshold,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -830,6 +868,8 @@ pub async fn album_about(
             .map_err(|error| error.to_string())?;
         let identification = store::load_identification(&mut connection, &lookup)
             .map_err(|error| error.to_string())?;
+        let release_match = store::load_release_match(&mut connection, &lookup)
+            .map_err(|error| error.to_string())?;
         let mut work_texts = Vec::new();
         for work in works.1.iter().filter(|work| work.parent_mbid.is_none()) {
             if work_texts.len() >= 4 {
@@ -848,10 +888,10 @@ pub async fn album_about(
                 });
             }
         }
-        Ok::<_, String>((works, identification, work_texts))
+        Ok::<_, String>((works, identification, release_match, work_texts))
     })
     .await;
-    let ((work_links, work_rows), identification, work_texts) = match works {
+    let ((work_links, work_rows), identification, release_match, work_texts) = match works {
         Ok(Ok(found)) => found,
         _ => {
             tracing::error!("could not load album works");
@@ -863,11 +903,17 @@ pub async fn album_about(
     let mut stored = stored;
     // An album by "Unknown Artist" is only trusted once a person identified
     // it or its tags name the release; older versions matched namesakes.
-    let untrusted = identification.is_none()
+    let placeholder = identification.is_none()
         && album.musicbrainz_id.is_empty()
         && cache
             .album_owner(&album.id)
             .is_some_and(|owner| is_placeholder_artist(&owner.name));
+    // A release that failed the match check is only a suggestion: the
+    // album shows its file-tag data.
+    let unverified = release_match
+        .as_ref()
+        .is_some_and(|found| found.status == "unverified");
+    let untrusted = placeholder || unverified;
     if untrusted {
         stored.profile = None;
         stored.texts.clear();
@@ -900,7 +946,13 @@ pub async fn album_about(
             .filter(|id| images.contains(*id))
             .map(artist_image_url);
     }
+    let (work_links, work_rows) = if untrusted {
+        (Vec::new(), Vec::new())
+    } else {
+        (work_links, work_rows)
+    };
     HttpResponse::Ok().json(AlbumAbout {
+        release_match: release_match.map(ReleaseMatchView::from),
         works: crate::api::works::album_track_works(&work_links, &work_rows, &people),
         identification,
         genres,

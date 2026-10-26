@@ -1399,6 +1399,78 @@ pub fn set_identification(
     })
 }
 
+/// The match check stored for an album's MusicBrainz release.
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct ReleaseMatchRow {
+    #[diesel(sql_type = Text)]
+    pub status: String,
+    #[diesel(sql_type = Text)]
+    pub method: String,
+    #[diesel(sql_type = Text)]
+    pub release_mbid: String,
+    #[diesel(sql_type = Text)]
+    pub release_title: String,
+    #[diesel(sql_type = Text)]
+    pub release_artist: String,
+    #[diesel(sql_type = Integer)]
+    pub score: i32,
+    #[diesel(sql_type = Integer)]
+    pub threshold: i32,
+    #[diesel(sql_type = Text)]
+    pub details_json: String,
+}
+
+pub fn save_release_match(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+    row: &ReleaseMatchRow,
+) -> QueryResult<()> {
+    diesel::sql_query(
+        "INSERT INTO album_release_match
+             (album_id, status, method, release_mbid, release_title, release_artist,
+              score, threshold, details_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(album_id) DO UPDATE SET
+             status = excluded.status, method = excluded.method,
+             release_mbid = excluded.release_mbid, release_title = excluded.release_title,
+             release_artist = excluded.release_artist, score = excluded.score,
+             threshold = excluded.threshold, details_json = excluded.details_json,
+             updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind::<Text, _>(album_id)
+    .bind::<Text, _>(&row.status)
+    .bind::<Text, _>(&row.method)
+    .bind::<Text, _>(&row.release_mbid)
+    .bind::<Text, _>(&row.release_title)
+    .bind::<Text, _>(&row.release_artist)
+    .bind::<Integer, _>(row.score)
+    .bind::<Integer, _>(row.threshold)
+    .bind::<Text, _>(&row.details_json)
+    .execute(connection)?;
+    Ok(())
+}
+
+pub fn load_release_match(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Option<ReleaseMatchRow>> {
+    let mut rows = diesel::sql_query(
+        "SELECT status, method, release_mbid, release_title, release_artist, score, threshold,
+                details_json
+         FROM album_release_match WHERE album_id = ?",
+    )
+    .bind::<Text, _>(album_id)
+    .load::<ReleaseMatchRow>(connection)?;
+    Ok(rows.pop())
+}
+
+pub fn delete_release_match(connection: &mut SqliteConnection, album_id: &str) -> QueryResult<()> {
+    diesel::sql_query("DELETE FROM album_release_match WHERE album_id = ?")
+        .bind::<Text, _>(album_id)
+        .execute(connection)?;
+    Ok(())
+}
+
 /// Removes everything enrichment stored for an entity (used when a match
 /// turns out to be wrong, e.g. a placeholder artist name).
 pub fn clear_editorial(

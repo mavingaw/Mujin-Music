@@ -70,7 +70,11 @@ Biographies, album background and reviews come straight from the Wikipedia artic
 
 ### Identify album
 
-Albums whose tags do not name a MusicBrainz release are matched by title and album artist; classical titles such as "Beethoven: Symphony No. 9" also match without the composer, and the year in your tags picks between several recordings. When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
+Albums whose tags do not name a MusicBrainz release are searched for by title and album artist. The search is forgiving: it also looks for the words of the title in any order and folds spellings together, so "Symphonien Nr. 5 & 7" finds "Symphonien nos. 5 & 7", and classical titles such as "Beethoven: Symphony No. 9" also match without the composer.
+
+Before anything from a release found this way is used, Parson checks it against your files: the number of tracks, each track's length, the year (and label) in your tags, and whether the conductor and orchestra your tags name are credited on the release. A release that does not pass, such as a 7-inch single with the album's title or a reissue of another orchestra's recording, is not applied: the album keeps its own tags, cover and credits, and its page shows an **Unverified match** notice with the closest release and the evidence for and against it. A release named in your tags, or chosen by hand, is always used.
+
+When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. Results that fit your files are marked, and choosing a release with a different number of tracks asks you to confirm first, because tracks are then paired by title. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
 
 ### Albums and editions
 

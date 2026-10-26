@@ -12,13 +12,14 @@ use crate::api::editorial::{EXTERNAL_PREFIX, person_query};
 use crate::api::error::{bad_request, conflict, internal_server_error, not_found};
 use crate::api::song::{ResponseSong, response_song};
 use crate::domain::{Album, Artist, Song};
+use crate::enrichment::confidence;
 use crate::enrichment::fetch::{Fetch, HttpFetch, MAX_JSON_BYTES};
 use crate::enrichment::identity::{PersonIdentity, load_identity};
 use crate::enrichment::musicbrainz::{
     self as mb, ReleaseCandidate, identify_query, is_mbid, is_placeholder_artist, release_query_url,
 };
 use crate::enrichment::store::{self, CreditRow, Identification, TrackWorkRow, WorkRow};
-use crate::enrichment::worker::wake;
+use crate::enrichment::worker::{AlbumInput, album_input, wake};
 use crate::enrichment::works::{first_year, part_title, period_for_year};
 use crate::library::focus::{
     FocusRecord, FocusSummary, Selection, focus, looks_like_ensemble, parse_selection,
@@ -835,6 +836,16 @@ pub struct ReleaseMatch {
     pub score: i64,
     /// Same number of tracks as the local album.
     pub same_track_count: bool,
+    /// The release's track count is known and differs from the album's:
+    /// choosing it pairs tracks by title, so some may get the wrong
+    /// credits or piece.
+    pub track_count_differs: bool,
+    /// How well the search result fits the album's files (track count,
+    /// year, label, title, artist and orchestra): `likely`, `possible` or
+    /// `unlikely`.
+    pub fit: &'static str,
+    /// Whether this is the release automatic matching found and rejected.
+    pub suggested: bool,
     pub url: String,
 }
 
@@ -849,35 +860,60 @@ pub struct IdentifySearch {
     pub releases: Vec<ReleaseMatch>,
 }
 
-/// Orders candidates for a person to choose from: same track count first,
-/// then MusicBrainz' own score.
-pub fn rank_releases(candidates: Vec<ReleaseCandidate>, track_count: usize) -> Vec<ReleaseMatch> {
+/// Orders candidates for a person to choose from: by how well they fit
+/// the album's files, then same track count, then MusicBrainz' own score.
+pub fn rank_releases(
+    candidates: Vec<ReleaseCandidate>,
+    album: &AlbumInput,
+    suggested: Option<&str>,
+) -> Vec<ReleaseMatch> {
+    let local = album.local();
+    let track_count = album.tracks.len();
     let mut releases = candidates
         .into_iter()
-        .map(|candidate| ReleaseMatch {
-            same_track_count: candidate.track_count == Some(track_count as i64),
-            url: mb::release_page_url(&candidate.mbid),
-            mbid: candidate.mbid,
-            title: candidate.title,
-            artist: candidate.artist,
-            date: candidate.date,
-            country: candidate.country,
-            track_count: candidate.track_count,
-            labels: candidate.labels,
-            catalog_numbers: candidate.catalog_numbers,
-            format: candidate.format,
-            release_type: candidate.release_type,
-            disambiguation: candidate.disambiguation,
-            score: candidate.score,
+        .map(|candidate| {
+            let points =
+                confidence::identify_fit(&album.title, &album.artist_name, &local, &candidate);
+            let fit = if points >= 5 {
+                "likely"
+            } else if points >= 2 {
+                "possible"
+            } else {
+                "unlikely"
+            };
+            (
+                points,
+                ReleaseMatch {
+                    same_track_count: candidate.track_count == Some(track_count as i64),
+                    track_count_differs: candidate
+                        .track_count
+                        .is_some_and(|count| count != track_count as i64),
+                    fit,
+                    suggested: suggested == Some(candidate.mbid.as_str()),
+                    url: mb::release_page_url(&candidate.mbid),
+                    mbid: candidate.mbid,
+                    title: candidate.title,
+                    artist: candidate.artist,
+                    date: candidate.date,
+                    country: candidate.country,
+                    track_count: candidate.track_count,
+                    labels: candidate.labels,
+                    catalog_numbers: candidate.catalog_numbers,
+                    format: candidate.format,
+                    release_type: candidate.release_type,
+                    disambiguation: candidate.disambiguation,
+                    score: candidate.score,
+                },
+            )
         })
         .collect::<Vec<_>>();
-    releases.sort_by(|left, right| {
-        right
-            .same_track_count
-            .cmp(&left.same_track_count)
+    releases.sort_by(|(left_points, left), (right_points, right)| {
+        right_points
+            .cmp(left_points)
+            .then_with(|| right.same_track_count.cmp(&left.same_track_count))
             .then_with(|| right.score.cmp(&left.score))
     });
-    releases
+    releases.into_iter().map(|(_, release)| release).collect()
 }
 
 /// The default search for an album: its title, and its artist unless the
@@ -952,11 +988,17 @@ pub async fn identify_search(
         return bad_request("The search is too long.", "query_too_long");
     }
     let local_track_count = album.songs.len();
+    let Some(input) = album_input(&cache, &album_id) else {
+        return not_found("Album not found.", "album_not_found");
+    };
     let lookup = album_id.clone();
-    let (settings, identification) = match blocking(pool.get_ref(), move |connection| {
+    let (settings, identification, suggested) = match blocking(pool.get_ref(), move |connection| {
         Ok((
             store::load_settings(connection)?,
             store::load_identification(connection, &lookup)?,
+            store::load_release_match(connection, &lookup)?
+                .filter(|found| found.status == "unverified")
+                .map(|found| found.release_mbid),
         ))
     })
     .await
@@ -988,7 +1030,7 @@ pub async fn identify_search(
             artist,
             local_track_count,
             identification,
-            releases: rank_releases(candidates, local_track_count),
+            releases: rank_releases(candidates, &input, suggested.as_deref()),
         }),
         Err(error) => {
             tracing::warn!(%error, "MusicBrainz release search failed");
@@ -1546,11 +1588,11 @@ mod tests {
     fn identify_queries_leave_out_placeholder_artists() {
         assert_eq!(
             default_identify_query("Basement Tapes", "Unknown Artist"),
-            "release:\"Basement Tapes\""
+            "release:(\"Basement Tapes\"^3 OR (basement tapes))"
         );
         assert_eq!(
             default_identify_query("Beethoven: Symphony No. 9", "Herbert von Karajan"),
-            "release:(\"Beethoven: Symphony No. 9\" OR \"Symphony No. 9\") AND artist:\"Herbert von Karajan\""
+            "release:(\"Beethoven: Symphony No. 9\"^3 OR \"Symphony No. 9\"^3 OR (beethoven symphony no 9)) AND artist:(\"Herbert von Karajan\" OR (+herbert +von +karajan))"
         );
     }
 
@@ -1571,10 +1613,19 @@ mod tests {
             ]}),
         );
         let found = search_releases(&fetch, query).await.unwrap();
-        let ranked = rank_releases(found, 4);
+        let album = AlbumInput {
+            title: "Beethoven: Symphony No. 9".into(),
+            artist_name: "Herbert von Karajan".into(),
+            tracks: vec![Default::default(); 4],
+            ..Default::default()
+        };
+        let ranked = rank_releases(found, &album, Some("55555555-5555-4555-8555-555555555555"));
         assert_eq!(ranked[0].mbid, "66666666-6666-4666-8666-666666666666");
         assert!(ranked[0].same_track_count);
+        assert!(!ranked[0].track_count_differs);
         let vinyl = &ranked[1];
+        assert!(vinyl.track_count_differs);
+        assert!(vinyl.suggested);
         assert_eq!(vinyl.format.as_deref(), Some("2×Vinyl"));
         assert_eq!(vinyl.labels, ["Deutsche Grammophon"]);
         assert_eq!(vinyl.catalog_numbers, ["138 807"]);

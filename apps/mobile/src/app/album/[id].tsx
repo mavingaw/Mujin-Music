@@ -5,7 +5,9 @@ import {
   getAlbumAbout,
   getAlbumInfo,
   type AboutCredit,
+  type ReleaseMatchCheck,
   type LibraryAlbum,
+  unverifiedMatch,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -33,6 +35,7 @@ import {
 import { joinMeta } from "@/lib/credit-links";
 import { WorkHeading } from "@/components/works";
 import { GenreChips } from "@/components/genres";
+import { UnverifiedMatchNotice } from "@/components/release-match";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { formatCollectionDuration } from "@/lib/format";
@@ -161,6 +164,11 @@ export default function AlbumScreen() {
               <Text style={styles.format}>{albumFormat(data.songs)}</Text>
             ) : null}
             <GenreChips genres={about.data?.genres} />
+            {unverifiedMatch(about.data) ? (
+              <UnverifiedMatchNotice
+                check={unverifiedMatch(about.data) as ReleaseMatchCheck}
+              />
+            ) : null}
             <View style={styles.actions}>
               <Pressable
                 {...immediatePressFeedback}
