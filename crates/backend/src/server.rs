@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, song_delivery, song_signal_path, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, focus, genres, home, lyrics, metadata, outputs,
-    playback, playlist, search, setup, song, user, zones,
+    album, album_sources, artist, cast, data, editorial, filesystem, focus, genre_pages, genres,
+    home, lyrics, metadata, outputs, playback, playlist, search, setup, song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -76,7 +76,20 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .wrap(HttpAuthentication::with_fn(admin_guard))
                 .service(metadata::edit_library_metadata)
                 .service(metadata::edit_album_metadata)
-                .service(metadata::upload_album_cover),
+                .service(metadata::upload_album_cover)
+                .service(editorial::get_enrichment)
+                .service(editorial::put_enrichment)
+                .service(editorial::refresh_enrichment)
+                .service(works::identify_search)
+                .service(works::identify_album)
+                .service(works::clear_identification)
+                .service(genre_pages::put_album_genres)
+                .service(genre_pages::delete_album_genres)
+                .service(album_sources::put_album_sources)
+                .service(album_sources::put_album_credits)
+                .service(album_sources::delete_album_credits)
+                .service(album_sources::get_library_sources)
+                .service(album_sources::put_library_sources),
         )
         .service(
             web::scope("/data/admin")
@@ -97,6 +110,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
+        .configure(works::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -239,7 +253,9 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "audio_devices",
             "bridges",
             "airplay",
-            "chromecast"
+            "chromecast",
+            "credits",
+            "works"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
@@ -311,6 +327,10 @@ pub async fn build_server_with_shutdown_timeout(
     let database = web::Data::new(local_app.database);
     data::start_automatic_backups(database.get_ref().clone());
     crate::library::works_online::start_musicbrainz_enrichment(database.get_ref().clone());
+    tokio::spawn(crate::enrichment::worker::run(
+        database.get_ref().clone(),
+        local_app.library.clone(),
+    ));
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()

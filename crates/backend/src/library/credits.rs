@@ -101,6 +101,10 @@ enum TagField {
     ComposedYear,
     /// A ReplayGain value.
     Loudness(LoudnessField),
+    /// A MusicBrainz id written by Picard or another tagger.
+    MusicBrainz(MbidField),
+    /// A release fact: catalog number, country, original date or barcode.
+    Release(ReleaseField),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +116,113 @@ enum LoudnessField {
     /// Opus `R128_*_GAIN`: Q7.8 fixed point relative to -23 LUFS.
     R128Track,
     R128Album,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseField {
+    CatalogNumber,
+    Country,
+    /// The original release date; an original year only fills it when no
+    /// full date is tagged.
+    OriginalDate,
+    OriginalYear,
+    Barcode,
+}
+
+/// Release facts tagged on a file (Picard writes all of them). They let a
+/// person keep their own edition facts instead of a matched release's.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseTags {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_number: Option<String>,
+    /// ISO 3166 code (MusicBrainz also uses XE for Europe, XW worldwide).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// The first release of this music, `YYYY`, `YYYY-MM` or `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barcode: Option<String>,
+}
+
+impl ReleaseTags {
+    pub fn is_empty(&self) -> bool {
+        self.catalog_number.is_none()
+            && self.country.is_none()
+            && self.original_date.is_none()
+            && self.barcode.is_none()
+    }
+}
+
+/// A tagged date reduced to `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, or `None`
+/// when it does not start with a plausible year.
+pub fn normalize_tag_date(value: &str) -> Option<String> {
+    let value = value.trim();
+    let year = value.get(..4)?;
+    if !year.chars().all(|character| character.is_ascii_digit()) || year < "1000" {
+        return None;
+    }
+    let mut date = year.to_string();
+    let mut parts = value[4..].split(['-', '/', '.']).skip(1);
+    for _ in 0..2 {
+        match parts.next().and_then(|part| part.get(..2)) {
+            Some(part)
+                if part.chars().all(|character| character.is_ascii_digit()) && part != "00" =>
+            {
+                date.push('-');
+                date.push_str(part);
+            }
+            _ => break,
+        }
+    }
+    Some(date)
+}
+
+/// A release country tag as an upper-case two-letter code.
+fn normalize_country(value: &str) -> Option<String> {
+    let value = value.trim();
+    (value.len() == 2
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphabetic()))
+    .then(|| value.to_ascii_uppercase())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MbidField {
+    Recording,
+    Release,
+    Artist,
+    AlbumArtist,
+}
+
+/// MusicBrainz ids read from a file's tags. The release id lets online
+/// metadata use exactly the tagged release instead of searching.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MusicBrainzIds {
+    pub recording: Option<String>,
+    pub release: Option<String>,
+    pub artist: Option<String>,
+    pub album_artist: Option<String>,
+}
+
+/// The first well-formed MusicBrainz id in a tag value (several may be
+/// joined with `;` or `/`), lower-cased.
+pub fn first_mbid(value: &str) -> Option<String> {
+    value
+        .split([';', '/', ',', '\0'])
+        .map(str::trim)
+        .find(|candidate| {
+            candidate.len() == 36
+                && candidate.char_indices().all(|(index, character)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        character == '-'
+                    } else {
+                        character.is_ascii_hexdigit()
+                    }
+                })
+        })
+        .map(str::to_ascii_lowercase)
 }
 
 /// Maps a Vorbis comment key, ID3 `TXXX` description or iTunes freeform name
@@ -153,6 +264,20 @@ fn named_field(key: &str) -> Option<TagField> {
         "REPLAYGAINALBUMPEAK" => TagField::Loudness(LoudnessField::AlbumPeak),
         "R128TRACKGAIN" => TagField::Loudness(LoudnessField::R128Track),
         "R128ALBUMGAIN" => TagField::Loudness(LoudnessField::R128Album),
+        "CATALOGNUMBER" | "CATALOGNO" | "CATALOG" | "LABELNO" | "CATNO" => {
+            TagField::Release(ReleaseField::CatalogNumber)
+        }
+        "RELEASECOUNTRY" | "MUSICBRAINZALBUMRELEASECOUNTRY" => {
+            TagField::Release(ReleaseField::Country)
+        }
+        "ORIGINALDATE" | "ORIGINALRELEASEDATE" => TagField::Release(ReleaseField::OriginalDate),
+        "ORIGINALYEAR" | "ORIGYEAR" => TagField::Release(ReleaseField::OriginalYear),
+        "BARCODE" | "UPC" | "EAN" => TagField::Release(ReleaseField::Barcode),
+        // Vorbis and iTunes spell the recording id "track id".
+        "MUSICBRAINZTRACKID" => TagField::MusicBrainz(MbidField::Recording),
+        "MUSICBRAINZALBUMID" => TagField::MusicBrainz(MbidField::Release),
+        "MUSICBRAINZARTISTID" => TagField::MusicBrainz(MbidField::Artist),
+        "MUSICBRAINZALBUMARTISTID" => TagField::MusicBrainz(MbidField::AlbumArtist),
         _ => return None,
     })
 }
@@ -168,6 +293,9 @@ fn id3_frame_field(id: &str) -> Option<TagField> {
         "TSRC" | "TRC" => TagField::Isrc,
         "MVNM" => TagField::Movement,
         "MVIN" => TagField::MovementNumber,
+        // ID3v2.4 original release time, v2.3 original release year.
+        "TDOR" => TagField::Release(ReleaseField::OriginalDate),
+        "TORY" | "TOR" => TagField::Release(ReleaseField::OriginalYear),
         _ => return None,
     })
 }
@@ -281,6 +409,8 @@ pub struct TagCredits {
     pub loudness: Loudness,
     track_gain_from_tag: bool,
     album_gain_from_tag: bool,
+    pub musicbrainz: MusicBrainzIds,
+    pub release: ReleaseTags,
 }
 
 /// Parses a ReplayGain gain such as `-6.40 dB` or `+1.2dB`.
@@ -328,7 +458,13 @@ impl TagCredits {
             TagField::Performer => {
                 for value in split_values(value) {
                     let (name, instrument) = split_performer(value);
-                    self.push("performer", &name, instrument);
+                    // Picard writes "Name (conductor)" and "Name (orchestra)"
+                    // into PERFORMER; those are roles, not instruments.
+                    match instrument.as_deref() {
+                        Some("conductor") => self.push("conductor", &name, None),
+                        Some("orchestra" | "ensemble") => self.push("ensemble", &name, None),
+                        _ => self.push("performer", &name, instrument),
+                    }
                 }
             }
             TagField::Label(priority) => {
@@ -392,6 +528,61 @@ impl TagCredits {
                 }
             }
             TagField::Loudness(field) => self.apply_loudness(field, value),
+            TagField::MusicBrainz(field) => {
+                let slot = match field {
+                    MbidField::Recording => &mut self.musicbrainz.recording,
+                    MbidField::Release => &mut self.musicbrainz.release,
+                    MbidField::Artist => &mut self.musicbrainz.artist,
+                    MbidField::AlbumArtist => &mut self.musicbrainz.album_artist,
+                };
+                if slot.is_none() {
+                    *slot = first_mbid(value);
+                }
+            }
+            TagField::Release(field) => {
+                let first = split_values(value).next().and_then(clean_text);
+                let release = &mut self.release;
+                match field {
+                    ReleaseField::CatalogNumber => {
+                        if release.catalog_number.is_none() {
+                            release.catalog_number =
+                                first.filter(|value| !value.eq_ignore_ascii_case("[none]"));
+                        }
+                    }
+                    ReleaseField::Country => {
+                        if release.country.is_none() {
+                            release.country = first.as_deref().and_then(normalize_country);
+                        }
+                    }
+                    ReleaseField::OriginalDate => {
+                        // A full date wins over a year read earlier.
+                        if let Some(date) = first.as_deref().and_then(normalize_tag_date)
+                            && release
+                                .original_date
+                                .as_ref()
+                                .is_none_or(|known| known.len() < date.len())
+                        {
+                            release.original_date = Some(date);
+                        }
+                    }
+                    ReleaseField::OriginalYear => {
+                        if release.original_date.is_none() {
+                            release.original_date = first
+                                .as_deref()
+                                .and_then(normalize_tag_date)
+                                .map(|date| date[..4].to_string());
+                        }
+                    }
+                    ReleaseField::Barcode => {
+                        if release.barcode.is_none() {
+                            release.barcode = first.filter(|value| {
+                                value.len() >= 8
+                                    && value.chars().all(|character| character.is_ascii_digit())
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -637,6 +828,24 @@ mod tests {
     }
 
     #[test]
+    fn performer_roles_written_as_instruments_become_roles() {
+        let mut credits = TagCredits::default();
+        credits.apply_named("PERFORMER", "Gil Evans (conductor); LSO (Orchestra)");
+        let roles = credits
+            .credits
+            .iter()
+            .map(|credit| (credit.role_key(), credit.name.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            [
+                ("conductor".to_string(), "Gil Evans"),
+                ("ensemble".to_string(), "LSO")
+            ]
+        );
+    }
+
+    #[test]
     fn duplicate_credits_collapse_by_identity() {
         let mut credits = TagCredits::default();
         credits.apply_named("COMPOSER", "Clara Composer");
@@ -675,6 +884,45 @@ mod tests {
         credits.apply_named("LABEL", "Real Label");
         credits.apply_named("PUBLISHER", "Later Publisher");
         assert_eq!(credits.label(), Some("Real Label"));
+    }
+
+    #[test]
+    fn release_facts_are_read_from_picard_and_id3_fields() {
+        let mut credits = TagCredits::default();
+        assert!(credits.apply_named("CATALOGNUMBER", "CL 1355"));
+        assert!(credits.apply_named("RELEASECOUNTRY", "us"));
+        assert!(credits.apply_named("ORIGINALYEAR", "1959"));
+        assert!(credits.apply_named("BARCODE", "074646493526"));
+        assert!(credits.apply_named("MusicBrainz Album Release Country", "GB"));
+        assert_eq!(credits.release.catalog_number.as_deref(), Some("CL 1355"));
+        assert_eq!(credits.release.country.as_deref(), Some("US"));
+        assert_eq!(credits.release.original_date.as_deref(), Some("1959"));
+        assert_eq!(credits.release.barcode.as_deref(), Some("074646493526"));
+        // A full original date replaces the year; a later year does not.
+        assert!(credits.apply_named("ORIGINALDATE", "1959-08-17"));
+        assert!(credits.apply_id3_frame("TORY", "1960"));
+        assert_eq!(credits.release.original_date.as_deref(), Some("1959-08-17"));
+
+        let mut id3 = TagCredits::default();
+        assert!(id3.apply_id3_frame("TDOR", "1957-09"));
+        assert_eq!(id3.release.original_date.as_deref(), Some("1957-09"));
+        assert!(id3.apply_named("CATALOGNUMBER", "[None]"));
+        assert_eq!(id3.release.catalog_number, None);
+        assert!(id3.apply_named("BARCODE", "n/a"));
+        assert_eq!(id3.release.barcode, None);
+    }
+
+    #[test]
+    fn tag_dates_are_reduced_to_their_known_parts() {
+        assert_eq!(normalize_tag_date("1959").as_deref(), Some("1959"));
+        assert_eq!(
+            normalize_tag_date("1959-08-17T00:00").as_deref(),
+            Some("1959-08-17")
+        );
+        assert_eq!(normalize_tag_date("1957-09").as_deref(), Some("1957-09"));
+        assert_eq!(normalize_tag_date("1957-00-00").as_deref(), Some("1957"));
+        assert_eq!(normalize_tag_date("19xx"), None);
+        assert_eq!(normalize_tag_date("0000"), None);
     }
 
     #[test]
@@ -815,5 +1063,39 @@ mod tests {
         assert_eq!(role_key("performer", Some("violin")), "performer:violin");
         assert!(role_rank("composer") < role_rank("engineer"));
         assert_eq!(role_rank("unknown"), CREDIT_ROLES.len());
+    }
+
+    #[test]
+    fn musicbrainz_ids_are_read_from_picard_tags() {
+        let mut credits = TagCredits::default();
+        assert!(credits.apply_named(
+            "MUSICBRAINZ_ALBUMID",
+            "E1BB14AE-CB3D-4582-B4BE-7ED1F558A0CB"
+        ));
+        assert!(credits.apply_named(
+            "MusicBrainz Artist Id",
+            "not-an-id; 4d0ce1d6-8462-4436-b5b9-4fa5ac8e8b35"
+        ));
+        assert!(credits.apply_named(
+            "MUSICBRAINZ_TRACKID",
+            "6d3b1a2c-0000-4000-8000-000000000001"
+        ));
+        assert!(credits.apply_named("musicbrainz_albumartistid", "garbage"));
+        // A later value never replaces the first.
+        credits.apply_named(
+            "MUSICBRAINZ_ALBUMID",
+            "00000000-0000-4000-8000-000000000000",
+        );
+        assert_eq!(
+            credits.musicbrainz.release.as_deref(),
+            Some("e1bb14ae-cb3d-4582-b4be-7ed1f558a0cb")
+        );
+        assert_eq!(
+            credits.musicbrainz.artist.as_deref(),
+            Some("4d0ce1d6-8462-4436-b5b9-4fa5ac8e8b35")
+        );
+        assert!(credits.musicbrainz.recording.is_some());
+        assert_eq!(credits.musicbrainz.album_artist, None);
+        assert!(credits.credits.is_empty());
     }
 }

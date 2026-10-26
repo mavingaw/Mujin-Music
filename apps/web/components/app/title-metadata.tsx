@@ -14,6 +14,7 @@ function routeTitle(pathname: string, query: string) {
   if (pathname === "/library") return "Library";
   if (pathname === "/album") return "Album";
   if (pathname === "/artist") return "Artist";
+  if (pathname === "/genre") return "Genres";
   if (pathname === "/profile") return "Profile";
   if (pathname === "/login") return "Log in";
   if (pathname === "/connect") return "Choose a library";

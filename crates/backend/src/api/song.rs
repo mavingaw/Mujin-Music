@@ -334,6 +334,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(get_batch_song_info)
             .service(get_random_song)
             .service(get_latest_songs)
+            .service(crate::api::works::get_song_works)
             .service(get_song_info),
     );
 }

@@ -1,13 +1,30 @@
 import {
+  chooseTextSource,
+  pageTextSources,
+  creditRoleLabel,
+  creditRolesLabel,
+  discographySections,
+  enrichmentWaitingLabel,
+  focusQueryString,
+  focusRoleLabel,
   getAlbumInfos,
+  getArtistAbout,
+  getArtistDiscography,
+  getArtistRelated,
+  qualityBadge,
+  type FocusSelection,
+  getArtistCredits,
   getArtistInfo,
+  getArtistWorks,
+  lifeSpanFacts,
   type Album,
+  type Artist,
   type LibraryAlbum,
 } from "@parson/music-sdk";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Play, Shuffle } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -19,10 +36,19 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
+import { PersonAvatar } from "@/components/person-avatar";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { BannedMark, useRadioBans } from "@/components/radio-bans";
 import { songBanned } from "@/lib/radio-queue";
+import { EditorialBlock, NoteBlock } from "@/components/credits";
+import { CompositionsSection } from "@/components/works";
+import { TextSourceChips } from "@/components/text-sources";
+import { GenreChips } from "@/components/genres";
+import { FocusBar } from "@/components/focus";
+import { RelatedPeople } from "@/components/related-people";
+import { apiUrl } from "@/lib/runtime";
+import { joinMeta } from "@/lib/credit-links";
 import { palette } from "@/constants/colors";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
@@ -31,7 +57,7 @@ import {
 } from "@/lib/press-feedback";
 
 export default function ArtistScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, tab } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
   const playback = useZonePlayback();
   const bans = useRadioBans();
@@ -39,7 +65,62 @@ export default function ArtistScreen() {
   const artist = useQuery({
     queryKey: ["artist", id],
     queryFn: () => getArtistInfo(id),
+    enabled: !!id && !id.startsWith("mb:"),
+    retry: 1,
+  });
+  const about = useQuery({
+    queryKey: ["artist-about", id],
+    queryFn: () => getArtistAbout(id),
     enabled: !!id,
+    staleTime: 60_000,
+  });
+  const [pickedSource, setPickedSource] = useState<string | null>(null);
+  const bioSources = pageTextSources(about.data).filter(
+    (source) => source.biography,
+  );
+  const bioSource = chooseTextSource(bioSources, pickedSource);
+  const biography = bioSource?.biography ?? about.data?.biography ?? null;
+  const credits = useQuery({
+    queryKey: ["artist-credits", id],
+    queryFn: () => getArtistCredits(id),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+  const [selection, setSelection] = useState<FocusSelection>({});
+  // A person opened under another of their ids moves to their one page.
+  const canonical =
+    about.data && about.data.artist_id !== id && about.data.requested_id === id
+      ? about.data.artist_id
+      : null;
+  useEffect(() => {
+    if (canonical) router.replace(`/artist/${encodeURIComponent(canonical)}`);
+  }, [canonical, router]);
+  const discography = useQuery({
+    queryKey: ["artist-discography", id, focusQueryString(selection)],
+    queryFn: () => getArtistDiscography(id, selection),
+    enabled: !!id && !canonical,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
+  const focusSections = useMemo(
+    () =>
+      discography.data ? discographySections(discography.data.albums) : null,
+    [discography.data],
+  );
+  const isComposer = Boolean(
+    about.data?.roles.some((role) => role.role === "composer"),
+  );
+  const works = useQuery({
+    queryKey: ["artist-works", id],
+    queryFn: () => getArtistWorks(id),
+    enabled: !!id && isComposer,
+    staleTime: 60_000,
+  });
+  const related = useQuery({
+    queryKey: ["artist-related", id],
+    queryFn: () => getArtistRelated(id),
+    enabled: !!id && !canonical,
+    staleTime: 60_000,
   });
   const sections = useMemo(() => {
     const data = artist.data;
@@ -103,13 +184,28 @@ export default function ArtistScreen() {
       return track ? [{ album, track }] : [];
     });
   }, [artist.data, featured.data, featuredAlbumIds]);
-  if (artist.isPending)
+  const contributor: Artist | null =
+    !artist.data && credits.data
+      ? {
+          id: credits.data.artist_id,
+          name: credits.data.name,
+          icon_url: "",
+          followers: 0,
+          albums: [],
+          featured_on_album_ids: [],
+          description: "",
+        }
+      : null;
+  if (
+    (artist.isPending && artist.fetchStatus !== "idle") ||
+    (!artist.data && credits.isPending)
+  )
     return (
       <Screen>
         <ActivityIndicator color="white" style={{ flex: 1 }} />
       </Screen>
     );
-  if (!artist.data)
+  if (!artist.data && !contributor)
     return (
       <Screen>
         <Pressable
@@ -121,7 +217,11 @@ export default function ArtistScreen() {
         </Pressable>
       </Screen>
     );
-  const data = artist.data;
+  const data = (artist.data ?? contributor) as Artist;
+  const facts = lifeSpanFacts(about.data?.facts);
+  const portrait =
+    data.icon_url || (about.data?.image ? apiUrl(about.data.image.url) : null);
+  const creditedAlbums = credits.data?.albums ?? [];
   return (
     <Screen>
       <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
@@ -138,19 +238,48 @@ export default function ArtistScreen() {
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
           <View style={styles.hero}>
-            {data.icon_url ? (
+            {portrait ? (
               <Artwork
-                path={data.icon_url}
-                rounded={70}
+                path={portrait}
+                rounded={80}
+                size={160}
+                style={styles.portrait}
+              />
+            ) : (
+              <PersonAvatar
+                name={data.name}
                 size={140}
                 style={styles.portrait}
               />
+            )}
+            {contributor ? (
+              <Text style={styles.kicker}>Contributor</Text>
             ) : null}
             <View style={styles.titleRow}>
               <Text style={styles.title}>{data.name}</Text>
               <BannedMark size={20} target={{ kind: "artist", id: data.id }} />
             </View>
-            {data.description ? (
+            {about.data?.facts ? (
+              <Text style={styles.facts}>
+                {joinMeta([
+                  about.data.facts.kind,
+                  ...facts.map((fact) => `${fact.label} ${fact.value}`),
+                ])}
+              </Text>
+            ) : null}
+            {about.data?.credited_as?.length ? (
+              <Text style={styles.facts}>
+                Also credited as {about.data.credited_as.join(", ")}
+              </Text>
+            ) : null}
+            <GenreChips centered genres={about.data?.genres} />
+            {!data.icon_url && about.data?.image ? (
+              <Text style={styles.photoCredit}>
+                Photo: {about.data.image.author}, {about.data.image.license},
+                via Wikimedia Commons
+              </Text>
+            ) : null}
+            {data.description && !about.data?.biography ? (
               <Text numberOfLines={4} style={styles.description}>
                 {data.description}
               </Text>
@@ -185,7 +314,175 @@ export default function ArtistScreen() {
               </View>
             ) : null}
           </View>
-          {sections.map((section) => (
+          {biography && tab !== "credits" ? (
+            <View style={styles.bio}>
+              <SectionTitle>Biography</SectionTitle>
+              <TextSourceChips
+                active={bioSource?.id}
+                onPick={setPickedSource}
+                sources={bioSources}
+              />
+              <EditorialBlock key={biography.url} text={biography} />
+            </View>
+          ) : null}
+          {!biography &&
+          tab !== "credits" &&
+          enrichmentWaitingLabel(about.data?.enrichment.task, "artist") ? (
+            <Text style={styles.waiting}>
+              {enrichmentWaitingLabel(about.data?.enrichment.task, "artist")}
+            </Text>
+          ) : null}
+          {works.data?.works.length ? (
+            <View>
+              <SectionTitle>Compositions</SectionTitle>
+              <CompositionsSection
+                catalogue={works.data.catalogue}
+                works={works.data.works}
+              />
+            </View>
+          ) : null}
+          {related.data && tab !== "credits" ? (
+            <RelatedPeople
+              name={about.data?.name ?? artist.data?.name ?? ""}
+              relations={related.data}
+            />
+          ) : null}
+          {creditedAlbums.length ? (
+            <View>
+              <SectionTitle>Credits</SectionTitle>
+              <Text style={styles.roles}>
+                {(credits.data?.roles ?? [])
+                  .map(
+                    (role) =>
+                      `${creditRoleLabel(role.role, role.instrument)} (${role.track_count})`,
+                  )
+                  .join(" · ")}
+              </Text>
+              <ScrollView
+                contentContainerStyle={styles.rail}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+              >
+                {creditedAlbums.map((entry) => (
+                  <Pressable
+                    accessibilityLabel={`${entry.album.name}, ${creditRolesLabel(entry.roles)}`}
+                    accessibilityRole="button"
+                    key={entry.album.id}
+                    onPress={() => router.push(`/album/${entry.album.id}`)}
+                    style={styles.card}
+                  >
+                    <Artwork
+                      path={entry.album.cover_url}
+                      size={156}
+                      rounded={9}
+                    />
+                    <Text numberOfLines={2} style={styles.albumName}>
+                      {entry.album.name}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.creditRole}>
+                      {creditRolesLabel(entry.roles)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+          {focusSections && discography.data ? (
+            <View>
+              <SectionTitle>Discography</SectionTitle>
+              <FocusBar
+                loading={discography.isFetching}
+                note={
+                  discography.data.albums.every((entry) =>
+                    entry.sources.every((source) => source === "local"),
+                  )
+                    ? "Source: every album here is a local file. Streaming albums join the Source filter once a streaming service adds them to the library."
+                    : undefined
+                }
+                onChange={setSelection}
+                selection={selection}
+                summary={discography.data.focus}
+              />
+              {discography.data.albums.length === 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setSelection({})}
+                  style={styles.emptyFocus}
+                >
+                  <Text style={styles.creditRole}>
+                    No album matches every filter · Tap to clear
+                  </Text>
+                </Pressable>
+              ) : null}
+              {focusSections.map((section) => (
+                <View key={section.key}>
+                  <Text style={styles.subsection}>{section.title}</Text>
+                  <View style={styles.grid}>
+                    {section.albums.map((entry) => {
+                      const badge = qualityBadge(entry);
+                      const roles = entry.roles
+                        .filter((role) => role !== "main")
+                        .map(focusRoleLabel)
+                        .slice(0, 2);
+                      return (
+                        <Pressable
+                          accessibilityLabel={`${entry.album.name}${badge ? `, ${badge}` : ""}`}
+                          accessibilityRole="button"
+                          key={entry.album.id}
+                          onLongPress={() =>
+                            setSelected(entry.album as unknown as Album)
+                          }
+                          onPress={() => {
+                            if (!selected)
+                              router.push(`/album/${entry.album.id}`);
+                          }}
+                          style={styles.card}
+                        >
+                          <Artwork
+                            path={entry.album.cover_url}
+                            rounded={9}
+                            size={156}
+                          />
+                          <Text numberOfLines={2} style={styles.albumName}>
+                            {entry.album.name}
+                          </Text>
+                          <Text numberOfLines={1} style={styles.creditRole}>
+                            {joinMeta([
+                              entry.artist.id !== data.id
+                                ? entry.artist.name
+                                : null,
+                              entry.year ? String(entry.year) : null,
+                            ])}
+                          </Text>
+                          <View style={styles.badges}>
+                            {badge ? (
+                              <Text
+                                style={[
+                                  styles.badge,
+                                  entry.quality === "hires" &&
+                                    styles.badgeHires,
+                                ]}
+                              >
+                                {entry.quality === "hires"
+                                  ? `HI-RES ${badge}`
+                                  : badge}
+                              </Text>
+                            ) : null}
+                            {roles.map((role) => (
+                              <Text key={role} style={styles.badge}>
+                                {role.toUpperCase()}
+                              </Text>
+                            ))}
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {(focusSections ? [] : sections).map((section) => (
             <View key={section.key}>
               <SectionTitle>{section.title}</SectionTitle>
               <View style={styles.grid}>
@@ -225,6 +522,16 @@ export default function ArtistScreen() {
               ))}
             </View>
           ) : null}
+          {about.data ? (
+            <View style={styles.bio}>
+              <SectionTitle>Your note</SectionTitle>
+              <NoteBlock
+                entityType="artist"
+                id={data.id}
+                note={about.data.note}
+              />
+            </View>
+          ) : null}
         </ScrollView>
         {selected ? (
           <AlbumActions
@@ -255,6 +562,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 5,
+  },
+  waiting: {
+    color: palette.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 18,
   },
   title: {
     color: "white",
@@ -305,6 +619,57 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 18,
   },
+  kicker: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginBottom: 6,
+    textTransform: "uppercase",
+  },
+  facts: {
+    color: palette.secondary,
+    fontSize: 13,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  photoCredit: {
+    color: palette.muted,
+    fontSize: 11,
+    marginTop: 6,
+    textAlign: "center",
+  },
+  bio: { marginBottom: 12 },
+  roles: {
+    color: palette.secondary,
+    fontSize: 13,
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  rail: { paddingHorizontal: 20, gap: 16 },
+  subsection: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "800",
+    paddingHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  emptyFocus: { paddingHorizontal: 20, paddingVertical: 16 },
+  badges: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 5 },
+  badge: {
+    color: palette.secondary,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.07)",
+  },
+  badgeHires: { color: "#fcd34d", backgroundColor: "rgba(252,211,77,0.14)" },
+  creditRole: { color: palette.muted, fontSize: 12, marginTop: 2 },
   errorState: { flex: 1, alignItems: "center", justifyContent: "center" },
   error: { color: palette.secondary },
 });

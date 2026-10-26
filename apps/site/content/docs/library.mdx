@@ -27,6 +27,67 @@ Parson uses tags first, then bounded, deterministic inference when tags are inco
 
 Track artists are the performers credited on a recording. Album artists own the release in the library. When album-artist tags are present, Parson uses them. When they are missing, it considers the artists shared across tracks in the same album folder and known aliases. Featuring credits stay attached to tracks without fragmenting the album artist unnecessarily.
 
+### Credits, biographies and reviews
+
+Composer, lyricist, arranger, conductor, performer (with instrument), ensemble, producer, remixer, mixer and engineer tags become credits. They appear on the album's **Credits** tab, under each track title ("Composed by …") and in **View credits…** on a track. Every name links to that person's **Credits** tab, which lists everything they composed, produced or played on in your library, filterable by role. People who only appear in credits get a contributor page instead of a discography.
+
+**Online metadata** (Settings → Library, off by default) adds MusicBrainz relationship credits, release facts such as label and catalog number, Wikipedia biographies, album background and critical reception, and freely licensed artist photos from Wikimedia Commons. Wikipedia text always shows its article and CC BY-SA license; reviews are the article's reception section, not a paid review service. When MusicBrainz has two artists with the same name and nothing in your tags tells them apart, Parson shows no biography rather than a wrong one. You can also keep a private note on any album or artist.
+
+**Editorial sources** (in the same settings) lists the Wikipedias Parson reads, English, German and French first. Turn each on or off and use the arrows to set the order: the first one on gives each page its main text, and the others are fetched too, so an album's review and background and an artist's biography have a **Source** switcher (English, Deutsch, Français …) that remembers your pick per page in that browser. When an album's article has a review scores table, the album page shows it under **Professional ratings**: each publication with its stars or grade (AllMusic 5/5, _The Penguin Guide to Jazz_ 4/4, _Pitchfork_ 10/10 …), credited to the article it comes from. These are the ratings Wikipedia cites, not reviews licensed from those publications.
+
+### One person, every name
+
+The same person is often credited under different names: tags may say "Q-Tip" where MusicBrainz credits "Jonathan Davis". With online metadata on, Parson learns the names MusicBrainz knows each person by (their own name, the names releases credit them as, and their aliases) and merges a tag credit into the MusicBrainz person by id or by one of those names. The album's Credits tab then lists them once ("Q-Tip, as Jonathan Davis"), their page collects every credit and album under both names, and a page opened under the other name moves to the merged one. A name two different MusicBrainz people share (Q-Tip and Korn's Jonathan Davis) is only merged on albums whose own MusicBrainz credits say who it is.
+
+### Focus on a discography
+
+Every person's **Discography** tab lists all their albums: the ones they made, conducted, appear on, composed for and produced. **Focus** narrows it with stackable filters: their own role, performer, conductor, ensemble, soloist, instrument, composer, form, period, bit depth, sample rate, quality (**Hi-Res only** means lossless at 24-bit or above 48 kHz) and source. Values in one filter widen the list and filters narrow it, so "Beethoven, conducted by Karajan, with the Philharmonia, 24-bit" is three choices on Beethoven's page, or "composer Beethoven, Philharmonia, Hi-Res only" on Karajan's. Each value shows how many albums choosing it would leave. A work's **Recordings** have the same filters. The choices stay in the page address, so a focused view can be bookmarked or shared. Ensembles are read from ensemble and orchestra tags, MusicBrainz credits, or a track artist named like an orchestra, choir or quartet. The source filter lists local files today; streaming albums join it once a streaming service adds them to the library.
+
+### Related people
+
+Every person's **Overview** ends with the people around them, each opening their own page:
+
+- **Collaborators**: the people they made music with, ranked by the releases and tracks they share in your tag and MusicBrainz credits. People who only wrote the music someone performed are not collaborators; they appear in the next two sections instead.
+- **Top performers** (for anyone whose music others record): the conductors, ensembles and soloists on the most recordings of their works, with how many recordings and works each one plays.
+- **Performing the music of**: the reverse, the composers whose works they record.
+- **Influences / Followers**: who influenced them and whom they influenced, from Wikidata's "influenced by" statements (CC0), when online metadata is on. People who are in your library link to their pages; the most notable others are looked up on MusicBrainz so their pages get a photo and biography, and the rest link to Wikidata.
+
+A person MusicBrainz credits under several names (a legal name for songwriting and a stage name for performing, for example) is one person in all of these sections and in album credits, shown under their MusicBrainz name.
+
+### Album covers
+
+An album with no artwork in its folder or tags shows the front cover of the release MusicBrainz matched (or of its release group) from the Cover Art Archive, once online metadata is on. Artwork in your files always wins and is never replaced.
+
+### Works and recordings
+
+With online metadata on, Parson also learns which **work** each track performs from MusicBrainz: the piece, its composer, form, key, catalogue number (Op. 125, BWV 1007, K. 550 …) and when it was composed, and which movement of the piece the track is. Movements of one piece are grouped under a heading in the album's track list. **Go to work** in a track's menu opens the work page, which lists every recording of it in your library with its conductor, orchestra and soloists, grouped by album, conductor or performer, and marks recordings that only include some movements. A composer's page has a **Compositions** tab with the composer's whole catalogue: every work MusicBrainz lists for them (up to 4,000, movements included), each marked with how many recordings you have or **Not in your library**, and a **Composed** year. The works Wikidata lists as the composer's notable works come first, as **Notable compositions** (also on the Overview tab), and Wikidata fills in the year, key and form of works MusicBrainz describes less fully. Switch between **All works**, **In your library** and **Notable**, and filter by form, period and key; each form lists its first works with **Show all**. Works you do not have still open a work page. When MusicBrainz links a piece to its Wikipedia article, the work page shows that article's introduction under **About**, and an album of the piece offers it as **About the work** next to the album's own review and background, so classical albums get text even when the release has no article.
+
+### Genres
+
+Parson reads genres from your files' tags (`GENRE` in FLAC and Ogg, `TCON` in MP3, `©gen` in MP4/M4A) and, with online metadata on, the genres MusicBrainz lists for the album's release group and for each artist. Every name is matched to a small genre tree with aliases, so "Bop" becomes Jazz › Bebop and "Hip-Hop", "hiphop" and "Rap" all mean Hip Hop; genres the tree does not know are kept as they are. Albums and artists show their genres as chips. Each chip opens a genre page with a description from Wikipedia (with its CC BY-SA attribution), its sub-genres and related genres, and the artists, composers and albums in your library in that genre or any genre below it. **Genres** in the sidebar lists the whole tree.
+
+In **Settings → Online metadata**, **Genres from** chooses between online genres and file tags; each falls back to the other when an album has none. An administrator can choose an album's genres by hand with **Edit** next to its genre chips; that choice wins until it is reset.
+
+Biographies, album background and reviews come straight from the Wikipedia article MusicBrainz links, or from the article whose Wikidata item MusicBrainz names; they do not wait for Wikidata, which is asked afterwards only for life dates, a photo and the article in your preferred language. An artist photo is the Wikidata image, the freely licensed Commons image MusicBrainz links, or the article's own Commons photo, in that order; photos without a free license (such as album covers uploaded under fair use) are never used. People MusicBrainz credits who have no tracks of their own in your library, such as producers, engineers and session players, are looked up by their MusicBrainz id too (up to 24 per album), so their contributor pages and credit avatars get the same biography and photo.
+
+### Identify album
+
+Albums whose tags do not name a MusicBrainz release are searched for by title and album artist. The search is forgiving: it also looks for the words of the title in any order and folds spellings together, so "Symphonien Nr. 5 & 7" finds "Symphonien nos. 5 & 7", and classical titles such as "Beethoven: Symphony No. 9" also match without the composer.
+
+Before anything from a release found this way is used, Parson checks it against your files: the number of tracks, each track's length, the year (and label) in your tags, and whether the conductor and orchestra your tags name are credited on the release. A release that does not pass, such as a 7-inch single with the album's title or a reissue of another orchestra's recording, is not applied: the album keeps its own tags, cover and credits, and its page shows an **Unverified match** notice with the closest release and the evidence for and against it. A release named in your tags, or chosen by hand, is always used.
+
+When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. Results that fit your files are marked, and choosing a release with a different number of tracks asks you to confirm first, because tracks are then paired by title. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
+
+When your files name a composer or conductor, releases that credit them are listed first, and you can show only those.
+
+### Tags or online, field by field
+
+Under **Edit album → Metadata preference** an administrator chooses, for each fact, whether the album shows its file tags or the matched MusicBrainz release: original release date, this edition's date, label, catalog number, country, barcode, cover, performers and other credits. When the chosen source has nothing, the other fills in, and the album page marks every fact with where it came from. Library-wide defaults are under **Settings → Library → Metadata preference**; out of the box, edition facts and covers come from your tags and credits add what MusicBrainz knows.
+
+Parson reads release facts that taggers such as Picard write: `CATALOGNUMBER`, `RELEASECOUNTRY`, `ORIGINALDATE` or `ORIGINALYEAR` (ID3 `TDOR`/`TORY`) and `BARCODE`. The year next to the album title is the original release, never the year of a reissue. A release found automatically may be another pressing, so its catalog number, country, barcode and edition date only appear where you choose Online for that field.
+
+Typing a value freezes it: looking the album up again, or identifying it, never changes it until you unfreeze it. The **Credits** tab has **Edit credits** to add or remove a person, change a role or instrument, or limit a credit to chosen tracks. An edited list replaces the tag and MusicBrainz credits on the album and on every person's page, and it is frozen the same way. None of this writes to your files.
+
 ### Albums and editions
 
 Albums are identified from normalized album title plus resolved album artist. Parson recognizes edition qualifiers such as deluxe, anniversary, remastered, expanded, special, collector's, limited, legacy, reissue, regional, mono/stereo, and bonus editions. It links confident variants into a release group while preserving the edition's visible title and tracks.

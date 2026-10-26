@@ -13,8 +13,11 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import {
   editAlbumMetadata,
   getAlbumInfo,
+  sourcesPatch,
+  updateAlbumSources,
   uploadAlbumCover,
   type LibraryAlbum,
+  type SourcesDraft,
 } from "@parson/music-sdk";
 import type { LibraryMetadataPatch } from "@parson/music-sdk/types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,9 +29,14 @@ import {
   validateMetadata,
 } from "./metadata-state";
 import { MetadataFields, type MetadataUpdater } from "./metadata-fields";
+import { AlbumSourcesPanel } from "./album-sources-panel";
+import { useAlbumAbout } from "./credits/use-editorial";
 import { toast } from "sonner";
 
 type Trigger = "context" | "dropdown" | "none";
+export type AlbumEditorTab = "details" | "sources";
+
+const EMPTY_DRAFT: SourcesDraft = { sources: {}, edits: {} };
 
 function editableAlbum(album: LibraryAlbum): LibraryMetadataPatch {
   return {
@@ -51,13 +59,32 @@ export default function AlbumEditor({
   albumId,
   label = "Edit album metadata",
   trigger = "dropdown",
+  open: controlledOpen,
+  onOpenChange,
+  initialTab = "details",
+  onEditCredits,
 }: {
   albumId: string;
   label?: string;
   trigger?: Trigger;
+  /** Controlled open state (with `trigger="none"`). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  initialTab?: AlbumEditorTab;
+  /** Opens the album's credits editor from the Metadata preference tab. */
+  onEditCredits?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
+  const [tab, setTab] = useState<AlbumEditorTab>(initialTab);
+  const [draft, setDraft] = useState<SourcesDraft>(EMPTY_DRAFT);
+  const aboutQuery = useAlbumAbout(open ? albumId : null);
+  const sources = aboutQuery.data?.sources;
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [coverFile, setCoverFile] = useState<File | null>(null);
@@ -79,6 +106,8 @@ export default function AlbumEditor({
     if (!open) return;
     let cancelled = false;
     original.current = null;
+    setTab(initialTab);
+    setDraft(EMPTY_DRAFT);
     setLoading(true);
     setError("");
     setShowAdvanced(false);
@@ -95,7 +124,8 @@ export default function AlbumEditor({
     return () => {
       cancelled = true;
     };
-  }, [albumId, open]);
+    // The tab to open on is read when the dialog opens.
+  }, [albumId, open, initialTab]);
 
   const update: MetadataUpdater = (section, field, value) =>
     setPatch((current) => ({
@@ -109,7 +139,8 @@ export default function AlbumEditor({
     const validationError = validateMetadata(changes);
     if (validationError) return setError(validationError);
     const metadataChanged = hasMetadataChanges(changes);
-    if (!metadataChanged && !coverFile) return setOpen(false);
+    const sourceChanges = sources ? sourcesPatch(sources.facts, draft) : null;
+    if (!metadataChanged && !coverFile && !sourceChanges) return setOpen(false);
     setSaving(true);
     setError("");
     try {
@@ -120,6 +151,7 @@ export default function AlbumEditor({
           })
         : null;
       if (coverFile) await uploadAlbumCover(albumId, coverFile);
+      if (sourceChanges) await updateAlbumSources(albumId, sourceChanges);
       if (response && !coverFile) {
         queryClient.setQueryData(["albums", albumId], response.album);
         queryClient.setQueryData(
@@ -130,6 +162,9 @@ export default function AlbumEditor({
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["albums", albumId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["album-about", albumId],
         }),
         queryClient.invalidateQueries({
           queryKey: ["library"],
@@ -145,8 +180,11 @@ export default function AlbumEditor({
         }),
       ]);
       setOpen(false);
-    } catch {
-      setError("Could not save album metadata.");
+    } catch (cause) {
+      const message =
+        (cause as { response?: { data?: { message?: string } } })?.response
+          ?.data?.message ?? null;
+      setError(message ?? "Could not save album metadata.");
     } finally {
       setSaving(false);
     }
@@ -170,10 +208,37 @@ export default function AlbumEditor({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {triggerNode}
-      <DialogContent className="grid-rows-[auto_minmax(0,1fr)] gap-5 p-6 sm:max-w-xl">
+      <DialogContent className="grid-rows-[auto_auto_minmax(0,1fr)] gap-4 p-6 sm:max-w-2xl">
         <DialogHeader className="pr-10">
           <DialogTitle className="text-base">Edit album</DialogTitle>
         </DialogHeader>
+        <div
+          aria-label="Album editor sections"
+          className="flex gap-5 border-b border-white/10"
+          role="tablist"
+        >
+          {(
+            [
+              ["details", "Details"],
+              ["sources", "Metadata preference"],
+            ] as const
+          ).map(([key, title]) => (
+            <button
+              aria-selected={tab === key}
+              className={`-mb-px border-b-2 pb-2.5 text-[13px] font-semibold transition-colors ${
+                tab === key
+                  ? "border-white text-white"
+                  : "border-transparent text-zinc-500 hover:text-zinc-200"
+              }`}
+              key={key}
+              onClick={() => setTab(key)}
+              role="tab"
+              type="button"
+            >
+              {title}
+            </button>
+          ))}
+        </div>
         <form
           className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-6"
           onSubmit={(event) => {
@@ -182,7 +247,34 @@ export default function AlbumEditor({
           }}
         >
           <div className="min-h-0 overflow-y-auto pr-1">
-            {loading ? (
+            {tab === "sources" ? (
+              sources ? (
+                <AlbumSourcesPanel
+                  draft={draft}
+                  onDraftChange={setDraft}
+                  onEditCredits={
+                    onEditCredits
+                      ? () => {
+                          setOpen(false);
+                          onEditCredits();
+                        }
+                      : undefined
+                  }
+                  sources={sources}
+                />
+              ) : (
+                <div className="flex items-center gap-2 py-10 text-sm text-zinc-500">
+                  {aboutQuery.isError ? (
+                    "This server cannot choose metadata sources yet."
+                  ) : (
+                    <>
+                      <Loader2 className="size-4 animate-spin" /> Loading
+                      sources
+                    </>
+                  )}
+                </div>
+              )
+            ) : loading ? (
               <div className="flex items-center gap-2 py-10 text-sm text-zinc-500">
                 <Loader2 className="size-4 animate-spin" /> Loading album
                 metadata

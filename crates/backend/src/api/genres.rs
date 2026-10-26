@@ -188,7 +188,7 @@ async fn songs(
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/genres")
+        crate::api::genre_pages::configure_canonical(web::scope("/genres"))
             .service(list)
             .service(popular)
             .service(albums)

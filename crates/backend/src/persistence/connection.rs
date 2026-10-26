@@ -517,6 +517,21 @@ pub fn connect() -> Result<DbPool, BoxError> {
     }
 }
 
+/// A private in-memory database with every migration applied, for tests.
+#[cfg(test)]
+pub fn migrated_memory_pool() -> DbPool {
+    let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
+    let pool = r2d2::Pool::builder()
+        .max_size(1)
+        .build(manager)
+        .expect("in-memory pool");
+    pool.get()
+        .expect("in-memory connection")
+        .run_pending_migrations(MIGRATIONS)
+        .expect("migrations");
+    Arc::new(pool)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

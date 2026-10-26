@@ -18,10 +18,18 @@ import {
 } from "@/features/library/focus/tag-submenu";
 import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
-import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
+import {
+  addSongToPlaylist,
+  getPlaylists,
+  trackWorkTarget,
+  type WorkSummary,
+} from "@parson/music-sdk";
+import { useSongWorks } from "@/features/library/works/use-works";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Disc3,
+  Info,
+  Music2,
   ListEnd,
   ListPlus,
   Loader2,
@@ -54,6 +62,11 @@ type SongMenuProps = {
   context?: SongMenuContext;
   onRemoveFromPlaylist?: () => void;
   removeFromPlaylistLabel?: string;
+  /** Shows "View credits…" when the caller can show the track's credits. */
+  onViewCredits?: () => void;
+  /** The piece the track performs, when the caller already knows it.
+   * Left undefined, the menu looks it up when it opens. */
+  work?: WorkSummary | null;
 };
 
 export default function SongMenu({
@@ -68,6 +81,8 @@ export default function SongMenu({
   context = "default",
   onRemoveFromPlaylist,
   removeFromPlaylistLabel = "Remove from playlist",
+  onViewCredits,
+  work,
 }: SongMenuProps) {
   const playback = useZonePlayback();
   const startRadio = useStartRadio();
@@ -76,6 +91,8 @@ export default function SongMenu({
   const [createOpen, setCreateOpen] = useState(false);
   const [createTagOpen, setCreateTagOpen] = useState(false);
   const entityLinks = songMenuEntityLinkVisibility(context);
+  const songWorks = useSongWorks(song_id, open && work === undefined);
+  const piece = work === undefined ? trackWorkTarget(songWorks.data) : work;
   const playlists = useQuery({
     queryKey: ["playlists"],
     queryFn: getPlaylists,
@@ -214,8 +231,23 @@ export default function SongMenu({
               onCreateTag={() => setCreateTagOpen(true)}
             />
           )}
-          {(entityLinks.album || entityLinks.artist) && (
-            <ContextMenuSeparator />
+          {(entityLinks.album ||
+            entityLinks.artist ||
+            onViewCredits ||
+            piece) && <ContextMenuSeparator />}
+          {onViewCredits && (
+            <ContextMenuItem onSelect={onViewCredits}>
+              <Info className="h-4 w-4" />
+              View credits…
+            </ContextMenuItem>
+          )}
+          {piece && (
+            <ContextMenuItem asChild>
+              <Link href={`/work?id=${encodeURIComponent(piece.mbid)}`}>
+                <Music2 className="h-4 w-4" />
+                <span className="truncate">Go to work</span>
+              </Link>
+            </ContextMenuItem>
           )}
           {entityLinks.album && (
             <ContextMenuItem asChild>

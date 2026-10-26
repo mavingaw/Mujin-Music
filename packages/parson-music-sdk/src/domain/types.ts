@@ -389,3 +389,805 @@ export interface Relationship {
   end: string;
   url: string;
 }
+
+/** Where a credit came from: file tags or an external source such as MusicBrainz. */
+export type CreditSource = "tags" | "musicbrainz" | "edited" | (string & {});
+
+/**
+ * A credit on an album page, merged across tags and external sources.
+ * `artist_id` is a local artist id, `mb:<MusicBrainz id>` for a person only
+ * known from MusicBrainz, or `null` when the person cannot be browsed.
+ * An empty `track_ids` list means the credit applies to the whole release.
+ */
+export interface AboutCredit {
+  artist_id: string | null;
+  name: string;
+  /** Other names the sources credit this person under ("Jonathan Davis"
+   * for Q-Tip). Older servers leave this out. */
+  credited_as?: string[];
+  role: CreditRole | (string & {});
+  instrument: string | null;
+  track_ids: string[];
+  sources: CreditSource[];
+  /** The person's cached photo, relative to the API base
+   * (`/artists/{id}/image`), when there is one. */
+  image_url?: string | null;
+}
+
+/** Licensed text (Wikipedia, CC BY-SA 4.0) stored with its attribution. */
+export interface EditorialText {
+  kind: "biography" | "background" | "reception";
+  source: "wikipedia" | (string & {});
+  language: string;
+  /** Article title. */
+  title: string;
+  body: string;
+  /** Article URL. */
+  url: string;
+  license: string;
+  license_url: string;
+}
+
+export interface EditorialImage {
+  /** Server path relative to the API base, e.g. `/artists/{id}/image`. */
+  url: string;
+  author: string;
+  license: string;
+  license_url: string | null;
+  page_url: string;
+}
+
+export interface ExternalLink {
+  provider: "musicbrainz" | "wikidata" | (string & {});
+  url: string;
+}
+
+/** A private note the signed-in user wrote about an album or artist. */
+export interface UserNote {
+  body: string;
+  updated_at: string;
+}
+
+/** The lookup stages; each has its own queue and back-off. */
+export type EnrichmentStage =
+  | "musicbrainz"
+  | "wikidata"
+  | "wikipedia"
+  | "commons"
+  | "relations"
+  | "coverart"
+  /** A composer's whole MusicBrainz catalogue with Wikidata's notable works. */
+  | "catalogue"
+  /** The same article in the other editorial sources turned on. */
+  | "sources";
+
+export interface EnrichmentTaskState {
+  status: "pending" | "done" | "skipped" | "failed" | (string & {});
+  last_error: string | null;
+  updated_at: string;
+  /** The stage still at work, so a page can say what it waits for. */
+  stage?: EnrichmentStage | (string & {});
+}
+
+export interface EnrichmentStageStatus {
+  stage: EnrichmentStage;
+  host: string;
+  counts: { pending: number; done: number; skipped: number; failed: number };
+  /** Seconds until a busy host is asked again; 0 when it is not paused. */
+  paused_seconds: number;
+}
+
+export interface EnrichmentStatus {
+  /** Whether an administrator turned on online metadata enrichment. */
+  enabled: boolean;
+  task: EnrichmentTaskState | null;
+}
+
+export interface AlbumReleaseFacts {
+  /**
+   * Whether the matched MusicBrainz release is known to be this exact
+   * edition (tagged id or identical track list). Edition facts such as
+   * `date`, `country`, `barcode` and catalog numbers only apply when true.
+   */
+  exact?: boolean;
+  date?: string | null;
+  first_release_date?: string | null;
+  country?: string | null;
+  barcode?: string | null;
+  release_type?: string | null;
+  labels?: { name: string; catalog_number: string | null }[];
+}
+
+/** One editorial text source a page can switch to: the same article in
+ * another Wikipedia, like Roon's source list under an album review. */
+export interface TextSource {
+  /** `wikipedia:<language>`. */
+  id: string;
+  /** "English Wikipedia", "German Wikipedia", ... */
+  name: string;
+  language: string;
+  /** The highest source in the administrator's priority list with text. */
+  preferred: boolean;
+  biography: EditorialText | null;
+  background: EditorialText | null;
+  review: EditorialText | null;
+}
+
+/** One publication's rating from an article's "Review scores" table. */
+export interface ReviewScore {
+  publication: string;
+  /** As printed: "5/5", "A+", "10/10". */
+  rating: string;
+  score: number | null;
+  max: number | null;
+}
+
+/** The review scores table of an album article, with its attribution. */
+export interface ReviewScores {
+  scores: ReviewScore[];
+  title: string;
+  url: string;
+  language: string;
+  license: string;
+  license_url: string;
+}
+
+export interface AlbumAbout {
+  album_id: string;
+  credits: AboutCredit[];
+  /** The Wikipedia article lead about the album. */
+  background: EditorialText | null;
+  /** The Wikipedia article's critical reception section. */
+  review: EditorialText | null;
+  facts: AlbumReleaseFacts | null;
+  links: ExternalLink[];
+  note: UserNote | null;
+  enrichment: EnrichmentStatus;
+  /** The work (and the piece it belongs to) each track performs. */
+  works?: TrackWork[];
+  /** The release an administrator chose with "Identify album". */
+  identification?: AlbumIdentification | null;
+  /** Canonical genres from tags, MusicBrainz or an edit; older servers leave this out. */
+  genres?: GenreRef[];
+  /** Whether an administrator chose the genres by hand. */
+  genres_edited?: boolean;
+  /**
+   * About the pieces on the album, from their own Wikipedia articles (what
+   * a classical album shows when the release has no article). Older
+   * servers leave this out.
+   */
+  work_texts?: WorkText[];
+  /** The match check behind the MusicBrainz release; older servers leave this out. */
+  release_match?: ReleaseMatchCheck | null;
+  /**
+   * Each fact with its source (file tags, the online release or a frozen
+   * edit), the album's own choices and the library defaults. Older servers
+   * leave this out.
+   */
+  sources?: AlbumSources;
+  /** Every editorial source with text about the album, in priority order;
+   * older servers leave this out. */
+  text_sources?: TextSource[];
+  /** Publications' ratings from the article's review scores table. */
+  review_scores?: ReviewScores | null;
+}
+
+/** Where an album fact comes from. */
+export type FactSource = "tags" | "online";
+
+/** The album facts a person can choose a source for. */
+export type AlbumField =
+  | "original_date"
+  | "release_date"
+  | "label"
+  | "catalog_number"
+  | "country"
+  | "barcode"
+  | "cover"
+  | "performers"
+  | "credits";
+
+/** One album fact with both candidates and the one shown. */
+export interface ResolvedFact {
+  field: AlbumField;
+  /** What the album shows. */
+  value: string | null;
+  /** `edited` (frozen), `tags` or `online`; null when nothing is known. */
+  source: "edited" | FactSource | null;
+  /** The source this album prefers: its own choice or the library default. */
+  preferred: FactSource;
+  /** This album's own choice; null follows the library default. */
+  choice: FactSource | null;
+  library_default: FactSource;
+  tags: string | null;
+  online: string | null;
+  /** The value a person typed. While set, lookups never change the field. */
+  edited: string | null;
+  /** The preferred source had nothing, so the other one filled in. */
+  fallback: boolean;
+}
+
+/** The library-wide default source per field. */
+export type FieldSources = Record<AlbumField, FactSource>;
+
+/** A credit in an edited credits list; no tracks means the whole album. */
+export interface EditedCredit {
+  name: string;
+  role: CreditRole | (string & {});
+  instrument?: string | null;
+  track_ids: string[];
+  /** The linked person (a library artist or `mb:<id>`), when known. */
+  artist_id?: string | null;
+}
+
+export interface AlbumSources {
+  facts: ResolvedFact[];
+  /** The year the hero shows: the original release, not this edition. */
+  hero_year: string | null;
+  /** A person edited the credits list; it is frozen until reverted. */
+  credits_edited: boolean;
+  edited_credits: EditedCredit[] | null;
+  /** A verified online release backs the Online values. */
+  online_release: boolean;
+  /** The online release is this exact edition, so it has edition facts. */
+  online_edition: boolean;
+  /**
+   * The release was found automatically, so its pressing is a guess: its
+   * edition facts never fill in for missing tags. Older servers leave this
+   * out.
+   */
+  edition_guessed?: boolean;
+  library: FieldSources;
+}
+
+/** Changes to an album's sources: `null` restores the default or unfreezes. */
+export interface AlbumSourcesPatch {
+  sources?: Partial<Record<AlbumField, FactSource | null>>;
+  edits?: Partial<Record<AlbumField, string | null>>;
+}
+
+/** A piece on an album and its Wikipedia About text. */
+export interface WorkText {
+  work_mbid: string;
+  title: string;
+  text: EditorialText;
+}
+
+/** Where a genre came from. */
+export type GenreOrigin = "tags" | "musicbrainz" | "user";
+
+/** Which genres albums and artists show; each falls back to the other. */
+export type GenreSource = "online" | "tags";
+
+/** A genre on an album or artist, normalised into the canonical tree. */
+export interface GenreRef {
+  /** Canonical slug, or a slug made from the name for unknown genres. */
+  slug: string;
+  name: string;
+  /** Ancestor names from the top-level genre down ("Jazz" for Hard Bop). */
+  path: string[];
+  /** Whether the genre is part of the canonical tree. */
+  canonical: boolean;
+  sources: (GenreOrigin | (string & {}))[];
+  /** The raw names that were normalised to this genre. */
+  raw_names: string[];
+}
+
+export interface GenreLink {
+  slug: string;
+  name: string;
+}
+
+export interface GenreCount extends GenreLink {
+  album_count: number;
+}
+
+export interface GenreTreeNode extends GenreCount {
+  children: GenreTreeNode[];
+}
+
+/** The library's genres as a tree, with album counts. */
+export interface GenreTree {
+  genres: GenreTreeNode[];
+  /** Genres the canonical tree does not know. */
+  other: GenreCount[];
+  source: GenreSource;
+  /** Every canonical genre, for choosing genres when editing an album. */
+  catalog?: { slug: string; name: string; parent: string | null }[];
+}
+
+export interface GenreAlbum {
+  id: string;
+  name: string;
+  cover_url: string;
+  year: string | null;
+  artist_id: string;
+  artist_name: string;
+  genres: GenreLink[];
+}
+
+export interface GenrePerson {
+  artist_id: string;
+  name: string;
+  /** The library's artist picture. */
+  icon_url: string | null;
+  /** API path of a cached Wikimedia Commons photo. */
+  image_url: string | null;
+  album_count: number;
+  track_count: number;
+}
+
+/** A genre page: About text, sub-genres and the library's music in it. */
+export interface GenreDetails {
+  slug: string;
+  name: string;
+  canonical: boolean;
+  path: GenreLink[];
+  children: GenreCount[];
+  related: GenreCount[];
+  /** The Wikipedia article lead, with CC BY-SA attribution. */
+  about: EditorialText | null;
+  links: ExternalLink[];
+  enrichment: EnrichmentStatus;
+  album_count: number;
+  albums: GenreAlbum[];
+  artists: GenrePerson[];
+  composers: GenrePerson[];
+  source: GenreSource;
+}
+
+export interface AlbumGenres {
+  album_id: string;
+  genres: GenreRef[];
+  edited: boolean;
+}
+
+export interface ArtistFacts {
+  name?: string | null;
+  /** `Person`, `Group`, `Orchestra`, `Choir`, ... */
+  kind?: string | null;
+  area?: string | null;
+  begin_area?: string | null;
+  /** Born or formed. */
+  begin?: string | null;
+  /** Died or disbanded. */
+  end?: string | null;
+  disambiguation?: string | null;
+}
+
+export interface CreditRoleSummary {
+  role: CreditRole | (string & {});
+  instrument: string | null;
+  track_count: number;
+  album_count: number;
+}
+
+export interface ArtistAbout {
+  /** The person's canonical id: a page opened under another of their ids
+   * (a second spelling, their MusicBrainz id) answers for this one. */
+  artist_id: string;
+  /** The id the page was opened with. Older servers leave this out. */
+  requested_id?: string;
+  /** Other names the person is credited under in this library. */
+  credited_as?: string[];
+  name: string;
+  biography: EditorialText | null;
+  image: EditorialImage | null;
+  facts: ArtistFacts | null;
+  links: ExternalLink[];
+  /** Contributor roles across the library (composer on 12 tracks, ...). */
+  roles: CreditRoleSummary[];
+  note: UserNote | null;
+  enrichment: EnrichmentStatus;
+  /** The artist's genres, or those of the albums they are credited on. */
+  genres?: GenreRef[];
+  /** Every editorial source with a biography, in priority order; older
+   * servers leave this out. */
+  text_sources?: TextSource[];
+}
+
+export interface CreditRoleRef {
+  role: CreditRole | (string & {});
+  instrument: string | null;
+}
+
+export interface CreditedAlbum {
+  album: Album;
+  artist: Artist;
+  roles: CreditRoleRef[];
+  /** Credited tracks on the album; empty for a release-wide credit. */
+  track_ids: string[];
+}
+
+export interface CreditedSong {
+  song: LibrarySong;
+  roles: CreditRoleRef[];
+}
+
+/** Everything a person is credited on, for linked credit browsing. */
+export interface ArtistCredits {
+  artist_id: string;
+  name: string;
+  /** Whether the person also has their own albums in the library. */
+  has_discography: boolean;
+  roles: CreditRoleSummary[];
+  albums: CreditedAlbum[];
+  songs: CreditedSong[];
+}
+
+export interface EnrichmentSettings {
+  enabled: boolean;
+  language: string;
+  artist_images: boolean;
+  /** Genres from MusicBrainz or from file tags; older servers leave this out. */
+  genre_source?: GenreSource;
+  /**
+   * Editorial text sources in priority order, each on or off (Roon's
+   * "Editorial sources"). The first one on is the main source. Older
+   * servers leave this out.
+   */
+  editorial_sources?: EditorialSource[];
+}
+
+/** One editorial text source and whether it is used. */
+export interface EditorialSource {
+  /** `wikipedia:<language>`, e.g. `wikipedia:de`. */
+  id: string;
+  enabled: boolean;
+}
+
+export interface EnrichmentOverview extends EnrichmentSettings {
+  counts: { pending: number; done: number; skipped: number; failed: number };
+  /** Hosts enrichment contacts when enabled. */
+  sources: string[];
+  /** Each stage's queue; older servers leave this out. */
+  stages?: EnrichmentStageStatus[];
+}
+
+/** A person on a work or recording. `artist_id` is a local artist id,
+ * `mb:<MusicBrainz id>` for someone only known from MusicBrainz, or null. */
+export interface PersonRef {
+  artist_id: string | null;
+  name: string;
+  instrument?: string | null;
+}
+
+/** A composition, keyed by its MusicBrainz work id. */
+export interface WorkSummary {
+  mbid: string;
+  title: string;
+  /** Form or MusicBrainz work type: Symphony, Sonata, Song, ... */
+  form: string | null;
+  key: string | null;
+  /** Catalogue number such as "Op. 125" or "BWV 1007". */
+  catalogue: string | null;
+  /** Year or range composed, e.g. "1822–1824". */
+  composed: string | null;
+  /** Style period from the composition year: Baroque, Classical, ... */
+  period: string | null;
+  composer: PersonRef | null;
+  language: string | null;
+  parent_mbid: string | null;
+  part_position: number | null;
+}
+
+/** A track's work; `parent` is the piece a movement belongs to. */
+export interface TrackWork {
+  track_id: string;
+  work: WorkSummary;
+  parent: WorkSummary | null;
+  /** The movement title under the piece's heading, e.g. "IV. Presto". */
+  part_title: string;
+}
+
+export interface RecordingTrack {
+  song: LibrarySong;
+  work_mbid: string;
+  part_title: string;
+  part_position: number | null;
+}
+
+/** One album's recording of a work. */
+export interface WorkRecording {
+  album: Album;
+  artist: Artist;
+  year: number | null;
+  conductors: PersonRef[];
+  ensembles: PersonRef[];
+  soloists: PersonRef[];
+  /** Track artists not already named as conductor, ensemble or soloist. */
+  artists: PersonRef[];
+  tracks: RecordingTrack[];
+  /** Every known movement of the work is on the album. */
+  complete: boolean;
+  duration: number;
+}
+
+export interface WorkPage {
+  work: WorkSummary;
+  parent: WorkSummary | null;
+  /** Movements with at least one recording in the library. */
+  parts: WorkSummary[];
+  /** The recordings the Focus selection keeps (all without one). */
+  recordings: WorkRecording[];
+  /** Focus chips over every recording. Older servers leave this out. */
+  focus?: FocusSummary;
+  /** The work on MusicBrainz. */
+  url: string;
+  /**
+   * About the work from the Wikipedia article MusicBrainz links (a
+   * movement shows its piece's text). Older servers leave this out.
+   */
+  about?: EditorialText | null;
+}
+
+export interface ComposerWork {
+  work: WorkSummary;
+  /** Library tracks performing the work; 0 for a catalogue work you do not have. */
+  track_count: number;
+  /** Library albums with a recording of the work. */
+  recording_count: number;
+  /** Position among the composer's notable works (Wikidata), or null. */
+  notable_rank?: number | null;
+  /** Whether the work came from the composer's MusicBrainz catalogue. */
+  in_catalogue?: boolean;
+  wikidata_id?: string | null;
+}
+
+/** Where a composer's full catalogue stands. */
+export interface CatalogueSummary {
+  /** `ready`, `pending` (being read), `failed`, `none` (MusicBrainz lists
+   * nothing) or `off` (online metadata is off). */
+  state: "ready" | "pending" | "failed" | "none" | "off" | (string & {});
+  composer_mbid: string | null;
+  /** Works MusicBrainz lists, movements included. */
+  musicbrainz_total: number;
+  /** Pieces in the catalogue; movements are listed under their piece. */
+  pieces: number;
+  in_library: number;
+  notable: number;
+  /** False when the composer has more works than Parson reads. */
+  complete: boolean;
+  musicbrainz_url: string | null;
+  wikidata_url: string | null;
+  updated_at: string | null;
+}
+
+export interface ComposerWorks {
+  artist_id: string;
+  name: string | null;
+  /** The library's works and the composer's whole catalogue. */
+  works: ComposerWork[];
+  /** Older servers leave this out. */
+  catalogue?: CatalogueSummary;
+}
+
+export interface AlbumIdentification {
+  release_mbid: string;
+  release_title: string;
+  release_artist: string;
+  created_at: string;
+}
+
+/** A MusicBrainz release offered by "Identify album". */
+export interface ReleaseMatch {
+  mbid: string;
+  title: string;
+  artist: string;
+  date: string | null;
+  country: string | null;
+  track_count: number | null;
+  labels: string[];
+  catalog_numbers: string[];
+  format: string | null;
+  release_type: string | null;
+  disambiguation: string | null;
+  score: number;
+  same_track_count: boolean;
+  /**
+   * The release's track count is known and differs from the album's.
+   * Choosing it pairs tracks by title, so some may get the wrong credits or
+   * piece. Older servers leave this out.
+   */
+  track_count_differs?: boolean;
+  /** How well the release fits the album's files. Older servers leave this out. */
+  fit?: "likely" | "possible" | "unlikely";
+  /** The release automatic matching found and rejected. */
+  suggested?: boolean;
+  url: string;
+  /** Every name in the release's artist credit. Older servers leave this out. */
+  artist_names?: string[];
+  /** The release credits a composer tagged on the files. */
+  credits_tagged_composer?: boolean;
+  /** The release credits a conductor tagged on the files. */
+  credits_tagged_conductor?: boolean;
+}
+
+/** One piece of evidence for or against a MusicBrainz release. */
+export interface ReleaseMatchSignal {
+  key:
+    | "tracks"
+    | "lengths"
+    | "year"
+    | "label"
+    | "conductor"
+    | "ensemble"
+    | (string & {});
+  outcome: "match" | "partial" | "mismatch" | "unknown";
+  points: number;
+  /** A sentence a person can check. */
+  detail: string;
+}
+
+/**
+ * The match check behind an album's MusicBrainz release. A release found
+ * automatically is only applied when it passes; an `unverified` one is a
+ * suggestion, and the album keeps its file-tag data.
+ */
+export interface ReleaseMatchCheck {
+  status: "verified" | "unverified";
+  method: "automatic" | "tagged" | "identified";
+  release_mbid: string;
+  release_title: string;
+  release_artist: string;
+  url: string;
+  score: number;
+  threshold: number;
+  /** Whether the evidence passed (a tagged or chosen release is used either way). */
+  passed?: boolean;
+  release_date?: string | null;
+  first_release_date?: string | null;
+  release_type?: string | null;
+  release_track_count?: number;
+  local_track_count?: number;
+  signals?: ReleaseMatchSignal[];
+}
+
+export interface IdentifySearch {
+  album_id: string;
+  /** The MusicBrainz search that ran. */
+  query: string;
+  title: string;
+  artist: string;
+  local_track_count: number;
+  identification: AlbumIdentification | null;
+  releases: ReleaseMatch[];
+  /** Composers tagged on the files; releases crediting them come first. */
+  tagged_composers?: string[];
+  /** Conductors tagged on the files; releases crediting them come first. */
+  tagged_conductors?: string[];
+}
+
+/** A Focus facet group. */
+export type FocusGroupKey =
+  | "role"
+  | "performer"
+  | "conductor"
+  | "ensemble"
+  | "soloist"
+  | "instrument"
+  | "composer"
+  | "form"
+  | "period"
+  | "quality"
+  | "bit_depth"
+  | "sample_rate"
+  | "source";
+
+/** One value of a Focus group, with how many albums choosing it shows. */
+export interface FocusChip {
+  /** A person's id, `name:<name>` for someone with no page, or a value
+   * such as `24`, `96000`, `hires`, `local`, `symphony`. */
+  key: string;
+  label: string;
+  artist_id?: string | null;
+  count: number;
+  selected: boolean;
+}
+
+export interface FocusGroup {
+  key: FocusGroupKey;
+  label: string;
+  values: FocusChip[];
+}
+
+export interface FocusSummary {
+  /** Albums or recordings before filtering. */
+  total: number;
+  /** Albums or recordings the selection keeps. */
+  matched: number;
+  /** Groups with a value that narrows or is chosen. */
+  groups: FocusGroup[];
+  /** Chosen values, keyed `group=value`, including any nothing has. */
+  selected: FocusChip[];
+}
+
+/** An album on a person's discography. */
+export interface DiscographyFocusAlbum {
+  album: Album;
+  artist: Artist;
+  year: number | null;
+  /** The person's roles: `main`, `featured`, or a credit role. */
+  roles: string[];
+  conductors: PersonRef[];
+  ensembles: PersonRef[];
+  /** The best format on the album, e.g. "FLAC 24-bit / 96 kHz". */
+  format: string | null;
+  quality: "hires" | "lossless" | "lossy" | null;
+  sources: string[];
+}
+
+/** Everything a person made, appears on, conducted, composed or is
+ * credited on, filtered by a Focus selection. */
+export interface PersonDiscography {
+  /** The person's canonical id. */
+  artist_id: string;
+  requested_id: string;
+  name: string;
+  /** Other names the person is credited under. */
+  credited_as: string[];
+  albums: DiscographyFocusAlbum[];
+  focus: FocusSummary;
+}
+
+/** An album two related people share. */
+export interface RelatedAlbum {
+  id: string;
+  name: string;
+  cover_url: string;
+}
+
+/** A person related to another through the music in the library. */
+export interface RelatedPerson {
+  /** Their page, or null when only a name is known. */
+  artist_id: string | null;
+  name: string;
+  /** Their stored photo (an API path), when there is one. */
+  image_url: string | null;
+  /** Instruments and roles on the shared music, most frequent first. */
+  roles: string[];
+  /** For top performers: what they are on the recordings. */
+  kind?: "conductor" | "ensemble" | "soloist" | "artist";
+  album_count: number;
+  track_count: number;
+  /** Distinct works (or tracks, without work links) connecting them. */
+  work_count: number;
+  /** Up to three shared albums. */
+  albums: RelatedAlbum[];
+}
+
+/** Someone Wikidata relates to the person by influence. */
+export interface InfluencePerson {
+  artist_id: string | null;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  /** Whether they have music in this library. */
+  in_library: boolean;
+  wikidata_url: string;
+}
+
+/** The related-people graph on a person page. */
+export interface PersonRelations {
+  artist_id: string;
+  requested_id: string;
+  /** People who made music with the person, by shared releases. */
+  collaborators: RelatedPerson[];
+  /** Conductors, ensembles and soloists on the most recordings of the
+   * person's works. */
+  top_performers: RelatedPerson[];
+  /** Composers whose works the person records. */
+  performing_the_music_of: RelatedPerson[];
+  /** Who influenced the person (Wikidata P737). */
+  influences: InfluencePerson[];
+  /** Whom the person influenced. */
+  followers: InfluencePerson[];
+  influence_source: {
+    source: string;
+    url: string;
+    license: string;
+    license_url: string;
+  } | null;
+  /** Whether online metadata, and so influences, is on. */
+  enrichment_enabled: boolean;
+}
