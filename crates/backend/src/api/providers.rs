@@ -1091,7 +1091,9 @@ async fn check_connection(
 }
 
 /// The format the listener's latest stream of this track actually
-/// delivered, read from its bytes by the media proxy.
+/// delivered, read from its bytes by the media proxy. With `?play=`, only
+/// that play's report: a player asking about the stream it is playing
+/// never gets an earlier stream's format.
 #[get("/{provider}/tracks/{id}/delivery")]
 async fn stream_delivery(
     request: HttpRequest,
@@ -1105,7 +1107,12 @@ async fn stream_delivery(
     let Some((provider, raw)) = provider_and_raw(&path.0, &path.1) else {
         return unknown_provider();
     };
-    match hub.delivery(user_id, &entity_id(provider, &raw)) {
+    let track_id = entity_id(provider, &raw);
+    let found = match play_id(request.query_string()) {
+        Some(play) => hub.play_delivery(user_id, &track_id, &play),
+        None => hub.delivery(user_id, &track_id),
+    };
+    match found {
         Some(delivery) => HttpResponse::Ok().json(delivery),
         None => json_error(
             StatusCode::NOT_FOUND,
@@ -1218,6 +1225,7 @@ pub async fn stream_provider_track(
         return hub_error_response(HubError::Provider(ProviderError::NotConnected));
     };
     let track_id = entity_id(provider, &raw_id);
+    let play = play_id(request.query_string());
     let stream = match hub
         .resolve_stream(user_id, provider, raw_id, bitrate > 0)
         .await
@@ -1236,7 +1244,7 @@ pub async fn stream_provider_track(
             let body = sandbox::preview_wav(*seed, *seconds, stream.requested);
             if probe_this {
                 let probed = probe::probe(&body[..body.len().min(probe::PROBE_BYTES)]);
-                hub.record_delivery(user_id, track_id, &stream, probed);
+                hub.record_play(user_id, track_id, play, &stream, probed, None);
             }
             let mut response = serve_bytes(request, body, "audio/wav");
             for (name, value) in [
@@ -1283,7 +1291,7 @@ pub async fn stream_provider_track(
                 recorded(
                     hub.clone(),
                     user_id,
-                    track_id,
+                    (track_id, play),
                     stream.clone(),
                     response.body,
                 )
@@ -1320,7 +1328,7 @@ pub async fn stream_provider_track(
                 let body = recorded(
                     hub.clone(),
                     user_id,
-                    track_id,
+                    (track_id, play),
                     stream.clone(),
                     media::segmented(hub.media(), urls),
                 );
@@ -1355,7 +1363,7 @@ pub async fn stream_provider_track(
             builder.no_chunking(length);
             let body = media::pieces(hub.media(), index.plan(&urls, start, end));
             let body = if probe_this {
-                recorded(hub.clone(), user_id, track_id, stream.clone(), body)
+                recorded(hub.clone(), user_id, (track_id, play), stream.clone(), body)
             } else {
                 body
             };
@@ -1364,20 +1372,30 @@ pub async fn stream_provider_track(
     }
 }
 
+/// The player's id for one play, from a stream URL's `play` parameter.
+fn play_id(query: &str) -> Option<String> {
+    web::Query::<std::collections::HashMap<String, String>>::from_query(query)
+        .ok()?
+        .into_inner()
+        .remove("play")
+        .filter(|value| valid_raw_id(value))
+}
+
 /// Reads the delivered format from the bytes as they pass through.
 fn recorded(
     hub: web::Data<StreamingHub>,
     user_id: i32,
-    track_id: String,
+    (track_id, play): (String, Option<String>),
     stream: ResolvedStream,
     body: media::MediaBody,
 ) -> media::MediaBody {
     media::tap(body, move |probed| {
-        let delivery = hub.record_delivery(user_id, track_id, &stream, probed);
+        let delivery = hub.record_play(user_id, track_id, play, &stream, probed, None);
         if !delivery.matches_announced {
             tracing::info!(
                 track = delivery.track_id,
                 announced = delivery.announced.label,
+                mismatches = ?delivery.mismatches,
                 delivered = delivery
                     .delivered
                     .as_ref()
@@ -2869,7 +2887,8 @@ mod tests {
     #[actix_web::test]
     async fn connection_check_signs_in_syncs_favorites_and_reads_a_stream() {
         let pool = pool();
-        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, HIRES_192_FLAC.to_vec()));
+        let media =
+            Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, stated_length(HIRES_192_FLAC, 274)));
         let hub = signed_in_app_state(&pool).await.with_media(media.clone());
         let data = web::Data::new(hub);
         let app = app_as!(data, 1, "user");
@@ -2899,6 +2918,15 @@ mod tests {
             steps[2]["detail"]
                 .as_str()
                 .is_some_and(|detail| detail.contains("first audio frame verified"))
+        );
+        // The whole track arrived: the header states the catalog length.
+        assert_eq!(check["delivery"]["full_length"], true, "{check}");
+        assert_eq!(check["delivery"]["track_seconds"], 274.0);
+        assert!(
+            steps[2]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("full length (4:34)")),
+            "{check}"
         );
         // The check reads only the start of the stream.
         assert_eq!(
@@ -3016,6 +3044,85 @@ mod tests {
         hub
     }
 
+    /// Stamps a FLAC file's `STREAMINFO` with a total length, the way an
+    /// encoder writes it for a whole track.
+    fn stated_length(file: &[u8], seconds: u64) -> Vec<u8> {
+        let mut file = file.to_vec();
+        // "fLaC", the block header, then STREAMINFO: the rate is in bytes
+        // 10-12 and the 36-bit sample count in bytes 13-17.
+        let info = 8;
+        let rate = (u64::from(file[info + 10]) << 12)
+            | (u64::from(file[info + 11]) << 4)
+            | (u64::from(file[info + 12]) >> 4);
+        let samples = seconds * rate;
+        file[info + 13] = (file[info + 13] & 0xf0) | ((samples >> 32) as u8 & 0x0f);
+        file[info + 14..info + 18].copy_from_slice(&(samples as u32).to_be_bytes());
+        file
+    }
+
+    #[actix_web::test]
+    async fn tidal_signs_in_headlessly_with_a_refresh_token() {
+        let pool = pool();
+        let (hub, transport) = hub(pool, false);
+        hub.save_credentials(1, ProviderId::Tidal, Some("client".into()), None, false)
+            .await
+            .expect("tidal credentials");
+        assert!(matches!(
+            hub.tidal_sign_in_with_refresh_token(1, "  ").await,
+            Err(crate::providers::hub::HubError::Invalid(_))
+        ));
+        let status = hub
+            .tidal_sign_in_with_refresh_token(1, "recorded-refresh-token")
+            .await
+            .expect("signed in");
+        assert_eq!(
+            status.status,
+            crate::providers::store::AccountStatus::SignedIn
+        );
+        let refresh = transport
+            .requests()
+            .into_iter()
+            .find(|request| request.form_value("grant_type") == Some("refresh_token"))
+            .expect("refresh request");
+        assert_eq!(
+            refresh.form_value("refresh_token"),
+            Some("recorded-refresh-token")
+        );
+        // The session works: favorites sync through it.
+        hub.sync_library(1, ProviderId::Tidal).await.expect("sync");
+    }
+
+    #[actix_web::test]
+    async fn connection_check_fails_a_preview_posing_as_the_full_track() {
+        let pool = pool();
+        // 0.03 seconds of audio for a 4:34 track, though the reply said FULL.
+        let media = Arc::new(FixtureMedia::new().with(QOBUZ_HIRES_URL, HIRES_192_FLAC.to_vec()));
+        let hub = signed_in_app_state(&pool).await.with_media(media);
+        let check = hub
+            .check_connection(1, ProviderId::Qobuz, Some("7700001".into()))
+            .await
+            .expect("check");
+        assert!(!check.ok, "{:?}", check.steps);
+        let delivery = check.delivery.expect("delivery");
+        assert_eq!(delivery.full_length, Some(false));
+        assert_eq!(delivery.track_seconds, Some(274.0));
+        assert!(
+            delivery
+                .delivered_seconds
+                .is_some_and(|seconds| seconds < 1.0)
+        );
+        let stream = check.steps.last().expect("stream step");
+        assert_eq!(stream.id, "stream");
+        assert!(!stream.ok);
+        assert!(
+            stream
+                .detail
+                .contains("only 0:00 of 4:34 arrived, a preview"),
+            "{}",
+            stream.detail
+        );
+    }
+
     #[actix_web::test]
     async fn rendered_sandbox_streams_deliver_every_tier_as_announced() {
         if !crate::providers::sandbox_media::ffmpeg_available() {
@@ -3070,10 +3177,14 @@ mod tests {
             )
             .await
             .expect("quality");
+            // The player names each play, as the web and phone apps do.
+            let play = format!("{service}-{quality}-{track}");
             let response = test::call_service(
                 &app,
                 test::TestRequest::get()
-                    .uri(&format!("/media/songs/{service}:{track}/stream"))
+                    .uri(&format!(
+                        "/media/songs/{service}:{track}/stream?bitrate=0&play={play}"
+                    ))
                     .to_request(),
             )
             .await;
@@ -3090,15 +3201,40 @@ mod tests {
             }
             let (status, delivery) = call!(
                 &app,
-                test::TestRequest::get()
-                    .uri(&format!("/providers/{service}/tracks/{track}/delivery")),
+                test::TestRequest::get().uri(&format!(
+                    "/providers/{service}/tracks/{track}/delivery?play={play}"
+                )),
             )
             .await;
             assert_eq!(status, StatusCode::OK);
             let context = format!("{service} {quality} {track}: {delivery}");
+            assert_eq!(delivery["play"], play.as_str(), "{context}");
             assert_eq!(delivery["sandbox"], true, "{context}");
             assert_eq!(delivery["tone"], false, "{context}");
-            assert_eq!(delivery["matches_announced"], true, "{context}");
+            // ffmpeg's built-in AAC encoder cannot fill 320 kbps, and the
+            // report says so rather than calling it a match.
+            let short_aac = service == "tidal" && quality == "high";
+            assert_eq!(delivery["matches_announced"], !short_aac, "{context}");
+            if short_aac {
+                let delivered = delivery["delivered"]["bitrate_kbps"]
+                    .as_u64()
+                    .expect("bitrate");
+                assert!(delivered < 288, "{context}");
+                assert_eq!(
+                    delivery["mismatches"],
+                    json!([format!("{delivered} kbps, not 320")]),
+                    "{context}"
+                );
+            } else {
+                assert_eq!(delivery["mismatches"], json!([]), "{context}");
+            }
+            // Sandbox streams are 30 seconds by design, so no full-length
+            // verdict; the delivered length is still measured.
+            assert_eq!(delivery["full_length"], Value::Null, "{context}");
+            if container != "mp3" {
+                let seconds = delivery["delivered_seconds"].as_f64().expect("length");
+                assert!((seconds - 30.0).abs() < 0.5, "{context}");
+            }
             assert_eq!(delivery["container"], container, "{context}");
             assert_eq!(delivery["delivered"]["lossless"], lossless, "{context}");
             assert_eq!(delivery["delivered"]["channels"], 2, "{context}");
@@ -3108,6 +3244,32 @@ mod tests {
                 assert_eq!(delivery["frame_verified"], true, "{context}");
             }
         }
+
+        // Each play keeps its own report: asking about the first play of
+        // TIDAL 300101 (Max) after it was replayed at AAC still says Max.
+        let (status, first) = call!(
+            &app,
+            test::TestRequest::get()
+                .uri("/providers/tidal/tracks/300101/delivery?play=tidal-hi_res_max-300101"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(first["delivered"]["label"], "24/192 FLAC", "{first}");
+        let (_, latest) = call!(
+            &app,
+            test::TestRequest::get().uri("/providers/tidal/tracks/300101/delivery"),
+        )
+        .await;
+        assert_eq!(latest["requested"], "low", "{latest}");
+        // A play whose bytes have not arrived yet has no report, never an
+        // older stream's.
+        let (status, _) = call!(
+            &app,
+            test::TestRequest::get()
+                .uri("/providers/tidal/tracks/300101/delivery?play=not-started"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
 
         // TIDAL Max DASH seeks across segment boundaries like a file.
         hub.set_quality(
@@ -3449,19 +3611,52 @@ mod tests {
             .filter(|value| !value.trim().is_empty())
     }
 
-    /// End-to-end check against real accounts. No accounts exist in CI, so
-    /// it is ignored by default. Run it with your own subscription:
+    /// Asserts a live check proved what Parson claims: the whole track
+    /// arrived (not a 30-second preview) in the announced format.
+    fn assert_live_stream(service: &str, check: &crate::providers::hub::ConnectionCheck) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(check).unwrap_or_default()
+        );
+        assert!(check.ok, "{service} check failed: {:?}", check.steps);
+        let delivery = check.delivery.as_ref().expect("delivery");
+        assert!(
+            !delivery.sandbox,
+            "{service}: a live check never uses the sandbox"
+        );
+        assert!(
+            delivery.matches_announced,
+            "{service}: {:?}",
+            delivery.mismatches
+        );
+        assert_eq!(
+            delivery.full_length,
+            Some(true),
+            "{service}: delivered {:?} s of a {:?} s track",
+            delivery.delivered_seconds,
+            delivery.track_seconds
+        );
+    }
+
+    /// End-to-end check against real accounts. No accounts exist in this
+    /// repository's sandboxes, so it is ignored by default; the
+    /// `live-streaming` workflow runs it when the repository has secrets.
+    /// Run it with your own subscription:
     ///
     /// ```sh
     /// PARSON_LIVE_QOBUZ_APP_ID=… PARSON_LIVE_QOBUZ_APP_SECRET=… \
     /// PARSON_LIVE_QOBUZ_EMAIL=… PARSON_LIVE_QOBUZ_PASSWORD=… \
-    /// PARSON_LIVE_TIDAL_CLIENT_ID=… \
+    /// PARSON_LIVE_TIDAL_CLIENT_ID=… [PARSON_LIVE_TIDAL_REFRESH_TOKEN=…] \
     ///   cargo test -p parson-music live_accounts -- --ignored --nocapture
     /// ```
     ///
-    /// Each service signs in (TIDAL prints a link to approve within five
-    /// minutes), syncs favorites, resolves a favorite at the highest quality
-    /// and reads the delivered format from the real stream's bytes.
+    /// Each service signs in, syncs favorites, resolves a favorite (or
+    /// `PARSON_LIVE_*_TRACK`) at the highest quality and reads the real
+    /// stream's bytes: the delivered format must match the announced one
+    /// and the stated length must be the catalog length, so a 30-second
+    /// preview fails. TIDAL uses `PARSON_LIVE_TIDAL_REFRESH_TOKEN` when set
+    /// (unattended); otherwise it prints a link to approve within five
+    /// minutes and, outside CI, the refresh token to save as that secret.
     #[actix_web::test]
     #[ignore = "needs real TIDAL or Qobuz accounts; see the doc comment"]
     async fn live_accounts_sign_in_sync_favorites_and_stream_hi_res() {
@@ -3496,11 +3691,7 @@ mod tests {
                 .check_connection(1, ProviderId::Qobuz, live("PARSON_LIVE_QOBUZ_TRACK"))
                 .await
                 .expect("qobuz check");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&check).unwrap_or_default()
-            );
-            assert!(check.ok, "Qobuz check failed: {:?}", check.steps);
+            assert_live_stream("Qobuz", &check);
             let delivered = check.delivery.and_then(|delivery| delivery.delivered);
             assert!(delivered.is_some_and(|format| format.lossless));
         }
@@ -3515,34 +3706,53 @@ mod tests {
             )
             .await
             .expect("tidal credentials");
-            let pending = hub.start_tidal_sign_in(1).await.expect("device code");
-            println!(
-                "Approve Parson on TIDAL: {} (code {})",
-                pending
-                    .verification_uri_complete
-                    .as_deref()
-                    .unwrap_or(&pending.verification_uri),
-                pending.user_code
-            );
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
-            loop {
-                let outcome = hub.poll_tidal_sign_in(1).await.expect("poll");
-                if outcome.status == "signed_in" {
-                    break;
+            if let Some(token) = live("PARSON_LIVE_TIDAL_REFRESH_TOKEN") {
+                hub.tidal_sign_in_with_refresh_token(1, &token)
+                    .await
+                    .expect("TIDAL refresh-token sign-in");
+            } else {
+                let pending = hub.start_tidal_sign_in(1).await.expect("device code");
+                println!(
+                    "Approve Parson on TIDAL: {} (code {})",
+                    pending
+                        .verification_uri_complete
+                        .as_deref()
+                        .unwrap_or(&pending.verification_uri),
+                    pending.user_code
+                );
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+                loop {
+                    let outcome = hub.poll_tidal_sign_in(1).await.expect("poll");
+                    if outcome.status == "signed_in" {
+                        break;
+                    }
+                    assert_eq!(outcome.status, "pending", "TIDAL sign-in ended");
+                    assert!(std::time::Instant::now() < deadline, "not approved in time");
+                    tokio::time::sleep(std::time::Duration::from_secs(outcome.interval)).await;
                 }
-                assert_eq!(outcome.status, "pending", "TIDAL sign-in ended");
-                assert!(std::time::Instant::now() < deadline, "not approved in time");
-                tokio::time::sleep(std::time::Duration::from_secs(outcome.interval)).await;
+                if std::env::var_os("CI").is_none()
+                    && let Ok((context, _)) = hub.context(1, ProviderId::Tidal).await
+                    && let Some(token) = context.session.refresh_token
+                {
+                    println!(
+                        "Save this as the PARSON_LIVE_TIDAL_REFRESH_TOKEN secret to run unattended: {token}"
+                    );
+                }
             }
             let check = hub
                 .check_connection(1, ProviderId::Tidal, live("PARSON_LIVE_TIDAL_TRACK"))
                 .await
                 .expect("tidal check");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&check).unwrap_or_default()
-            );
-            assert!(check.ok, "TIDAL check failed: {:?}", check.steps);
+            assert_live_stream("TIDAL", &check);
+            let delivery = check.delivery.expect("delivery");
+            if delivery.requested == crate::providers::StreamQuality::HiResMax
+                && delivery.container == Some("mp4")
+            {
+                // Max arrives as DASH FLAC; a 24-bit master must say so.
+                let format = delivery.delivered.expect("format");
+                assert_eq!(format.codec, "flac");
+                assert!(format.bit_depth.is_some_and(|bits| bits >= 16));
+            }
         }
         assert!(
             ran,

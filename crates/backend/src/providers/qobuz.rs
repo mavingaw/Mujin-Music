@@ -1039,6 +1039,7 @@ impl StreamingProvider for QobuzClient {
                 source: StreamSource::Progressive { url, mime },
                 format: delivered,
                 requested: quality,
+                stream_seconds: None,
             })
         })
     }

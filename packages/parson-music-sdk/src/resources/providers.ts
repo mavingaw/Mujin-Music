@@ -345,7 +345,29 @@ export interface StreamingDelivery {
   container: "flac" | "mp4" | "wav" | "mp3" | "adts" | null;
   /** The first audio frame was parsed and agrees with the header. */
   frame_verified: boolean;
+  /**
+   * Codec, and bit depth and rate (lossless) or bitrate within 10% (lossy),
+   * agree with what the service announced.
+   */
   matches_announced: boolean;
+  /** What disagrees, e.g. `255 kbps, not 320`. Empty when it matches. */
+  mismatches?: string[];
+  /** The player's id for the play this report belongs to. */
+  play?: string | null;
+  /** Larger is newer. */
+  seq?: number;
+  /**
+   * The delivered stream's length from its own header or DASH timeline;
+   * `null` when the stream does not state it (MP3, ADTS).
+   */
+  delivered_seconds?: number | null;
+  /** The catalog length, when the server knew it. */
+  track_seconds?: number | null;
+  /**
+   * The whole track arrived rather than a preview. `null` when a length is
+   * unknown, and always in the sandbox (30-second renders by design).
+   */
+  full_length?: boolean | null;
   sandbox: boolean;
   /**
    * The sandbox's 16/44.1 placeholder tone (server without ffmpeg). Other
@@ -469,18 +491,49 @@ export async function checkStreamingConnection(
   ).data;
 }
 
+const PLAY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Whether `value` can name one play of a stream (`?play=`). */
+export function isPlayId(value: string | null | undefined): value is string {
+  return Boolean(value && PLAY_ID_PATTERN.test(value));
+}
+
+let playCounter = 0;
+
 /**
- * The format the latest stream of this track delivered, or `null` before
- * its first bytes reached the player.
+ * A fresh id for one play of a streaming track. The player adds it to the
+ * stream URL as `play`, then asks for that play's delivery report, so the
+ * format it shows is the stream it is playing and never an earlier one.
+ */
+export function newPlayId(): string {
+  playCounter = (playCounter + 1) % 1_000_000;
+  const random = Math.random().toString(36).slice(2, 10);
+  return `p${Date.now().toString(36)}${playCounter.toString(36)}${random}`;
+}
+
+/** The `play` id in a stream URL, if it has one. */
+export function playIdFromStreamUrl(url: string | null | undefined) {
+  if (!url) return null;
+  const match = /[?&]play=([^&#]*)/.exec(url);
+  const value = match?.[1] ? decodeURIComponent(match[1]) : null;
+  return isPlayId(value) ? value : null;
+}
+
+/**
+ * The format a stream of this track delivered, or `null` before its first
+ * bytes reached the server. With `play`, only that play's report: never an
+ * earlier stream of the same track at another quality.
  */
 export async function getStreamDelivery(
   trackId: string,
+  play?: string | null,
 ): Promise<StreamingDelivery | null> {
+  const path = `${entityPath("tracks", trackId)}/delivery`;
   try {
     return (
-      await api.get<StreamingDelivery>(
-        `${entityPath("tracks", trackId)}/delivery`,
-      )
+      isPlayId(play)
+        ? await api.get<StreamingDelivery>(path, { params: { play } })
+        : await api.get<StreamingDelivery>(path)
     ).data;
   } catch (error) {
     const status = (error as { response?: { status?: number } }).response

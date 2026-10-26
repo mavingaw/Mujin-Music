@@ -22,6 +22,10 @@ pub struct ProbedFormat {
     pub container: &'static str,
     /// Whether the first audio frame was found and agrees with the header.
     pub frame_verified: bool,
+    /// The stream's length as its own header states it (FLAC
+    /// `STREAMINFO` total samples, MP4 `mvhd`/`mehd`, WAV `data` size).
+    /// `None` when the header does not say, as with MP3 and ADTS.
+    pub seconds: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +33,14 @@ struct StreamInfo {
     sample_rate: u32,
     channels: u8,
     bit_depth: u8,
+    /// 0 when the encoder did not know the length.
+    total_samples: u64,
+}
+
+impl StreamInfo {
+    fn seconds(self) -> Option<f64> {
+        (self.total_samples > 0).then(|| self.total_samples as f64 / f64::from(self.sample_rate))
+    }
 }
 
 fn u16_be(bytes: &[u8], at: usize) -> Option<u16> {
@@ -84,10 +96,12 @@ fn parse_streaminfo(block: &[u8]) -> Option<StreamInfo> {
         (u32::from(block[10]) << 12) | (u32::from(block[11]) << 4) | (u32::from(block[12]) >> 4);
     let channels = ((block[12] >> 1) & 0x07) + 1;
     let bit_depth = (((block[12] & 0x01) << 4) | (block[13] >> 4)) + 1;
+    let total_samples = (u64::from(block[13] & 0x0f) << 32) | u64::from(u32_be(block, 14)?);
     (sample_rate > 0).then_some(StreamInfo {
         sample_rate,
         channels,
         bit_depth,
+        total_samples,
     })
 }
 
@@ -129,6 +143,7 @@ fn probe_flac(body: &[u8]) -> Option<ProbedFormat> {
         format: flac_format(info),
         container: "flac",
         frame_verified,
+        seconds: info.seconds(),
     })
 }
 
@@ -254,11 +269,54 @@ fn probe_wav(body: &[u8]) -> Option<ProbedFormat> {
                 format,
                 container: "wav",
                 frame_verified: false,
+                seconds: wav_seconds(body, at + 8 + length, sample_rate, channels, bits),
             });
         }
         at += 8 + length + (length & 1);
     }
     None
+}
+
+/// The length of a WAV file's `data` chunk in seconds, looking from the
+/// chunk after `fmt `.
+fn wav_seconds(body: &[u8], from: usize, rate: u32, channels: u16, bits: u16) -> Option<f64> {
+    let bytes_per_second = u64::from(rate) * u64::from(channels) * u64::from(bits).div_ceil(8);
+    let mut at = from + (from & 1);
+    while let Some(id) = body.get(at..at + 4) {
+        let length = u32_le(body, at + 4)?;
+        if id == b"data" {
+            return (bytes_per_second > 0 && length > 0)
+                .then(|| f64::from(length) / bytes_per_second as f64);
+        }
+        at += 8 + length as usize + (length as usize & 1);
+    }
+    None
+}
+
+/// The movie length from `mvhd`, or for fragmented MP4 (DASH) from
+/// `mvex/mehd`, in seconds.
+fn mp4_seconds(moov: &[u8]) -> Option<f64> {
+    let mvhd = child(moov, b"mvhd")?;
+    let (timescale, duration) = if *mvhd.first()? == 1 {
+        (
+            u32_be(mvhd, 20)?,
+            u64::from_be_bytes(mvhd.get(24..32)?.try_into().ok()?),
+        )
+    } else {
+        (u32_be(mvhd, 12)?, u64::from(u32_be(mvhd, 16)?))
+    };
+    let unknown = |value: u64| value == 0 || value == u64::from(u32::MAX) || value == u64::MAX;
+    let duration = if unknown(duration) {
+        let mehd = path(moov, &[b"mvex", b"mehd"])?;
+        if *mehd.first()? == 1 {
+            u64::from_be_bytes(mehd.get(4..12)?.try_into().ok()?)
+        } else {
+            u64::from(u32_be(mehd, 4)?)
+        }
+    } else {
+        duration
+    };
+    (timescale > 0 && !unknown(duration)).then(|| duration as f64 / f64::from(timescale))
 }
 
 /// An MP4 box: type, payload range.
@@ -335,6 +393,7 @@ fn probe_mp4(body: &[u8]) -> Option<ProbedFormat> {
                 format: flac_format(info),
                 container: "mp4",
                 frame_verified,
+                seconds: mp4_seconds(moov).or_else(|| info.seconds()),
             });
         }
         b"alac" => {
@@ -375,6 +434,7 @@ fn probe_mp4(body: &[u8]) -> Option<ProbedFormat> {
         format,
         container: "mp4",
         frame_verified: false,
+        seconds: mp4_seconds(moov),
     })
 }
 
@@ -457,6 +517,7 @@ fn probe_mpeg_frame(body: &[u8]) -> Option<ProbedFormat> {
             format,
             container: "adts",
             frame_verified: true,
+            seconds: None,
         });
     }
     let version = (header[1] >> 3) & 0x03;
@@ -487,6 +548,7 @@ fn probe_mpeg_frame(body: &[u8]) -> Option<ProbedFormat> {
         format,
         container: "mp3",
         frame_verified: true,
+        seconds: None,
     })
 }
 
@@ -551,6 +613,16 @@ pub(crate) mod tests {
         assert_eq!(probed.format.label, "16/44.1 FLAC");
         assert!(!probed.frame_verified);
 
+        // No sample count in STREAMINFO: the length is unknown.
+        assert_eq!(probe(&file).expect("flac").seconds, None);
+        let mut whole = file.clone();
+        // 4:01 at 192 kHz: 46,272,000 samples in bits 108-143.
+        let samples: u64 = 241 * 192_000;
+        whole[8 + 13] |= (samples >> 32) as u8 & 0x0f;
+        whole[8 + 14..8 + 18].copy_from_slice(&(samples as u32).to_be_bytes());
+        assert_eq!(probe(&whole).expect("flac").seconds, Some(241.0));
+        assert!(probe(&whole).expect("flac").frame_verified);
+
         // Only the metadata arrived: format known, frame not yet verified.
         let partial = &file[..file.len() - 6];
         assert!(!probe(partial).expect("flac").frame_verified);
@@ -585,6 +657,10 @@ pub(crate) mod tests {
         let probed = probe(&wav).expect("wav");
         assert_eq!(probed.format.label, "16/44.1 PCM");
         assert_eq!(probed.format.channels, Some(1));
+        assert_eq!(probed.seconds, None, "no data chunk yet");
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(88_200_u32 * 30).to_le_bytes());
+        assert_eq!(probe(&wav).expect("wav").seconds, Some(30.0));
     }
 
     fn mp4_box(kind: &[u8], payload: &[u8]) -> Vec<u8> {
@@ -653,6 +729,10 @@ pub(crate) mod tests {
             ("flac", "24/192 FLAC", true)
         );
         assert_eq!(probed.format.channels, Some(2));
+        let close = |seconds: Option<f64>, expected: f64| {
+            seconds.is_some_and(|seconds| (seconds - expected).abs() < 0.005)
+        };
+        assert!(close(probed.seconds, 0.03), "{:?}", probed.seconds);
 
         for (file, label) in [
             (
@@ -671,6 +751,8 @@ pub(crate) mod tests {
         }
 
         let aac = probe(include_bytes!("fixtures/media/aac-320.mp4")).expect("aac");
+        // Fragmented, with no `mehd`: the file does not state its length.
+        assert_eq!(aac.seconds, None);
         assert_eq!(aac.format.codec, "aac");
         assert!(!aac.format.lossless);
         assert_eq!(aac.format.sample_rate, Some(44_100));

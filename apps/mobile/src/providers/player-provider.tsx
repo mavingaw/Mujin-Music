@@ -2,6 +2,8 @@ import {
   createPlaybackQueue,
   isStreamingId,
   fillReverbImpulseChannel,
+  newPlayId,
+  playIdFromStreamUrl,
   getPlayerAudioPreset,
   playerAudioPresets,
   recordPlaybackEvent,
@@ -122,6 +124,11 @@ type PlayerContextValue = {
   cycleRepeat: () => void;
   toggleShuffle: () => void;
   setAudioPreset: (preset: AudioPreset) => void;
+  /**
+   * The id of the TIDAL or Qobuz play now loaded (the stream URL's
+   * `play`), so the signal line asks about exactly this stream.
+   */
+  streamPlay: string | null;
 };
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -775,7 +782,14 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       return {
         artworkUrl,
         // Native decoding expects a decoded path, not an Expo file URI.
-        uri: local ? decodeURI(local) : streamUrl(song.id, bitrate),
+        uri: local
+          ? decodeURI(local)
+          : streamUrl(
+              song.id,
+              bitrate,
+              // Each load is a new play with its own delivery report.
+              isStreamingId(song.id) ? newPlayId() : null,
+            ),
         headers: local ? undefined : await freshAuthorizationHeaders(),
       };
     },
@@ -1227,6 +1241,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     rate: effectivePreset.rate,
   });
 
+  const streamPlay = playIdFromStreamUrl(playbackSource?.value.uri);
   const value = useMemo<PlayerContextValue>(() => {
     const effectiveIndex = cast.casting ? cast.currentIndex : currentIndex;
     return {
@@ -1254,6 +1269,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       cycleRepeat,
       toggleShuffle,
       setAudioPreset,
+      streamPlay: cast.casting ? null : streamPlay,
     };
   }, [
     addNext,
@@ -1272,6 +1288,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     currentIndex,
     cycleRepeat,
     playbackError,
+    streamPlay,
     isBuffering,
     isPlaying,
     next,

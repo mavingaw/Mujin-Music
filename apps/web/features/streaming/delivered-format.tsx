@@ -1,8 +1,13 @@
 "use client";
 
-import { getStreamDelivery, parseStreamingId } from "@parson/music-sdk";
+import {
+  getStreamDelivery,
+  parseStreamingId,
+  playIdFromStreamUrl,
+} from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, AudioLines, CheckCircle2 } from "lucide-react";
+import { useContext, useEffect } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,9 +15,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { PlayerContext } from "@/features/player/player-api";
 import { cn } from "@/lib/cn";
 import { FormatBadge } from "./source-badge";
-import { deliverySummary } from "./streaming-model";
+import { deliveryQueryKey, deliverySummary } from "./streaming-model";
 
 const POLL_MS = 1500;
 const MAX_POLLS = 20;
@@ -21,12 +27,22 @@ const MAX_POLLS = 20;
  * The format a streaming track actually delivered. Parson reads it from the
  * stream's own bytes as they pass through the server, so the badge shows
  * what arrived, not just the quality that was asked for.
+ *
+ * With `play` (the id in the playing stream's URL) it asks about exactly
+ * that stream: a new track, a replay or a quality change starts a new play
+ * with no report until its own bytes arrive, so the badge never shows an
+ * earlier stream's format. `frames` counts first-frame decodes of that
+ * stream and re-reads the report each time.
  */
-export function useStreamDelivery(songId: string | null | undefined) {
+export function useStreamDelivery(
+  songId: string | null | undefined,
+  play?: string | null,
+  frames = 0,
+) {
   const parsed = parseStreamingId(songId);
-  return useQuery({
-    queryKey: ["streaming", "delivery", songId],
-    queryFn: () => getStreamDelivery(songId ?? ""),
+  const query = useQuery({
+    queryKey: deliveryQueryKey(songId, play),
+    queryFn: () => getStreamDelivery(songId ?? "", play),
     enabled: Boolean(parsed),
     staleTime: 10_000,
     refetchInterval: (query) =>
@@ -34,6 +50,11 @@ export function useStreamDelivery(songId: string | null | undefined) {
         ? false
         : POLL_MS,
   });
+  const { refetch } = query;
+  useEffect(() => {
+    if (frames > 0 && parsed) void refetch();
+  }, [frames, parsed, refetch]);
+  return query;
 }
 
 export function DeliveredFormat({
@@ -45,9 +66,13 @@ export function DeliveredFormat({
   className?: string;
   align?: "start" | "center" | "end";
 }) {
-  const { data } = useStreamDelivery(songId);
+  const player = useContext(PlayerContext);
+  // Only the track now playing has a stream to ask about.
+  const playing = player?.song.id === songId ? player : null;
+  const play = playing ? playIdFromStreamUrl(playing.stream.url) : null;
+  const { data } = useStreamDelivery(songId, play, playing?.stream.frames ?? 0);
   if (!data) return null;
-  const summary = deliverySummary(data);
+  const summary = deliverySummary(data, playing?.song.duration);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -89,7 +114,7 @@ export function DeliveredFormat({
                 aria-hidden="true"
                 className="mt-0.5 h-3.5 w-3.5 shrink-0"
               />
-              {summary.warning}, but this is what arrived.
+              {summary.warning}. Shown as it arrived.
             </p>
           </>
         )}

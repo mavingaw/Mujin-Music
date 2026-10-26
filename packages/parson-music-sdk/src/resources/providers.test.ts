@@ -22,6 +22,9 @@ import {
   checkStreamingConnection,
   describeDelivery,
   getStreamDelivery,
+  isPlayId,
+  newPlayId,
+  playIdFromStreamUrl,
   getStreamingPlaylist,
   getStreamingPlaylistCopies,
   getStreamingPlaylists,
@@ -317,6 +320,22 @@ test("deliveries read back what the stream carried", async () => {
   );
   await expect(getStreamDelivery("qobuz:7700001")).rejects.toThrow("Down");
 
+  // One play's report, so a replay at another quality never shows the old one.
+  get.mockResolvedValueOnce({
+    data: { ...delivery, play: "pabc123" },
+    status: 200,
+    headers: new Headers(),
+  } as never);
+  expect((await getStreamDelivery("qobuz:7700001", "pabc123"))?.play).toBe(
+    "pabc123",
+  );
+  expect(get).toHaveBeenLastCalledWith(
+    "/providers/qobuz/tracks/7700001/delivery",
+    {
+      params: { play: "pabc123" },
+    },
+  );
+
   expect(describeDelivery(delivery)).toBe("24/192 FLAC, stereo");
   expect(
     describeDelivery({
@@ -327,6 +346,25 @@ test("deliveries read back what the stream carried", async () => {
   expect(describeDelivery({ ...delivery, delivered: null })).toBe(
     "Format not readable",
   );
+});
+
+test("play ids are fresh, URL-safe and read back from stream URLs", () => {
+  const first = newPlayId();
+  const second = newPlayId();
+  expect(first).not.toBe(second);
+  expect(isPlayId(first)).toBeTrue();
+  expect(isPlayId("has space")).toBeFalse();
+  expect(isPlayId("x".repeat(65))).toBeFalse();
+  expect(
+    playIdFromStreamUrl(
+      `https://parson.test/api/v1/media/songs/tidal%3A1/stream?bitrate=0&play=${first}&media_token=t`,
+    ),
+  ).toBe(first);
+  expect(
+    playIdFromStreamUrl("https://parson.test/stream?bitrate=0"),
+  ).toBeNull();
+  expect(playIdFromStreamUrl("https://x.test/s?play=bad%20id")).toBeNull();
+  expect(playIdFromStreamUrl(null)).toBeNull();
 });
 
 test("playlists are read and copied through provider-scoped routes", async () => {

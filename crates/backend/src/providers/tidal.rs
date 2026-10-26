@@ -601,6 +601,31 @@ impl TidalClient {
         (pending, url)
     }
 
+    /// Fills in which account a token belongs to from `GET /sessions`,
+    /// for token replies (refreshes) that leave the user out.
+    pub async fn identify(&self, mut session: ProviderSession) -> ProviderResult<ProviderSession> {
+        if !session.user_id.is_empty() {
+            return Ok(session);
+        }
+        let request = ApiRequest::get(format!("{API_BASE}/sessions"))
+            .header("authorization", format!("Bearer {}", session.access_token));
+        let reply = self.transport.send(request).await?;
+        if !(200..300).contains(&reply.status) {
+            return Err(status_error(reply.status));
+        }
+        let user: TUser = decode_json(&reply.body)?;
+        session.user_id = user
+            .user_id
+            .ok_or_else(|| ProviderError::Decode("session without a user id".into()))?;
+        if session.country_code.is_none() {
+            session.country_code = non_empty(user.country_code);
+        }
+        if session.account_name.is_empty() {
+            session.account_name = "TIDAL listener".into();
+        }
+        Ok(session)
+    }
+
     /// Trades the code TIDAL sent back for tokens.
     pub async fn exchange_authorization_code(
         &self,
@@ -854,6 +879,8 @@ pub(crate) struct DashRepresentation {
     pub sample_rate: Option<u32>,
     pub init_url: Option<String>,
     pub segment_urls: Vec<String>,
+    /// The `SegmentTimeline` total, in seconds.
+    pub seconds: Option<f64>,
 }
 
 /// Reads the single audio representation TIDAL returns for a track: its
@@ -878,18 +905,35 @@ pub(crate) fn parse_dash_manifest(xml: &str) -> ProviderResult<DashRepresentatio
     let start_number = xml_attribute(&template, "startNumber")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(1);
-    let segments = Regex::new(r"<S\b([^>]*)/?>")
+    let timeline = Regex::new(r"<S\b([^>]*)/?>")
         .map_err(|_| invalid("timeline pattern"))?
         .captures_iter(xml)
         .filter_map(|captures| captures.get(1))
         .map(|attributes| {
-            xml_attribute(attributes.as_str(), "r")
+            let attributes = attributes.as_str();
+            let count = xml_attribute(attributes, "r")
                 .and_then(|value| value.parse::<i64>().ok())
                 .unwrap_or(0)
                 .max(0) as usize
-                + 1
+                + 1;
+            let duration =
+                xml_attribute(attributes, "d").and_then(|value| value.parse::<u64>().ok());
+            (count, duration)
         })
-        .sum::<usize>();
+        .collect::<Vec<_>>();
+    let segments = timeline.iter().map(|(count, _)| count).sum::<usize>();
+    // What the listed segments add up to, in seconds: the length Parson
+    // will actually relay, whatever the manifest's own header claims.
+    let timescale = xml_attribute(&template, "timescale")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1);
+    let seconds = timeline
+        .iter()
+        .try_fold(0_u64, |total, (count, duration)| {
+            duration.map(|duration| total.saturating_add(duration.saturating_mul(*count as u64)))
+        })
+        .filter(|total| *total > 0 && timescale > 0)
+        .map(|total| total as f64 / timescale as f64);
     if segments == 0 {
         return Err(invalid("empty SegmentTimeline"));
     }
@@ -920,6 +964,7 @@ pub(crate) fn parse_dash_manifest(xml: &str) -> ProviderResult<DashRepresentatio
             .and_then(|value| value.parse().ok()),
         init_url,
         segment_urls,
+        seconds,
     })
 }
 
@@ -1348,6 +1393,7 @@ impl StreamingProvider for TidalClient {
                             mime: manifest.mime_type,
                         },
                         requested: quality,
+                        stream_seconds: None,
                     })
                 }
                 "application/dash+xml" => {
@@ -1367,6 +1413,7 @@ impl StreamingProvider for TidalClient {
                             segment_urls: dash.segment_urls,
                         },
                         requested: quality,
+                        stream_seconds: dash.seconds,
                     })
                 }
                 other => Err(ProviderError::Unavailable(format!(
@@ -1967,6 +2014,30 @@ mod tests {
         assert!(parse_dash_manifest(insecure).is_err());
         let empty = r#"<MPD><Representation id="FLAC" codecs="flac"><SegmentTemplate media="https://x/$Number$.mp4"></SegmentTemplate></Representation></MPD>"#;
         assert!(parse_dash_manifest(empty).is_err());
+    }
+
+    #[test]
+    fn dash_timelines_give_the_relayed_length() {
+        // TIDAL's shape: 4.096-second segments at 96 kHz, a short last one.
+        let full = r#"<MPD mediaPresentationDuration="PT4M1S"><Period><AdaptationSet><Representation id="FLAC" codecs="flac" audioSamplingRate="96000"><SegmentTemplate timescale="96000" initialization="https://x/0.mp4" media="https://x/$Number$.mp4" startNumber="1"><SegmentTimeline><S d="393216" r="58"/><S d="96000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#;
+        let dash = parse_dash_manifest(full).expect("manifest");
+        assert_eq!(dash.segment_urls.len(), 60);
+        let seconds = dash.seconds.expect("length");
+        assert!((seconds - (59.0 * 4.096 + 1.0)).abs() < 1e-9, "{seconds}");
+
+        // A preview's timeline stops at 30 seconds whatever the header says.
+        let preview = full.replace(
+            r#"<S d="393216" r="58"/><S d="96000"/>"#,
+            r#"<S d="96000" r="29"/>"#,
+        );
+        assert_eq!(
+            parse_dash_manifest(&preview).expect("manifest").seconds,
+            Some(30.0)
+        );
+
+        // Without durations the length is unknown, not zero.
+        let bare = full.replace(r#"<S d="393216" r="58"/><S d="96000"/>"#, r#"<S r="2"/>"#);
+        assert_eq!(parse_dash_manifest(&bare).expect("manifest").seconds, None);
     }
 
     #[test]

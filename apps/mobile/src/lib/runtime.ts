@@ -152,11 +152,18 @@ export async function lockScreenArtworkUrl(path?: string | null) {
   return applyImageSignature(uri, signed.expiresAt, signed.signature);
 }
 
-export function streamUrl(songId: string, bitrate = 0) {
+export function streamUrl(
+  songId: string,
+  bitrate = 0,
+  play: string | null = null,
+) {
   const url = new URL(
     apiUrl(`media/songs/${encodeURIComponent(songId)}/stream`),
   );
   url.searchParams.set("bitrate", String(bitrate));
+  // TIDAL and Qobuz plays carry an id so the player can ask what exactly
+  // this stream delivered.
+  if (play) url.searchParams.set("play", play);
   return url.toString();
 }
 

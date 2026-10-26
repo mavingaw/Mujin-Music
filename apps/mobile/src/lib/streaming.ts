@@ -78,8 +78,17 @@ export function serviceAction(provider: StreamingProviderStatus) {
   return needsOwnCredentials(provider) ? "Set up" : "Sign in";
 }
 
+/** `4:01` style length. */
+function clock(seconds: number) {
+  const total = Math.max(0, Math.round(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 /** The player's signal line: what the stream actually delivered. */
-export function deliveryText(delivery: StreamingDelivery): {
+export function deliveryText(
+  delivery: StreamingDelivery,
+  trackSeconds?: number | null,
+): {
   label: string;
   detail: string;
   warning: string | null;
@@ -92,6 +101,16 @@ export function deliveryText(delivery: StreamingDelivery): {
     format.channels === 1 ? "mono" : format.channels === 2 ? "stereo" : null;
   // Servers before `tone` existed only had the placeholder tone.
   const placeholder = delivery.tone ?? delivery.sandbox;
+  const delivered = delivery.delivered_seconds ?? null;
+  const track = delivery.track_seconds ?? trackSeconds ?? null;
+  // The sandbox renders 30 seconds of every track, so no verdict there.
+  const fullLength = delivery.sandbox
+    ? null
+    : typeof delivery.full_length === "boolean"
+      ? delivery.full_length
+      : delivered && track && track > 0
+        ? delivered + 2 >= track
+        : null;
   const detail = [
     placeholder
       ? "sandbox preview"
@@ -100,16 +119,26 @@ export function deliveryText(delivery: StreamingDelivery): {
         : "delivered",
     channels,
     delivery.frame_verified ? "frame verified" : null,
+    fullLength && delivered ? `full length ${clock(delivered)}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
+  const mismatch =
+    !placeholder && !delivery.matches_announced
+      ? `Announced ${delivery.announced.label}${
+          delivery.mismatches?.length
+            ? ` (${delivery.mismatches.join(", ")})`
+            : ""
+        }`
+      : null;
+  const preview =
+    fullLength === false && delivered && track
+      ? `Preview: ${clock(delivered)} of ${clock(track)}`
+      : null;
   return {
     label: format.label,
     detail,
-    warning:
-      !placeholder && !delivery.matches_announced
-        ? `Announced ${delivery.announced.label}`
-        : null,
+    warning: [mismatch, preview].filter(Boolean).join(" · ") || null,
   };
 }
 

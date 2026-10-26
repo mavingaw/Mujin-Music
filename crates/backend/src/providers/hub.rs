@@ -260,8 +260,29 @@ pub struct DeliveredStream {
     pub container: Option<&'static str>,
     /// Whether the first audio frame was parsed and agrees with the header.
     pub frame_verified: bool,
-    /// Whether the delivered format agrees with the announced one.
+    /// Whether the delivered format agrees with the announced one: the
+    /// codec, and the bit depth and sample rate for lossless streams or the
+    /// bitrate (within 10%) for lossy ones.
     pub matches_announced: bool,
+    /// What disagrees, in words, e.g. `AAC at 255 kbps, not 320`.
+    pub mismatches: Vec<String>,
+    /// The player's id for this play, from the stream URL's `play`
+    /// parameter, so a player can ask about exactly the stream it is
+    /// playing rather than an earlier one of the same track.
+    pub play: Option<String>,
+    /// Orders deliveries; larger is newer.
+    pub seq: u64,
+    /// How long the delivered stream is, from its own header (FLAC
+    /// `STREAMINFO`, MP4 `mvhd`/`mehd`, WAV) or, for DASH, the segments
+    /// Parson relays. `None` when neither says (MP3, ADTS).
+    pub delivered_seconds: Option<f64>,
+    /// The track's catalog length, when the caller knew it.
+    pub track_seconds: Option<f64>,
+    /// Whether the whole track arrived rather than a preview: the delivered
+    /// length is within 2 seconds of the catalog length. `None` when either
+    /// length is unknown, and always in the sandbox, which renders 30
+    /// seconds of every track by design.
+    pub full_length: Option<bool>,
     pub sandbox: bool,
     /// The sandbox's 16/44.1 placeholder tone, which announces no real
     /// format. Rendered sandbox streams are `false` and are checked like
@@ -371,7 +392,9 @@ pub struct StreamingHub {
     sandbox_tone: bool,
     server_credentials: RwLock<HashMap<ProviderId, ServerCredential>>,
     media: Arc<dyn MediaTransport>,
-    deliveries: Mutex<HashMap<(i32, String), DeliveredStream>>,
+    /// Keyed by listener, track and play id (empty without one).
+    deliveries: Mutex<HashMap<(i32, String, String), DeliveredStream>>,
+    delivery_seq: std::sync::atomic::AtomicU64,
     segment_indexes: Mutex<HashMap<String, media::SegmentIndex>>,
     /// Each service's genre list per listener (genres vary by country),
     /// with when it was read.
@@ -547,6 +570,7 @@ impl StreamingHub {
             server_credentials: RwLock::new(server_credentials),
             media: Arc::new(media::FixtureMedia::new()),
             deliveries: Mutex::new(HashMap::new()),
+            delivery_seq: std::sync::atomic::AtomicU64::new(0),
             segment_indexes: Mutex::new(HashMap::new()),
             genre_lists: Mutex::new(HashMap::new()),
             genre_hints: Mutex::new(HashMap::new()),
@@ -1053,6 +1077,43 @@ impl StreamingHub {
 
     /// Finishes a browser sign-in with the code and state TIDAL sent back.
     /// Each state works once, for the listener who started it.
+    /// Signs in to TIDAL headlessly with a refresh token from an earlier
+    /// sign-in on this client, the way an unattended check (CI with
+    /// secrets) keeps a session without a person approving a code.
+    pub async fn tidal_sign_in_with_refresh_token(
+        &self,
+        user_id: i32,
+        refresh_token: &str,
+    ) -> HubResult<ProviderStatus> {
+        let refresh_token = refresh_token.trim();
+        if refresh_token.is_empty() || refresh_token.len() > 4096 {
+            return Err(HubError::Invalid("That TIDAL refresh token is not usable."));
+        }
+        let row = self
+            .row(user_id, ProviderId::Tidal)
+            .await?
+            .ok_or(HubError::Provider(ProviderError::NotConnected))?;
+        let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
+        let seed = ProviderSession {
+            access_token: String::new(),
+            refresh_token: Some(refresh_token.to_string()),
+            expires_at: Some(0),
+            user_id: String::new(),
+            account_name: String::new(),
+            country_code: None,
+            plan: None,
+        };
+        let session = self
+            .tidal
+            .refresh(&credentials, &seed)
+            .await?
+            .ok_or(HubError::Provider(ProviderError::SessionExpired))?;
+        let session = self.tidal.identify(session).await?;
+        self.store_session(user_id, ProviderId::Tidal, &session)
+            .await?;
+        self.provider_status(user_id, ProviderId::Tidal).await
+    }
+
     pub async fn finish_tidal_browser_sign_in(
         &self,
         user_id: i32,
@@ -1225,7 +1286,7 @@ impl StreamingHub {
             .await;
     }
 
-    async fn context(
+    pub(crate) async fn context(
         &self,
         user_id: i32,
         provider: ProviderId,
@@ -1800,6 +1861,7 @@ impl StreamingHub {
                 },
                 format,
                 requested: quality,
+                stream_seconds: Some(f64::from(sandbox::PREVIEW_SECONDS)),
             });
         }
         let (stream, _) = self
@@ -2184,17 +2246,40 @@ impl StreamingHub {
         stream: &ResolvedStream,
         probed: Option<ProbedFormat>,
     ) -> DeliveredStream {
-        let delivery = delivered_stream(track_id.clone(), stream, probed, self.sandbox);
+        self.record_play(user_id, track_id, None, stream, probed, None)
+    }
+
+    /// Records what one play of a stream delivered. `play` is the
+    /// player's id for that play.
+    pub fn record_play(
+        &self,
+        user_id: i32,
+        track_id: String,
+        play: Option<String>,
+        stream: &ResolvedStream,
+        probed: Option<ProbedFormat>,
+        track_seconds: Option<f64>,
+    ) -> DeliveredStream {
+        let mut delivery = delivered_stream(track_id.clone(), stream, probed, self.sandbox);
+        check_length(&mut delivery, track_seconds);
+        delivery.seq = self
+            .delivery_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        delivery.play = play.clone();
         if let Ok(mut deliveries) = self.deliveries.lock() {
             if deliveries.len() >= MAX_DELIVERIES
                 && let Some(oldest) = deliveries
                     .iter()
-                    .min_by_key(|(_, delivery)| delivery.at)
+                    .min_by_key(|(_, delivery)| delivery.seq)
                     .map(|(key, _)| key.clone())
             {
                 deliveries.remove(&oldest);
             }
-            deliveries.insert((user_id, track_id), delivery.clone());
+            deliveries.insert(
+                (user_id, track_id, play.unwrap_or_default()),
+                delivery.clone(),
+            );
         }
         delivery
     }
@@ -2204,7 +2289,24 @@ impl StreamingHub {
         self.deliveries
             .lock()
             .ok()?
-            .get(&(user_id, track_id.to_string()))
+            .iter()
+            .filter(|((user, track, _), _)| *user == user_id && track == track_id)
+            .max_by_key(|(_, delivery)| delivery.seq)
+            .map(|(_, delivery)| delivery.clone())
+    }
+
+    /// What one play of a track delivered, or `None` until that play's
+    /// first bytes have been read. Never an earlier play's report.
+    pub fn play_delivery(
+        &self,
+        user_id: i32,
+        track_id: &str,
+        play: &str,
+    ) -> Option<DeliveredStream> {
+        self.deliveries
+            .lock()
+            .ok()?
+            .get(&(user_id, track_id.to_string(), play.to_string()))
             .cloned()
     }
 
@@ -2356,10 +2458,12 @@ impl StreamingHub {
             }
         };
         let track_id = super::entity_id(provider, &raw_id);
+        let track_seconds = check.track.as_ref().map(|track| track.duration);
         match self.sample_stream(&stream).await {
             Ok(probed) => {
-                let delivery = self.record_delivery(user_id, track_id, &stream, probed);
-                let ok = delivery.delivered.is_some();
+                let delivery =
+                    self.record_play(user_id, track_id, None, &stream, probed, track_seconds);
+                let ok = delivery.delivered.is_some() && delivery.full_length != Some(false);
                 check.steps.push(CheckStep {
                     id: "stream",
                     ok,
@@ -2427,6 +2531,62 @@ fn quality_label(provider: &dyn StreamingProvider, quality: StreamQuality) -> St
         )
 }
 
+/// Whether a delivered lossy bitrate is the one announced: within 10%,
+/// as encoders round and VBR streams average a little either side.
+fn bitrate_matches(announced: u32, delivered: u32) -> bool {
+    let tolerance = announced.div_ceil(10);
+    delivered.abs_diff(announced) <= tolerance
+}
+
+/// What disagrees between the announced and delivered formats.
+fn format_mismatches(announced: &AudioFormat, delivered: &AudioFormat) -> Vec<String> {
+    let mut found = Vec::new();
+    if delivered.lossless != announced.lossless {
+        found.push(if announced.lossless {
+            format!("lossy {}, not lossless", delivered.label)
+        } else {
+            format!("lossless {}, not lossy", delivered.label)
+        });
+        return found;
+    }
+    if delivered.codec != announced.codec {
+        found.push(format!(
+            "{}, not {}",
+            delivered.codec.to_ascii_uppercase(),
+            announced.codec.to_ascii_uppercase()
+        ));
+    }
+    if announced.lossless {
+        if let Some(depth) = announced.bit_depth
+            && delivered.bit_depth != Some(depth)
+        {
+            found.push(format!(
+                "{}-bit, not {depth}-bit",
+                delivered
+                    .bit_depth
+                    .map_or_else(|| "unknown".to_string(), |bits| bits.to_string())
+            ));
+        }
+        if let Some(rate) = announced.sample_rate
+            && delivered.sample_rate != Some(rate)
+        {
+            found.push(format!(
+                "{} kHz, not {} kHz",
+                delivered
+                    .sample_rate
+                    .map_or_else(|| "unknown".to_string(), super::format_khz),
+                super::format_khz(rate)
+            ));
+        }
+    } else if let (Some(announced), Some(delivered)) =
+        (announced.bitrate_kbps, delivered.bitrate_kbps)
+        && !bitrate_matches(announced, delivered)
+    {
+        found.push(format!("{delivered} kbps, not {announced}"));
+    }
+    found
+}
+
 fn delivered_stream(
     track_id: String,
     stream: &ResolvedStream,
@@ -2435,27 +2595,21 @@ fn delivered_stream(
 ) -> DeliveredStream {
     let tone = matches!(stream.source, StreamSource::SandboxTone { .. });
     let announced = stream.format.clone();
-    let (delivered, container, frame_verified) = match probed {
+    let (delivered, container, frame_verified, header_seconds) = match probed {
         Some(probed) => (
             Some(probed.format),
             Some(probed.container),
             probed.frame_verified,
+            probed.seconds,
         ),
-        None => (None, None, false),
+        None => (None, None, false, None),
     };
-    let matches_announced = delivered.as_ref().is_some_and(|delivered| {
+    let mismatches = match &delivered {
         // The placeholder tone announces no real format.
-        !tone
-            && delivered.lossless == announced.lossless
-            && (!announced.lossless
-                || (delivered.codec == announced.codec
-                    && announced
-                        .bit_depth
-                        .is_none_or(|depth| delivered.bit_depth == Some(depth))
-                    && announced
-                        .sample_rate
-                        .is_none_or(|rate| delivered.sample_rate == Some(rate))))
-    });
+        Some(delivered) if !tone => format_mismatches(&announced, delivered),
+        _ => Vec::new(),
+    };
+    let matches_announced = delivered.is_some() && !tone && mismatches.is_empty();
     DeliveredStream {
         track_id,
         requested: stream.requested,
@@ -2464,10 +2618,35 @@ fn delivered_stream(
         container,
         frame_verified,
         matches_announced,
+        mismatches,
+        play: None,
+        seq: 0,
+        // A DASH timeline lists every segment Parson relays; a fragmented
+        // init segment's own header often leaves the length out.
+        delivered_seconds: stream.stream_seconds.or(header_seconds),
+        track_seconds: None,
+        full_length: None,
         sandbox,
         tone,
         at: unix_now(),
     }
+}
+
+/// Fills in the catalog length and whether the whole track arrived.
+fn check_length(delivery: &mut DeliveredStream, track_seconds: Option<f64>) {
+    let track_seconds = track_seconds.filter(|seconds| *seconds > 0.0);
+    delivery.track_seconds = track_seconds;
+    delivery.full_length = match (delivery.delivered_seconds, track_seconds) {
+        // The sandbox renders 30 seconds of every track by design.
+        _ if delivery.sandbox => None,
+        (Some(delivered), Some(track)) => Some(delivered + 2.0 >= track),
+        _ => None,
+    };
+}
+
+fn clock(seconds: f64) -> String {
+    let total = seconds.round().max(0.0) as u64;
+    format!("{}:{:02}", total / 60, total % 60)
 }
 
 fn describe_delivery(delivery: &DeliveredStream) -> String {
@@ -2489,6 +2668,21 @@ fn describe_delivery(delivery: &DeliveredStream) -> String {
     if delivery.frame_verified {
         detail.push_str("; first audio frame verified");
     }
+    match (
+        delivery.full_length,
+        delivery.delivered_seconds,
+        delivery.track_seconds,
+    ) {
+        (Some(true), Some(delivered), _) => {
+            detail.push_str(&format!("; full length ({})", clock(delivered)));
+        }
+        (Some(false), Some(delivered), Some(track)) => detail.push_str(&format!(
+            "; only {} of {} arrived, a preview rather than the full track",
+            clock(delivered),
+            clock(track)
+        )),
+        _ => {}
+    }
     if delivery.tone {
         detail.push_str(". Sandbox preview tone, not a real stream.");
     } else if delivery.matches_announced {
@@ -2504,9 +2698,21 @@ fn describe_delivery(delivery: &DeliveredStream) -> String {
         }
     } else {
         detail.push_str(&format!(
-            ". The service announced {}.",
+            ". The service announced {}",
             delivery.announced.label
         ));
+        if delivery.mismatches.is_empty() {
+            detail.push('.');
+        } else {
+            detail.push_str(&format!(": {}.", delivery.mismatches.join(", ")));
+        }
+        if delivery.sandbox {
+            detail.push_str(
+                " Sandbox: Parson's test encoder (ffmpeg's built-in AAC) cannot \
+                 reach every announced bitrate, so this check is working as \
+                 intended.",
+            );
+        }
     }
     detail
 }
@@ -2579,5 +2785,156 @@ pub fn user_message(error: &HubError) -> String {
         HubError::CredentialsRequired(ProviderId::Qobuz) => {
             "This server has no Qobuz app yet. Ask the server owner to add one in Settings > Services, or use your own app ID and secret.".into()
         }
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+
+    fn stream(format: AudioFormat) -> ResolvedStream {
+        ResolvedStream {
+            source: StreamSource::Progressive {
+                url: "https://media.test/a".into(),
+                mime: "audio/mp4".into(),
+            },
+            format,
+            requested: StreamQuality::High,
+            stream_seconds: None,
+        }
+    }
+
+    fn probed(format: AudioFormat, seconds: Option<f64>) -> ProbedFormat {
+        ProbedFormat {
+            format,
+            container: "mp4",
+            frame_verified: false,
+            seconds,
+        }
+    }
+
+    #[test]
+    fn a_short_lossy_bitrate_is_a_mismatch_not_a_match() {
+        let announced = AudioFormat::lossy("aac", 320);
+        let delivery = delivered_stream(
+            "tidal:1".into(),
+            &stream(announced.clone()),
+            Some(probed(AudioFormat::lossy("aac", 255), None)),
+            false,
+        );
+        assert!(!delivery.matches_announced);
+        assert_eq!(delivery.mismatches, vec!["255 kbps, not 320".to_string()]);
+        assert!(
+            describe_delivery(&delivery)
+                .contains("The service announced AAC 320: 255 kbps, not 320.")
+        );
+
+        // Encoders round: within 10% is the announced bitrate.
+        for close in [290, 318, 320, 330, 352] {
+            let delivery = delivered_stream(
+                "tidal:1".into(),
+                &stream(announced.clone()),
+                Some(probed(AudioFormat::lossy("aac", close), None)),
+                false,
+            );
+            assert!(delivery.matches_announced, "{close}");
+        }
+        for far in [287, 353] {
+            assert!(!bitrate_matches(320, far), "{far}");
+        }
+
+        // Another codec is a mismatch whatever the bitrate.
+        let delivery = delivered_stream(
+            "qobuz:1".into(),
+            &stream(AudioFormat::lossy("mp3", 320)),
+            Some(probed(AudioFormat::lossy("aac", 320), None)),
+            false,
+        );
+        assert_eq!(delivery.mismatches, vec!["AAC, not MP3".to_string()]);
+    }
+
+    #[test]
+    fn lossless_mismatches_name_the_depth_and_rate() {
+        let delivery = delivered_stream(
+            "qobuz:1".into(),
+            &stream(AudioFormat::lossless("flac", Some(24), Some(192_000))),
+            Some(probed(
+                AudioFormat::lossless("flac", Some(16), Some(44_100)),
+                None,
+            )),
+            false,
+        );
+        assert_eq!(
+            delivery.mismatches,
+            vec![
+                "16-bit, not 24-bit".to_string(),
+                "44.1 kHz, not 192 kHz".to_string()
+            ]
+        );
+        let delivery = delivered_stream(
+            "tidal:1".into(),
+            &stream(AudioFormat::lossless("flac", Some(16), Some(44_100))),
+            Some(probed(AudioFormat::lossy("aac", 320), None)),
+            false,
+        );
+        assert_eq!(
+            delivery.mismatches,
+            vec!["lossy AAC 320, not lossless".to_string()]
+        );
+    }
+
+    #[test]
+    fn full_length_compares_the_delivered_length_with_the_catalog() {
+        let format = AudioFormat::lossless("flac", Some(24), Some(96_000));
+        let mut delivery = delivered_stream(
+            "tidal:1".into(),
+            &stream(format.clone()),
+            Some(probed(format.clone(), Some(240.6))),
+            false,
+        );
+        check_length(&mut delivery, Some(241.0));
+        assert_eq!(delivery.full_length, Some(true));
+        assert!(describe_delivery(&delivery).contains("full length (4:01)"));
+
+        let mut preview = delivered_stream(
+            "tidal:1".into(),
+            &stream(format.clone()),
+            Some(probed(format.clone(), Some(30.0))),
+            false,
+        );
+        check_length(&mut preview, Some(241.0));
+        assert_eq!(preview.full_length, Some(false));
+        assert!(describe_delivery(&preview).contains("only 0:30 of 4:01 arrived"));
+
+        // A DASH timeline's length wins over a header that leaves it out.
+        let mut dash = stream(format.clone());
+        dash.stream_seconds = Some(241.2);
+        let mut delivery = delivered_stream(
+            "tidal:1".into(),
+            &dash,
+            Some(probed(format.clone(), None)),
+            false,
+        );
+        check_length(&mut delivery, Some(241.0));
+        assert_eq!(delivery.delivered_seconds, Some(241.2));
+        assert_eq!(delivery.full_length, Some(true));
+
+        // Unknown lengths and the 30-second sandbox give no verdict.
+        let mut unknown = delivered_stream(
+            "tidal:1".into(),
+            &stream(format.clone()),
+            Some(probed(format.clone(), None)),
+            false,
+        );
+        check_length(&mut unknown, Some(241.0));
+        assert_eq!(unknown.full_length, None);
+        let mut sandbox = delivered_stream(
+            "tidal:1".into(),
+            &stream(format.clone()),
+            Some(probed(format, Some(30.0))),
+            true,
+        );
+        check_length(&mut sandbox, Some(241.0));
+        assert_eq!(sandbox.full_length, None);
     }
 }
