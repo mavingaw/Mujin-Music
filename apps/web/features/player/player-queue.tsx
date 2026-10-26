@@ -2,6 +2,7 @@
 
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
 import { usePlayer, type Player } from "./player-api";
 import {
   type ZoneRepeatMode,
@@ -309,9 +310,8 @@ export function PlayerQueueList({
         const rowMovable = movable(index);
         const removable = canEditQueueRow(editing, index, queue.length);
         const radioPick = radioStart >= 0 && index >= radioStart;
-        const cover = item.album.cover_url
-          ? `${getBaseURL()}/media/images/${encodeURIComponent(item.album.cover_url)}`
-          : defaultCover;
+        const cover =
+          getLibraryImageUrl(item.album.cover_url, getBaseURL) ?? defaultCover;
         return (
           <Fragment key={`${item.song.id}-${index}`}>
             {index === radioStart && <RadioQueueSection hasPicks />}

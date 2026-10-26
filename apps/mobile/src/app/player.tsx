@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
+import { StreamDeliveryLine } from "@/components/streaming-ui";
 import {
   ChevronDown,
   ChevronLeft,
@@ -86,7 +87,7 @@ import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
 import { ServerOutputs } from "@/components/server-outputs";
 import { dspAvailable } from "@/lib/signal-path";
 import { useSignalPath } from "@/hooks/use-signal-path";
-import type { SignalPath } from "@parson/music-sdk";
+import { isStreamingId, type SignalPath } from "@parson/music-sdk";
 import { ZoneButton } from "@/components/zone-sheet";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
@@ -233,7 +234,11 @@ function NowPlayingPanel({
           >
             {song.artist}
           </Text>
-          <SignalPathBadge onPress={onSignalPath} path={signalPath} />
+          {isStreamingId(song.id) ? (
+            <StreamDeliveryLine songId={song.id} />
+          ) : (
+            <SignalPathBadge onPress={onSignalPath} path={signalPath} />
+          )}
         </View>
         <Pressable
           {...immediateBorderlessPressFeedback}

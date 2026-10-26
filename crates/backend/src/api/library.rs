@@ -2888,7 +2888,7 @@ async fn release_transcode_lock(cache_path: &Path, cache_lock: &Arc<Mutex<()>>) 
 }
 
 #[get("/media/songs/{song}/stream")]
-async fn stream_song(
+pub(crate) async fn stream_song(
     req: HttpRequest,
     path: web::Path<String>,
     query: web::Query<BitrateQueryParams>,
@@ -2898,6 +2898,11 @@ async fn stream_song(
         return response;
     }
     let song_key = path.into_inner();
+    // TIDAL and Qobuz tracks share the stream route under provider-scoped ids.
+    if let Some((provider, raw_id)) = crate::providers::parse_entity_id(&song_key) {
+        return crate::api::providers::stream_provider_track(&req, provider, raw_id, query.bitrate)
+            .await;
+    }
     stream_song_planned(
         &req,
         &song_key,
@@ -2920,6 +2925,13 @@ async fn head_stream_song(
     }
     let audio_effect = query.audio_effect();
     let song_key = path.into_inner();
+    if crate::providers::parse_entity_id(&song_key).is_some() {
+        // Resolving a streaming-service URL costs an API call, so HEAD only
+        // confirms the route; the GET reports format and length.
+        return HttpResponse::Ok()
+            .insert_header((header::ACCEPT_RANGES, "bytes"))
+            .finish();
+    }
     let (song_id, song_path) = match resolve_stream_song_with_refresh(&song_key, &lifecycle).await {
         Ok(resolved) => resolved,
         Err(response) => return response,

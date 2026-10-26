@@ -9,7 +9,7 @@ export default function EntityPageState({
   loading = false,
   onRetry,
 }: {
-  kind: "album" | "artist" | "composer";
+  kind: "album" | "artist" | "composer" | "playlist";
   loading?: boolean;
   onRetry?: () => void;
 }) {
@@ -31,7 +31,9 @@ export default function EntityPageState({
             ? "Album unavailable"
             : kind === "composer"
               ? "Composer unavailable"
-              : "Artist unavailable"}
+              : kind === "playlist"
+                ? "Playlist unavailable"
+                : "Artist unavailable"}
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-500">
           It may have moved during a library refresh, or the server could not be

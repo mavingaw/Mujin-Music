@@ -2,6 +2,9 @@
 
 import { ExplicitBadge } from "@/features/library/song-title";
 import { ArtistCreditLinks } from "@/features/library/artist-credit-links";
+import { DeliveredFormat } from "@/features/streaming/delivered-format";
+import { SourceBadge } from "@/features/streaming/source-badge";
+import { parseStreamingId } from "@parson/music-sdk";
 import type { TrackArtistCreditPart } from "@/features/library/track-artist-credit";
 
 import Image from "next/image";
@@ -162,6 +165,7 @@ export function FullscreenPlayer({
       ? "Queue"
       : "Now playing";
   const showingMobileSubView = lyricsOpen || queueOpen;
+  const streamingSource = parseStreamingId(songId);
 
   const beginDrag = (event: PointerEvent<HTMLDivElement>) => {
     dragStart.current = event.clientY;
@@ -351,6 +355,12 @@ export function FullscreenPlayer({
                       <div className="mt-4 flex min-w-0">{signalBadge}</div>
                     ) : null}
                     {feedback && <div className="mt-4 flex">{feedback}</div>}
+                    {streamingSource && (
+                      <div className="mt-4 flex items-center gap-2.5">
+                        <SourceBadge provider={streamingSource.provider} />
+                        <DeliveredFormat songId={songId} />
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

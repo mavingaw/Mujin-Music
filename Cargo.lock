@@ -2362,6 +2362,7 @@ dependencies = [
  "actix-web-httpauth",
  "actix-ws",
  "argon2",
+ "aws-lc-rs",
  "base64 0.23.1",
  "bytes",
  "chrono",

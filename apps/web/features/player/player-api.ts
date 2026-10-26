@@ -57,6 +57,11 @@ export type Player = {
   muted: boolean;
   slowedReverb: boolean;
   audioPreset: AudioPresetId;
+  /**
+   * The stream now playing: its URL and how many times its first frame
+   * has been decoded (0 until the first).
+   */
+  stream: { url: string; frames: number };
   audioPresets: readonly AudioPreset[];
   /** True while repeating the current track (`repeatMode === "one"`). */
   looping: boolean;

@@ -6,7 +6,7 @@ import AdvancedSettings from "@/features/settings/advanced-settings";
 import LibrarySettings from "@/features/settings/library-settings";
 import UserForm from "@/features/settings/user-form";
 import { useSession } from "@/features/account/session-provider";
-import { useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import AudioOutputSettings from "@/features/settings/audio-output-settings";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
@@ -14,12 +14,15 @@ import EnrichmentSettings from "@/features/settings/enrichment-settings";
 import MetadataSourcesSettings from "@/features/settings/metadata-sources-settings";
 import RadioSettings from "@/features/settings/radio-settings";
 import ConnectionsSettings from "@/features/imports/connections-settings";
+import ServicesSettings from "@/features/streaming/services-settings";
+import { useSearchParams } from "next/navigation";
 
 const settingsTabs = [
   "account",
   "playback",
   "outputs",
   "connections",
+  "services",
   "library",
   "data",
   "users",
@@ -32,6 +35,7 @@ const labels: Record<SettingsTab, string> = {
   playback: "Playback",
   outputs: "Audio outputs",
   connections: "Connections",
+  services: "Services",
   library: "Library",
   data: "Data",
   users: "Users",
@@ -39,21 +43,42 @@ const labels: Record<SettingsTab, string> = {
 };
 
 export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsContent />
+    </Suspense>
+  );
+}
+
+function SettingsContent() {
   const { session } = useSession();
   const isAdmin = session?.role === "admin";
-  const [activeTab, setActiveTab] = useState<SettingsTab>("account");
-  const availableTabs: readonly SettingsTab[] = isAdmin
+  const requestedTab = useSearchParams().get("tab");
+  const allowedTabs: readonly SettingsTab[] = isAdmin
     ? settingsTabs
-    : (["account", "playback", "outputs", "connections", "data"] as const);
-  useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    const allowed: readonly string[] = isAdmin
-      ? settingsTabs
-      : ["account", "playback", "outputs", "connections", "data"];
-    if (requested && allowed.includes(requested)) {
-      setActiveTab(requested as SettingsTab);
-    }
-  }, [isAdmin]);
+    : ([
+        "account",
+        "playback",
+        "outputs",
+        "connections",
+        "services",
+        "data",
+      ] as const);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+    allowedTabs.includes(requestedTab as SettingsTab)
+      ? (requestedTab as SettingsTab)
+      : "account",
+  );
+  // Deep links such as /settings?tab=outputs from the signal path; an
+  // admin tab applies once the session says the user is an admin.
+  const requestKey = `${requestedTab ?? ""}|${isAdmin}`;
+  const [appliedKey, setAppliedKey] = useState(requestKey);
+  if (requestKey !== appliedKey) {
+    setAppliedKey(requestKey);
+    if (allowedTabs.includes(requestedTab as SettingsTab))
+      setActiveTab(requestedTab as SettingsTab);
+  }
+  const availableTabs = allowedTabs;
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -95,6 +120,7 @@ export default function SettingsPage() {
           )}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
           {activeTab === "connections" && <ConnectionsSettings />}
+          {activeTab === "services" && <ServicesSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && (
             <>

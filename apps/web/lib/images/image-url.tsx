@@ -15,7 +15,7 @@ export function getLibraryImageUrl(
   getBaseUrl: () => string,
 ) {
   if (isPlaceholderImage(image)) return null;
-  if (/^https?:\/\//i.test(image ?? "")) return image ?? null;
+  if (/^(https?:\/\/|data:image\/)/i.test(image ?? "")) return image ?? null;
 
   return `${getBaseUrl()}/media/images/${encodeURIComponent(image ?? "")}`;
 }

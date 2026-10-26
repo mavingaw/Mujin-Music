@@ -2,6 +2,7 @@ import {
   buildSignalPath,
   getPlayerAudioPreset,
   getSongSignalPath,
+  isStreamingId,
   type LibrarySong,
   type SignalPath,
 } from "@parson/music-sdk";
@@ -34,7 +35,9 @@ export function useSignalPath(song: LibrarySong | null): {
         // The capabilities every stream request carries.
         capabilities: devicePlaybackCapabilities(),
       }),
-    enabled: Boolean(songId) && online && !signal.localFile,
+    // TIDAL and Qobuz streams report their delivered format themselves.
+    enabled:
+      Boolean(songId) && online && !signal.localFile && !isStreamingId(songId),
     retry: 1,
     staleTime: 60_000,
   });

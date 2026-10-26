@@ -7,6 +7,7 @@ import {
   enrichmentWaitingLabel,
   focusQueryString,
   focusRoleLabel,
+  isStreamingId,
   getAlbumInfos,
   getArtistAbout,
   getArtistDiscography,
@@ -38,6 +39,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Artwork } from "@/components/artwork";
 import { PersonAvatar } from "@/components/person-avatar";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
+import { StreamingArtistScreen } from "@/components/streaming-artist-screen";
 import { AlbumActions } from "@/components/album-actions";
 import { BannedMark, useRadioBans } from "@/components/radio-bans";
 import { songBanned } from "@/lib/radio-queue";
@@ -58,6 +60,11 @@ import {
 
 export default function ArtistScreen() {
   const { id, tab } = useLocalSearchParams<{ id: string; tab?: string }>();
+  if (isStreamingId(id)) return <StreamingArtistScreen id={id} />;
+  return <LibraryArtistScreen id={id} tab={tab} />;
+}
+
+function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
   const router = useRouter();
   const playback = useZonePlayback();
   const bans = useRadioBans();

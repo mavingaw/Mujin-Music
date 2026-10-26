@@ -1,6 +1,14 @@
 "use client";
 
-import { Home, Import, Library, Search, Settings, Tags } from "lucide-react";
+import {
+  AudioLines,
+  Home,
+  Import,
+  Library,
+  Search,
+  Settings,
+  Tags,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ParsonBrandMark from "@/components/icons/parson-brand-mark";
@@ -10,6 +18,7 @@ const navigation = [
   { href: "/library", label: "Library", icon: Library },
   { href: "/genre", label: "Genres", icon: Tags },
   { href: "/imports", label: "Imports", icon: Import },
+  { href: "/streaming", label: "Streaming", icon: AudioLines },
 ];
 
 const mobileNavigation = [

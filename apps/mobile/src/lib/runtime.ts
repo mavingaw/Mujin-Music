@@ -117,7 +117,7 @@ export function imageUrl(path?: string | null) {
     normalized.includes("snf.png?")
   )
     return null;
-  if (/^https?:\/\//i.test(image)) return image;
+  if (/^(https?:\/\/|data:image\/)/i.test(image)) return image;
   return `${runtime.origin}/media/images/${encodeURIComponent(image)}`;
 }
 
@@ -163,12 +163,16 @@ export function streamUrl(
   songId: string,
   bitrate = 0,
   capabilities: PlaybackCapabilities | null = null,
+  play: string | null = null,
 ) {
   const url = new URL(
     apiUrl(`media/songs/${encodeURIComponent(songId)}/stream`),
   );
   url.searchParams.set("bitrate", String(bitrate));
   applyPlaybackCapabilities(url, capabilities);
+  // TIDAL and Qobuz plays carry an id so the player can ask what exactly
+  // this stream delivered.
+  if (play) url.searchParams.set("play", play);
   return url.toString();
 }
 
