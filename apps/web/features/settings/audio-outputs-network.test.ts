@@ -35,6 +35,8 @@ test("network players are listed apart from the server's own devices", () => {
   const { local, network } = outputEntries([
     zone("upnp:abc", "upnp", streamer),
     zone("web:1", "web"),
+    // This browser's own zone describes its system output, not the server's.
+    zone("client:1", "web", endpoint("client:1")),
     zone("device:alsa:USB:0", "device", usb),
     zone("airplay:aabb", "airplay", airplay),
     // A group plays through its members' endpoints, listed under them.
