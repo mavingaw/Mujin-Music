@@ -17,6 +17,7 @@ import {
   ListMusic,
   Maximize2,
   MicVocal,
+  MonitorSpeaker,
   SlidersHorizontal,
 } from "lucide-react";
 import Image from "next/image";
@@ -50,6 +51,7 @@ export function PlayerFooter({
   lyricsOpen,
   muted,
   onNext,
+  onHandOffToSpotify,
   onOpenFullscreen,
   onOpenDsp,
   onOpenQueue,
@@ -90,6 +92,8 @@ export function PlayerFooter({
   lyricsOpen: boolean;
   muted: boolean;
   onNext: () => void;
+  /** Present when Spotify Connect handoff is available. */
+  onHandOffToSpotify?: () => void;
   onOpenFullscreen: () => void;
   /** Opens the DSP engine; omitted while casting. */
   onOpenDsp?: () => void;
@@ -249,6 +253,12 @@ export function PlayerFooter({
                 <Maximize2 className="h-4 w-4" />
                 Fullscreen
               </DropdownMenuItem>
+              {onHandOffToSpotify && (
+                <DropdownMenuItem onSelect={onHandOffToSpotify}>
+                  <MonitorSpeaker className="h-4 w-4" />
+                  Play on Spotify device…
+                </DropdownMenuItem>
+              )}
             </PlayerMoreMenu>
           </section>
         </div>

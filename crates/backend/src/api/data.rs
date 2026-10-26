@@ -910,6 +910,25 @@ fn sanitize_backup_database(path: &Path) -> Result<(), String> {
              SET token_version = token_version + 1, now_playing = NULL;",
         )
         .map_err(|error| error.to_string())?;
+    // Music-service tokens and API keys never leave the server in a backup.
+    #[derive(diesel::deserialize::QueryableByName)]
+    struct TableCount {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    for table in ["import_connection", "import_auth_state"] {
+        let present = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind::<diesel::sql_types::Text, _>(table)
+        .get_result::<TableCount>(&mut snapshot)
+        .map_err(|error| error.to_string())?;
+        if present.count > 0 {
+            snapshot
+                .batch_execute(&format!("DELETE FROM {table};"))
+                .map_err(|error| error.to_string())?;
+        }
+    }
     drop(snapshot);
     validate_restore_database(path)
 }
@@ -1700,7 +1719,9 @@ mod tests {
                  CREATE TABLE file_entry (id INTEGER PRIMARY KEY);
                  CREATE TABLE listen_history_item (id INTEGER PRIMARY KEY);
                  INSERT INTO user VALUES (1, 4, 'private-song-id');
-                 INSERT INTO refresh_session VALUES ('private-session');",
+                 INSERT INTO refresh_session VALUES ('private-session');
+                 CREATE TABLE import_connection (user_id INTEGER, service TEXT, credentials TEXT);
+                 INSERT INTO import_connection VALUES (1, 'spotify', '{\"refresh_token\":\"x\"}');",
             )
             .expect("private backup fixture");
         drop(connection);
@@ -1727,6 +1748,18 @@ mod tests {
         assert_eq!(state.sessions, 0);
         assert_eq!(state.token_version, 5);
         assert!(state.now_playing.is_none());
+        #[derive(diesel::deserialize::QueryableByName)]
+        struct Connections {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            count: i64,
+        }
+        let connections = diesel::sql_query("SELECT COUNT(*) AS count FROM import_connection")
+            .get_result::<Connections>(&mut connection)
+            .expect("import connections");
+        assert_eq!(
+            connections.count, 0,
+            "music-service tokens are not backed up"
+        );
         drop(connection);
         let _ = std::fs::remove_file(path);
     }

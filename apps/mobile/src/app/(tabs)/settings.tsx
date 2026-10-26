@@ -14,7 +14,7 @@ import {
   type LibraryRoot,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
-import { LogOut, Radio, Server, Trash2 } from "lucide-react-native";
+import { Import, LogOut, Radio, Server, Trash2 } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import {
@@ -351,6 +351,7 @@ export default function SettingsScreen() {
                 offline={session.phase === "offline"}
                 libraryName={session.libraryName}
                 onChange={() => leaveAuthenticatedApp(session.changeServer)}
+                onOpenImports={() => router.push("/imports")}
                 onRetry={session.retry}
                 origin={session.origin}
               />
@@ -614,6 +615,7 @@ function ServerSettings({
   offline,
   libraryName,
   onChange,
+  onOpenImports,
   onRetry,
   origin,
 }: {
@@ -621,6 +623,7 @@ function ServerSettings({
   offline: boolean;
   libraryName: string | null;
   onChange: () => Promise<void>;
+  onOpenImports: () => void;
   onRetry: () => Promise<void>;
   origin: string | null;
 }) {
@@ -656,6 +659,18 @@ function ServerSettings({
         <Server color="white" size={21} />
         <Text style={styles.actionText}>Change server</Text>
       </Pressable>
+      {offline ? null : (
+        <Pressable
+          accessibilityHint="Spotify, Apple Music, YouTube Music, Deezer and playlist files"
+          accessibilityRole="button"
+          disabled={busy}
+          style={[styles.action, busy && styles.disabled]}
+          onPress={onOpenImports}
+        >
+          <Import color="white" size={21} />
+          <Text style={styles.actionText}>Import playlists</Text>
+        </Pressable>
+      )}
     </>
   );
 }

@@ -53,6 +53,7 @@ import {
   Feather,
   ListMusic,
   Heart,
+  Import,
   Music2,
   Pause,
   Play,
@@ -332,7 +333,12 @@ export default function LibraryOverview() {
           />
         </div>
         {view === "playlists" && (
-          <div className="mb-2 ml-2 shrink-0">
+          <div className="mb-2 ml-2 flex shrink-0 gap-2">
+            <Button asChild variant="ghost">
+              <Link href="/imports">
+                <Import /> Import
+              </Link>
+            </Button>
             <CreatePlaylistButton />
           </div>
         )}

@@ -8,6 +8,7 @@ pub mod focus;
 pub mod formats;
 pub mod identity;
 pub mod indexer;
+pub mod matching;
 pub mod normalize;
 pub mod probe;
 pub mod search;

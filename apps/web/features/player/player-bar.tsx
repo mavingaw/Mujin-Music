@@ -43,6 +43,9 @@ import {
   useZoneQueue,
   useZoneSong,
 } from "./zones/use-remote-zone";
+import SpotifyHandoffDialog, {
+  useSpotifyHandoffAvailable,
+} from "@/features/imports/spotify-handoff-dialog";
 
 export default function PlayerBar() {
   const {
@@ -88,6 +91,8 @@ export default function PlayerBar() {
     output,
   } = usePlayer();
   const currentTime = usePlayerClock();
+  const handoffAvailable = useSpotifyHandoffAvailable();
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const cast = useCastOutput();
   const castItem = cast.session?.items[cast.session.current_position] ?? null;
   const castSong = useQuery({
@@ -604,6 +609,9 @@ export default function PlayerBar() {
         lyricsOpen={lyricsOpen}
         muted={effectiveMuted}
         onNext={next}
+        onHandOffToSpotify={
+          handoffAvailable && !casting ? () => setHandoffOpen(true) : undefined
+        }
         onOpenFullscreen={() => {
           setLyricsOpen(false);
           setQueueOpen(false);
@@ -632,6 +640,25 @@ export default function PlayerBar() {
         zoneSignal={remote ? <ZoneQualityLight compact zone={remote} /> : null}
       />
       {!casting && !fullscreenOpen && !queueOpen && <RadioNotices />}
+      {handoffOpen && (
+        <SpotifyHandoffDialog
+          onHandedOff={() => {
+            if (isPlaying) togglePlayPause();
+          }}
+          onOpenChange={setHandoffOpen}
+          open
+          positionMs={currentTime * 1000}
+          songIds={handoffSongIds(queue, song.id)}
+        />
+      )}
     </>
   );
+}
+
+/** The current song and the rest of the queue after it. */
+function handoffSongIds(queue: { song: { id: string } }[], currentId: string) {
+  const start = queue.findIndex((item) => item.song.id === currentId);
+  const upcoming = start >= 0 ? queue.slice(start) : [];
+  const ids = upcoming.map((item) => item.song.id);
+  return ids.length ? ids : [currentId];
 }
