@@ -99,28 +99,47 @@ pub struct BrowserSignIn {
 pub const TIDAL_CALLBACK_PATH: &str = "/settings/services/tidal-callback";
 const MAX_BROWSER_SIGN_INS: usize = 512;
 
-fn validated_redirect_uri(value: &str) -> HubResult<String> {
+/// Checks a browser sign-in redirect URI. It must be exactly one of
+/// `origins` (this server's own addresses: the one the browser used, and
+/// the configured public URL) followed by [`TIDAL_CALLBACK_PATH`], so a
+/// sign-in can never hand TIDAL's authorization code to another host.
+fn validated_redirect_uri(value: &str, origins: &[String]) -> HubResult<String> {
     let value = value.trim();
     let invalid = HubError::Invalid(
         "The redirect URI must be this server's address followed by /settings/services/tidal-callback.",
     );
-    let Some(rest) = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-    else {
+    let Some(origin) = value.strip_suffix(TIDAL_CALLBACK_PATH) else {
         return Err(invalid);
     };
     let well_formed = value.len() <= 512
-        && !rest.is_empty()
-        && !rest.starts_with('/')
-        && !value.contains(['?', '#', '\\'])
-        && value.chars().all(|character| character.is_ascii_graphic())
-        && value.ends_with(TIDAL_CALLBACK_PATH);
-    if well_formed {
+        && origin_is_well_formed(origin)
+        && value.chars().all(|character| character.is_ascii_graphic());
+    if !well_formed {
+        return Err(invalid);
+    }
+    let ours = origins
+        .iter()
+        .any(|allowed| allowed.trim_end_matches('/').eq_ignore_ascii_case(origin));
+    if ours {
         Ok(value.to_string())
     } else {
-        Err(invalid)
+        Err(HubError::Invalid(
+            "The redirect URI must point at this server, the address you opened Parson on.",
+        ))
     }
+}
+
+/// `http(s)://host[:port]` with no path, query, fragment or user info.
+fn origin_is_well_formed(origin: &str) -> bool {
+    let Some(authority) = origin
+        .strip_prefix("https://")
+        .or_else(|| origin.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    !authority.is_empty()
+        && !authority.contains(['/', '?', '#', '@', '\\'])
+        && !authority.starts_with(':')
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -164,6 +183,68 @@ pub struct ProviderStatus {
     pub pending: Option<PendingSignIn>,
     pub library: LibraryCounts,
     pub sandbox: bool,
+    /// The last "Check connection" on this account, kept so Settings can
+    /// say whether this account itself has been proven.
+    pub last_check: Option<AccountCheck>,
+}
+
+/// What the last "Check connection" proved about one account. Only a check
+/// against the real service (not the sandbox) that received the whole track
+/// in the lossless format the service announced counts as `verified`.
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub struct AccountCheck {
+    pub checked_at: i64,
+    pub ok: bool,
+    pub sandbox: bool,
+    pub verified: bool,
+    /// The step that failed: `session`, `favorites` or `stream`.
+    pub failed_step: Option<String>,
+    pub detail: String,
+    pub requested: Option<StreamQuality>,
+    pub announced: Option<String>,
+    pub delivered: Option<String>,
+    pub lossless: Option<bool>,
+    pub matches_announced: Option<bool>,
+    pub full_length: Option<bool>,
+    pub delivered_seconds: Option<f64>,
+    pub track_seconds: Option<f64>,
+    pub track_title: Option<String>,
+}
+
+impl AccountCheck {
+    pub fn from_check(check: &ConnectionCheck) -> Self {
+        let failed = check.steps.iter().find(|step| !step.ok);
+        let delivery = check.delivery.as_ref();
+        let delivered = delivery.and_then(|delivery| delivery.delivered.as_ref());
+        let verified = check.ok
+            && !check.sandbox
+            && delivery.is_some_and(|delivery| {
+                !delivery.sandbox
+                    && delivery.matches_announced
+                    && delivery.full_length == Some(true)
+            })
+            && delivered.is_some_and(|format| format.lossless);
+        Self {
+            checked_at: check.checked_at,
+            ok: check.ok,
+            sandbox: check.sandbox,
+            verified,
+            failed_step: failed.map(|step| step.id.to_string()),
+            detail: failed
+                .or(check.steps.last())
+                .map(|step| step.detail.clone())
+                .unwrap_or_default(),
+            requested: delivery.map(|delivery| delivery.requested),
+            announced: delivery.map(|delivery| delivery.announced.label.clone()),
+            delivered: delivered.map(|format| format.label.clone()),
+            lossless: delivered.map(|format| format.lossless),
+            matches_announced: delivery.map(|delivery| delivery.matches_announced),
+            full_length: delivery.and_then(|delivery| delivery.full_length),
+            delivered_seconds: delivery.and_then(|delivery| delivery.delivered_seconds),
+            track_seconds: delivery.and_then(|delivery| delivery.track_seconds),
+            track_title: check.track.as_ref().map(|track| track.title.clone()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -973,6 +1054,9 @@ impl StreamingHub {
             pending,
             library,
             sandbox: self.sandbox,
+            last_check: row
+                .and_then(|row| row.last_check.as_deref())
+                .and_then(|json| serde_json::from_str(json).ok()),
         }
     }
 
@@ -1037,8 +1121,9 @@ impl StreamingHub {
         &self,
         user_id: i32,
         redirect_uri: &str,
+        origins: &[String],
     ) -> HubResult<BrowserSignIn> {
-        let redirect_uri = validated_redirect_uri(redirect_uri)?;
+        let redirect_uri = validated_redirect_uri(redirect_uri, origins)?;
         let row = self.account_for_sign_in(user_id, ProviderId::Tidal).await?;
         let credentials = self.credentials(user_id, ProviderId::Tidal, &row)?;
         let (pending, mut authorize_url) =
@@ -2350,6 +2435,20 @@ impl StreamingHub {
     /// quality and reads the delivered format from the stream's own bytes
     /// through the same media path playback uses.
     pub async fn check_connection(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        track: Option<String>,
+    ) -> HubResult<ConnectionCheck> {
+        let check = self.run_check(user_id, provider, track).await?;
+        if let Ok(json) = serde_json::to_string(&AccountCheck::from_check(&check)) {
+            self.db(move |connection| store::save_last_check(connection, user_id, provider, &json))
+                .await?;
+        }
+        Ok(check)
+    }
+
+    async fn run_check(
         &self,
         user_id: i32,
         provider: ProviderId,

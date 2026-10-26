@@ -18,6 +18,16 @@ export function CredentialsGuide() {
       <h3 className="text-sm font-semibold text-zinc-200">
         How to get credentials
       </h3>
+      <GuideSection title="Why a subscription alone is not enough">
+        <p>
+          Apps that sign you in with only your TIDAL or Qobuz password are
+          partners the services licensed, or they reuse the keys built into the
+          services&apos; own apps. Neither service has licensed Parson, and
+          Parson does not reuse their apps&apos; keys. So someone on this server
+          adds a TIDAL client and a Qobuz app once, under Server credentials;
+          after that every listener signs in with just their own subscription.
+        </p>
+      </GuideSection>
       <GuideSection title="TIDAL: register your own client (free, self-service)">
         <ol className="list-decimal space-y-1.5 pl-5">
           <li>

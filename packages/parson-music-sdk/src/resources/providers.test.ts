@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api, { ApiError } from "../core/http";
 import {
+  accountProof,
+  type StreamingAccountCheck,
   finishTidalBrowserSignIn,
   readTidalCallback,
   startTidalBrowserSignIn,
@@ -662,5 +664,81 @@ describe("TIDAL browser sign-in", () => {
       ok: false,
       error: "TIDAL sent back no sign-in code.",
     });
+  });
+});
+
+describe("account proof", () => {
+  const now = new Date("2026-10-26T12:00:00Z");
+  const base: StreamingAccountCheck = {
+    checked_at: Math.floor(now.getTime() / 1000) - 60,
+    ok: true,
+    sandbox: false,
+    verified: true,
+    failed_step: null,
+    detail: "Delivered 24/192 FLAC",
+    requested: "hi_res",
+    announced: "24/192 FLAC",
+    delivered: "24/192 FLAC",
+    lossless: true,
+    matches_announced: true,
+    full_length: true,
+    delivered_seconds: 274,
+    track_seconds: 274,
+    track_title: "Blue in Green",
+  };
+  const provider = (last_check: StreamingAccountCheck | null) => ({
+    name: "Qobuz",
+    status: "signed_in" as const,
+    last_check,
+  });
+
+  test("a signed-in account is never assumed to work", () => {
+    expect(accountProof(provider(null), now)?.tone).toBe("unproven");
+    expect(
+      accountProof({ name: "Qobuz", status: "configured", last_check: null }),
+    ).toBeNull();
+  });
+
+  test("only a real full-length lossless check is verified", () => {
+    const proof = accountProof(provider(base), now);
+    expect(proof?.tone).toBe("verified");
+    expect(proof?.label).toBe("Verified: full-length 24/192 FLAC");
+    expect(proof?.detail).toContain('"Blue in Green" as 24/192 FLAC');
+
+    const sandbox = accountProof(
+      provider({ ...base, sandbox: true, verified: false }),
+      now,
+    );
+    expect(sandbox?.tone).toBe("unproven");
+    expect(sandbox?.detail).toContain("not the real service");
+  });
+
+  test("lossy and preview results say what was not proven", () => {
+    const lossy = accountProof(
+      provider({
+        ...base,
+        verified: false,
+        lossless: false,
+        delivered: "AAC 320",
+      }),
+      now,
+    );
+    expect(lossy?.tone).toBe("partial");
+    expect(lossy?.detail).toContain("lossy (AAC 320)");
+
+    const preview = accountProof(
+      provider({
+        ...base,
+        ok: false,
+        verified: false,
+        failed_step: "stream",
+        full_length: false,
+        detail: "only 0:30 of 4:34 arrived, a preview",
+      }),
+      now,
+    );
+    expect(preview?.tone).toBe("failed");
+    expect(preview?.label).toBe("Last check: Preview only");
+    expect(preview?.detail).toContain("a preview");
   });
 });

@@ -211,6 +211,104 @@ export interface StreamingProviderStatus {
   pending: StreamingPendingSignIn | null;
   library: { albums: number; tracks: number };
   sandbox: boolean;
+  /** The last "Check connection" on this account; null until one runs. */
+  last_check?: StreamingAccountCheck | null;
+}
+
+/**
+ * What the last "Check connection" proved about one account. `verified`
+ * means the real service (not the sandbox) sent the whole track, lossless,
+ * in the format it announced.
+ */
+export interface StreamingAccountCheck {
+  checked_at: number;
+  ok: boolean;
+  sandbox: boolean;
+  verified: boolean;
+  failed_step: "session" | "favorites" | "stream" | null;
+  detail: string;
+  requested: StreamQuality | null;
+  announced: string | null;
+  delivered: string | null;
+  lossless: boolean | null;
+  matches_announced: boolean | null;
+  full_length: boolean | null;
+  delivered_seconds: number | null;
+  track_seconds: number | null;
+  track_title: string | null;
+}
+
+export type AccountProofTone = "verified" | "partial" | "failed" | "unproven";
+
+export interface AccountProof {
+  tone: AccountProofTone;
+  /** Short line for a services list, e.g. "Verified: full-length 24/192 FLAC". */
+  label: string;
+  /** One sentence saying exactly what was and was not proven. */
+  detail: string;
+}
+
+/**
+ * Says honestly whether a signed-in account has been proven to stream
+ * whole tracks in lossless quality, from its last connection check. A
+ * signed-in account that was never checked is "unproven", never assumed
+ * to work.
+ */
+export function accountProof(
+  provider: Pick<StreamingProviderStatus, "name" | "status" | "last_check">,
+  now: Date = new Date(),
+): AccountProof | null {
+  if (provider.status !== "signed_in" && !provider.last_check) return null;
+  const check = provider.last_check;
+  if (!check) {
+    return {
+      tone: "unproven",
+      label: "Not checked yet",
+      detail: `Run Check connection to prove ${provider.name} sends this account full-length lossless streams.`,
+    };
+  }
+  const when = formatLastSync(check.checked_at, now);
+  if (check.sandbox) {
+    return {
+      tone: "unproven",
+      label: "Sandbox only",
+      detail: `Checked against recorded ${provider.name} replies (${when}), not the real service. This proves Parson's side only.`,
+    };
+  }
+  if (check.verified) {
+    return {
+      tone: "verified",
+      label: `Verified: full-length ${check.delivered ?? "lossless"}`,
+      detail: `${when}: ${provider.name} sent this account the whole of ${check.track_title ? `"${check.track_title}"` : "a track"} as ${check.delivered}, the format it announced.`,
+    };
+  }
+  if (check.ok) {
+    // Worked, but not proof of lossless: a lossy plan or an unknown length.
+    const reason =
+      check.lossless === false
+        ? `it was lossy (${check.delivered ?? "unknown format"})`
+        : check.full_length == null
+          ? "the stream did not state its length"
+          : `it was ${check.delivered ?? "an unread format"}`;
+    return {
+      tone: "partial",
+      label: `Plays ${check.delivered ?? "audio"}`,
+      detail: `${when}: streaming works, but ${reason}, so lossless playback is not proven.`,
+    };
+  }
+  const failed =
+    check.failed_step === "stream" && check.full_length === false
+      ? "Preview only"
+      : check.failed_step === "session"
+        ? "Sign-in failed"
+        : check.failed_step === "favorites"
+          ? "Favorites failed"
+          : "Stream failed";
+  return {
+    tone: "failed",
+    label: `Last check: ${failed}`,
+    detail: `${when}: ${check.detail}`,
+  };
 }
 
 export interface StreamingProvidersResponse {

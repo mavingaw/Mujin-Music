@@ -68,6 +68,9 @@ pub struct AccountRow {
     pub status_message: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
     pub last_library_sync: Option<i64>,
+    /// The last "Check connection" result, as JSON.
+    #[diesel(sql_type = Nullable<Text>)]
+    pub last_check: Option<String>,
 }
 
 impl AccountRow {
@@ -85,7 +88,7 @@ impl AccountRow {
 }
 
 const ACCOUNT_COLUMNS: &str = "provider, sealed_credentials, sealed_session, sealed_pending, \
-     account_name, plan, quality, status, status_message, last_library_sync";
+     account_name, plan, quality, status, status_message, last_library_sync, last_check";
 
 pub fn accounts(connection: &mut SqliteConnection, user_id: i32) -> QueryResult<Vec<AccountRow>> {
     diesel::sql_query(format!(
@@ -131,6 +134,7 @@ pub fn save_credentials(
            plan = NULL,
            status = 'configured',
            status_message = NULL,
+           last_check = NULL,
            updated_at = excluded.updated_at",
     )
     .bind::<Integer, _>(user_id)
@@ -139,6 +143,22 @@ pub fn save_credentials(
     .bind::<Text, _>(default_quality.as_str())
     .bind::<BigInt, _>(now)
     .bind::<BigInt, _>(now)
+    .execute(connection)
+}
+
+/// Keeps the last "Check connection" result for the account.
+pub fn save_last_check(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    provider: ProviderId,
+    json: &str,
+) -> QueryResult<usize> {
+    diesel::sql_query(
+        "UPDATE provider_account SET last_check = ? WHERE user_id = ? AND provider = ?",
+    )
+    .bind::<Text, _>(json)
+    .bind::<Integer, _>(user_id)
+    .bind::<Text, _>(provider.as_str())
     .execute(connection)
 }
 
@@ -171,11 +191,14 @@ pub fn save_session(
 ) -> QueryResult<usize> {
     diesel::sql_query(
         "UPDATE provider_account
-         SET sealed_session = ?, sealed_pending = NULL, account_name = ?, plan = ?,
+         SET sealed_session = ?, sealed_pending = NULL,
+             last_check = CASE WHEN account_name IS ? THEN last_check ELSE NULL END,
+             account_name = ?, plan = ?,
              status = 'signed_in', status_message = NULL, updated_at = ?
          WHERE user_id = ? AND provider = ?",
     )
     .bind::<Binary, _>(sealed)
+    .bind::<Text, _>(account_name)
     .bind::<Text, _>(account_name)
     .bind::<Nullable<Text>, _>(plan)
     .bind::<BigInt, _>(unix_now())

@@ -85,3 +85,15 @@ jobs:
       - name: Stream from the real services
         if: steps.accounts.outputs.run == 'true'
         run: cargo test -p parson-music live_accounts -- --ignored --nocapture
+        env:
+          PARSON_LIVE_RESULT_DIR: ${{ runner.temp }}/live-results
+      # The record of what each real account received (format, full length
+      # or preview). It holds no tokens or credentials.
+      - name: Keep the result
+        if: always() && steps.accounts.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: live-streaming-results
+          path: ${{ runner.temp }}/live-results
+          if-no-files-found: warn
+          retention-days: 90
