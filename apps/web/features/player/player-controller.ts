@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  activeConvolutionFilter,
   createPlaybackQueue,
   defaultDspSettings,
   volumeLevelingGain,
@@ -47,6 +48,7 @@ import {
 import { usePlaybackTelemetry } from "./player-telemetry";
 import { serverOutputId, useNativeOutputs } from "./use-native-outputs";
 import { useServerDsp } from "./use-server-dsp";
+import { useConvolutionFilters } from "./convolution-section";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
 import { useQueueRestore } from "./use-queue-restore";
 import {
@@ -75,6 +77,7 @@ export function usePlayerController() {
     deviceSampleRate,
     graphSampleRate,
     isPlaying,
+    loadedImpulse,
     muted,
     nativeSession,
     playAudioSource,
@@ -131,6 +134,13 @@ export function usePlayerController() {
     setLocalDsp,
   );
   const dsp = nativeDeviceId ? serverDsp.settings : localDsp;
+  // The browser chain names (and loads) its convolution filter; a server
+  // output describes its own.
+  const convolutionFilterId =
+    !nativeDeviceId && dsp ? activeConvolutionFilter(dsp) : null;
+  const convolutionFilters = useConvolutionFilters(
+    Boolean(convolutionFilterId),
+  );
   const setDsp = nativeDeviceId ? serverDsp.setSettings : setLocalDsp;
   useEffect(() => {
     setNativeOutput(nativeDeviceId);
@@ -625,6 +635,15 @@ export function usePlayerController() {
         leveling: leveling.result,
         levelingUnavailable: leveling.unavailable,
         dsp,
+        convolution: convolutionFilterId
+          ? {
+              name:
+                convolutionFilters.data?.find(
+                  (filter) => filter.id === convolutionFilterId,
+                )?.name ?? "Filter",
+              loaded: loadedImpulse === convolutionFilterId,
+            }
+          : null,
         deviceSampleRate,
         outputName,
         outputChosen: Boolean(activeSinkId),
@@ -702,6 +721,9 @@ export function usePlayerController() {
       isPlaying,
       error,
       graphSampleRate,
+      convolutionFilterId,
+      convolutionFilters.data,
+      loadedImpulse,
       leveling,
       looping,
       activeSinkId,

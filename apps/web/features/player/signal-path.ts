@@ -44,6 +44,7 @@ export function webClientLeg(input: WebSignalInput): ClientSignalLeg {
     leveling: input.signal.leveling,
     levelingUnavailable: input.signal.levelingUnavailable,
     dsp: input.signal.dsp,
+    convolution: input.signal.convolution ?? null,
     deviceSampleRate: input.signal.deviceSampleRate,
     output: input.casting
       ? { kind: "cast", name: input.castDeviceName }

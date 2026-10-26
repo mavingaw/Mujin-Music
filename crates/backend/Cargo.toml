@@ -92,3 +92,7 @@ ravif = { version = "0.13.0", default-features = false, features = ["threading"]
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.190"
 tokio-uring = "0.5.0"
+
+[dev-dependencies]
+# The protocol-level fake renderer and AirPlay receiver for network output tests.
+parson-output = { path = "../parson-output", features = ["network-fakes"] }

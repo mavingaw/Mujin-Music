@@ -14,19 +14,30 @@
 //! - `POST /outputs/native/session` plays a song on a device.
 //! - `POST /outputs/native/session/commands` pauses, resumes, seeks or
 //!   stops it.
+//! - `POST /outputs/native/admin/network` adds a network player (UPnP AV,
+//!   OpenHome or AirPlay) by address; `DELETE` removes it (admin).
+//! - `GET  /outputs/native/icon?device_id=` is a network player's own
+//!   picture, fetched from the player.
+//! - `GET  /outputs/native/convolution` lists the convolution filters;
+//!   `GET …/convolution/{id}/file` returns one as WAV (for a browser's
+//!   own convolver); `POST /outputs/native/admin/convolution?name=`
+//!   uploads a WAV impulse response and `DELETE …/admin/convolution/{id}`
+//!   removes one (admin).
 
 use std::sync::Arc;
 
-use actix_web::{HttpRequest, HttpResponse, get, post, put, web};
+use actix_web::{HttpRequest, HttpResponse, delete, get, post, put, web};
 use actix_web_httpauth::middleware::HttpAuthentication;
+use futures::StreamExt;
 use serde::Deserialize;
 
 use crate::api::auth::{admin_guard, authenticated_user_id};
 use crate::api::error::{bad_request, internal_server_error, not_found, service_unavailable};
 use crate::library::state::LibraryLifecycle;
-use crate::native_output::{LevelingRequest, NativeError, NativeOutputs};
+use crate::native_output::{LevelingRequest, MAX_FILTER_BYTES, NativeError, NativeOutputs};
 use parson_output::OutputSettings;
 use parson_output::dsp::DspSettings;
+use parson_output::network::ManualEndpoint;
 
 /// Longest accepted device id (WASAPI endpoint ids are about 55 chars).
 const MAX_DEVICE_ID: usize = 512;
@@ -230,6 +241,145 @@ async fn command(
     }
 }
 
+#[post("/network")]
+async fn add_network(
+    body: web::Json<ManualEndpoint>,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let endpoint = body.into_inner();
+    if let Err(message) = endpoint.validate() {
+        return bad_request(message, "invalid_network_player");
+    }
+    let outputs = outputs(data);
+    match blocking(move || outputs.add_network_endpoint(endpoint)).await {
+        Ok(Ok(view)) => HttpResponse::Ok().json(view),
+        Ok(Err(message)) => bad_request(message, "invalid_network_player"),
+        Err(response) => response,
+    }
+}
+
+#[derive(Deserialize)]
+struct RemoveNetworkRequest {
+    address: String,
+}
+
+#[delete("/network")]
+async fn remove_network(
+    body: web::Json<RemoveNetworkRequest>,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let address = body.into_inner().address;
+    let outputs = outputs(data);
+    match blocking(move || outputs.remove_network_endpoint(&address)).await {
+        Ok(Ok(view)) => HttpResponse::Ok().json(view),
+        Ok(Err(message)) => not_found(message, "network_player_not_found"),
+        Err(response) => response,
+    }
+}
+
+#[derive(Deserialize)]
+struct IconQuery {
+    device_id: String,
+}
+
+#[get("/icon")]
+async fn device_icon(
+    query: web::Query<IconQuery>,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let device_id = query.into_inner().device_id;
+    if !valid_device_id(&device_id) {
+        return bad_request("Invalid device id.", "invalid_device_id");
+    }
+    let outputs = outputs(data);
+    match blocking(move || outputs.device_icon(&device_id)).await {
+        Ok(Some((content_type, bytes))) => HttpResponse::Ok()
+            .content_type(content_type)
+            .insert_header(("Cache-Control", "private, max-age=3600"))
+            .body(bytes),
+        Ok(None) => not_found("This output has no picture.", "output_icon_not_found"),
+        Err(response) => response,
+    }
+}
+
+#[get("/convolution")]
+async fn list_filters(data: Option<web::Data<NativeOutputs>>) -> HttpResponse {
+    let outputs = outputs(data);
+    match blocking(move || outputs.filters()).await {
+        Ok(filters) => HttpResponse::Ok().json(filters),
+        Err(response) => response,
+    }
+}
+
+#[get("/convolution/{id}/file")]
+async fn filter_file(
+    path: web::Path<String>,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    let outputs = outputs(data);
+    match blocking(move || outputs.filter_file(&id)).await {
+        Ok(Some(bytes)) => HttpResponse::Ok()
+            .content_type("audio/wav")
+            .insert_header(("Cache-Control", "private, max-age=86400"))
+            .body(bytes),
+        Ok(None) => not_found("That filter is not on the server.", "filter_not_found"),
+        Err(response) => response,
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadFilterQuery {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    file_name: Option<String>,
+}
+
+#[post("/convolution")]
+async fn upload_filter(
+    query: web::Query<UploadFilterQuery>,
+    mut payload: web::Payload,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = payload.next().await {
+        let Ok(chunk) = chunk else {
+            return bad_request("The upload was interrupted.", "filter_upload_failed");
+        };
+        if bytes.len() + chunk.len() > MAX_FILTER_BYTES {
+            return HttpResponse::PayloadTooLarge().json(serde_json::json!({
+                "error": "filter_too_large",
+                "message": format!("A filter file can be at most {} MB.", MAX_FILTER_BYTES / (1024 * 1024)),
+            }));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let query = query.into_inner();
+    let outputs = outputs(data);
+    match blocking(move || outputs.add_filter(&query.name, query.file_name.as_deref(), &bytes))
+        .await
+    {
+        Ok(Ok(view)) => HttpResponse::Ok().json(view),
+        Ok(Err(message)) => bad_request(message, "invalid_filter"),
+        Err(response) => response,
+    }
+}
+
+#[delete("/convolution/{id}")]
+async fn delete_filter(
+    path: web::Path<String>,
+    data: Option<web::Data<NativeOutputs>>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    let outputs = outputs(data);
+    match blocking(move || outputs.delete_filter(&id)).await {
+        Ok(Ok(())) => HttpResponse::NoContent().finish(),
+        Ok(Err(message)) => not_found(message, "filter_not_found"),
+        Err(response) => response,
+    }
+}
+
 /// Mounted under the authenticated music scope.
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -238,9 +388,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::scope("/admin")
                     .wrap(HttpAuthentication::with_fn(admin_guard))
                     .service(refresh_devices)
-                    .service(update_settings),
+                    .service(update_settings)
+                    .service(add_network)
+                    .service(remove_network)
+                    .service(upload_filter)
+                    .service(delete_filter),
             )
             .service(list_devices)
+            .service(device_icon)
+            .service(list_filters)
+            .service(filter_file)
             .service(update_dsp)
             .service(current_session)
             .service(play)
@@ -311,6 +468,82 @@ mod tests {
         .with_float_decoder(Arc::new(|_, _, _| {
             Ok(Box::new(std::io::repeat(0)) as PcmSource)
         }))
+    }
+
+    #[actix_web::test]
+    async fn convolution_filters_and_device_pictures_are_served() {
+        let dir = std::env::temp_dir().join(format!("parson-routes-{}", uuid::Uuid::new_v4()));
+        let outputs = NativeOutputs::new(
+            vec![Arc::new(SimulatedBackend)],
+            true,
+            Some(dir.join("native-outputs.json")),
+            Arc::new(|_, _, _, _, _| Ok(Box::new(std::io::repeat(0)) as PcmSource)),
+            "test resampler",
+        );
+        let wav = parson_output::convolution::write_wav_f64(48_000, &[vec![0.0, 1.0, 0.0]]);
+        let filter = outputs.add_filter("Room", None, &wav).unwrap();
+        let outputs = web::Data::new(outputs);
+        let app = test::init_service(
+            App::new()
+                .app_data(outputs.clone())
+                .wrap_fn(|request, service| {
+                    request.extensions_mut().insert(crate::api::auth::Claims {
+                        sub: "3".into(),
+                        exp: usize::MAX,
+                        username: "listener".into(),
+                        bitrate: 0,
+                        token_type: "access".into(),
+                        role: "user".into(),
+                        token_version: 0,
+                        session_id: None,
+                    });
+                    actix_web::dev::Service::call(service, request)
+                })
+                .configure(configure),
+        )
+        .await;
+        let listed: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/outputs/native/convolution")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(listed[0]["name"], "Room");
+        assert_eq!(listed[0]["summary"]["taps"], 3);
+        let file = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/outputs/native/convolution/{}/file",
+                    filter.record.id
+                ))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(file.status(), 200);
+        assert_eq!(file.headers().get("content-type").unwrap(), "audio/wav");
+        assert_eq!(test::read_body(file).await, wav);
+        for uri in [
+            "/outputs/native/convolution/../../etc/file".to_string(),
+            "/outputs/native/convolution/abcdef/file".to_string(),
+            format!("/outputs/native/icon?device_id={SIMULATED_DEVICE_ID}"),
+        ] {
+            let response =
+                test::call_service(&app, test::TestRequest::get().uri(&uri).to_request()).await;
+            assert_eq!(response.status(), 404, "{uri}");
+        }
+        // Uploads and network players are for administrators.
+        let upload = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/outputs/native/admin/convolution?name=x")
+                .set_payload(wav.clone())
+                .to_request(),
+        )
+        .await;
+        assert_eq!(upload.status(), 401);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[actix_web::test]

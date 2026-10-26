@@ -1,9 +1,92 @@
-import api from "../core/http";
+import api, { getApiBaseURL, isApiError } from "../core/http";
 import type { DspSettings } from "../player/dsp";
 import type { ServerSignalPath } from "../player/signal-path";
 
 /** How the server drives a device. */
-export type NativeOutputDriver = "alsa" | "wasapi" | "core_audio" | "simulated";
+export type NativeOutputDriver =
+  | "alsa"
+  | "wasapi"
+  | "core_audio"
+  | "simulated"
+  /** A UPnP AV or OpenHome renderer on the network. */
+  | "upnp"
+  /** An AirPlay receiver (AirPlay 1 / RAOP). */
+  | "airplay";
+
+/** The network drivers: the server streams to a player on the LAN. */
+export function isNetworkDriver(driver: NativeOutputDriver | null | undefined) {
+  return driver === "upnp" || driver === "airplay";
+}
+
+/** How Parson reaches a network player. */
+export type NetworkProtocol = "upnp_av" | "open_home" | "air_play";
+
+export const networkProtocolLabels: Record<NetworkProtocol, string> = {
+  upnp_av: "UPnP AV",
+  open_home: "OpenHome",
+  air_play: "AirPlay",
+};
+
+/**
+ * Where a network player's format limits come from: declared by the
+ * renderer, fixed by the protocol (AirPlay), the maker's published limits,
+ * or assumed by Parson because the renderer does not say.
+ */
+export type NetworkCapsSource =
+  "declared" | "protocol" | "known_model" | "assumed";
+
+export const networkCapsSourceLabels: Record<NetworkCapsSource, string> = {
+  declared: "Declared by the player",
+  protocol: "Fixed by the protocol",
+  known_model: "Maker's published limits",
+  assumed: "Assumed by Parson (the player does not say)",
+};
+
+export type NetworkEndpointKind =
+  "streamer" | "speaker" | "television" | "receiver" | "computer";
+
+/** A network player's protocol, identity and limits. */
+export interface NetworkOutputInfo {
+  protocol: NetworkProtocol;
+  host: string;
+  port: number;
+  /** UPnP: the device description URL. */
+  location: string | null;
+  manufacturer: string | null;
+  /** e.g. `Klimax DSM` or `HomePod mini`. */
+  model: string | null;
+  model_description: string | null;
+  /** The player's own picture (fetch it through `nativeOutputIconUrl`). */
+  icon_url: string | null;
+  kind: NetworkEndpointKind;
+  caps_source: NetworkCapsSource;
+  /** e.g. `WAV (LPCM) over HTTP`. */
+  stream_format: string;
+  /** What the player says it accepts, e.g. `WAV`, `L16 44.1/48kHz`. */
+  accepts: string[];
+  /** The player reports what it decodes while playing (OpenHome). */
+  reports_format: boolean;
+  /** Added by address rather than discovered. */
+  manual: boolean;
+  /** What this output has, and has not, been tested against. */
+  verification: string;
+}
+
+/** A network player added by address. */
+export interface ManualNetworkEndpoint {
+  protocol: NetworkProtocol;
+  /** UPnP: a description URL or `host[:port]`; AirPlay: `host[:port]`. */
+  address: string;
+  name?: string | null;
+}
+
+export interface NetworkOutputsView {
+  /** The server can play to network players. */
+  available: boolean;
+  /** SSDP and mDNS discovery is on. */
+  discovery: boolean;
+  manual: ManualNetworkEndpoint[];
+}
 
 export type NativeSampleFormat =
   | "s16"
@@ -125,8 +208,11 @@ export interface NativeHardwareStatus {
    * `snd_pcm_dump(<pcm>)` for a libasound report.
    */
   source: string;
-  /** `kernel` (procfs) or `library` (libasound's opened chain). */
-  reporter?: "kernel" | "library";
+  /**
+   * `kernel` (procfs), `library` (libasound's opened chain) or
+   * `renderer` (a network player's own report, OpenHome Info).
+   */
+  reporter?: "kernel" | "library" | "renderer";
   /** The report came from Parson's kernel-ABI emulator, not a kernel. */
   kernel_emulator?: boolean;
   /** The plugin chain the samples pass through, for libasound reports. */
@@ -200,6 +286,8 @@ export interface NativeOutputDevice {
   dsd_formats?: string[];
   /** What the kernel says about the hardware (Linux). */
   hardware?: NativeHardwareInfo | null;
+  /** A network player's protocol, identity and format limits. */
+  network?: NetworkOutputInfo | null;
 }
 
 /** What the server's DSP chain can do on one device. */
@@ -224,6 +312,8 @@ export interface NativeOutputs {
   /** The simulated test device is enabled. */
   simulated: boolean;
   devices: NativeOutputDevice[];
+  /** Network players (older servers omit it). */
+  network?: NetworkOutputsView;
 }
 
 export type NativePlaybackState =
@@ -375,4 +465,133 @@ export async function sendNativeOutputCommand(
 export function nativeFormatLabel(rate: number) {
   const khz = rate / 1000;
   return Number.isInteger(khz) ? `${khz}kHz` : `${khz.toFixed(1)}kHz`;
+}
+
+/** Adds a network player by address and returns the refreshed list. */
+export async function addNetworkOutput(
+  endpoint: ManualNetworkEndpoint,
+): Promise<NativeOutputs> {
+  return (
+    await api.post<NativeOutputs>(
+      "/outputs/native/admin/network",
+      {
+        protocol: endpoint.protocol,
+        address: endpoint.address.trim(),
+        name: endpoint.name?.trim() || null,
+      },
+      { timeout: 30_000 },
+    )
+  ).data;
+}
+
+/** Removes a network player added by address. */
+export async function removeNetworkOutput(
+  address: string,
+): Promise<NativeOutputs> {
+  return (
+    await api.delete<NativeOutputs>("/outputs/native/admin/network", {
+      data: { address },
+      timeout: 30_000,
+    })
+  ).data;
+}
+
+/** URL of a network player's own picture (same-origin, cookie auth). */
+export function nativeOutputIconUrl(deviceId: string) {
+  const base = getApiBaseURL().replace(/\/+$/, "");
+  return `${base}/outputs/native/icon?device_id=${encodeURIComponent(deviceId)}`;
+}
+
+/** A short identity line for a network player: maker, model, protocol. */
+export function networkOutputIdentity(network: NetworkOutputInfo): string {
+  const maker = network.manufacturer?.trim();
+  const model = network.model?.trim();
+  const name =
+    maker && model && !model.toLowerCase().includes(maker.toLowerCase())
+      ? `${maker} ${model}`
+      : (model ?? maker ?? null);
+  return [name, networkProtocolLabels[network.protocol]]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/* ------------------------------------------------------------------ */
+/* Convolution filters                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface ConvolutionFilterSummary {
+  sample_rate: number;
+  channels: number;
+  taps: number;
+  duration_ms: number;
+  /** Highest gain of the filter's response: the headroom it needs. */
+  peak_gain_db: number;
+  gain_1khz_db: number;
+  /** e.g. `32-bit float`. */
+  format: string;
+}
+
+export interface ConvolutionFilter {
+  id: string;
+  name: string;
+  file_name: string | null;
+  added_at: string;
+  summary: ConvolutionFilterSummary;
+  /** Magnitude response of the first channel, `[Hz, dB]`. */
+  response: [number, number][];
+}
+
+/** The convolution filters stored on the server. */
+export async function getConvolutionFilters(): Promise<ConvolutionFilter[]> {
+  return (await api.get<ConvolutionFilter[]>("/outputs/native/convolution"))
+    .data;
+}
+
+/** Uploads a WAV impulse response (administrators). */
+export async function uploadConvolutionFilter(
+  file: Blob,
+  options: { name?: string; fileName?: string } = {},
+): Promise<ConvolutionFilter> {
+  const params: Record<string, string> = {};
+  if (options.name?.trim()) params.name = options.name.trim();
+  if (options.fileName) params.file_name = options.fileName;
+  return (
+    await api.post<ConvolutionFilter>(
+      "/outputs/native/admin/convolution",
+      file,
+      {
+        params,
+        headers: { "Content-Type": "audio/wav" },
+        timeout: 120_000,
+      },
+    )
+  ).data;
+}
+
+export async function deleteConvolutionFilter(id: string): Promise<void> {
+  await api.delete(
+    `/outputs/native/admin/convolution/${encodeURIComponent(id)}`,
+  );
+}
+
+/** The filter's WAV file, for a browser's own `ConvolverNode`. */
+export async function getConvolutionFilterFile(
+  id: string,
+): Promise<ArrayBuffer> {
+  const blob = (
+    await api.get<Blob>(
+      `/outputs/native/convolution/${encodeURIComponent(id)}/file`,
+      { responseType: "blob", timeout: 60_000 },
+    )
+  ).data;
+  return blob.arrayBuffer();
+}
+
+/** The server's own explanation of a failed outputs request. */
+export function outputErrorMessage(error: unknown, fallback: string): string {
+  if (isApiError(error)) {
+    const data = error.response?.data as { message?: unknown } | undefined;
+    if (typeof data?.message === "string" && data.message) return data.message;
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
 }

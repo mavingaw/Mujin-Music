@@ -15,9 +15,11 @@ import {
 } from "./audio-presets";
 import { canPromotePreloadedMedia } from "./gapless-playback";
 import {
+  activeConvolutionFilter,
   createDspChain,
   defaultDspSettings,
   dspNeedsGraph,
+  getConvolutionFilterFile,
   requestedContextSampleRate,
   type DspAudioContext,
   type DspSettings,
@@ -86,6 +88,11 @@ export function useAudioEngine() {
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [graphSampleRate, setGraphSampleRate] = useState<number | null>(null);
+  // Convolution filters decoded for the graph, keyed `id@rate` (a
+  // ConvolverNode needs a buffer at its context's rate).
+  const impulses = useRef(new Map<string, AudioBuffer>());
+  const impulseLoading = useRef(new Set<string>());
+  const [loadedImpulse, setLoadedImpulse] = useState<string | null>(null);
   const dspRef = useRef<DspSettings>(defaultDspSettings());
   const sourceRateRef = useRef<number | null>(null);
   const sinkIdRef = useRef("");
@@ -174,6 +181,36 @@ export function useAudioEngine() {
     setAudioVersion((version) => version + 1);
   }, [configureAudioElement]);
 
+  /**
+   * Fetches and decodes the chosen convolution filter for the graph's
+   * rate, then rewires the chain with it.
+   */
+  const loadImpulse = useCallback((settings: DspSettings) => {
+    const id = activeConvolutionFilter(settings);
+    const current = graph.current;
+    if (!id || !current) return;
+    const key = `${id}@${current.context.sampleRate}`;
+    if (impulses.current.has(key)) {
+      setLoadedImpulse(id);
+      return;
+    }
+    if (impulseLoading.current.has(key)) return;
+    impulseLoading.current.add(key);
+    void getConvolutionFilterFile(id)
+      .then((data) => current.context.decodeAudioData(data))
+      .then((buffer) => {
+        impulses.current.set(key, buffer);
+        if (graph.current === current) {
+          current.chain.update(dspRef.current);
+          setLoadedImpulse(id);
+        }
+      })
+      .catch((cause) => {
+        console.error("Unable to load the convolution filter", cause);
+      })
+      .finally(() => impulseLoading.current.delete(key));
+  }, []);
+
   const ensureAudioGraph = useCallback(() => {
     if (nativeRef.current) return null;
     recoverAudioElement();
@@ -201,6 +238,10 @@ export function useAudioEngine() {
       const chain = createDspChain(
         context as unknown as DspAudioContext,
         dspRef.current,
+        {
+          impulse: (id) =>
+            impulses.current.get(`${id}@${context.sampleRate}`) ?? null,
+        },
       );
       const chainOutput = chain.output as unknown as AudioNode;
       const dryGain = context.createGain();
@@ -225,12 +266,13 @@ export function useAudioEngine() {
         wetGain,
       };
       setGraphSampleRate(context.sampleRate);
+      loadImpulse(dspRef.current);
     } catch (cause) {
       console.error("Unable to initialize the audio processing graph", cause);
       return null;
     }
     return graph.current;
-  }, [recoverAudioElement, wantedRate]);
+  }, [loadImpulse, recoverAudioElement, wantedRate]);
 
   /** Closes the graph; the element cannot be reused, so it is replaced. */
   const dropAudioGraph = useCallback(
@@ -502,6 +544,7 @@ export function useAudioEngine() {
           return;
         }
         current.chain.update(settings);
+        loadImpulse(settings);
         return;
       }
       if (needsGraph() && audio.current && !audio.current.paused) {
@@ -511,7 +554,14 @@ export function useAudioEngine() {
         applyPreset(presetRef.current);
       }
     },
-    [applyPreset, ensureAudioGraph, needsGraph, resetAudioGraph, wantedRate],
+    [
+      applyPreset,
+      ensureAudioGraph,
+      loadImpulse,
+      needsGraph,
+      resetAudioGraph,
+      wantedRate,
+    ],
   );
 
   /** Routes playback to an output device; `""` is the system default. */
@@ -621,6 +671,7 @@ export function useAudioEngine() {
     deviceSampleRate,
     graphSampleRate,
     isPlaying,
+    loadedImpulse,
     muted,
     nativeSession,
     playAudioSource,

@@ -1,20 +1,36 @@
 "use client";
 
 import {
+  addNetworkOutput,
   dsdRateLabel,
   DSD_STRATEGIES,
   nativeFormatLabel,
+  networkOutputIdentity,
+  networkProtocolLabels,
+  outputErrorMessage,
   refreshNativeOutputs,
+  removeNetworkOutput,
   updateNativeOutputSettings,
   type DsdStrategy,
   type FormatSupportEntry,
   type NativeOutputDevice,
   type NativeOutputSettings,
   type NativeOutputs,
+  type NetworkProtocol,
 } from "@parson/music-sdk";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, HardDrive, RefreshCw, Speaker, X } from "lucide-react";
-import { useId } from "react";
+import {
+  Check,
+  FlaskConical,
+  HardDrive,
+  Network,
+  Plus,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useId, useState } from "react";
+import { OutputArtwork, ProtocolBadge } from "@/features/player/output-artwork";
 import { cn } from "@/lib/cn";
 import {
   nativeOutputsKey,
@@ -31,9 +47,13 @@ import {
   formatTone,
   formatToneLabel,
   hardwareSummary,
+  isNetworkDevice,
   maxDepthOptions,
   maxDsdRateOptions,
   maxRateOptions,
+  networkLimitsNote,
+  networkStreamNote,
+  splitOutputDevices,
 } from "./audio-outputs-model";
 
 const selectClass =
@@ -138,33 +158,61 @@ function DeviceCard({
       void queryClient.invalidateQueries({ queryKey: ["signal-path"] });
     },
   });
+  const remove = useMutation({
+    mutationFn: () => removeNetworkOutput(device.address ?? ""),
+    onSuccess: (view) => queryClient.setQueryData(nativeOutputsKey, view),
+  });
   const settings = device.settings;
   const change = (patch: Partial<NativeOutputSettings>) =>
     save.mutate({ ...settings, ...patch });
   const editable = isAdmin && !save.isPending;
+  const network = device.network ?? null;
 
   return (
     <article
-      className="rounded-xl border border-white/8 bg-white/2"
+      className={cn(
+        "rounded-xl border bg-white/2",
+        network ? "border-white/10" : "border-white/8",
+      )}
       data-native-device={device.id}
+      data-network-protocol={network?.protocol}
     >
       <header className="flex flex-wrap items-start gap-3 border-b border-white/6 px-4 py-3">
-        <Speaker className="mt-0.5 h-5 w-5 shrink-0 text-zinc-400" />
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-semibold text-white">
-            {device.name}
+        <OutputArtwork
+          deviceId={device.id}
+          driver={device.driver}
+          hasIcon={Boolean(network?.icon_url)}
+          kind={network?.kind ?? null}
+          protocol={network?.protocol ?? null}
+          size={network ? 52 : 40}
+        />
+        <div className="min-w-[12rem] flex-1">
+          <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+            <span className="truncate">{device.name}</span>
+            {network ? (
+              <ProtocolBadge
+                label={networkProtocolLabels[network.protocol]}
+                protocol={network.protocol}
+              />
+            ) : null}
             {device.is_default ? (
-              <span className="ml-2 text-xs font-normal text-zinc-500">
+              <span className="text-xs font-normal text-zinc-500">
                 System default
               </span>
             ) : null}
           </h3>
           <p className="truncate text-xs text-zinc-500">
-            {driverLabels[device.driver]} · {device.detail}
+            {network
+              ? `${networkOutputIdentity(network)} · ${network.host}:${network.port}${network.manual ? " · added by address" : ""}`
+              : `${driverLabels[device.driver]} · ${device.detail}`}
           </p>
           <p className="mt-1 text-xs text-zinc-400">
             {deviceCapabilitySummary(device)}
-            {dsdSupportSummary(device) ? ` · ${dsdSupportSummary(device)}` : ""}
+            {network
+              ? " · DSD is converted to PCM on the server"
+              : dsdSupportSummary(device)
+                ? ` · ${dsdSupportSummary(device)}`
+                : ""}
           </p>
           {hardwareSummary(device) ? (
             <p
@@ -188,10 +236,43 @@ function DeviceCard({
         >
           {selected ? "Playing here" : "Play here"}
         </button>
+        {network?.manual && isAdmin ? (
+          <button
+            aria-label={`Remove ${device.name}`}
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-zinc-400 hover:bg-white/8 hover:text-white disabled:opacity-40"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate()}
+            type="button"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </header>
 
       <div className="space-y-4 px-4 py-4">
-        <div className="flex items-start gap-3">
+        {network ? (
+          <div className="space-y-2" data-network-details>
+            <p className="text-xs leading-5 text-zinc-400">
+              {networkStreamNote(device)}
+            </p>
+            {network.accepts.length ? (
+              <p className="text-[11px] text-zinc-500">
+                The player lists:{" "}
+                <span className="text-zinc-300">
+                  {network.accepts.join(", ")}
+                </span>
+              </p>
+            ) : null}
+            <p
+              className="flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] leading-4 text-amber-200/90"
+              data-network-verification
+            >
+              <FlaskConical className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {network.verification}
+            </p>
+          </div>
+        ) : null}
+        <div className={cn("flex items-start gap-3", network && "hidden")}>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-zinc-200">Exclusive Mode</p>
             <p className="text-xs leading-5 text-zinc-500">
@@ -263,7 +344,7 @@ function DeviceCard({
           </label>
         </div>
 
-        {device.formats?.dsd_rates ? (
+        {device.formats?.dsd_rates && !network ? (
           <div className="grid gap-3 sm:grid-cols-2" data-dsd-settings>
             <label className="grid gap-1.5" htmlFor={strategyId}>
               <span className="text-xs font-medium text-zinc-300">
@@ -318,8 +399,18 @@ function DeviceCard({
 
         <section aria-label="Bit-Perfect Format Support">
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Bit-Perfect Format Support
+            {network
+              ? "Format limits for this player"
+              : "Bit-Perfect Format Support"}
           </h4>
+          {network ? (
+            <p
+              className="mb-2 text-[11px] leading-4 text-zinc-400"
+              data-network-limits
+            >
+              {networkLimitsNote(device)}
+            </p>
+          ) : null}
           {device.formats ? (
             <>
               <ul className="flex flex-wrap gap-1.5" data-format-list="rates">
@@ -343,7 +434,7 @@ function DeviceCard({
                   />
                 ))}
               </ul>
-              {device.formats.dsd_rates ? (
+              {device.formats.dsd_rates && !network ? (
                 <ul
                   className="mt-1.5 flex flex-wrap gap-1.5"
                   data-format-list="dsd"
@@ -395,7 +486,108 @@ function DeviceCard({
   );
 }
 
-/** Settings → Audio outputs: the server's own devices. */
+const PROTOCOL_CHOICES: {
+  value: NetworkProtocol;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "open_home",
+    label: "UPnP / OpenHome renderer",
+    hint: "http://192.168.1.40:49152/description.xml, or just 192.168.1.40",
+  },
+  {
+    value: "air_play",
+    label: "AirPlay receiver",
+    hint: "192.168.1.50 or 192.168.1.50:7000",
+  },
+];
+
+/** Adds a network player by address, for networks discovery cannot reach. */
+function AddNetworkPlayer() {
+  const queryClient = useQueryClient();
+  const [protocol, setProtocol] = useState<NetworkProtocol>("open_home");
+  const [address, setAddress] = useState("");
+  const [name, setName] = useState("");
+  const protocolId = useId();
+  const addressId = useId();
+  const nameId = useId();
+  const add = useMutation({
+    mutationFn: () => addNetworkOutput({ protocol, address, name }),
+    onSuccess: (view) => {
+      queryClient.setQueryData(nativeOutputsKey, view);
+      setAddress("");
+      setName("");
+    },
+  });
+  const choice = PROTOCOL_CHOICES.find((item) => item.value === protocol)!;
+  return (
+    <form
+      className="grid gap-2 rounded-xl border border-white/8 bg-white/2 px-4 py-3 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_minmax(0,9rem)_auto] sm:items-end"
+      data-add-network-player
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (address.trim()) add.mutate();
+      }}
+    >
+      <label className="grid gap-1" htmlFor={protocolId}>
+        <span className="text-[11px] font-medium text-zinc-400">Protocol</span>
+        <select
+          className={selectClass}
+          id={protocolId}
+          onChange={(event) =>
+            setProtocol(event.target.value as NetworkProtocol)
+          }
+          value={protocol}
+        >
+          {PROTOCOL_CHOICES.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="grid gap-1" htmlFor={addressId}>
+        <span className="text-[11px] font-medium text-zinc-400">Address</span>
+        <input
+          className={cn(selectClass, "min-w-0")}
+          id={addressId}
+          onChange={(event) => setAddress(event.target.value)}
+          placeholder={choice.hint}
+          value={address}
+        />
+      </label>
+      <label className="grid gap-1" htmlFor={nameId}>
+        <span className="text-[11px] font-medium text-zinc-400">
+          Name (AirPlay)
+        </span>
+        <input
+          className={cn(selectClass, "min-w-0")}
+          disabled={protocol !== "air_play"}
+          id={nameId}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Kitchen"
+          value={name}
+        />
+      </label>
+      <button
+        className="flex h-9 items-center justify-center gap-1.5 rounded-full bg-white px-4 text-xs font-semibold text-black hover:bg-zinc-200 disabled:opacity-50"
+        disabled={add.isPending || !address.trim()}
+        type="submit"
+      >
+        <Plus className={cn("h-3.5 w-3.5", add.isPending && "animate-spin")} />
+        {add.isPending ? "Checking" : "Add player"}
+      </button>
+      {add.error ? (
+        <p className="text-xs text-red-400 sm:col-span-4">
+          {outputErrorMessage(add.error, "The player could not be added.")}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+/** Settings → Audio outputs: the server's own devices and network players. */
 export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
   const outputs = useNativeOutputs();
   const queryClient = useQueryClient();
@@ -405,6 +597,17 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
     onSuccess: (view) => queryClient.setQueryData(nativeOutputsKey, view),
   });
   const view = outputs.data;
+  const { local, network } = splitOutputDevices(view?.devices ?? []);
+  const networkAvailable = view?.network?.available ?? false;
+  const card = (device: NativeOutputDevice) => (
+    <DeviceCard
+      device={device}
+      isAdmin={isAdmin}
+      key={device.id}
+      onUse={() => setChoice(`${SERVER_OUTPUT_PREFIX}${device.id}`)}
+      selected={choice === `${SERVER_OUTPUT_PREFIX}${device.id}`}
+    />
+  );
 
   return (
     <div className="space-y-5" data-audio-output-settings>
@@ -412,10 +615,11 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-semibold text-white">Audio outputs</h2>
           <p className="mt-1 max-w-xl text-sm leading-6 text-zinc-400">
-            Devices attached to the computer running Parson. The server plays to
-            them itself, opening the device exclusively so the file&apos;s
-            samples reach the DAC unmodified. Browsers and phones can only play
-            through the system mixer in shared mode.
+            Where the server plays itself: devices attached to the computer
+            running Parson, opened exclusively so the file&apos;s samples reach
+            the DAC unmodified, and network players it streams to after its own
+            DSP. Browsers and phones can only play through the system mixer in
+            shared mode.
           </p>
         </div>
         {isAdmin ? (
@@ -428,7 +632,7 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
             <RefreshCw
               className={cn("h-3.5 w-3.5", refresh.isPending && "animate-spin")}
             />
-            Find devices
+            {refresh.isPending ? "Searching" : "Find devices"}
           </button>
         ) : null}
       </div>
@@ -444,36 +648,70 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
       ) : null}
 
       {outputs.isLoading ? (
-        <p className="text-sm text-zinc-500">Looking for devices…</p>
+        <p className="text-sm text-zinc-500">
+          Looking for devices and network players…
+        </p>
       ) : !view ? (
         <p className="text-sm text-red-400">
           The server&apos;s outputs could not be loaded.
         </p>
-      ) : !view.supported ? (
-        <p className="rounded-xl border border-white/8 px-4 py-3 text-sm text-zinc-400">
-          This server has no native audio output on this platform.
-        </p>
-      ) : view.devices.length === 0 ? (
-        <div className="flex items-start gap-3 rounded-xl border border-dashed border-white/10 px-4 py-4 text-sm text-zinc-400">
-          <HardDrive className="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" />
-          <p>
-            No output devices were found on the server
-            {view.driver ? ` (${driverLabels[view.driver]})` : ""}. Connect a
-            DAC or sound card, then choose Find devices.
-          </p>
-        </div>
       ) : (
-        <div className="space-y-4">
-          {view.devices.map((device) => (
-            <DeviceCard
-              device={device}
-              isAdmin={isAdmin}
-              key={device.id}
-              onUse={() => setChoice(`${SERVER_OUTPUT_PREFIX}${device.id}`)}
-              selected={choice === `${SERVER_OUTPUT_PREFIX}${device.id}`}
-            />
-          ))}
-        </div>
+        <>
+          <section aria-label="On this server" className="space-y-3">
+            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              <HardDrive className="h-3.5 w-3.5" /> On this server
+            </h3>
+            {!view.supported && local.length === 0 ? (
+              <p className="rounded-xl border border-white/8 px-4 py-3 text-sm text-zinc-400">
+                This server has no native audio output on this platform.
+              </p>
+            ) : local.length === 0 ? (
+              <div className="flex items-start gap-3 rounded-xl border border-dashed border-white/10 px-4 py-4 text-sm text-zinc-400">
+                <HardDrive className="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" />
+                <p>
+                  No output devices were found on the server
+                  {view.driver ? ` (${driverLabels[view.driver]})` : ""}.
+                  Connect a DAC or sound card, then choose Find devices.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">{local.map(card)}</div>
+            )}
+          </section>
+
+          {networkAvailable || network.length ? (
+            <section
+              aria-label="On the network"
+              className="space-y-3"
+              data-network-outputs
+            >
+              <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                <Network className="h-3.5 w-3.5" /> On the network
+              </h3>
+              <p className="max-w-2xl text-xs leading-5 text-zinc-400">
+                UPnP AV and OpenHome streamers and AirPlay receivers. The server
+                runs the whole chain (decoder, DSP engine, any conversion the
+                player needs) before the network hop, and each player keeps its
+                own format limits.
+                {view.network?.discovery
+                  ? " Parson searches with SSDP and mDNS when you choose Find devices."
+                  : " Discovery is off on this server (PARSON_NETWORK_DISCOVERY=0); add players by address."}
+              </p>
+              {network.length ? (
+                <div className="space-y-4">{network.map(card)}</div>
+              ) : (
+                <div className="flex items-start gap-3 rounded-xl border border-dashed border-white/10 px-4 py-4 text-sm text-zinc-400">
+                  <Network className="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" />
+                  <p>
+                    No network players answered. If your network blocks
+                    multicast (VLANs, some mesh Wi-Fi), add one by address.
+                  </p>
+                </div>
+              )}
+              {isAdmin && networkAvailable ? <AddNetworkPlayer /> : null}
+            </section>
+          ) : null}
+        </>
       )}
       {view?.simulated ? (
         <p className="text-[11px] leading-4 text-zinc-500">
@@ -483,7 +721,7 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
       ) : null}
       {!isAdmin ? (
         <p className="text-[11px] text-zinc-500">
-          Only administrators can change device settings.
+          Only administrators can change device settings or add players.
         </p>
       ) : null}
     </div>

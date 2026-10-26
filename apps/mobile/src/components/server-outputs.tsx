@@ -2,6 +2,7 @@ import {
   SIGNAL_CLIPPING_COLOR,
   buildSignalPath,
   defaultDspSettings,
+  getConvolutionFilters,
   getNativeOutputSession,
   getNativeOutputs,
   normalizeDspSettings,
@@ -23,6 +24,8 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { palette } from "@/constants/colors";
 import { useState } from "react";
 import {
+  networkPlayerLine,
+  networkPlayerNote,
   serverDriverLine,
   serverDsdLine,
   serverDspStatusLine,
@@ -58,6 +61,12 @@ export function ServerOutputs({
     queryKey: ["native-outputs"],
     queryFn: getNativeOutputs,
     staleTime: 30_000,
+    retry: 1,
+  });
+  const filters = useQuery({
+    queryKey: ["convolution-filters"],
+    queryFn: getConvolutionFilters,
+    staleTime: 60_000,
     retry: 1,
   });
   const session = useQuery({
@@ -164,7 +173,8 @@ export function ServerOutputs({
       <Text style={styles.title}>Server outputs</Text>
       <Text style={styles.note}>
         Play this track on a device attached to the computer running Parson,
-        opened in exclusive mode for a bit-perfect path.
+        opened in exclusive mode for a bit-perfect path, or on a network player
+        (UPnP, OpenHome, AirPlay) the server streams to after its own DSP.
       </Text>
       {current && path ? (
         <View style={styles.session}>
@@ -196,7 +206,9 @@ export function ServerOutputs({
                 styles.detail,
                 {
                   color: current.hardware?.matches_stream
-                    ? signalQualityColors.lossless
+                    ? path.quality === "lossless"
+                      ? signalQualityColors.lossless
+                      : palette.secondary
                     : signalQualityColors.high_quality,
                 },
               ]}
@@ -236,9 +248,19 @@ export function ServerOutputs({
             <Text numberOfLines={1} style={styles.deviceName}>
               {device.name}
             </Text>
+            {networkPlayerLine(device) ? (
+              <Text numberOfLines={1} style={styles.network}>
+                {networkPlayerLine(device)}
+              </Text>
+            ) : null}
             <Text numberOfLines={1} style={styles.detail}>
               {device.mode_label} · {serverOutputSummary(device)}
             </Text>
+            {networkPlayerNote(device) ? (
+              <Text numberOfLines={2} style={styles.tested}>
+                {networkPlayerNote(device)}
+              </Text>
+            ) : null}
             {unsupportedRates(device) ? (
               <Text numberOfLines={1} style={styles.unsupported}>
                 Converted: {unsupportedRates(device)}
@@ -308,6 +330,15 @@ export function ServerOutputs({
       ) : null}
       <DspControls
         crossfeed={focused.dsp_support ? focused.dsp_support.crossfeed : null}
+        filters={
+          filters.data
+            ? filters.data.map((filter) => ({
+                id: filter.id,
+                name: filter.name,
+                peakGainDb: filter.summary.peak_gain_db,
+              }))
+            : null
+        }
         onChange={(settings) => {
           setDraft({ id: focused.id, settings });
           saveDsp.mutate({ id: focused.id, settings });
@@ -385,6 +416,8 @@ const styles = StyleSheet.create({
   deviceText: { flex: 1, minWidth: 0 },
   deviceName: { color: "white", fontSize: 13, fontWeight: "600" },
   detail: { color: palette.secondary, fontSize: 12 },
+  network: { color: "#c4b5fd", fontSize: 12 },
+  tested: { color: "rgba(252,211,77,0.85)", fontSize: 11, lineHeight: 15 },
   unsupported: { color: "#f87171", fontSize: 11 },
   button: {
     minHeight: 32,

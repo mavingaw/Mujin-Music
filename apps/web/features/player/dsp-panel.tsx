@@ -17,6 +17,7 @@ import {
   formatFrequency,
   formatRealtimeFactor,
   formatSampleRate,
+  isNetworkDriver,
   recommendedHeadroomDb,
   SIGNAL_CLIPPING_COLOR,
   signalLightColor,
@@ -45,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
+import { ConvolutionControls } from "./convolution-section";
 import type { PlayerOutputState } from "./player-api";
 import { QualityGlyph } from "./signal-path-popover";
 
@@ -561,17 +563,38 @@ export function DspPanel({
                       </option>
                     ))
                 : null}
-              {output.serverDevices.length ? (
+              {output.serverDevices.some(
+                (device) => !isNetworkDriver(device.driver),
+              ) ? (
                 <optgroup label="Server outputs (exclusive, bit-perfect)">
-                  {output.serverDevices.map((device) => (
-                    <option
-                      disabled={!device.formats}
-                      key={device.id}
-                      value={`server:${device.id}`}
-                    >
-                      {device.name} · {device.mode_label}
-                    </option>
-                  ))}
+                  {output.serverDevices
+                    .filter((device) => !isNetworkDriver(device.driver))
+                    .map((device) => (
+                      <option
+                        disabled={!device.formats}
+                        key={device.id}
+                        value={`server:${device.id}`}
+                      >
+                        {device.name} · {device.mode_label}
+                      </option>
+                    ))}
+                </optgroup>
+              ) : null}
+              {output.serverDevices.some((device) =>
+                isNetworkDriver(device.driver),
+              ) ? (
+                <optgroup label="Network players (server DSP, then the network)">
+                  {output.serverDevices
+                    .filter((device) => isNetworkDriver(device.driver))
+                    .map((device) => (
+                      <option
+                        disabled={!device.formats}
+                        key={device.id}
+                        value={`server:${device.id}`}
+                      >
+                        {device.name} · {device.mode_label}
+                      </option>
+                    ))}
                 </optgroup>
               ) : null}
             </select>
@@ -601,10 +624,13 @@ export function DspPanel({
               <p className="flex w-full items-start gap-1.5 text-[11px] leading-4 text-zinc-500">
                 <Server className="mt-px h-3 w-3 shrink-0" />
                 <span>
-                  The server runs this chain itself, in 64-bit float, before the
-                  device. In exclusive mode the result reaches it with no mixer
-                  or second resampler after Parson. Set Exclusive Mode and
-                  format limits in{" "}
+                  {isNetworkDriver(
+                    output.serverDevices.find(
+                      (device) => device.id === output.serverOutputId,
+                    )?.driver,
+                  )
+                    ? "The server runs this chain itself, in 64-bit float, then sends the result over the network to the player; nothing on the way mixes it. Set the player's format limits in "
+                    : "The server runs this chain itself, in 64-bit float, before the device. In exclusive mode the result reaches it with no mixer or second resampler after Parson. Set Exclusive Mode and format limits in "}
                   <a
                     className="text-zinc-300 underline underline-offset-2"
                     href="/settings?tab=outputs"
@@ -869,6 +895,32 @@ export function DspPanel({
                 },
               )}
             </div>
+          </Section>
+
+          <Section
+            description="Convolves with an FIR filter you upload, such as a room correction from REW, Dirac or Acourate, after the EQ and crossfeed."
+            enabled={settings.convolution?.enabled ?? false}
+            masterOn={settings.enabled && !blocked}
+            onToggle={(enabled) =>
+              update({
+                convolution: {
+                  filterId: settings.convolution?.filterId ?? null,
+                  enabled,
+                },
+              })
+            }
+            title="Convolution"
+            unavailable={
+              availability.convolution.available
+                ? null
+                : availability.convolution.reason
+            }
+          >
+            <ConvolutionControls
+              onChange={onChange}
+              serverRun={serverRun}
+              settings={settings}
+            />
           </Section>
         </div>
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/6 px-5 py-3 text-[11px] text-zinc-500">

@@ -24,6 +24,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
+import { OutputPickerButton } from "./output-picker";
 import { DSP_SHORTCUT_LABEL } from "./dsp-panel";
 import {
   ActionButton,
@@ -188,6 +189,9 @@ export function PlayerFooter({
               >
                 <AudioLines className="h-4 w-4" />
               </ActionButton>
+            </div>
+            <div className="hidden sm:block" data-output-picker-trigger>
+              <OutputPickerButton />
             </div>
             <div className="hidden sm:block">
               <VolumeControl

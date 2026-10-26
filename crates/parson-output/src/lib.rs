@@ -16,8 +16,10 @@
 //! unmodified or which conversion is unavoidable. [`player::Player`] then
 //! plays decoded PCM to the device on its own thread.
 
+pub mod convolution;
 pub mod dsd;
 pub mod dsp;
+pub mod network;
 pub mod pcm_chain;
 pub mod player;
 pub mod procfs;
@@ -58,6 +60,12 @@ pub enum Driver {
     /// A software device that consumes audio in real time without a sound
     /// card, for testing and demonstrations (`PARSON_NATIVE_OUTPUT_SIMULATE`).
     Simulated,
+    /// A UPnP AV or OpenHome renderer on the network, which pulls the
+    /// server's processed PCM over HTTP.
+    Upnp,
+    /// An AirPlay receiver, sent ALAC over RTP (AirPlay 1 / RAOP).
+    #[serde(rename = "airplay")]
+    AirPlay,
 }
 
 impl Driver {
@@ -72,7 +80,14 @@ impl Driver {
             (Self::CoreAudio, false) => "CoreAudio, shared",
             (Self::Simulated, true) => "Simulated exclusive output",
             (Self::Simulated, false) => "Simulated shared output",
+            (Self::Upnp, _) => "UPnP AV stream over HTTP",
+            (Self::AirPlay, _) => "AirPlay (RAOP), ALAC 44.1kHz 16bit",
         }
+    }
+
+    /// Plays over the network rather than to a device on this machine.
+    pub fn is_network(self) -> bool {
+        matches!(self, Self::Upnp | Self::AirPlay)
     }
 }
 
@@ -240,6 +255,8 @@ pub struct DeviceInfo {
     /// How the driver addresses the device: `hw:1,0` for an ALSA card, or
     /// the PCM's name for a PCM defined in the ALSA configuration.
     pub address: Option<String>,
+    /// A network endpoint's protocol, identity and format limits.
+    pub network: Option<network::NetworkInfo>,
 }
 
 /// Device ids of PCMs from the ALSA configuration (`aplay -L`), as
@@ -256,6 +273,9 @@ impl DeviceInfo {
     /// The driver, the device's address and the mode, e.g. `ALSA hw:1,0
     /// exclusive` or `WASAPI Exclusive Mode`.
     pub fn mode_label(&self, exclusive: bool) -> String {
+        if let Some(network) = &self.network {
+            return format!("{} · {}", network.protocol.label(), network.stream_format);
+        }
         match (self.driver, self.address.as_deref()) {
             (Driver::Alsa, Some(address)) if self.is_alsa_config_pcm() => {
                 if exclusive {
@@ -634,6 +654,9 @@ pub trait Backend: Send + Sync {
     ) -> Option<procfs::HardwareStatus> {
         None
     }
+    /// Tells the backend which track the next `open` of `device_id` plays,
+    /// for endpoints that show it (network renderers).
+    fn prepare(&self, _device_id: &str, _track: &network::TrackInfo) {}
 }
 
 /// This platform's native backend, or `None` where there is none (or the
@@ -909,6 +932,7 @@ mod tests {
             is_default: false,
             hardware: None,
             address: Some("hw:1,0".into()),
+            network: None,
         };
         assert_eq!(card.mode_label(true), "ALSA hw:1,0 exclusive");
         assert_eq!(

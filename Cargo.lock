@@ -2430,6 +2430,7 @@ name = "parson-output"
 version = "1.0.1"
 dependencies = [
  "libc",
+ "mdns-sd",
  "serde",
  "serde_json",
  "windows",

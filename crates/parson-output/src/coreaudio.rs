@@ -404,6 +404,7 @@ impl Backend for CoreAudioBackend {
                     is_default: default == Some(device),
                     hardware: None,
                     address: None,
+                    network: None,
                 })
             })
             .collect()

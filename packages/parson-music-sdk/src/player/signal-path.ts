@@ -1,6 +1,7 @@
 import type { AudioProperties, Loudness } from "../domain/types";
 import {
   activeEqBands,
+  activeConvolutionFilter,
   crossfeedActive,
   crossfeedParameters,
   crossfeedStrengthLabels,
@@ -103,6 +104,31 @@ export interface ServerSignalPath {
   processing?: ServerSignalProcessing | null;
   /** The server output that plays a native path. */
   output_device?: SignalOutputDevice | null;
+  /**
+   * The driver's or network renderer's report while it plays: `true`
+   * when it runs exactly what Parson opened, `false` when something below
+   * Parson converted it; absent without a report (older servers too).
+   */
+  hardware_confirmed?: boolean | null;
+}
+
+/** The network end of a path to a streamer or speaker. */
+export interface SignalNetworkEndpoint {
+  protocol: "upnp_av" | "open_home" | "air_play";
+  /** e.g. `OpenHome`. */
+  protocol_label: string;
+  /** e.g. `192.168.1.40:55178`. */
+  endpoint: string;
+  manufacturer: string | null;
+  model: string | null;
+  kind: "streamer" | "speaker" | "television" | "receiver" | "computer";
+  caps_source: "declared" | "protocol" | "known_model" | "assumed";
+  /** e.g. `WAV (LPCM) over HTTP`. */
+  stream_format: string;
+  /** The player has its own picture, served by the outputs API. */
+  has_icon: boolean;
+  /** What this output has, and has not, been tested against. */
+  verification: string;
 }
 
 /** A server output as the kernel and driver name it. */
@@ -123,6 +149,8 @@ export interface SignalOutputDevice {
    * path ran for real, but no DAC hardware is attached.
    */
   kernel_emulator?: boolean;
+  /** A network player (UPnP AV, OpenHome or AirPlay). */
+  network?: SignalNetworkEndpoint | null;
 }
 
 export type SignalPlatform = "web" | "desktop" | "ios" | "android";
@@ -165,6 +193,11 @@ export interface ClientSignalLeg {
   dsp?: DspSettings | null;
   /** The chain's crossfeed needs channel splitters this engine lacks. */
   crossfeedUnsupported?: boolean;
+  /**
+   * The convolution filter the chain runs: its name, and whether the
+   * engine has it loaded (it is fetched from the server first).
+   */
+  convolution?: { name: string; loaded: boolean } | null;
   /**
    * Rate the output device runs at, when the client can read it. A
    * difference from the stream's rate means the browser resamples.
@@ -227,6 +260,8 @@ export interface SignalPath {
    * report (not playing, or not Linux).
    */
   hardwareVerified: boolean | null;
+  /** Who made that report: the kernel/ALSA `driver`, or a network `renderer`. */
+  hardwareReporter: "driver" | "renderer" | null;
   /**
    * The driver's report, e.g. `hardware running at S24_3LE 96kHz 2ch`
    * (older servers: `S24_3LE at 96kHz 2ch`).
@@ -518,6 +553,7 @@ function sourceStageFromAudio(
 function dspStages(
   dsp: DspSettings,
   crossfeedUnsupported: boolean,
+  convolution?: { name: string; loaded: boolean } | null,
 ): SignalStage[] {
   const stages: SignalStage[] = [];
   if (headroomActive(dsp)) {
@@ -559,6 +595,21 @@ function dspStages(
       explanation: crossfeedUnsupported
         ? "This audio engine cannot split channels, so crossfeed is skipped."
         : "Crossfeed mixes a delayed, low-passed share of each channel into the other ear, so headphone listening sounds less like the music is inside your head.",
+    });
+  }
+  if (activeConvolutionFilter(dsp)) {
+    const loaded = convolution?.loaded === true;
+    stages.push({
+      id: "dsp-convolution",
+      kind: "dsp",
+      title: "Convolution",
+      detail: loaded
+        ? `${convolution?.name ?? "Filter"}: Web Audio ConvolverNode`
+        : "Loading the filter from the server",
+      quality: loaded ? "enhanced" : null,
+      explanation: loaded
+        ? "The FIR filter you chose (a room correction, for example) is convolved by this browser's Web Audio ConvolverNode in 32-bit float, unnormalised so the filter's own gain is kept. The browser converts the filter to its own sample rate when it decodes it."
+        : "The filter is being downloaded from the server; until it is loaded the audio passes without it.",
     });
   }
   return stages;
@@ -714,7 +765,14 @@ function clientStages(
     });
   }
 
-  if (dsp) stages.push(...dspStages(dsp, Boolean(client.crossfeedUnsupported)));
+  if (dsp)
+    stages.push(
+      ...dspStages(
+        dsp,
+        Boolean(client.crossfeedUnsupported),
+        client.convolution,
+      ),
+    );
 
   if (!casting && client.reverbWet > 0) {
     stages.push({
@@ -859,6 +917,8 @@ export function describeSignalPath(
     output?: string;
     /** The DSP chain clipped: its result is no longer exact. */
     clipping?: boolean;
+    /** The output is a network player reached over this protocol. */
+    network?: { protocol: string; airplay: boolean } | null;
   } = {},
 ): string {
   const quality = overallSignalQuality(stages);
@@ -866,9 +926,16 @@ export function describeSignalPath(
     stages.filter((stage) => stage.quality === wanted);
   const enhanced = by("enhanced");
   const outputStage = stages.find((stage) => stage.kind === "output");
+  const network = options.network ?? null;
+  const networkTransport = network
+    ? stages.find((stage) => stage.id === "native-transport")
+    : undefined;
   const sharedOutput =
     outputStage?.quality === "high_quality" ? outputStage : null;
-  const high = by("high_quality").filter((stage) => stage !== sharedOutput);
+  const high = by("high_quality").filter(
+    (stage) => stage !== sharedOutput && stage !== networkTransport,
+  );
+  const mode = network ? `over ${network.protocol}` : "in exclusive mode";
   const output = options.output ?? "the output";
   const asked = enhanced.length
     ? `processing you asked for: ${listTitles(enhanced)}`
@@ -876,20 +943,24 @@ export function describeSignalPath(
   switch (quality) {
     case "lossless":
       return outputStage?.id === "native-output"
-        ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, in exclusive mode at ${outputFormatFromDetail(outputStage.detail)}.`
+        ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
         : `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
     case "enhanced":
       return outputStage?.id === "native-output" &&
         outputStage.quality === "lossless"
-        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, in exclusive mode at ${outputFormatFromDetail(outputStage.detail)}.`
+        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
         : `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
     case "high_quality": {
       const unknown = stages.some(
         (stage) => stage.kind === "source" && !stage.quality,
       );
-      const mixer = sharedOutput
-        ? `${output} is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.`
-        : "";
+      const mixer = network?.airplay
+        ? `${output} is an AirPlay receiver: AirPlay carries 44.1kHz/16bit and the receiver applies its own volume, so the path is high quality at best, as Roon also rates AirPlay.`
+        : network && sharedOutput
+          ? `${output} is reached over ${network.protocol}; what it does after its network input is out of Parson's sight.`
+          : sharedOutput
+            ? `${output} is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.`
+            : "";
       const changed = high.length
         ? `The audio is changed in ways you did not ask for, with very little loss: ${listTitles(high)}.`
         : unknown
@@ -955,13 +1026,33 @@ export function buildSignalPath(
   const clipping = processing?.status?.clipping === true;
   const clipped = processing?.status?.clipped_samples ?? 0;
   const hardwareStage = stages.find((stage) => stage.id === "native-hardware");
+  // The report confirms the format whatever the source: an MP3 the DAC
+  // runs exactly as opened is confirmed, and still a lossy file.
+  const hardwareConfirmed: boolean | null = hardwareStage
+    ? server &&
+      !client.localFile &&
+      typeof server.hardware_confirmed === "boolean"
+      ? server.hardware_confirmed
+      : hardwareStage.title.startsWith("Confirmed")
+    : null;
+  const reporter = hardwareStage?.title.includes("renderer")
+    ? "renderer"
+    : "driver";
+  const networkEndpoint =
+    server && !client.localFile ? server.output_device?.network : null;
   const description = `${describeSignalPath(stages, {
     highRes,
     output: outputStage?.title,
     clipping,
+    network: networkEndpoint
+      ? {
+          protocol: networkEndpoint.protocol_label,
+          airplay: networkEndpoint.protocol === "air_play",
+        }
+      : null,
   })}${
-    hardwareStage?.quality === "lossless"
-      ? ` Confirmed by the driver: ${hardwareStage.detail}.`
+    hardwareConfirmed
+      ? ` Confirmed by the ${reporter}: ${hardwareStage?.detail}.`
       : ""
   }${
     clipping
@@ -971,9 +1062,9 @@ export function buildSignalPath(
   const beforeOutput = rated.filter((stage) => stage.kind !== "output");
   const ratedOutput = rated.find((stage) => stage.kind === "output");
   const hardware = rated.find((stage) => stage.id === "native-hardware");
-  const hardwareVerified = hardware ? hardware.quality === "lossless" : null;
   return {
-    hardwareVerified,
+    hardwareVerified: hardwareConfirmed,
+    hardwareReporter: hardware ? reporter : null,
     hardwareReport: hardware?.detail ?? null,
     transport:
       rated.find((stage) => stage.id === "native-transport")?.detail ?? null,

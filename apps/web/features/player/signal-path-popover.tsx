@@ -43,10 +43,21 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
+import { useOutputDeviceChoice } from "./dsp-store";
+import { OutputArtwork } from "./output-artwork";
+import { serverOutputId } from "./use-native-outputs";
 import {
   volumeLevelingModeLabels,
   volumeLevelingModes,
 } from "./volume-leveling";
+
+/** Where a network player's format limits came from, in a few words. */
+const NETWORK_LIMIT_NOTES: Record<string, string> = {
+  declared: "formats declared by the player",
+  protocol: "format fixed by AirPlay",
+  known_model: "maker's published limits",
+  assumed: "rates assumed: the player does not list them",
+};
 
 const STAGE_ICONS: Record<SignalStageKind, LucideIcon> = {
   source: FileAudio,
@@ -297,6 +308,8 @@ function SignalPathPanel({
   const style = usePanelPosition(anchor, panelRef, wide);
   const [selected, setSelected] = useState<string | null>(null);
   const titleId = `${id}-title`;
+  const [outputChoice] = useOutputDeviceChoice();
+  const deviceId = serverOutputId(outputChoice);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -345,14 +358,26 @@ function SignalPathPanel({
   const device = path?.outputDevice ?? null;
   const selectedStage =
     path?.stages.find((stage) => stage.id === selected) ?? null;
+  const network = device?.network ?? null;
   const deviceFacts = device
-    ? [
-        device.usb_id ? `USB ${device.usb_id}` : null,
-        device.usb_speed,
-        device.transport,
-        `on ${device.host}`,
-      ].filter(Boolean)
+    ? network
+      ? [
+          [network.manufacturer, network.model]
+            .filter(Boolean)
+            .join(" ")
+            .replace(/^(\S+) \1 /, "$1 ") || null,
+          `${network.protocol_label} at ${network.endpoint}`,
+          NETWORK_LIMIT_NOTES[network.caps_source],
+          `from ${device.host}`,
+        ].filter(Boolean)
+      : [
+          device.usb_id ? `USB ${device.usb_id}` : null,
+          device.usb_speed,
+          device.transport,
+          `on ${device.host}`,
+        ].filter(Boolean)
     : [];
+  const reporter = path?.hardwareReporter ?? "driver";
 
   return createPortal(
     <div
@@ -367,6 +392,16 @@ function SignalPathPanel({
       tabIndex={-1}
     >
       <header className="flex items-start gap-3 border-b border-white/6 px-5 pb-3 pt-4">
+        {serverOutput && network ? (
+          <OutputArtwork
+            className="mt-1"
+            deviceId={deviceId}
+            hasIcon={network.has_icon}
+            kind={network.kind}
+            protocol={network.protocol}
+            size={48}
+          />
+        ) : null}
         <div className="min-w-0 flex-1">
           <h2 className="text-[17px] font-semibold leading-6" id={titleId}>
             Signal path:{" "}
@@ -446,6 +481,16 @@ function SignalPathPanel({
               kernel here, so this proves the hw driver path, not a DAC.
             </p>
           ) : null}
+          {serverOutput && network ? (
+            <p
+              className="mt-0.5 text-[11px] leading-4 text-amber-300/90"
+              data-network-verification
+            >
+              {network.protocol === "air_play"
+                ? "Tested against Parson's protocol-level AirPlay receiver, not yet a real AirPlay device."
+                : "Tested against Parson's protocol-level UPnP/OpenHome renderer, not yet a real streamer."}
+            </p>
+          ) : null}
           {path?.hardwareVerified !== null &&
           path?.hardwareVerified !== undefined ? (
             <p
@@ -453,13 +498,19 @@ function SignalPathPanel({
               data-hardware-verified={path.hardwareVerified}
               style={{
                 color: path.hardwareVerified
-                  ? signalQualityColors.lossless
+                  ? path.quality === "lossless"
+                    ? signalQualityColors.lossless
+                    : "#d4d4d8"
                   : signalQualityColors.high_quality,
               }}
             >
               {path.hardwareVerified
-                ? `Confirmed by the driver: ${path.hardwareReport}.`
-                : `Driver report: ${path.hardwareReport}. That is not exactly what Parson opened.`}
+                ? `Confirmed by the ${reporter}: ${path.hardwareReport}, exactly the format Parson ${reporter === "renderer" ? "sends" : "opened"}.${
+                    path.quality === "low_quality"
+                      ? " The light is yellow because the file itself is lossy."
+                      : ""
+                  }`
+                : `${reporter === "renderer" ? "Renderer" : "Driver"} report: ${path.hardwareReport}, not the format Parson ${reporter === "renderer" ? "sends" : "opened"}: something below Parson converts the stream.`}
             </p>
           ) : null}
           {path && !serverOutput && !casting ? (

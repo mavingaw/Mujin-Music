@@ -12,8 +12,10 @@
 //! 2. volume leveling and headroom adjustment (one gain),
 //! 3. the parametric EQ (RBJ biquads, transposed direct form II),
 //! 4. crossfeed (Bauer-style: low-passed, delayed feed to the other ear),
-//! 5. sample rate conversion (polyphase windowed-sinc, linear phase),
-//! 6. TPDF dither to the device's integer format.
+//! 5. convolution (an FIR filter such as room correction, see
+//!    [`crate::convolution`]),
+//! 6. sample rate conversion (polyphase windowed-sinc, linear phase),
+//! 7. TPDF dither to the device's integer format.
 //!
 //! The settings are the same plain data the SDK's DSP panel stores per
 //! output (`DspSettings` in `parson-music-sdk`), so a chain set up in the
@@ -27,6 +29,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::convolution::{Convolver, FilterSummary, ImpulseResponse};
 use crate::player::InputFormat;
 use crate::{DepthChange, DeviceCaps, OutputPlan, OutputSettings, SourceFormat};
 
@@ -253,6 +256,16 @@ impl Default for SampleRateSettings {
     }
 }
 
+/// An FIR filter (room correction and the like), chosen from the filters
+/// uploaded to the server.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ConvolutionSettings {
+    pub enabled: bool,
+    /// The uploaded filter's id.
+    pub filter_id: Option<String>,
+}
+
 /// One output's DSP chain, in the SDK's `DspSettings` shape.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -262,6 +275,7 @@ pub struct DspSettings {
     pub headroom: HeadroomSettings,
     pub eq: EqSettings,
     pub crossfeed: CrossfeedSettings,
+    pub convolution: ConvolutionSettings,
     pub sample_rate: SampleRateSettings,
 }
 
@@ -272,9 +286,15 @@ impl Default for DspSettings {
             headroom: HeadroomSettings::default(),
             eq: EqSettings::default(),
             crossfeed: CrossfeedSettings::default(),
+            convolution: ConvolutionSettings::default(),
             sample_rate: SampleRateSettings::default(),
         }
     }
+}
+
+/// A filter id as the server writes them: lowercase hex and dashes.
+pub fn valid_filter_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
 fn clamp_finite(value: f64, fallback: f64, min: f64, max: f64) -> f64 {
@@ -299,7 +319,22 @@ impl DspSettings {
             band.q = clamp_finite(band.q, 1.0, 0.1, 18.0);
         }
         self.eq.preset.truncate(64);
+        if self
+            .convolution
+            .filter_id
+            .as_deref()
+            .is_some_and(|id| !valid_filter_id(id))
+        {
+            self.convolution.filter_id = None;
+        }
         self
+    }
+
+    /// The convolution filter the chain should run, if any.
+    pub fn convolution_filter(&self) -> Option<&str> {
+        (self.enabled && self.convolution.enabled)
+            .then_some(self.convolution.filter_id.as_deref())
+            .flatten()
     }
 
     pub fn headroom_db(&self) -> Option<f64> {
@@ -343,6 +378,7 @@ impl DspSettings {
         self.headroom_db().is_some()
             || !self.active_bands().is_empty()
             || self.crossfeed().is_some()
+            || self.convolution_filter().is_some()
     }
 }
 
@@ -408,6 +444,35 @@ pub struct ProcessingPlan {
     pub requested_rate_unavailable: Option<u32>,
     pub resampler: Option<ResamplerKind>,
     pub output_bits: u8,
+    /// The FIR filter the chain convolves with.
+    #[serde(default)]
+    pub convolution: Option<ConvolutionPlan>,
+    /// Why convolution is on but does not run for this track.
+    #[serde(default)]
+    pub convolution_skipped: Option<String>,
+}
+
+/// A convolution filter as the plan uses it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ConvolutionPlan {
+    pub filter_id: String,
+    pub name: String,
+    pub taps: usize,
+    /// The rate the filter was designed at.
+    pub filter_rate: u32,
+    /// The rate the chain convolves at (the filter is converted to it).
+    pub run_rate: u32,
+    pub channels: u8,
+    pub peak_gain_db: f64,
+}
+
+/// An uploaded filter, ready for the chain.
+#[derive(Clone, Debug)]
+pub struct ConvolutionFilter {
+    pub id: String,
+    pub name: String,
+    pub summary: FilterSummary,
+    pub impulse: Arc<ImpulseResponse>,
 }
 
 impl ProcessingPlan {
@@ -453,7 +518,43 @@ pub fn plan_processing(
     caps: &DeviceCaps,
     settings: &OutputSettings,
 ) -> Option<ProcessingPlan> {
+    plan_processing_with(plan, source, dsp, leveling_db, caps, settings, None)
+}
+
+/// [`plan_processing`] with the convolution filter the settings name
+/// (`None` when it is not on the server).
+pub fn plan_processing_with(
+    plan: &mut OutputPlan,
+    source: &SourceFormat,
+    dsp: &DspSettings,
+    leveling_db: Option<f64>,
+    caps: &DeviceCaps,
+    settings: &OutputSettings,
+    filter: Option<&ConvolutionFilter>,
+) -> Option<ProcessingPlan> {
     let leveling_db = leveling_db.filter(|gain| gain.is_finite() && gain.abs() >= 0.005);
+    let wanted_filter = dsp.convolution_filter();
+    let (convolve, convolution_skipped) = match (wanted_filter, filter) {
+        (None, _) => (None, None),
+        (Some(_), None) => (
+            None,
+            Some("The convolution filter chosen for this output is no longer on the server; choose or upload it again.".to_string()),
+        ),
+        (Some(_), Some(filter)) => {
+            let filter_channels = filter.impulse.channels.len();
+            if filter_channels != 1 && filter_channels != usize::from(plan.channels) {
+                (
+                    None,
+                    Some(format!(
+                        "The convolution filter {} has {filter_channels} channels but this track plays in {}, so it is skipped.",
+                        filter.name, plan.channels
+                    )),
+                )
+            } else {
+                (Some(filter), None)
+            }
+        }
+    };
     let allowed = allowed_rates(caps, settings);
     let requested = dsp.requested_rate(source.sample_rate);
     let (output_rate, rate_requested, unavailable) = match requested {
@@ -461,7 +562,9 @@ pub fn plan_processing(
         Some(rate) => (plan.sample_rate, false, Some(rate)),
         None => (plan.sample_rate, false, None),
     };
-    let processes = leveling_db.is_some() || dsp.processes() || rate_requested;
+    let others =
+        dsp.headroom_db().is_some() || !dsp.active_bands().is_empty() || dsp.crossfeed().is_some();
+    let processes = leveling_db.is_some() || others || rate_requested || convolve.is_some();
     if !processes {
         return None;
     }
@@ -499,6 +602,20 @@ pub fn plan_processing(
         output_rate,
         rate_requested,
         requested_rate_unavailable: unavailable,
+        convolution: convolve.map(|filter| ConvolutionPlan {
+            filter_id: filter.id.clone(),
+            name: filter.name.clone(),
+            taps: filter.summary.taps,
+            filter_rate: filter.summary.sample_rate,
+            run_rate: if resampler == Some(ResamplerKind::Decoder) {
+                output_rate
+            } else {
+                source.sample_rate
+            },
+            channels: filter.summary.channels,
+            peak_gain_db: filter.summary.peak_gain_db,
+        }),
+        convolution_skipped,
         resampler,
         output_bits: plan.bit_depth,
     })
@@ -1049,6 +1166,8 @@ pub struct DspChain {
     gain: f64,
     eq: Vec<Vec<Biquad>>,
     crossfeed: Option<Crossfeed>,
+    convolver: Option<Convolver>,
+    convolved: Vec<f64>,
     resampler: Option<Resampler>,
     bits: u8,
     output: InputFormat,
@@ -1056,9 +1175,18 @@ pub struct DspChain {
     stats: Arc<DspStats>,
     scratch: Vec<f64>,
     resampled: Vec<f64>,
+    input_rate: u32,
 }
 
 impl DspChain {
+    /// Adds the convolution stage, with `impulse` converted to the rate
+    /// the chain runs at.
+    pub fn with_convolution(mut self, impulse: &ImpulseResponse) -> Result<Self, String> {
+        let at_rate = impulse.at_rate(self.input_rate);
+        self.convolver = Some(Convolver::new(&at_rate, self.channels)?);
+        Ok(self)
+    }
+
     /// `input_rate` is the rate frames arrive at (the decoder's, which is
     /// already the output rate when the decoder resamples).
     pub fn new(
@@ -1096,6 +1224,9 @@ impl DspChain {
                 .crossfeed
                 .filter(|_| channels == 2)
                 .map(|strength| Crossfeed::new(strength, rate)),
+            convolver: None,
+            convolved: Vec::new(),
+            input_rate,
             resampler: (input_rate != plan.output_rate)
                 .then(|| Resampler::new(input_rate, plan.output_rate, channels)),
             bits: plan.output_bits.clamp(8, 32),
@@ -1124,6 +1255,11 @@ impl DspChain {
                 self.scratch[start] = left;
                 self.scratch[start + 1] = right;
             }
+        }
+        if let Some(convolver) = &mut self.convolver {
+            self.convolved.clear();
+            convolver.process(&self.scratch, &mut self.convolved);
+            std::mem::swap(&mut self.scratch, &mut self.convolved);
         }
     }
 
@@ -1168,6 +1304,13 @@ impl DspChain {
     pub fn finish(&mut self, bytes: &mut Vec<u8>) {
         let started = Instant::now();
         self.scratch.clear();
+        if let Some(convolver) = &mut self.convolver {
+            convolver.flush(&mut self.scratch);
+            if !self.scratch.is_empty() {
+                self.emit(false, bytes);
+                self.scratch.clear();
+            }
+        }
         if self.resampler.is_some() {
             self.emit(true, bytes);
         }
@@ -1285,6 +1428,8 @@ mod tests {
             requested_rate_unavailable: None,
             resampler: None,
             output_bits: 24,
+            convolution: None,
+            convolution_skipped: None,
         }
     }
 
@@ -1427,6 +1572,103 @@ mod tests {
         chain.process(&input, &mut bytes);
         let ratio = rms(&decode_s32(&bytes)) / rms(&input);
         assert!((20.0 * ratio.log10() + 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn convolution_runs_in_the_chain_without_adding_or_losing_frames() {
+        // A filter that halves the level after a 300-sample delay, at
+        // 48 kHz, run on 44.1 kHz audio: the chain converts it.
+        let mut taps = vec![0.0; 1_200];
+        taps[300] = 0.5;
+        let impulse = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![taps],
+        };
+        let stats = Arc::new(DspStats::default());
+        let config = plan(Vec::new(), 44_100, 44_100);
+        let mut chain = DspChain::new(&config, 44_100, InputFormat::S32, Arc::clone(&stats))
+            .with_convolution(&impulse)
+            .unwrap();
+        let input = sine(1_000.0, 44_100, 10_000, 0.8);
+        let mut bytes = Vec::new();
+        for chunk in input.chunks(2 * 999) {
+            chain.process(chunk, &mut bytes);
+        }
+        chain.finish(&mut bytes);
+        let out = decode_s32(&bytes);
+        assert_eq!(
+            out.len(),
+            input.len(),
+            "the convolver keeps the frame count"
+        );
+        let gain_db = 20.0 * (rms(&out[8_000..]) / rms(&input[8_000..])).log10();
+        assert!((gain_db + 6.02).abs() < 0.1, "{gain_db}");
+    }
+
+    #[test]
+    fn convolution_is_planned_from_the_filter_or_explained() {
+        let caps = DeviceCaps {
+            sample_rates: vec![44_100, 48_000],
+            sample_formats: vec![SampleFormat::S16, SampleFormat::S24Packed],
+            min_channels: 2,
+            max_channels: 2,
+            dsd_formats: Vec::new(),
+            dsd_rates: Vec::new(),
+        };
+        let settings = OutputSettings::default();
+        let source = SourceFormat {
+            sample_rate: 44_100,
+            bit_depth: Some(16),
+            channels: 2,
+            lossless: true,
+        };
+        let dsp = DspSettings {
+            convolution: ConvolutionSettings {
+                enabled: true,
+                filter_id: Some("0f-room".into()),
+            },
+            ..DspSettings::default()
+        };
+        assert!(dsp.processes());
+        let mut output = crate::plan_output(source, Some(&caps), &settings).unwrap();
+        let skipped = plan_processing_with(
+            &mut output.clone(),
+            &source,
+            &dsp,
+            None,
+            &caps,
+            &settings,
+            None,
+        );
+        assert!(skipped.is_none(), "a missing filter alone does not process");
+        let impulse = ImpulseResponse {
+            sample_rate: 48_000,
+            channels: vec![vec![1.0, 0.0, 0.0]],
+        };
+        let filter = ConvolutionFilter {
+            id: "0f-room".into(),
+            name: "Living room".into(),
+            summary: impulse.summary("64-bit float".into()),
+            impulse: Arc::new(impulse),
+        };
+        let processing = plan_processing_with(
+            &mut output,
+            &source,
+            &dsp,
+            None,
+            &caps,
+            &settings,
+            Some(&filter),
+        )
+        .unwrap();
+        let convolution = processing.convolution.unwrap();
+        assert_eq!(convolution.name, "Living room");
+        assert_eq!(convolution.filter_rate, 48_000);
+        assert_eq!(convolution.run_rate, 44_100);
+        assert!(!output.bit_perfect);
+        let mut bad = dsp.clone();
+        bad.convolution.filter_id = Some("../etc".into());
+        assert!(bad.normalized().convolution.filter_id.is_none());
     }
 
     #[test]

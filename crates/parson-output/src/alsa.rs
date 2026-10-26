@@ -617,6 +617,7 @@ impl Backend for AlsaBackend {
                 is_default: false,
                 hardware,
                 address: Some(format!("hw:{},{}", found.card, found.device)),
+                network: None,
             }
         });
         let configured = enumerate_config_pcms(api)
@@ -637,6 +638,7 @@ impl Backend for AlsaBackend {
                     is_default: false,
                     hardware: None,
                     address: Some(pcm),
+                    network: None,
                 }
             });
         cards.chain(configured).collect()
@@ -1063,6 +1065,8 @@ mod tests {
             requested_rate_unavailable: None,
             resampler: Some(crate::dsp::ResamplerKind::Parson),
             output_bits: 24,
+            convolution: None,
+            convolution_skipped: None,
         };
         let floats: Vec<u8> = (0..44_100 / 5)
             .flat_map(|n| {

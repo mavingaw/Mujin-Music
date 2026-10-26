@@ -1,7 +1,8 @@
 /**
  * A per-output DSP chain in the spirit of Roon's MUSE: headroom
- * management, a parametric EQ made of biquad filters, headphone crossfeed
- * and a sample rate choice. Each section has its own switch and the whole
+ * management, a parametric EQ made of biquad filters, headphone crossfeed,
+ * convolution with an uploaded FIR filter (room correction) and a sample
+ * rate choice. Each section has its own switch and the whole
  * chain has a master switch. The settings are plain data so web and
  * mobile share them; `createDspChain` builds the nodes on any Web Audio
  * style context (the browser's or react-native-audio-api's).
@@ -32,6 +33,11 @@ export interface DspSettings {
   headroom: { enabled: boolean; gainDb: number };
   eq: { enabled: boolean; preset: string; bands: EqBand[] };
   crossfeed: { enabled: boolean; strength: CrossfeedStrength };
+  /**
+   * An FIR filter (room correction and the like) from the filters stored
+   * on the server (older settings omit it: off).
+   */
+  convolution: { enabled: boolean; filterId: string | null };
   sampleRate: { enabled: boolean; mode: DspSampleRateMode };
 }
 
@@ -120,8 +126,19 @@ export function defaultDspSettings(): DspSettings {
     headroom: { enabled: false, gainDb: -3 },
     eq: { enabled: false, preset: "flat", bands: fiveBand([0, 0, 0, 0, 0]) },
     crossfeed: { enabled: false, strength: "medium" },
+    convolution: { enabled: false, filterId: null },
     sampleRate: { enabled: false, mode: "device" },
   };
+}
+
+/** Filter ids as the server writes them: hex and dashes. */
+export function validFilterId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    /^[0-9a-fA-F-]+$/.test(value)
+  );
 }
 
 function finite(value: unknown, fallback: number) {
@@ -164,6 +181,7 @@ export function normalizeDspSettings(value: unknown): DspSettings {
   const headroom = record(input.headroom);
   const eq = record(input.eq);
   const crossfeed = record(input.crossfeed);
+  const convolution = record(input.convolution);
   const sampleRate = record(input.sampleRate);
   const rawBands = Array.isArray(eq.bands) ? eq.bands.slice(0, 10) : null;
   const mode = sampleRate.mode;
@@ -195,6 +213,12 @@ export function normalizeDspSettings(value: unknown): DspSettings {
         crossfeed.strength === "light" || crossfeed.strength === "strong"
           ? crossfeed.strength
           : "medium",
+    },
+    convolution: {
+      enabled: convolution.enabled === true,
+      filterId: validFilterId(convolution.filterId)
+        ? convolution.filterId
+        : null,
     },
     sampleRate: {
       enabled: sampleRate.enabled === true,
@@ -231,6 +255,15 @@ export function crossfeedActive(settings: DspSettings) {
   return settings.enabled && settings.crossfeed.enabled;
 }
 
+/** The convolution filter the chain runs, or `null`. */
+export function activeConvolutionFilter(settings: DspSettings): string | null {
+  return settings.enabled &&
+    settings.convolution?.enabled &&
+    settings.convolution.filterId
+    ? settings.convolution.filterId
+    : null;
+}
+
 /**
  * Sample rate the audio context should run at, or `null` for the output
  * device's own rate.
@@ -253,7 +286,8 @@ export function dspProcesses(settings: DspSettings | null | undefined) {
   return (
     headroomActive(settings) ||
     activeEqBands(settings).length > 0 ||
-    crossfeedActive(settings)
+    crossfeedActive(settings) ||
+    activeConvolutionFilter(settings) !== null
   );
 }
 
@@ -489,6 +523,12 @@ export interface DspBiquadNode extends DspAudioNode {
   gain: DspAudioParam;
 }
 
+/** A Web Audio `ConvolverNode`. */
+export interface DspConvolverNode extends DspAudioNode {
+  buffer: unknown;
+  normalize: boolean;
+}
+
 export interface DspDelayNode extends DspAudioNode {
   delayTime: DspAudioParam;
 }
@@ -501,6 +541,15 @@ export interface DspAudioContext {
   createDelay(maxDelayTime?: number): DspDelayNode;
   createChannelSplitter?(outputs?: number): DspAudioNode;
   createChannelMerger?(inputs?: number): DspAudioNode;
+  createConvolver?(): DspConvolverNode;
+}
+
+export interface DspChainOptions {
+  /**
+   * The decoded impulse response for a filter id (an `AudioBuffer` at the
+   * context's rate), or `null` while it is not loaded.
+   */
+  impulse?: (filterId: string) => unknown;
 }
 
 export interface DspChain {
@@ -531,13 +580,15 @@ const link: Link = (from, to, output, input) => {
 };
 
 /**
- * Builds the chain input → headroom → EQ bands → crossfeed → output.
+ * Builds the chain input → headroom → EQ bands → crossfeed →
+ * convolution → output.
  * Bypassed sections are left out of the graph entirely, so the master
  * switch off leaves input wired straight to output.
  */
 export function createDspChain(
   context: DspAudioContext,
   initial: DspSettings,
+  options: DspChainOptions = {},
 ): DspChain {
   const input = context.createGain();
   const output = context.createGain();
@@ -618,6 +669,20 @@ export function createDspChain(
       tail = merger;
     }
 
+    const filterId = activeConvolutionFilter(settings);
+    const impulse = filterId ? options.impulse?.(filterId) : null;
+    if (filterId && impulse && context.createConvolver) {
+      const convolver = context.createConvolver();
+      // The filter's own gain is the point (room correction); never
+      // rescale it.
+      convolver.normalize = false;
+      convolver.buffer = impulse;
+      link(tail, convolver);
+      nodes.push(convolver);
+      names.push(`convolution:${filterId}`);
+      tail = convolver;
+    }
+
     link(tail, output);
   };
 
@@ -653,7 +718,13 @@ export interface ServerDspCapabilities {
 
 export type DspTarget =
   /** This browser or phone's Web Audio graph (shared-mode output). */
-  | { kind: "client"; webAudio: boolean; channelSplitting?: boolean }
+  | {
+      kind: "client";
+      webAudio: boolean;
+      channelSplitting?: boolean;
+      /** The engine has a `ConvolverNode` (`false` hides convolution). */
+      convolver?: boolean;
+    }
   /** A server output: the server runs the chain before the device. */
   | {
       kind: "server";
@@ -672,6 +743,7 @@ export interface DspAvailability {
   /** e.g. `64-bit float` or `32-bit float`. */
   precision: string;
   crossfeed: { available: boolean; reason: string | null };
+  convolution: { available: boolean; reason: string | null };
   /** Fixed rates that can be chosen; `null` when any listed rate can. */
   sampleRates: readonly number[] | null;
   /** `device` means the server output's own (track's) rate. */
@@ -691,6 +763,7 @@ export function dspAvailability(target: DspTarget): DspAvailability {
       engine: "Not available while casting",
       precision: "",
       crossfeed: { available: false, reason: null },
+      convolution: { available: false, reason: null },
       sampleRates: [],
       deviceRateLabel: "Output device rate",
     };
@@ -704,6 +777,7 @@ export function dspAvailability(target: DspTarget): DspAvailability {
         engine: "Server output",
         precision: "",
         crossfeed: { available: false, reason: null },
+        convolution: { available: false, reason: null },
         sampleRates: [],
         deviceRateLabel: "Device rate",
       };
@@ -719,6 +793,7 @@ export function dspAvailability(target: DspTarget): DspAvailability {
             available: false,
             reason: `${target.deviceName} does not open in stereo, which crossfeed needs.`,
           },
+      convolution: { available: support.available, reason: null },
       sampleRates: DSP_SAMPLE_RATES.filter((rate) =>
         support.sample_rates.includes(rate),
       ),
@@ -733,6 +808,7 @@ export function dspAvailability(target: DspTarget): DspAvailability {
       engine: "Not available in this browser",
       precision: "",
       crossfeed: { available: false, reason: null },
+      convolution: { available: false, reason: null },
       sampleRates: [],
       deviceRateLabel: "Output device rate",
     };
@@ -747,6 +823,14 @@ export function dspAvailability(target: DspTarget): DspAvailability {
         ? {
             available: false,
             reason: "This audio engine cannot split channels.",
+          }
+        : { available: true, reason: null },
+    convolution:
+      target.convolver === false
+        ? {
+            available: false,
+            reason:
+              "This audio engine has no convolver. Play on a server output to convolve on the server.",
           }
         : { available: true, reason: null },
     sampleRates: null,
