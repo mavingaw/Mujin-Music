@@ -16,6 +16,7 @@ pub mod lyrics;
 pub mod metadata;
 pub mod playback;
 pub mod playlist;
+pub mod related;
 pub mod search;
 pub mod setup;
 pub mod song;

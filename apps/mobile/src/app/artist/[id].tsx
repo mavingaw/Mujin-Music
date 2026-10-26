@@ -8,6 +8,7 @@ import {
   getAlbumInfos,
   getArtistAbout,
   getArtistDiscography,
+  getArtistRelated,
   qualityBadge,
   type FocusSelection,
   getArtistCredits,
@@ -40,6 +41,7 @@ import { EditorialBlock, NoteBlock } from "@/components/credits";
 import { CompositionsSection } from "@/components/works";
 import { GenreChips } from "@/components/genres";
 import { FocusBar } from "@/components/focus";
+import { RelatedPeople } from "@/components/related-people";
 import { apiUrl } from "@/lib/runtime";
 import { joinMeta } from "@/lib/credit-links";
 import { palette } from "@/constants/colors";
@@ -100,6 +102,12 @@ export default function ArtistScreen() {
     queryKey: ["artist-works", id],
     queryFn: () => getArtistWorks(id),
     enabled: !!id && isComposer,
+    staleTime: 60_000,
+  });
+  const related = useQuery({
+    queryKey: ["artist-related", id],
+    queryFn: () => getArtistRelated(id),
+    enabled: !!id && !canonical,
     staleTime: 60_000,
   });
   const sections = useMemo(() => {
@@ -302,6 +310,12 @@ export default function ArtistScreen() {
               <SectionTitle>Compositions</SectionTitle>
               <CompositionsSection works={works.data.works} />
             </View>
+          ) : null}
+          {related.data && tab !== "credits" ? (
+            <RelatedPeople
+              name={about.data?.name ?? artist.data?.name ?? ""}
+              relations={related.data}
+            />
           ) : null}
           {creditedAlbums.length ? (
             <View>

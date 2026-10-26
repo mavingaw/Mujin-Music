@@ -6,6 +6,7 @@ import {
   getArtistAbout,
   getArtistCredits,
   getArtistDiscography,
+  getArtistRelated,
   isApiError,
   saveNote,
   type FocusSelection,
@@ -67,6 +68,21 @@ export function useArtistDiscography(
     enabled: Boolean(id) && enabled,
     retry: noRetryOnMissing,
     placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
+}
+
+/** Collaborators, top performers, composers performed, influences and
+ * followers for a person page. */
+export function useArtistRelated(
+  id: string | null | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["artist-related", id],
+    queryFn: () => getArtistRelated(id!),
+    enabled: Boolean(id) && enabled,
+    retry: noRetryOnMissing,
     staleTime: 60_000,
   });
 }

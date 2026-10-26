@@ -168,7 +168,7 @@ fn commons_file_from_upload_url(url: &str) -> Option<String> {
         .then_some(name)
 }
 
-fn is_item_id(id: &str) -> bool {
+pub fn is_item_id(id: &str) -> bool {
     id.len() > 1 && id.starts_with('Q') && id[1..].bytes().all(|byte| byte.is_ascii_digit())
 }
 
@@ -929,6 +929,146 @@ pub fn parse_commons_image(body: &Value) -> Option<CommonsImage> {
     })
 }
 
+/// How someone is related to a person by influence on Wikidata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfluenceDirection {
+    /// The person names them in "influenced by" (P737).
+    Influence,
+    /// They name the person in their own "influenced by".
+    Follower,
+}
+
+impl InfluenceDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InfluenceDirection::Influence => "influence",
+            InfluenceDirection::Follower => "follower",
+        }
+    }
+}
+
+/// Someone who influenced a person, or whom the person influenced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfluenceItem {
+    pub direction: InfluenceDirection,
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Their MusicBrainz artist id (P434).
+    pub musicbrainz_id: Option<String>,
+    /// Commons file name of their image (P18).
+    pub image: Option<String>,
+}
+
+/// At most this many people in each direction are kept.
+pub const MAX_INFLUENCES: usize = 24;
+
+/// A Wikidata Query Service request for both directions of "influenced by"
+/// (P737) around `item`, most notable people (by Wikipedia sitelinks)
+/// first, labelled in `language` with English as the fallback.
+pub fn influence_query_url(item: &str, language: &str) -> Option<String> {
+    if !is_item_id(item) {
+        return None;
+    }
+    let languages = if valid_language(language) && language != "en" {
+        format!("{language},en")
+    } else {
+        "en".to_string()
+    };
+    // The optimizer is told to keep the written order: joined first with
+    // every item's sitelink count, the query times out.
+    let query = format!(
+        "SELECT ?item ?itemLabel ?itemDescription ?direction ?mbid ?image ?links WHERE {{ \
+         hint:Query hint:optimizer \"None\" . \
+         {{ wd:{item} wdt:P737 ?item . BIND(\"influence\" AS ?direction) }} UNION \
+         {{ ?item wdt:P737 wd:{item} . BIND(\"follower\" AS ?direction) }} \
+         OPTIONAL {{ ?item wikibase:sitelinks ?links . }} \
+         OPTIONAL {{ ?item wdt:P434 ?mbid . }} \
+         OPTIONAL {{ ?item wdt:P18 ?image . }} \
+         SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"{languages}\" . }} \
+         }} ORDER BY DESC(?links) LIMIT 300"
+    );
+    Some(format!(
+        "https://query.wikidata.org/sparql?format=json&query={}",
+        encode(&query)
+    ))
+}
+
+/// The Commons file name in a `Special:FilePath` URL.
+fn commons_file_from_file_path(url: &str) -> Option<String> {
+    let (_, name) = url.split_once("/Special:FilePath/")?;
+    let name = percent_decode_str(name.split(['?', '#']).next()?)
+        .decode_utf8()
+        .ok()?
+        .replace('_', " ");
+    (!name.is_empty() && name.len() <= 240 && !name.contains(['/', '\\', '|'])).then_some(name)
+}
+
+/// Reads a Wikidata Query Service answer to [`influence_query_url`]: one
+/// entry per person and direction, in the order returned, without people
+/// Wikidata has no label for.
+pub fn parse_influences(body: &Value) -> Vec<InfluenceItem> {
+    let mut items: Vec<InfluenceItem> = Vec::new();
+    let bindings = body
+        .pointer("/results/bindings")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for binding in bindings {
+        let text = |key: &str| {
+            binding
+                .get(key)
+                .and_then(|value| value.get("value"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        let Some(id) = text("item")
+            .and_then(|uri| uri.rsplit('/').next())
+            .filter(|id| is_item_id(id))
+        else {
+            continue;
+        };
+        let direction = match text("direction") {
+            Some("influence") => InfluenceDirection::Influence,
+            Some("follower") => InfluenceDirection::Follower,
+            _ => continue,
+        };
+        let Some(name) = text("itemLabel").filter(|label| *label != id) else {
+            continue;
+        };
+        let mbid = text("mbid")
+            .filter(|mbid| super::musicbrainz::is_mbid(mbid))
+            .map(str::to_string);
+        let image = text("image").and_then(commons_file_from_file_path);
+        if let Some(known) = items
+            .iter_mut()
+            .find(|known| known.id == id && known.direction == direction)
+        {
+            known.musicbrainz_id = known.musicbrainz_id.take().or(mbid);
+            known.image = known.image.take().or(image);
+            continue;
+        }
+        if items
+            .iter()
+            .filter(|known| known.direction == direction)
+            .count()
+            >= MAX_INFLUENCES
+        {
+            continue;
+        }
+        items.push(InfluenceItem {
+            direction,
+            id: id.to_string(),
+            name: decode_entities(name),
+            description: text("itemDescription").map(str::to_string),
+            musicbrainz_id: mbid,
+            image,
+        });
+    }
+    items
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1260,5 +1400,62 @@ mod tests {
         assert!(
             parse_article_page("<html><body><p>No canonical link.</p></body></html>").is_none()
         );
+    }
+
+    #[test]
+    fn influence_queries_ask_both_directions_for_a_valid_item_only() {
+        let url = influence_query_url("Q255", "de").unwrap();
+        assert!(url.starts_with("https://query.wikidata.org/sparql?format=json&query="));
+        let query = percent_decode_str(url.split("query=").nth(1).unwrap())
+            .decode_utf8()
+            .unwrap()
+            .to_string();
+        assert!(query.contains("wd:Q255 wdt:P737 ?item"));
+        assert!(query.contains("?item wdt:P737 wd:Q255"));
+        assert!(query.contains("wikibase:language \"de,en\""));
+        // Written order, or the sitelink join times out.
+        assert!(query.contains("hint:optimizer \"None\""));
+        assert!(influence_query_url("Q255 } DELETE", "en").is_none());
+        assert!(influence_query_url("P737", "en").is_none());
+    }
+
+    #[test]
+    fn influences_are_read_once_per_person_with_their_ids_and_photo() {
+        let binding = |item: &str,
+                       label: &str,
+                       direction: &str,
+                       mbid: Option<&str>,
+                       image: Option<&str>| {
+            let mut value = json!({
+                "item": {"type": "uri", "value": format!("http://www.wikidata.org/entity/{item}")},
+                "itemLabel": {"type": "literal", "value": label},
+                "direction": {"type": "literal", "value": direction},
+            });
+            if let Some(mbid) = mbid {
+                value["mbid"] = json!({"type": "literal", "value": mbid});
+            }
+            if let Some(image) = image {
+                value["image"] = json!({"type": "uri", "value": format!("http://commons.wikimedia.org/wiki/Special:FilePath/{image}")});
+            }
+            value
+        };
+        let body = json!({"results": {"bindings": [
+            binding("Q1299", "The Beatles", "follower", Some("b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d"), Some("Beatles%20ad%201965.jpg")),
+            binding("Q1299", "The Beatles", "follower", None, Some("Other.jpg")),
+            binding("Q254", "Wolfgang Amadeus Mozart", "influence", None, None),
+            binding("Q999999999", "Q999999999", "follower", None, None),
+            binding("Q7294", "Brahms", "sideways", None, None),
+        ]}});
+        let items = parse_influences(&body);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "The Beatles");
+        assert_eq!(items[0].direction, InfluenceDirection::Follower);
+        assert_eq!(
+            items[0].musicbrainz_id.as_deref(),
+            Some("b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d")
+        );
+        assert_eq!(items[0].image.as_deref(), Some("Beatles ad 1965.jpg"));
+        assert_eq!(items[1].id, "Q254");
+        assert_eq!(items[1].direction, InfluenceDirection::Influence);
     }
 }

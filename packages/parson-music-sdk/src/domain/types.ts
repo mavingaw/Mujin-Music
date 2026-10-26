@@ -436,7 +436,12 @@ export interface UserNote {
 
 /** The lookup stages; each has its own queue and back-off. */
 export type EnrichmentStage =
-  "musicbrainz" | "wikidata" | "wikipedia" | "commons";
+  | "musicbrainz"
+  | "wikidata"
+  | "wikipedia"
+  | "commons"
+  | "relations"
+  | "coverart";
 
 export interface EnrichmentTaskState {
   status: "pending" | "done" | "skipped" | "failed" | (string & {});
@@ -879,4 +884,66 @@ export interface PersonDiscography {
   credited_as: string[];
   albums: FocusAlbum[];
   focus: FocusSummary;
+}
+
+/** An album two related people share. */
+export interface RelatedAlbum {
+  id: string;
+  name: string;
+  cover_url: string;
+}
+
+/** A person related to another through the music in the library. */
+export interface RelatedPerson {
+  /** Their page, or null when only a name is known. */
+  artist_id: string | null;
+  name: string;
+  /** Their stored photo (an API path), when there is one. */
+  image_url: string | null;
+  /** Instruments and roles on the shared music, most frequent first. */
+  roles: string[];
+  /** For top performers: what they are on the recordings. */
+  kind?: "conductor" | "ensemble" | "soloist" | "artist";
+  album_count: number;
+  track_count: number;
+  /** Distinct works (or tracks, without work links) connecting them. */
+  work_count: number;
+  /** Up to three shared albums. */
+  albums: RelatedAlbum[];
+}
+
+/** Someone Wikidata relates to the person by influence. */
+export interface InfluencePerson {
+  artist_id: string | null;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  /** Whether they have music in this library. */
+  in_library: boolean;
+  wikidata_url: string;
+}
+
+/** The related-people graph on a person page. */
+export interface PersonRelations {
+  artist_id: string;
+  requested_id: string;
+  /** People who made music with the person, by shared releases. */
+  collaborators: RelatedPerson[];
+  /** Conductors, ensembles and soloists on the most recordings of the
+   * person's works. */
+  top_performers: RelatedPerson[];
+  /** Composers whose works the person records. */
+  performing_the_music_of: RelatedPerson[];
+  /** Who influenced the person (Wikidata P737). */
+  influences: InfluencePerson[];
+  /** Whom the person influenced. */
+  followers: InfluencePerson[];
+  influence_source: {
+    source: string;
+    url: string;
+    license: string;
+    license_url: string;
+  } | null;
+  /** Whether online metadata, and so influences, is on. */
+  enrichment_enabled: boolean;
 }

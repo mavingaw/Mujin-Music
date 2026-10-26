@@ -170,7 +170,23 @@ pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
          ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
     )
     .execute(connection)?;
-    Ok(queued + linked + text + people)
+    // Influences and followers for people with a Wikidata item, and covers
+    // for matched albums, including those matched before these stages.
+    let relations = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT 'wikidata-query', 'artist', entity_id FROM editorial_profile
+         WHERE entity_type = 'artist' AND wikidata_id IS NOT NULL
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    let covers = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT 'coverart', 'album', entity_id FROM editorial_profile
+         WHERE entity_type = 'album' AND musicbrainz_id IS NOT NULL
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    Ok(queued + linked + text + people + relations + covers)
 }
 
 /// The enrichment stages. Each one talks to a single host and has its own
@@ -191,15 +207,29 @@ pub enum Stage {
     Wikidata,
     /// Download the licensed artist photo from Wikimedia Commons.
     Commons,
+    /// Ask the Wikidata Query Service who influenced a person (P737) and
+    /// whom they influenced, for the Influences / Followers sections.
+    Relations,
+    /// Download the front cover of the matched release from the Cover Art
+    /// Archive for an album that has no artwork of its own.
+    CoverArt,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 4] = [
+    pub const ALL: [Stage; 6] = [
         Stage::Musicbrainz,
         Stage::Wikipedia,
         Stage::Wikidata,
         Stage::Commons,
+        Stage::Relations,
+        Stage::CoverArt,
     ];
+
+    /// Whether the stage fills an entity's page text or photo, so a page
+    /// waiting on it says so. Relations and cover art arrive quietly.
+    pub fn feeds_page_text(self) -> bool {
+        !matches!(self, Stage::Relations | Stage::CoverArt)
+    }
 
     /// The `metadata_task.provider` value for the stage's queue.
     pub fn provider(self) -> &'static str {
@@ -208,6 +238,8 @@ impl Stage {
             Stage::Wikidata => "wikidata",
             Stage::Wikipedia => "wikipedia",
             Stage::Commons => "commons",
+            Stage::Relations => "wikidata-query",
+            Stage::CoverArt => "coverart",
         }
     }
 
@@ -218,6 +250,8 @@ impl Stage {
             Stage::Wikidata => "wikidata.org",
             Stage::Wikipedia => "wikipedia.org",
             Stage::Commons => "commons.wikimedia.org",
+            Stage::Relations => "query.wikidata.org",
+            Stage::CoverArt => "coverartarchive.org",
         }
     }
 
@@ -505,17 +539,16 @@ pub fn task_state(
     if first.status != "done" {
         return Ok(Some(first.clone()));
     }
-    Ok(Stage::ALL[1..]
-        .iter()
-        .filter_map(|stage| by_stage(*stage))
+    let text_stages = || {
+        Stage::ALL[1..]
+            .iter()
+            .filter(|stage| stage.feeds_page_text())
+            .filter_map(|stage| by_stage(*stage))
+    };
+    Ok(text_stages()
         .filter(|row| row.stage != first.stage)
         .find(|row| row.status == "pending")
-        .or_else(|| {
-            Stage::ALL[1..]
-                .iter()
-                .filter_map(|stage| by_stage(*stage))
-                .find(|row| row.status == "failed")
-        })
+        .or_else(|| text_stages().find(|row| row.status == "failed"))
         .unwrap_or(first)
         .clone()
         .into())
@@ -1381,7 +1414,15 @@ pub fn clear_editorial(
         .bind::<Text, _>(entity_id)
         .execute(connection)?;
     }
+    if entity_type == "artist" {
+        diesel::sql_query("DELETE FROM person_influence WHERE artist_id = ?")
+            .bind::<Text, _>(entity_id)
+            .execute(connection)?;
+    }
     if entity_type == "album" {
+        diesel::sql_query("DELETE FROM album_cover_art WHERE album_id = ?")
+            .bind::<Text, _>(entity_id)
+            .execute(connection)?;
         diesel::sql_query(
             "DELETE FROM enriched_credit WHERE album_id = ? AND source = 'musicbrainz'",
         )
@@ -1614,8 +1655,14 @@ mod tests {
         )
         .unwrap();
         // It also gets a Wikipedia stage of its own, which does not wait
-        // for Wikidata.
-        assert_eq!(seed_tasks(&mut connection).unwrap(), 2);
+        // for Wikidata, and its influences are looked up.
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 3);
+        assert_eq!(
+            next_stage_task(&mut connection, Stage::Relations)
+                .unwrap()
+                .map(|task| task.entity_id),
+            Some("karajan".into())
+        );
         assert_eq!(
             next_stage_task(&mut connection, Stage::Wikidata)
                 .unwrap()
@@ -2064,4 +2111,200 @@ pub fn credits_with_role(
     ))
     .bind::<Text, _>(role)
     .load::<CreditRow>(connection)
+}
+
+/// Someone Wikidata says influenced a person (`influence`) or was
+/// influenced by them (`follower`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, QueryableByName)]
+pub struct InfluenceRow {
+    #[diesel(sql_type = Text)]
+    pub artist_id: String,
+    /// `influence` or `follower`.
+    #[diesel(sql_type = Text)]
+    pub direction: String,
+    #[diesel(sql_type = Text)]
+    pub wikidata_id: String,
+    #[diesel(sql_type = Text)]
+    pub name: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub description: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub musicbrainz_id: Option<String>,
+    /// Commons file name of their Wikidata image (P18).
+    #[diesel(sql_type = Nullable<Text>)]
+    pub image: Option<String>,
+    #[diesel(sql_type = Integer)]
+    pub position: i32,
+}
+
+/// Replaces what Wikidata says about a person's influences and followers.
+pub fn replace_influences(
+    connection: &mut SqliteConnection,
+    artist_id: &str,
+    rows: &[InfluenceRow],
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        diesel::sql_query("DELETE FROM person_influence WHERE artist_id = ?")
+            .bind::<Text, _>(artist_id)
+            .execute(connection)?;
+        for row in rows {
+            diesel::sql_query(
+                "INSERT INTO person_influence (artist_id, direction, wikidata_id, name,
+                     description, musicbrainz_id, image, position)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            )
+            .bind::<Text, _>(artist_id)
+            .bind::<Text, _>(&row.direction)
+            .bind::<Text, _>(&row.wikidata_id)
+            .bind::<Text, _>(&row.name)
+            .bind::<Nullable<Text>, _>(&row.description)
+            .bind::<Nullable<Text>, _>(&row.musicbrainz_id)
+            .bind::<Nullable<Text>, _>(&row.image)
+            .bind::<Integer, _>(row.position)
+            .execute(connection)?;
+        }
+        Ok(())
+    })
+}
+
+/// Influences and followers stored under any of a person's ids.
+pub fn load_influences(
+    connection: &mut SqliteConnection,
+    artist_ids: &[String],
+) -> QueryResult<Vec<InfluenceRow>> {
+    let mut rows = Vec::new();
+    for id in artist_ids.iter().take(16) {
+        rows.extend(
+            diesel::sql_query(
+                "SELECT artist_id, direction, wikidata_id, name, description, musicbrainz_id,
+                        image, position
+                 FROM person_influence WHERE artist_id = ? ORDER BY direction, position",
+            )
+            .bind::<Text, _>(id)
+            .load::<InfluenceRow>(connection)?,
+        );
+    }
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct WikidataLinkRow {
+    #[diesel(sql_type = Text)]
+    pub entity_id: String,
+    #[diesel(sql_type = Text)]
+    pub wikidata_id: String,
+}
+
+/// People already resolved on this server, by their Wikidata items.
+pub fn artists_by_wikidata(
+    connection: &mut SqliteConnection,
+    wikidata_ids: &[String],
+) -> QueryResult<Vec<WikidataLinkRow>> {
+    let mut found = Vec::new();
+    for chunk in wikidata_ids.chunks(400) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let query = format!(
+            "SELECT entity_id, wikidata_id FROM editorial_profile
+             WHERE entity_type = 'artist' AND wikidata_id IN ({placeholders})"
+        );
+        let mut statement = diesel::sql_query(query).into_boxed::<diesel::sqlite::Sqlite>();
+        for id in chunk {
+            statement = statement.bind::<Text, _>(id.clone());
+        }
+        found.extend(statement.load::<WikidataLinkRow>(connection)?);
+    }
+    Ok(found)
+}
+
+/// A front cover fetched from the Cover Art Archive.
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct CoverArtRow {
+    #[diesel(sql_type = Text)]
+    pub album_id: String,
+    /// Absolute path of the stored image.
+    #[diesel(sql_type = Text)]
+    pub file_path: String,
+    #[diesel(sql_type = Text)]
+    pub mime_type: String,
+    /// The Cover Art Archive URL it was fetched from.
+    #[diesel(sql_type = Text)]
+    pub source_url: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub release_mbid: Option<String>,
+}
+
+pub fn save_cover_art(connection: &mut SqliteConnection, row: &CoverArtRow) -> QueryResult<()> {
+    diesel::sql_query(
+        "INSERT INTO album_cover_art (album_id, file_path, mime_type, source_url, release_mbid)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(album_id) DO UPDATE SET file_path = excluded.file_path,
+             mime_type = excluded.mime_type, source_url = excluded.source_url,
+             release_mbid = excluded.release_mbid, updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind::<Text, _>(&row.album_id)
+    .bind::<Text, _>(&row.file_path)
+    .bind::<Text, _>(&row.mime_type)
+    .bind::<Text, _>(&row.source_url)
+    .bind::<Nullable<Text>, _>(&row.release_mbid)
+    .execute(connection)?;
+    Ok(())
+}
+
+pub fn load_cover_arts(connection: &mut SqliteConnection) -> QueryResult<Vec<CoverArtRow>> {
+    diesel::sql_query(
+        "SELECT album_id, file_path, mime_type, source_url, release_mbid FROM album_cover_art
+         LIMIT 200000",
+    )
+    .load::<CoverArtRow>(connection)
+}
+
+pub fn load_cover_art(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Option<CoverArtRow>> {
+    let mut rows = diesel::sql_query(
+        "SELECT album_id, file_path, mime_type, source_url, release_mbid FROM album_cover_art
+         WHERE album_id = ?",
+    )
+    .bind::<Text, _>(album_id)
+    .load::<CoverArtRow>(connection)?;
+    Ok(rows.pop())
+}
+
+/// Albums with a recording of a work by a composer (by MusicBrainz id or
+/// normalized name), including works whose movements are linked.
+pub fn composer_work_albums(
+    connection: &mut SqliteConnection,
+    normalized_names: &[String],
+    mbids: &[String],
+) -> QueryResult<Vec<String>> {
+    let mut albums: Vec<String> = Vec::new();
+    let mut add = |rows: Vec<ValueRow>| {
+        for row in rows {
+            if !albums.contains(&row.value) {
+                albums.push(row.value);
+            }
+        }
+    };
+    const QUERY: &str = "SELECT DISTINCT tw.album_id AS value FROM track_work tw
+         JOIN work w ON w.mbid = tw.work_mbid
+         LEFT JOIN work p ON p.mbid = w.parent_mbid
+         WHERE w.{column} = ? OR p.{column} = ? LIMIT 2000";
+    for name in normalized_names.iter().take(16) {
+        add(
+            diesel::sql_query(QUERY.replace("{column}", "composer_normalized"))
+                .bind::<Text, _>(name)
+                .bind::<Text, _>(name)
+                .load::<ValueRow>(connection)?,
+        );
+    }
+    for mbid in mbids.iter().take(16) {
+        add(
+            diesel::sql_query(QUERY.replace("{column}", "composer_mbid"))
+                .bind::<Text, _>(mbid)
+                .bind::<Text, _>(mbid)
+                .load::<ValueRow>(connection)?,
+        );
+    }
+    Ok(albums)
 }

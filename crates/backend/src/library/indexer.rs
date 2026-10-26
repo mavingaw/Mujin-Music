@@ -46,7 +46,8 @@ use crate::library::storage::get_cover_art_path;
 use crate::persistence::connection::{DbPool, connect};
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
-const TAG_PARSER_VERSION: &str = "17";
+// 18: MusicBrainz release, recording and artist ids are read from tags.
+const TAG_PARSER_VERSION: &str = "18";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -5112,10 +5113,30 @@ fn parsed_file_from_result(
             .duration_source
             .unwrap_or(DurationSource::Unavailable),
         cover_url: local_cover.to_owned(),
-        musicbrainz_recording_id: String::new(),
-        musicbrainz_release_id: String::new(),
-        musicbrainz_artist_id: String::new(),
-        musicbrainz_album_artist_id: String::new(),
+        musicbrainz_recording_id: metadata
+            .credits
+            .musicbrainz
+            .recording
+            .clone()
+            .unwrap_or_default(),
+        musicbrainz_release_id: metadata
+            .credits
+            .musicbrainz
+            .release
+            .clone()
+            .unwrap_or_default(),
+        musicbrainz_artist_id: metadata
+            .credits
+            .musicbrainz
+            .artist
+            .clone()
+            .unwrap_or_default(),
+        musicbrainz_album_artist_id: metadata
+            .credits
+            .musicbrainz
+            .album_artist
+            .clone()
+            .unwrap_or_default(),
         error,
         embedded_artwork: metadata.embedded_artwork,
         technical,

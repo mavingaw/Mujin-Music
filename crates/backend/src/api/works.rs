@@ -344,6 +344,14 @@ pub fn build_recordings(
             ensembles = groups;
             artists = people;
         }
+        // An orchestra or choir credited as a performer is an ensemble.
+        let (groups, people): (Vec<_>, Vec<_>) = soloists
+            .into_iter()
+            .partition(|entry| looks_like_ensemble(&entry.name));
+        soloists = people;
+        for group in groups {
+            push_person(&mut ensembles, group);
+        }
         soloists.retain(|entry| {
             let key = normalize_artist_identity(&entry.name);
             Some(&key) != composer.as_ref()
@@ -531,7 +539,7 @@ fn canonical_people(identity: &PersonIdentity, people: &mut Vec<PersonRef>, albu
     people.retain_mut(|person| {
         if let Some(id) = &person.artist_id {
             let canonical = identity.for_local(id, &person.name, Some(album_id));
-            if canonical != *id
+            if (canonical != *id || canonical.starts_with(EXTERNAL_PREFIX))
                 && let Some(name) = identity.display_name(&canonical)
             {
                 person.name = name.to_string();
