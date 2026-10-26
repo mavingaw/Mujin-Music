@@ -25,6 +25,8 @@ import {
   UserRound,
 } from "lucide-react";
 import { downloadAlbum } from "@/lib/downloads/download-album";
+import { AudioQualityBadge } from "@/features/library/audio-quality-badge";
+import { albumAudioSummary } from "@/features/library/audio-quality";
 import { usePlayer } from "@/features/player/player-context";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor from "@/features/library/album-editor";
@@ -127,6 +129,10 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
       0,
     );
   }, [album?.songs]);
+  const audioSummary = useMemo(
+    () => albumAudioSummary(album?.songs || []),
+    [album?.songs],
+  );
   const addAlbumToPlaylist = useMutation({
     mutationFn: async ({ id }: { id: number; name: string }) => {
       if (!album) {
@@ -268,6 +274,13 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               <span>
                 {album.songs.length} songs, {formatTotalDuration(totalDuration)}
               </span>
+              {audioSummary ? (
+                <AudioQualityBadge
+                  className="ml-1"
+                  summary={audioSummary}
+                  suffix={audioSummary.mixed ? "mixed" : undefined}
+                />
+              ) : null}
             </div>
           </div>
         </div>

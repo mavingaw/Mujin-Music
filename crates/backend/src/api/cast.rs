@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::OnceLock;
 
 use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
@@ -174,7 +173,7 @@ struct CastQueueItem {
     album: String,
     artwork_url: Option<String>,
     media_url: String,
-    content_type: &'static str,
+    content_type: String,
     duration_ms: i64,
 }
 
@@ -237,20 +236,6 @@ fn request_origin(request: &HttpRequest) -> String {
 
 fn encoded(value: &str) -> String {
     utf8_percent_encode(value, URL_COMPONENT).to_string()
-}
-
-fn cast_content_type(path: &str) -> &'static str {
-    match Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("mp3") => "audio/mpeg",
-        Some("aac") => "audio/aac",
-        Some("m4a") | Some("mp4") => "audio/mp4",
-        _ => "audio/mpeg",
-    }
 }
 
 fn valid_receiver_field(value: &str) -> bool {
@@ -372,7 +357,7 @@ fn hydrate_response(
                 album: album.name.clone(),
                 artwork_url,
                 media_url,
-                content_type: cast_content_type(&song.path),
+                content_type: crate::api::library::cast_delivery_plan(song).content_type,
                 duration_ms: (song.duration.max(0.0) * 1_000.0).round() as i64,
             })
         })

@@ -11,6 +11,7 @@ import {
 } from "./player-bar-hooks";
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
 import { PlayerFooter } from "./player-footer";
+import { FormatBadge } from "./format-badge";
 import PlayerQueue from "./player-queue";
 import { useMediaSession } from "./use-media-session";
 import { useCastOutput } from "./use-cast-output";
@@ -21,6 +22,7 @@ import {
   isExplicitSongTitle,
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
+import { useSession } from "@/features/account/session-provider";
 
 export default function PlayerBar() {
   const {
@@ -52,6 +54,7 @@ export default function PlayerBar() {
     audioPresets,
   } = usePlayer();
   const currentTime = usePlayerClock();
+  const { session } = useSession();
   const cast = useCastOutput();
   const castItem = cast.session?.items[cast.session.current_position] ?? null;
   const castSong = useQuery({
@@ -208,6 +211,20 @@ export default function PlayerBar() {
           cover={cover}
           currentTime={effectiveCurrentTime}
           duration={effectiveDuration}
+          formatBadge={
+            <FormatBadge
+              audio={effectiveSong.audio}
+              bitrate={session?.bitrate ?? 0}
+              casting={casting}
+              presetLabel={
+                audioPreset === "original"
+                  ? null
+                  : (audioPresets.find((preset) => preset.id === audioPreset)
+                      ?.label ?? null)
+              }
+              songId={castItem?.song_id || song.id}
+            />
+          }
           readPosition={casting ? undefined : getPlaybackPosition}
           isPlaying={effectivePlaying}
           looping={looping}
@@ -306,8 +323,11 @@ export default function PlayerBar() {
         artistId={effectiveSong.artist_object.id || artist.id}
         artistName={displayArtist}
         artistCredits={artistCredits}
+        audio={effectiveSong.audio}
         audioPreset={audioPreset}
         audioPresets={audioPresets}
+        bitrate={session?.bitrate ?? 0}
+        casting={casting}
         cover={cover}
         currentTime={effectiveCurrentTime}
         duration={effectiveDuration}
