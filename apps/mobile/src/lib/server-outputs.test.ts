@@ -45,7 +45,7 @@ test("only zones with an endpoint of their own are server outputs", () => {
     ({ id, kind, endpoints }) as unknown as Zone;
   expect(
     serverOutputs([
-      zone("phone", "mobile", []),
+      zone("phone", "mobile", [{ ...device, id: "phone" }]),
       zone("device:wasapi:{1}", "device", [device]),
       zone("group", "linked", [device]),
     ]).map((output) => output.zone.id),

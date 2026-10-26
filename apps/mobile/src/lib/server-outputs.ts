@@ -29,11 +29,15 @@ export interface ServerOutput {
   endpoint: ZoneEndpoint;
 }
 
+const APP_KINDS = new Set<Zone["kind"]>(["web", "desktop", "mobile"]);
+
 /** Zones that play through an endpoint of their own; groups are skipped. */
 export function serverOutputs(zones: readonly Zone[]): ServerOutput[] {
   const outputs: ServerOutput[] = [];
   for (const zone of zones) {
-    if (zone.kind === "linked" || zone.group) continue;
+    // Apps play through their own system mixer, groups through members.
+    if (APP_KINDS.has(zone.kind) || zone.kind === "linked" || zone.group)
+      continue;
     const endpoint = zone.endpoints?.find((item) => item.id === zone.id);
     if (endpoint) outputs.push({ zone, endpoint });
   }

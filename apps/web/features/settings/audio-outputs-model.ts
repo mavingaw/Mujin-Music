@@ -46,6 +46,8 @@ export function formatToneLabel(tone: FormatTone) {
   }
 }
 
+const APP_KINDS = new Set<Zone["kind"]>(["web", "desktop", "mobile"]);
+
 /**
  * Every zone that plays through one endpoint of its own (a device, a
  * bridge's device, a network player), the server's own devices first.
@@ -54,7 +56,9 @@ export function formatToneLabel(tone: FormatTone) {
 export function outputEntries(zones: readonly Zone[]) {
   const entries: OutputEntry[] = [];
   for (const zone of zones) {
-    if (zone.kind === "linked" || zone.group) continue;
+    // Apps play through their own system mixer, groups through members.
+    if (APP_KINDS.has(zone.kind) || zone.kind === "linked" || zone.group)
+      continue;
     const endpoint = zone.endpoints?.find((item) => item.id === zone.id);
     if (endpoint) entries.push({ zone, endpoint });
   }
