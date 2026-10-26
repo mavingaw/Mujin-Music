@@ -50,6 +50,12 @@ pub struct TrackRequest {
     /// DIDL-Lite metadata for `uri`.
     pub metadata: String,
     pub mime_type: String,
+    /// Display metadata (Chromecast shows it on screen).
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    /// Signed cover URL, for network renderers.
+    pub art_uri: Option<String>,
     /// Volume leveling gain for this track, in dB.
     pub gain_db: Option<f32>,
     pub dsp: ZoneDsp,
@@ -163,6 +169,10 @@ pub trait Renderer: Send + Sync {
     fn set_mute(&self, muted: bool) -> BoxFuture<'_, Result<(), String>>;
     /// Refreshes [`Renderer::state`].
     fn poll(&self) -> BoxFuture<'_, ()>;
+    /// Zone ids of the members, for a group that plays as one renderer.
+    fn group_members(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Most of a dB scale the 0..=100 slider spans: below -80 dB is silence in

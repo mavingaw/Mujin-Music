@@ -11,6 +11,9 @@
 //! Both implement [`renderer::Renderer`], so the zone service drives them
 //! the same way.
 
+pub mod airplay;
+pub mod bridge;
+pub mod cast;
 pub mod device;
 pub mod renderer;
 pub mod upnp;
@@ -150,6 +153,12 @@ pub fn describe_source(source: &SourceFormat) -> String {
 pub struct Outputs {
     pub upnp: Option<Arc<upnp::UpnpController>>,
     pub devices: Option<Arc<device::DeviceManager>>,
+    /// Parson Bridges: audio devices of other machines.
+    pub bridges: Option<Arc<bridge::BridgeHub>>,
+    /// AirPlay receivers.
+    pub airplay: Option<Arc<airplay::AirplayController>>,
+    /// Chromecast devices and Google Home groups, driven by the server.
+    pub cast: Option<Arc<cast::CastController>>,
 }
 
 impl Outputs {
@@ -168,13 +177,31 @@ impl Outputs {
                 }
             });
         let devices = device::DeviceManager::from_env().map(Arc::new);
-        Self { upnp, devices }
+        let bridges = bridge::BridgeHub::from_env();
+        let airplay = airplay::AirplayController::from_env();
+        let cast = cast::CastController::from_env();
+        Self {
+            upnp,
+            devices,
+            bridges,
+            airplay,
+            cast,
+        }
     }
 
     pub fn renderers(&self) -> Vec<Arc<dyn Renderer>> {
         let mut renderers: Vec<Arc<dyn Renderer>> = Vec::new();
         if let Some(devices) = &self.devices {
             renderers.extend(devices.renderers());
+        }
+        if let Some(bridges) = &self.bridges {
+            renderers.extend(bridges.renderers());
+        }
+        if let Some(airplay) = &self.airplay {
+            renderers.extend(airplay.devices.renderers());
+        }
+        if let Some(cast) = &self.cast {
+            renderers.extend(cast.renderers());
         }
         if let Some(upnp) = &self.upnp {
             renderers.extend(upnp.renderers());
@@ -189,6 +216,15 @@ impl Outputs {
         if zone_id.starts_with("upnp:") {
             return self.upnp.as_ref()?.renderer(zone_id);
         }
+        if zone_id.starts_with(bridge::BRIDGE_PREFIX) || zone_id.starts_with(bridge::GROUP_PREFIX) {
+            return self.bridges.as_ref()?.renderer(zone_id);
+        }
+        if zone_id.starts_with(airplay::AIRPLAY_PREFIX) {
+            return self.airplay.as_ref()?.devices.renderer(zone_id);
+        }
+        if zone_id.starts_with(cast::CAST_PREFIX) {
+            return self.cast.as_ref()?.renderer(zone_id);
+        }
         None
     }
 
@@ -197,6 +233,7 @@ impl Outputs {
         if let Some(devices) = &self.devices {
             devices.refresh();
         }
+        self.maintain_bridges().await;
         if let Some(upnp) = &self.upnp
             && let Err(error) = upnp.discover().await
         {
@@ -204,9 +241,46 @@ impl Outputs {
         }
     }
 
+    /// Connects to bridges that are not connected yet.
+    pub async fn maintain_bridges(&self) {
+        if let Some(bridges) = self.bridges.clone() {
+            let _ = tokio::task::spawn_blocking(move || bridges.maintain()).await;
+        }
+    }
+
     /// Fires when a renderer's state changes on its own (a track ended).
+    /// Merges the change signals of every output kind (call from within a
+    /// Tokio runtime).
     pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<()>> {
-        self.devices.as_ref().map(|devices| devices.subscribe())
+        let sources: Vec<tokio::sync::broadcast::Receiver<()>> = [
+            self.devices.as_ref().map(|devices| devices.subscribe()),
+            self.bridges.as_ref().map(|bridges| bridges.subscribe()),
+            self.airplay.as_ref().map(|airplay| airplay.subscribe()),
+            self.cast.as_ref().map(|cast| cast.subscribe()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if sources.is_empty() {
+            return None;
+        }
+        let (sender, receiver) = tokio::sync::broadcast::channel(64);
+        for mut source in sources {
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                loop {
+                    match source.recv().await {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            if sender.send(()).is_err() {
+                                return;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    }
+                }
+            });
+        }
+        Some(receiver)
     }
 
     pub fn status(&self) -> serde_json::Value {
@@ -227,6 +301,14 @@ impl Outputs {
                 "devices": 0,
                 "note": "Audio devices of this computer show as zones in the Parson desktop app.",
             })),
+            "airplay": self.airplay.as_ref().map(|airplay| airplay.status())
+                .unwrap_or_else(|| serde_json::json!({"enabled": false, "receivers": [], "note": null})),
+            "chromecast": self.cast.as_ref().map(|cast| cast.status())
+                .unwrap_or_else(|| serde_json::json!({"enabled": false, "devices": [], "note": null})),
+            "bridges": self.bridges.as_ref().map(|bridges| serde_json::json!({
+                "enabled": true,
+                "bridges": bridges.status(),
+            })).unwrap_or_else(|| serde_json::json!({"enabled": false, "bridges": []})),
         })
     }
 }

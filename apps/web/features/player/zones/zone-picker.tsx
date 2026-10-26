@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { ZoneIcon } from "./zone-icons";
+import { ZoneOutputsPanel } from "./zone-outputs";
 import { ZoneSettingsDialog } from "./zone-settings";
 import { QualityLight, ZoneSignalPathDialog } from "./zone-signal-path";
 import { useZones } from "./zones-provider";
@@ -72,6 +73,8 @@ function errorMessage(error: unknown, fallback: string): string {
       "Chromecast playback starts from the Parson mobile app.",
     chromecast_groups_are_made_in_google_home:
       "Group Chromecast speakers in the Google Home app.",
+    bridges_disabled:
+      "Parson Bridge support is turned off on this server (PARSON_BRIDGES=off).",
     end_of_queue: "That was the last track in the queue.",
     sonos_disabled: "Sonos support is turned off on this server.",
     private_zones_cannot_be_grouped:
@@ -315,7 +318,7 @@ export function ZonePickerDialog({
                     setChecked([]);
                     toast.success(
                       plan.synced
-                        ? "Grouped. Rooms play in sync."
+                        ? "Grouped. Rooms play sample-synced."
                         : "Linked. Zones follow the same controls.",
                     );
                   }, "Grouping failed.")
@@ -340,7 +343,8 @@ function ZoneFooterNotes() {
   const devices = outputs?.devices;
   const upnp = outputs?.upnp;
   return (
-    <div className="space-y-1 border-t border-white/10 px-5 py-3 text-[11px] leading-4 text-zinc-500">
+    <div className="max-h-[32dvh] space-y-1 overflow-y-auto border-t border-white/10 px-5 py-3 text-[11px] leading-4 text-zinc-500">
+      <ZoneOutputsPanel />
       {sonos && (
         <p>
           {sonos.enabled

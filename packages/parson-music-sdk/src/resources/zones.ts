@@ -4,7 +4,9 @@ import api, { getApiWebSocketURL } from "../core/http";
  * Zones are every place music can play: each running Parson app (web,
  * desktop, mobile), an active Chromecast session, each Sonos room or group,
  * each UPnP/DLNA renderer, each audio device (USB DAC, built-in, HDMI) of
- * the computer running the server, and linked groups of zones. The server
+ * the computer running the server, each device of a machine running Parson
+ * Bridge (and sample-synced groups of them), each AirPlay receiver, each
+ * Chromecast the server drives, and linked groups of zones. The server
  * keeps the list; clients register themselves, pick a zone to control,
  * transfer queues and group zones.
  */
@@ -16,6 +18,8 @@ export type ZoneKind =
   | "sonos"
   | "upnp"
   | "device"
+  | "bridge"
+  | "airplay"
   | "linked";
 
 /** How a server-driven zone changes volume. */
@@ -26,7 +30,7 @@ export interface DeviceVolumeRange {
   min: number;
   max: number;
   step: number;
-  unit: "dB" | "steps";
+  unit: "dB" | "steps" | "level";
   /** The device changes its own gain: samples stay untouched. */
   hardware: boolean;
   current?: number | null;
@@ -166,7 +170,7 @@ export interface ZoneGroupMember {
 
 export interface ZoneGroupInfo {
   id: string;
-  /** True only for native groups (Sonos) that play sample-synced. */
+  /** True only for native groups (Sonos, Parson Bridge) that play sample-synced. */
   synced: boolean;
   sync_note: string;
   members: ZoneGroupMember[];
@@ -201,7 +205,15 @@ export interface ZoneNowPlaying {
 export interface Zone {
   id: string;
   kind: ZoneKind;
-  ecosystem: "parson" | "chromecast" | "sonos" | "upnp" | "device" | "linked";
+  ecosystem:
+    | "parson"
+    | "chromecast"
+    | "sonos"
+    | "upnp"
+    | "device"
+    | "bridge"
+    | "airplay"
+    | "linked";
   name: string;
   /** Icon name from `ZONE_ICONS` (custom or the device's). */
   icon?: string;
@@ -231,8 +243,55 @@ export interface Zone {
   notes: string[];
 }
 
+/** A Parson Bridge: another machine whose audio devices are zones. */
+export interface BridgeStatus {
+  address: string;
+  source: "discovered" | "manual";
+  connected: boolean;
+  bridge_id: string | null;
+  name: string | null;
+  host: string | null;
+  /** e.g. `linux aarch64`. */
+  platform: string | null;
+  version: string | null;
+  /** `ALSA`, `Simulated`, or null. */
+  backend: string | null;
+  devices: number;
+  /** Bridge clock minus server clock, in microseconds. */
+  clock_offset_us: number | null;
+  clock_uncertainty_us: number | null;
+  /** Why the bridge lists no devices (no supported audio API). */
+  note: string | null;
+  last_error: string | null;
+}
+
+export interface AirplayReceiver {
+  id: string;
+  name: string;
+  model: string | null;
+  address: string;
+  supported: boolean;
+  reason: string | null;
+}
+
+export interface CastDevice {
+  id: string;
+  name: string;
+  model: string;
+  address: string;
+  /** A Google Home speaker group. */
+  group: boolean;
+}
+
 export interface ZoneOutputsStatus {
   upnp: { enabled: boolean; renderers: number; last_error: string | null };
+  bridges?: { enabled: boolean; bridges: BridgeStatus[] };
+  airplay?: {
+    enabled: boolean;
+    receivers: AirplayReceiver[];
+    note: string | null;
+  };
+  chromecast?: { enabled: boolean; devices: CastDevice[]; note: string | null };
   devices: {
     enabled: boolean;
     /** `ALSA`, `Simulated`, or `null` when unavailable. */
@@ -484,6 +543,28 @@ export async function discoverOutputs(): Promise<ZoneOutputsStatus> {
   return response.data;
 }
 
+export async function getBridges(): Promise<{
+  enabled: boolean;
+  bridges: BridgeStatus[];
+}> {
+  const response = await api.get("/zones/bridges", zoneRequest({}));
+  return response.data;
+}
+
+/** Adds a Parson Bridge by address (`host` or `host:port`); admins only. */
+export async function addBridge(address: string): Promise<BridgeStatus> {
+  const response = await api.post<BridgeStatus>(
+    "/zones/bridges",
+    { address },
+    { timeout: 20_000 },
+  );
+  return response.data;
+}
+
+export async function removeBridge(address: string): Promise<void> {
+  await api.delete(`/zones/bridges/${encodeURIComponent(address)}`);
+}
+
 export async function discoverSonos(): Promise<{
   players: number;
   last_error?: string;
@@ -503,8 +584,10 @@ const KIND_ORDER: Record<ZoneKind, number> = {
   desktop: 1,
   mobile: 1,
   device: 2,
+  bridge: 2,
   linked: 3,
   sonos: 4,
+  airplay: 5,
   upnp: 5,
   chromecast: 6,
 };
@@ -538,9 +621,43 @@ export function zoneKindLabel(kind: ZoneKind): string {
       return "UPnP/DLNA renderer";
     case "device":
       return "Audio device";
+    case "bridge":
+      return "Parson Bridge";
+    case "airplay":
+      return "AirPlay";
     case "linked":
       return "Linked zones";
   }
+}
+
+/**
+ * One line about the network outputs the server plays to, e.g.
+ * `2 Parson Bridges (5 outputs) · 1 AirPlay receiver · 1 Chromecast`.
+ */
+export function zoneOutputsSummary(
+  outputs: ZoneOutputsStatus | null | undefined,
+): string | null {
+  const parts: string[] = [];
+  const bridges = (outputs?.bridges?.bridges ?? []).filter(
+    (bridge) => bridge.connected,
+  );
+  if (bridges.length) {
+    const devices = bridges.reduce((sum, bridge) => sum + bridge.devices, 0);
+    parts.push(
+      `${bridges.length} Parson ${bridges.length === 1 ? "Bridge" : "Bridges"} (${devices} ${devices === 1 ? "output" : "outputs"})`,
+    );
+  }
+  const airplay = (outputs?.airplay?.receivers ?? []).filter(
+    (receiver) => receiver.supported,
+  ).length;
+  if (airplay) {
+    parts.push(
+      `${airplay} AirPlay ${airplay === 1 ? "receiver" : "receivers"}`,
+    );
+  }
+  const cast = outputs?.chromecast?.devices.length ?? 0;
+  if (cast) parts.push(`${cast} ${cast === 1 ? "Chromecast" : "Chromecasts"}`);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 /** Whether pressing "Pause all" would pause anything. */
@@ -619,6 +736,11 @@ export function deviceVolumeLabel(volume: ZoneVolume | null): string | null {
     return current === null || current === undefined
       ? `Device range ${span}`
       : `${current.toFixed(1)} dB on the device (${span})`;
+  }
+  if (range.unit === "level") {
+    return current === null || current === undefined
+      ? "The device's own volume"
+      : `${Math.round(current * 100)}% on the device`;
   }
   return current === null || current === undefined
     ? `Device range ${range.min}-${range.max}`
@@ -728,6 +850,20 @@ export function groupingPlan(zones: Zone[]): {
       allowed: true,
       synced: true,
       reason: "Native Sonos group: rooms play sample-synced.",
+    };
+  }
+  if (zones.every((zone) => zone.kind === "bridge")) {
+    if (zones.some((zone) => zone.group)) {
+      return {
+        allowed: false,
+        synced: false,
+        reason: "Ungroup the bridge group first.",
+      };
+    }
+    return {
+      allowed: true,
+      synced: true,
+      reason: `Parson Bridge group: sample-synced to ${zones[0]?.name ?? "the first zone"}'s DAC clock, which stays bit-perfect.`,
     };
   }
   return {
@@ -901,6 +1037,8 @@ const DEFAULT_ICONS: Record<ZoneKind, ZoneIconName> = {
   sonos: "speaker",
   upnp: "radio",
   device: "amplifier",
+  bridge: "amplifier",
+  airplay: "speaker",
   linked: "music",
 };
 

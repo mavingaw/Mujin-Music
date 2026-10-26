@@ -37,6 +37,9 @@ test("step icons follow the server's wording", () => {
   );
   expect(stepIcon("Resampled 192 kHz to 96 kHz")).toBe("rate");
   expect(stepIcon("DSP: Bass +3 dB")).toBe("dsp");
+  expect(
+    stepIcon("Sync: Living Room is the clock master and gets every sample"),
+  ).toBe("sync");
 });
 
 test("caveats say what was tested, never more", () => {
@@ -44,5 +47,11 @@ test("caveats say what was tested, never more", () => {
     "not yet on Sonos hardware",
   );
   expect(signalPathCaveat({ kind: "upnp" })).toContain("simulator");
+  expect(signalPathCaveat({ kind: "bridge" })).toContain(
+    "not yet on a USB DAC",
+  );
+  expect(signalPathCaveat({ kind: "airplay" })).toContain(
+    "not yet on Apple hardware",
+  );
   expect(signalPathCaveat({ kind: "web" })).toBeNull();
 });

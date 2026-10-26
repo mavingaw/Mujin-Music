@@ -1,0 +1,22 @@
+# systemd unit for Parson Bridge (Raspberry Pi OS, Debian, Ubuntu, Fedora...).
+# Install: sudo cp parson-bridge /usr/local/bin/ && sudo cp parson-bridge.service /etc/systemd/system/
+#          sudo systemctl enable --now parson-bridge
+[Unit]
+Description=Parson Bridge (makes this machine's DACs Parson zones)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/parson-bridge
+DynamicUser=yes
+# Exclusive access to the sound cards.
+SupplementaryGroups=audio
+StateDirectory=parson-bridge
+Environment=XDG_CONFIG_HOME=/var/lib/parson-bridge
+Restart=on-failure
+RestartSec=3
+# Audio threads want low latency.
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

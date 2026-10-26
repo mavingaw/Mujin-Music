@@ -1276,7 +1276,7 @@ impl ZoneService {
         if let Some(uuid) = zone_id.strip_prefix("sonos:") {
             return self.sonos_command(user_id, uuid, command, cache).await;
         }
-        if zone_id.starts_with("upnp:") || zone_id.starts_with("device:") {
+        if hosted_zone_id(zone_id) {
             return self.hosted_command(zone_id, command, cache).await;
         }
         if zone_id.starts_with("client:") {
@@ -2137,6 +2137,12 @@ impl ZoneService {
             self.changed(None);
             return Ok(sonos_zone_id(&coordinator));
         }
+        if unique
+            .iter()
+            .all(|id| id.starts_with(crate::outputs::bridge::BRIDGE_PREFIX))
+        {
+            return self.group_bridges(user_id, &unique, &zones).await;
+        }
         let id = format!("linked:{}", uuid::Uuid::new_v4());
         {
             let mut state = self.lock();
@@ -2186,6 +2192,122 @@ impl ZoneService {
         Ok(id)
     }
 
+    /// Groups Parson Bridge zones into one sample-synced zone that carries
+    /// on with the first zone's queue.
+    async fn group_bridges(
+        &self,
+        user_id: i32,
+        members: &[String],
+        zones: &[Zone],
+    ) -> Result<String, ZoneError> {
+        let hub = self
+            .outputs
+            .get()
+            .and_then(|outputs| outputs.bridges.clone())
+            .ok_or(ZoneError::Unsupported("bridges_disabled"))?;
+        let snapshot = self.snapshot(user_id, &members[0]).ok();
+        let picked: Vec<&Zone> = members
+            .iter()
+            .filter_map(|id| zones.iter().find(|zone| &zone.id == id))
+            .collect();
+        let mut names: Vec<String> = picked.iter().map(|zone| zone.name.clone()).collect();
+        let duplicates = (1..names.len()).any(|index| names[..index].contains(&names[index]));
+        if duplicates {
+            // Same DAC model in two rooms: name the group by machine.
+            names = picked
+                .iter()
+                .map(|zone| {
+                    zone.device
+                        .split(" · ")
+                        .next()
+                        .unwrap_or(&zone.name)
+                        .to_string()
+                })
+                .collect();
+        }
+        let name = names.join(" + ");
+        for member in members {
+            let _ = self.command(user_id, member, ZoneCommand::Stop, None).await;
+        }
+        let master = picked
+            .first()
+            .map(|zone| zone.name.clone())
+            .unwrap_or_else(|| "the first zone".to_string());
+        let group_id = hub
+            .create_group(members, &name, &master)
+            .map_err(ZoneError::Device)?;
+        if let Some(snapshot) = snapshot {
+            self.load_snapshot(user_id, &group_id, snapshot).await?;
+        }
+        self.changed(None);
+        Ok(group_id)
+    }
+
+    async fn load_snapshot(
+        &self,
+        user_id: i32,
+        zone_id: &str,
+        snapshot: PlaybackSnapshot,
+    ) -> Result<(), ZoneError> {
+        self.command(
+            user_id,
+            zone_id,
+            ZoneCommand::Load {
+                song_ids: snapshot.song_ids,
+                current_position: snapshot.current_position,
+                position_ms: snapshot.position_ms,
+                play: snapshot.playing,
+            },
+            None,
+        )
+        .await
+    }
+
+    /// Ends a bridge group (its queue carries on in the first zone) or
+    /// takes one zone out of it.
+    async fn ungroup_bridges(
+        &self,
+        user_id: i32,
+        group_id: &str,
+        member: Option<&str>,
+    ) -> Result<(), ZoneError> {
+        let hub = self
+            .outputs
+            .get()
+            .and_then(|outputs| outputs.bridges.clone())
+            .ok_or(ZoneError::Unsupported("bridges_disabled"))?;
+        let members = hub.group_members(group_id).ok_or(ZoneError::NotFound)?;
+        let snapshot = self.snapshot(user_id, group_id).ok();
+        let _ = self
+            .command(user_id, group_id, ZoneCommand::Stop, None)
+            .await;
+        let freed = hub.leave_group(group_id, member).map_err(|error| {
+            if error == "member_not_in_group" {
+                ZoneError::Invalid("member_not_in_group")
+            } else {
+                ZoneError::Device(error)
+            }
+        })?;
+        let group_remains = hub.group_members(group_id).is_some();
+        if !group_remains {
+            self.lock().hosted.remove(group_id);
+        }
+        if let Some(snapshot) = snapshot {
+            let target = if group_remains {
+                group_id.to_string()
+            } else {
+                members
+                    .iter()
+                    .find(|id| freed.contains(id))
+                    .cloned()
+                    .unwrap_or_else(|| members[0].clone())
+            };
+            self.load_snapshot(user_id, &target, snapshot).await?;
+        }
+        self.changed(None);
+        Ok(())
+    }
+
     /// Ungroups a linked or Sonos group, or removes one member when given.
     pub async fn ungroup(
         &self,
@@ -2193,6 +2315,9 @@ impl ZoneService {
         group_id: &str,
         member: Option<&str>,
     ) -> Result<(), ZoneError> {
+        if group_id.starts_with(crate::outputs::bridge::GROUP_PREFIX) {
+            return self.ungroup_bridges(user_id, group_id, member).await;
+        }
         if group_id.starts_with("linked:") {
             {
                 let mut state = self.lock();
@@ -2360,7 +2485,7 @@ impl ZoneService {
                 tracing::warn!(%error, uuid, "could not apply leveling to the Sonos queue");
             }
         }
-        if zone_id.starts_with("upnp:") || zone_id.starts_with("device:") {
+        if hosted_zone_id(zone_id) {
             self.hosted_settings_changed(zone_id).await;
         }
         self.changed(if shared_zone(zone_id) {
@@ -2685,6 +2810,9 @@ impl ZoneService {
                         }
                     }
                     tick += 1;
+                    if tick == 1 || tick.is_multiple_of(5) {
+                        outputs.maintain_bridges().await;
+                    }
                     if (tick == 1 || tick.is_multiple_of(10))
                         && let Some(devices) = &outputs.devices
                     {
@@ -2794,7 +2922,21 @@ impl ZoneService {
 
 /// Zones every account on the server sees (speakers, renderers, devices).
 fn shared_zone(zone_id: &str) -> bool {
-    zone_id.starts_with("sonos:") || zone_id.starts_with("upnp:") || zone_id.starts_with("device:")
+    zone_id.starts_with("sonos:") || hosted_zone_id(zone_id)
+}
+
+/// Zones the server plays itself (renderers, devices, bridges, AirPlay).
+pub(crate) fn hosted_zone_id(zone_id: &str) -> bool {
+    [
+        "upnp:",
+        "device:",
+        "bridge:",
+        "bridge-group:",
+        "airplay:",
+        "chromecast:",
+    ]
+    .iter()
+    .any(|prefix| zone_id.starts_with(prefix))
 }
 
 fn strip_member(command: &mut ZoneCommand) {

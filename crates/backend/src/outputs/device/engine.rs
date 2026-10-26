@@ -43,6 +43,17 @@ pub enum Control {
     Shutdown,
 }
 
+/// Where the device is, for the signal path.
+#[derive(Clone, Debug, Default)]
+pub struct Route {
+    /// After the device name, e.g. `on kitchen-pi via Parson Bridge`.
+    pub suffix: Option<String>,
+    /// A step every stream takes.
+    pub step: Option<String>,
+    /// The output has no exclusive/shared mode (AirPlay).
+    pub modeless: bool,
+}
+
 struct Shared {
     state: RendererState,
     settings: RendererSettings,
@@ -65,6 +76,7 @@ impl Engine {
         backend: Arc<dyn DeviceBackend>,
         device: DeviceInfo,
         changed: tokio::sync::broadcast::Sender<()>,
+        route: Route,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let settings = RendererSettings {
@@ -74,7 +86,7 @@ impl Engine {
             } else {
                 VolumeMode::Fixed
             },
-            limits: device.limits(),
+            limits: super::device_limits(&device),
         };
         let shared = Arc::new(Mutex::new(Shared {
             state: RendererState {
@@ -89,6 +101,7 @@ impl Engine {
             Player {
                 backend,
                 device,
+                route,
                 receiver,
                 shared: thread_shared,
                 changed,
@@ -247,6 +260,7 @@ struct Active {
 struct Player {
     backend: Arc<dyn DeviceBackend>,
     device: DeviceInfo,
+    route: Route,
     receiver: Receiver<Control>,
     shared: Arc<Mutex<Shared>>,
     changed: tokio::sync::broadcast::Sender<()>,
@@ -536,6 +550,9 @@ impl Player {
             if active.track.dsp.is_active() {
                 steps.push(format!("DSP: {}", active.track.dsp.summary()));
             }
+            if let Some(step) = &self.route.step {
+                steps.push(step.clone());
+            }
             let software = settings.volume_mode == VolumeMode::Software
                 && (self.software_volume < 100 || self.muted);
             if software {
@@ -557,15 +574,20 @@ impl Player {
             ZoneStreamInfo {
                 source: describe_source(&active.track.source),
                 output: format!(
-                    "{}/{}-bit ({}) to {}, {}",
+                    "{}/{}-bit ({}) to {}{}{}",
                     format_rate(active.format.sample_rate),
                     active.format.format.bits(),
                     active.format.format.name(),
                     self.device.name,
-                    if settings.exclusive {
-                        "exclusive"
-                    } else {
-                        "shared"
+                    self.route
+                        .suffix
+                        .as_ref()
+                        .map(|suffix| format!(" {suffix}"))
+                        .unwrap_or_default(),
+                    match (self.route.modeless, settings.exclusive) {
+                        (true, _) => "",
+                        (false, true) => ", exclusive",
+                        (false, false) => ", shared",
                     }
                 ),
                 bit_perfect,

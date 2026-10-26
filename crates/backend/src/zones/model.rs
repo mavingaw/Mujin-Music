@@ -28,6 +28,10 @@ pub enum ZoneKind {
     /// An audio output (USB DAC, built-in, HDMI) of the machine running the
     /// Parson server, normally the desktop app's own computer.
     Device,
+    /// An audio output of another machine running Parson Bridge.
+    Bridge,
+    /// An AirPlay receiver (RAOP).
+    Airplay,
     Linked,
 }
 
@@ -40,13 +44,18 @@ impl ZoneKind {
             Self::Sonos => "sonos",
             Self::Upnp => "upnp",
             Self::Device => "device",
+            Self::Bridge => "bridge",
+            Self::Airplay => "airplay",
             Self::Linked => "linked",
         }
     }
 
     /// Zones whose queue the server holds and plays track by track.
     pub fn is_hosted(self) -> bool {
-        matches!(self, Self::Upnp | Self::Device)
+        matches!(
+            self,
+            Self::Upnp | Self::Device | Self::Bridge | Self::Airplay
+        )
     }
 
     pub fn is_client(self) -> bool {
@@ -549,7 +558,8 @@ pub fn default_zone_icon(kind: ZoneKind) -> &'static str {
         ZoneKind::Chromecast => "tv",
         ZoneKind::Sonos => "speaker",
         ZoneKind::Upnp => "radio",
-        ZoneKind::Device => "amplifier",
+        ZoneKind::Device | ZoneKind::Bridge => "amplifier",
+        ZoneKind::Airplay => "speaker",
         ZoneKind::Linked => "music",
     }
 }

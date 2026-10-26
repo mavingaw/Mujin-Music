@@ -310,6 +310,7 @@ async fn upnp_renderer_plays_gapless_converts_and_follows_the_queue_end_to_end()
     service.set_outputs(Arc::new(Outputs {
         upnp: Some(controller.clone()),
         devices: None,
+        ..Outputs::default()
     }));
     service.set_library(lifecycle.clone());
     service.set_sleep_fade(Duration::ZERO);
@@ -726,6 +727,7 @@ async fn audio_device_zones_play_bit_perfect_and_follow_device_setup_end_to_end(
     service.set_outputs(Arc::new(Outputs {
         upnp: None,
         devices: Some(devices.clone()),
+        ..Outputs::default()
     }));
     service.set_library(lifecycle.clone());
     service.set_sleep_fade(Duration::ZERO);
@@ -1424,4 +1426,699 @@ async fn serve_fake_upnp_renderer() {
             renderer.finish_track();
         }
     }
+}
+
+/// A Parson Bridge on another machine (here: an endpoint on a loopback
+/// socket with simulated DACs).
+fn bridge_endpoint(name: &str) -> (parson_bridge::endpoint::Endpoint, Arc<SimulatedBackend>) {
+    let backend = Arc::new(SimulatedBackend::with_default_devices(1.0));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let endpoint = parson_bridge::endpoint::Endpoint::start(
+        listener,
+        Some(backend.clone() as Arc<dyn crate::outputs::device::DeviceBackend>),
+        parson_bridge::endpoint::EndpointConfig {
+            bridge_id: format!("{name}-id"),
+            name: name.to_string(),
+            host: format!("{name}.local"),
+            clock_offset_us: if name == "kitchen" { 2_500_000 } else { 0 },
+            note: None,
+        },
+    )
+    .expect("bridge endpoint");
+    (endpoint, backend)
+}
+
+/// Strips the silence a synced stream starts with.
+fn after_priming(bytes: &[u8], frame: usize) -> &[u8] {
+    let first = bytes
+        .chunks(frame)
+        .position(|frame| frame.iter().any(|byte| *byte != 0))
+        .unwrap_or(0);
+    &bytes[first * frame..]
+}
+
+#[actix_web::test]
+async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-bridges-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let raw_a = raw_s24(96_000 * 3 / 2, 17);
+    let raw_c = raw_s24(44_100 * 2, 23);
+    let a = flac_from_raw(&directory, "a", &raw_a, 96_000);
+    let c = flac_from_raw(&directory, "c", &raw_c, 44_100);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![
+            song("song-a", &a, 1.5, "flac", 96_000, Some(24)),
+            song("song-c", &c, 2.0, "flac", 44_100, Some(24)),
+        ]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+
+    let (kitchen, kitchen_dacs) = bridge_endpoint("kitchen");
+    let (living, living_dacs) = bridge_endpoint("living-room");
+    let hub = crate::outputs::bridge::BridgeHub::new("server-id".into(), "Test".into(), None);
+    let added = hub
+        .add(&kitchen.address().to_string())
+        .expect("add the kitchen bridge");
+    assert!(added.connected, "{added:?}");
+    assert_eq!(added.name.as_deref(), Some("kitchen"));
+    assert_eq!(added.devices, 2);
+    let offset = added.clock_offset_us.expect("clock offset");
+    assert!((offset - 2_500_000).abs() < 10_000, "{offset}");
+    hub.add(&living.address().to_string())
+        .expect("add the living room bridge");
+    let service = ZoneService::new(None, None);
+    service.set_outputs(Arc::new(Outputs {
+        bridges: Some(hub.clone()),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+
+    let kitchen_dac = "bridge:kitchen-id:sim-usb-dac";
+    let living_dac = "bridge:living-room-id:sim-usb-dac";
+    let zones = service.list(USER, Some(&cache));
+    assert_eq!(
+        zones
+            .iter()
+            .filter(|zone| zone.kind == ZoneKind::Bridge)
+            .count(),
+        4,
+        "every output of both machines is a zone"
+    );
+    let dac_zone = zones
+        .iter()
+        .find(|zone| zone.id == kitchen_dac)
+        .expect("kitchen DAC zone");
+    assert_eq!(dac_zone.ecosystem, "bridge");
+    assert_eq!(
+        dac_zone.device,
+        "kitchen · Parson Bridge · Simulated USB Audio 2.0 DAC"
+    );
+    assert_eq!(
+        dac_zone
+            .output
+            .as_ref()
+            .map(|output| output.max_sample_rate),
+        Some(384_000)
+    );
+    assert_eq!(dac_zone.settings.volume_mode, VolumeMode::Hardware);
+    assert!(dac_zone.settings.supports.exclusive);
+    assert!(
+        dac_zone
+            .notes
+            .iter()
+            .any(|note| note.contains("not yet on real hardware"))
+    );
+
+    // --- A remote DAC: exclusive, at the file's own 96 kHz/24-bit.
+    service
+        .command(
+            USER,
+            kitchen_dac,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-a"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load on the kitchen DAC");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, kitchen_dac)
+            .status
+            == ZoneStatus::Playing)
+        .await
+    );
+    let stream = zone(&service, &cache, kitchen_dac)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(stream.bit_perfect, "{stream:?}");
+    assert_eq!(
+        stream.output,
+        "96 kHz/24-bit (S24_3LE) to USB DAC (simulated) on kitchen via Parson Bridge, exclusive"
+    );
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, kitchen_dac)
+            .status
+            == ZoneStatus::Stopped)
+        .await,
+        "plays to the end"
+    );
+    let capture = kitchen_dacs.capture("sim-usb-dac");
+    assert_eq!(capture.opened.len(), 1);
+    assert_eq!(capture.opened[0].0.sample_rate, 96_000);
+    assert!(capture.opened[0].1, "opened exclusively");
+    assert!(
+        capture.bytes == raw_a,
+        "every sample reaches the remote DAC unchanged"
+    );
+
+    // --- Hardware volume on the remote DAC's own mixer, in dB.
+    service
+        .command(
+            USER,
+            kitchen_dac,
+            ZoneCommand::SetVolume {
+                volume: 80,
+                member_id: None,
+                above_comfort: false,
+            },
+            None,
+        )
+        .await
+        .expect("volume");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(kitchen_dacs.capture("sim-usb-dac").volume_db, Some(-16.0));
+
+    // --- Group the two machines: one sample-synced zone, master first.
+    service
+        .command(
+            USER,
+            living_dac,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-c"]),
+                current_position: 0,
+                position_ms: 0,
+                play: false,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("queue on the living room");
+    let group_id = service
+        .group(USER, &ids(&[living_dac, kitchen_dac]))
+        .await
+        .expect("group bridge zones");
+    assert!(group_id.starts_with("bridge-group:"), "{group_id}");
+    let zones = service.list(USER, Some(&cache));
+    assert!(
+        !zones
+            .iter()
+            .any(|zone| zone.id == living_dac || zone.id == kitchen_dac),
+        "members fold into the group"
+    );
+    let group = zone(&service, &cache, &group_id);
+    assert_eq!(group.name, "living-room + kitchen", "named by machine");
+    let info = group.group.clone().expect("group info");
+    assert!(info.synced);
+    assert!(info.sync_note.contains("sample-synced"));
+    assert_eq!(
+        info.members
+            .iter()
+            .map(|member| member.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![living_dac, kitchen_dac]
+    );
+    assert_eq!(
+        group.queue.song_ids,
+        ids(&["song-c"]),
+        "the first zone's queue carries on"
+    );
+    service
+        .command(USER, &group_id, ZoneCommand::Play, Some(&cache))
+        .await
+        .expect("play the group");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, &group_id).status
+            == ZoneStatus::Playing)
+        .await
+    );
+    let stream = zone(&service, &cache, &group_id)
+        .output
+        .and_then(|output| output.stream)
+        .expect("group signal path");
+    assert!(
+        !stream.bit_perfect,
+        "followers are corrected, so not every zone is bit-perfect"
+    );
+    assert!(
+        stream
+            .steps
+            .iter()
+            .any(|step| step.contains("clock master")),
+        "{stream:?}"
+    );
+    // Per-zone volume inside the group.
+    service
+        .command(
+            USER,
+            &group_id,
+            ZoneCommand::SetVolume {
+                volume: 50,
+                member_id: Some(kitchen_dac.to_string()),
+                above_comfort: false,
+            },
+            None,
+        )
+        .await
+        .expect("member volume");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, &group_id).status
+            == ZoneStatus::Stopped)
+        .await,
+        "the group plays to the end"
+    );
+    assert_eq!(kitchen_dacs.capture("sim-usb-dac").volume_db, Some(-40.0));
+    // The clock master got every sample, after the start-up silence.
+    let living_capture = living_dacs.capture("sim-usb-dac");
+    let frame = 6;
+    assert!(
+        after_priming(&living_capture.bytes, frame) == raw_c.as_slice(),
+        "the clock master is bit-perfect"
+    );
+    let kitchen_capture = kitchen_dacs.capture("sim-usb-dac");
+    let kitchen_group = after_priming(&kitchen_capture.bytes[raw_a.len()..], frame);
+    let difference = kitchen_group.len() as i64 / frame as i64 - raw_c.len() as i64 / frame as i64;
+    assert!(
+        difference.abs() <= 44,
+        "the follower played the same audio within a millisecond: {difference} frames"
+    );
+
+    // --- Ungroup: the queue carries on in the first zone.
+    service
+        .ungroup(USER, &group_id, None)
+        .await
+        .expect("ungroup");
+    assert!(service.zone(USER, &group_id, None).is_none());
+    let living = zone(&service, &cache, living_dac);
+    assert_eq!(living.queue.song_ids, ids(&["song-c"]));
+    assert!(service.zone(USER, kitchen_dac, None).is_some());
+    let status = hub.status();
+    assert_eq!(status.len(), 2);
+    assert!(status.iter().all(|bridge| bridge.connected));
+    assert!(hub.remove(&kitchen.address().to_string()));
+    assert!(
+        service.zone(USER, kitchen_dac, None).is_none(),
+        "a removed bridge's zones go"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A 16-bit 44.1 kHz FLAC made from exactly `raw` (s16le stereo).
+fn cd_flac_from_raw(directory: &Path, name: &str, raw: &[u8]) -> PathBuf {
+    let raw_path = directory.join(format!("{name}.s16"));
+    std::fs::write(&raw_path, raw).expect("raw pcm");
+    let path = directory.join(format!("{name}.flac"));
+    run(std::process::Command::new("ffmpeg")
+        .args([
+            "-y", "-v", "error", "-f", "s16le", "-ar", "44100", "-ac", "2", "-i",
+        ])
+        .arg(&raw_path)
+        .args(["-c:a", "flac", "-sample_fmt", "s16"])
+        .arg(&path));
+    path
+}
+
+#[actix_web::test]
+async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
+    use crate::outputs::airplay::fake::FakeReceiver;
+    use crate::outputs::airplay::{AirplayController, Receiver};
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-airplay-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    // 1.2 s of CD-quality noise, so every sample can be checked.
+    let raw: Vec<u8> = raw_s24(52_920, 31)
+        .chunks(3)
+        .flat_map(|sample| [sample[1], sample[2]])
+        .collect();
+    let cd = cd_flac_from_raw(&directory, "cd", &raw);
+    let hires = flac_from_raw(&directory, "hires", &raw_s24(96_000, 5), 96_000);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![
+            song("song-cd", &cd, 1.2, "flac", 44_100, Some(16)),
+            song("song-hires", &hires, 1.0, "flac", 96_000, Some(24)),
+        ]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+
+    let receiver = FakeReceiver::start(false);
+    let airplay = AirplayController::new();
+    airplay.add_receiver(Receiver {
+        id: "aabbccddeeff".into(),
+        name: "Kitchen speaker".into(),
+        model: Some("AirPort10,115".into()),
+        address: receiver.address.to_string(),
+        supported: true,
+        reason: None,
+    });
+    airplay.add_receiver(Receiver {
+        id: "homepod".into(),
+        name: "HomePod".into(),
+        model: Some("AudioAccessory5,1".into()),
+        address: "127.0.0.1:9".into(),
+        supported: false,
+        reason: Some("only AirPlay 2".into()),
+    });
+    let service = ZoneService::new(None, None);
+    service.set_outputs(Arc::new(Outputs {
+        airplay: Some(airplay.clone()),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+    let id = "airplay:aabbccddeeff";
+    let zones = service.list(USER, Some(&cache));
+    assert!(
+        !zones.iter().any(|zone| zone.name == "HomePod"),
+        "receivers Parson cannot play to are not zones"
+    );
+    let speaker = zones
+        .iter()
+        .find(|zone| zone.id == id)
+        .expect("AirPlay zone");
+    assert_eq!(speaker.kind, ZoneKind::Airplay);
+    assert_eq!(speaker.ecosystem, "airplay");
+    assert_eq!(speaker.device, "AirPlay · AirPort10,115");
+    assert!(!speaker.settings.supports.exclusive);
+    assert!(speaker.notes[0].contains("44.1 kHz/16-bit lossless (ALAC)"));
+    assert!(
+        speaker
+            .notes
+            .iter()
+            .any(|note| note.contains("not yet against Apple hardware"))
+    );
+
+    // --- CD-quality audio reaches the receiver bit for bit.
+    service
+        .command(
+            USER,
+            id,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-cd"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("play on AirPlay");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, id).status
+            == ZoneStatus::Playing)
+        .await
+    );
+    let stream = zone(&service, &cache, id)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(stream.bit_perfect, "{stream:?}");
+    assert_eq!(
+        stream.output,
+        "44.1 kHz/16-bit (S16_LE) to Kitchen speaker over AirPlay (ALAC)"
+    );
+    service
+        .command(
+            USER,
+            id,
+            ZoneCommand::SetVolume {
+                volume: 50,
+                member_id: None,
+                above_comfort: false,
+            },
+            None,
+        )
+        .await
+        .expect("volume");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, id).status
+            == ZoneStatus::Stopped)
+        .await,
+        "plays to the end"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let state = receiver.state();
+    assert_eq!(
+        &state.methods[..4],
+        &["OPTIONS", "ANNOUNCE", "SETUP", "RECORD"]
+    );
+    assert!(
+        state.methods.contains(&"TEARDOWN".to_string()),
+        "{:?}",
+        state.methods
+    );
+    assert!(state.sdp.contains("a=rtpmap:96 AppleLossless"));
+    assert!(
+        state
+            .sdp
+            .contains("a=fmtp:96 352 0 16 40 10 14 2 255 0 0 44100")
+    );
+    assert_eq!(state.bad_frames, 0);
+    assert_eq!(state.markers, 1, "the first packet is marked");
+    assert!(state.syncs >= 1);
+    assert_eq!(state.sync_latency, Some(88_200));
+    assert_eq!(
+        state.timing_replies, 1,
+        "answers the receiver's clock requests"
+    );
+    assert_eq!(state.resent, 1, "resends the packet the receiver lost");
+    assert_eq!(state.volumes.last(), Some(&-15.0));
+    let pcm = state.pcm();
+    assert!(pcm.len() >= raw.len() && pcm.len() < raw.len() + 352 * 4);
+    assert!(
+        pcm[..raw.len()] == raw[..],
+        "every sample arrives unchanged"
+    );
+    assert!(
+        pcm[raw.len()..].iter().all(|byte| *byte == 0),
+        "padded with silence"
+    );
+
+    // --- Hi-res is converted to what AirPlay carries, and says so.
+    service
+        .command(
+            USER,
+            id,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-hires"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("hi-res on AirPlay");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, id).status
+            == ZoneStatus::Playing)
+        .await
+    );
+    let stream = zone(&service, &cache, id)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(!stream.bit_perfect);
+    assert!(
+        stream
+            .steps
+            .iter()
+            .any(|step| step.contains("Resampled 96 kHz to 44.1 kHz"))
+    );
+    assert!(
+        stream
+            .steps
+            .iter()
+            .any(|step| step.contains("Reduced to 16-bit"))
+    );
+    service
+        .command(USER, id, ZoneCommand::Stop, None)
+        .await
+        .expect("stop");
+    let status = airplay.status();
+    assert_eq!(status["receivers"].as_array().map(Vec::len), Some(2));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[actix_web::test]
+async fn chromecast_zones_are_driven_by_the_server_end_to_end() {
+    use crate::outputs::cast::fake::FakeCast;
+    use crate::outputs::cast::{CastController, CastDevice};
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-cast-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let a = flac_from_raw(&directory, "a", &raw_s24(96_000 * 3 / 2, 41), 96_000);
+    let b = tone(&directory, "b", "flac", 192_000, 1.0);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![
+            song("song-a", &a, 1.5, "flac", 96_000, Some(24)),
+            song("song-b", &b, 1.0, "flac", 192_000, Some(24)),
+        ]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+    let device = FakeCast::start();
+    let cast = CastController::new();
+    cast.add(CastDevice {
+        id: "living-tv".into(),
+        name: "Living Room TV".into(),
+        model: "Chromecast Ultra".into(),
+        address: device.address.to_string(),
+        group: false,
+    });
+    cast.add(CastDevice {
+        id: "whole-home".into(),
+        name: "Whole Home".into(),
+        model: "Google Cast Group".into(),
+        address: device.address.to_string(),
+        group: true,
+    });
+    let service = web::Data::new(ZoneService::new(None, None));
+    service.set_outputs(Arc::new(Outputs {
+        cast: Some(cast.clone()),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+    let (port, server) =
+        serve_device_routes(service.clone(), web::Data::from(lifecycle.clone())).await;
+    service.set_port(port);
+
+    let id = "chromecast:living-tv";
+    let listed = zone(&service, &cache, id);
+    assert_eq!(listed.kind, ZoneKind::Chromecast);
+    assert_eq!(listed.device, "Chromecast Ultra");
+    assert!(
+        listed.capabilities.transfer_target,
+        "any app can transfer to it"
+    );
+    let output = listed.output.clone().expect("output");
+    assert_eq!((output.max_sample_rate, output.max_bit_depth), (96_000, 24));
+    assert!(
+        listed
+            .notes
+            .iter()
+            .any(|note| note.contains("not yet on Google hardware"))
+    );
+    assert_eq!(
+        zone(&service, &cache, "chromecast:whole-home").device,
+        "Google Home speaker group"
+    );
+
+    // --- Load from the server: launch the receiver app, LOAD signed media.
+    service
+        .command(
+            USER,
+            id,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-a", "song-b"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("cast from the server");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, id).status
+            == ZoneStatus::Playing)
+        .await
+    );
+    let stream = zone(&service, &cache, id)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(stream.bit_perfect, "{stream:?}");
+    let state = device.state();
+    assert!(state.launched);
+    assert_eq!(state.launches, 1);
+    assert_eq!(
+        state.connects,
+        vec!["receiver-0".to_string(), "web-5".to_string()]
+    );
+    let load = &state.loads[0];
+    assert_eq!(load["media"]["contentType"], "audio/flac");
+    assert_eq!(load["media"]["metadata"]["title"], "Track song-a");
+    assert_eq!(load["media"]["streamType"], "BUFFERED");
+
+    // --- Volume on the device's own scale, then pause and resume.
+    service
+        .command(
+            USER,
+            id,
+            ZoneCommand::SetVolume {
+                volume: 30,
+                member_id: None,
+                above_comfort: false,
+            },
+            None,
+        )
+        .await
+        .expect("volume");
+    assert!((device.state().level - 0.3).abs() < 1e-9);
+    assert_eq!(
+        zone(&service, &cache, id).volume.map(|volume| volume.level),
+        Some(30)
+    );
+    service
+        .command(USER, id, ZoneCommand::Pause, None)
+        .await
+        .expect("pause");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, id).status
+            == ZoneStatus::Paused)
+        .await
+    );
+    service
+        .command(USER, id, ZoneCommand::Play, None)
+        .await
+        .expect("resume");
+
+    // --- The device fetched the original 96 kHz FLAC; at the end of the
+    // track the server loads the next one, converted from 192 kHz.
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, id)
+            .queue
+            .current_position
+            == 1)
+        .await,
+        "moves on when the device finishes a track"
+    );
+    assert!(
+        drive_until(&service, |_| device.state().fetches.len() >= 2).await,
+        "fetches both tracks"
+    );
+    let state = device.state();
+    assert_eq!(state.loads.len(), 2);
+    assert!(state.commands.contains(&"PAUSE".to_string()));
+    for (index, expected_rate) in [(0, 96_000), (1, 96_000)] {
+        let fetch = &state.fetches[index];
+        assert_eq!(fetch.status, 200, "{}", fetch.url);
+        assert_eq!(fetch.content_type, "audio/flac");
+        assert!(fetch.body.starts_with(b"fLaC"));
+        let path = directory.join(format!("fetched-{index}.flac"));
+        std::fs::write(&path, &fetch.body).expect("fetched media");
+        assert_eq!(ffprobe(&path), (expected_rate, "flac".to_string()));
+    }
+    let stream = zone(&service, &cache, id)
+        .output
+        .and_then(|output| output.stream)
+        .expect("signal path");
+    assert!(!stream.bit_perfect);
+    assert!(
+        stream
+            .steps
+            .iter()
+            .any(|step| step.contains("192 kHz to 96 kHz")),
+        "{stream:?}"
+    );
+    service
+        .command(USER, id, ZoneCommand::Stop, None)
+        .await
+        .expect("stop");
+    server.stop(true).await;
+    let _ = std::fs::remove_dir_all(&directory);
 }

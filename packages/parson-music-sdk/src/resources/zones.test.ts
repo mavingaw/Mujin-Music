@@ -1,6 +1,10 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import api from "../core/http";
 import {
+  zoneOutputsSummary,
+  addBridge,
+  getBridges,
+  removeBridge,
   createZoneDeviceId,
   estimateZonePosition,
   formatSleepRemaining,
@@ -663,4 +667,100 @@ test("signal path ratings read like Roon's quality light", () => {
   expect(
     streamQuality({ source: "", output: "", bit_perfect: false, steps: [] }),
   ).toBe("high");
+});
+
+test("bridge zones group sample-synced and bridges are managed by address", async () => {
+  const kitchen = zone({
+    id: "bridge:pi:hw-2-0",
+    kind: "bridge",
+    ecosystem: "bridge",
+    name: "Kitchen DAC",
+  });
+  const office = zone({
+    id: "bridge:mini:hw-1-0",
+    kind: "bridge",
+    ecosystem: "bridge",
+    name: "Office DAC",
+  });
+  const sonos = zone({ id: "sonos:A", kind: "sonos", ecosystem: "sonos" });
+  const plan = groupingPlan([kitchen, office]);
+  expect(plan).toMatchObject({ allowed: true, synced: true });
+  expect(plan.reason).toContain("Kitchen DAC's DAC clock");
+  expect(groupingPlan([kitchen, sonos])).toMatchObject({ synced: false });
+  const group = zone({
+    id: "bridge-group:1",
+    kind: "bridge",
+    ecosystem: "bridge",
+    group: { id: "bridge-group:1", synced: true, sync_note: "", members: [] },
+  });
+  expect(groupingPlan([group, kitchen]).allowed).toBeFalse();
+  expect(zoneKindLabel("bridge")).toBe("Parson Bridge");
+  expect(zoneKindLabel("airplay")).toBe("AirPlay");
+  expect(zoneIconName({ kind: "airplay" })).toBe("speaker");
+  expect(
+    deviceVolumeLabel({
+      level: 30,
+      muted: false,
+      min: 0,
+      max: 100,
+      step: 1,
+      device_range: {
+        min: 0,
+        max: 1,
+        step: 0.01,
+        unit: "level",
+        hardware: true,
+        current: 0.3,
+      },
+    }),
+  ).toBe("30% on the device");
+
+  const get = spyOn(api, "get").mockResolvedValue({
+    data: { enabled: true, bridges: [] },
+  } as never);
+  const post = spyOn(api, "post").mockResolvedValue({
+    data: { address: "pi.local:1994", connected: true },
+  } as never);
+  const remove = spyOn(api, "delete").mockResolvedValue({
+    data: null,
+  } as never);
+  expect((await getBridges()).enabled).toBeTrue();
+  expect(get.mock.calls[0]![0]).toBe("/zones/bridges");
+  expect((await addBridge("pi.local")).connected).toBeTrue();
+  expect(post).toHaveBeenCalledWith(
+    "/zones/bridges",
+    { address: "pi.local" },
+    { timeout: 20_000 },
+  );
+  expect(zoneOutputsSummary(null)).toBeNull();
+  expect(
+    zoneOutputsSummary({
+      upnp: { enabled: false, renderers: 0, last_error: null },
+      devices: { enabled: false, backend: null, devices: 0, note: null },
+      bridges: {
+        enabled: true,
+        bridges: [
+          {
+            address: "a",
+            source: "discovered",
+            connected: true,
+            bridge_id: "a",
+            name: "pi",
+            host: "pi",
+            platform: null,
+            version: null,
+            backend: "ALSA",
+            devices: 2,
+            clock_offset_us: 0,
+            clock_uncertainty_us: 100,
+            note: null,
+            last_error: null,
+          },
+        ],
+      },
+      chromecast: { enabled: true, note: null, devices: [] },
+    }),
+  ).toBe("1 Parson Bridge (2 outputs)");
+  await removeBridge("pi.local:1994");
+  expect(remove).toHaveBeenCalledWith("/zones/bridges/pi.local%3A1994");
 });

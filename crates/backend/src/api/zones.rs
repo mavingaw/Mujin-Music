@@ -553,15 +553,17 @@ async fn create_group(
     }
     match service.group(user_id, &form.zone_ids).await {
         Ok(group_id) => {
-            let synced = group_id.starts_with("sonos:");
+            let (synced, sync_note) = if group_id.starts_with("sonos:") {
+                (true, crate::zones::SONOS_SYNC_NOTE)
+            } else if group_id.starts_with(crate::outputs::bridge::GROUP_PREFIX) {
+                (true, crate::outputs::bridge::GROUP_SYNC_NOTE)
+            } else {
+                (false, crate::zones::LINKED_SYNC_NOTE)
+            };
             HttpResponse::Created().json(serde_json::json!({
                 "group_id": group_id,
                 "synced": synced,
-                "sync_note": if synced {
-                    crate::zones::SONOS_SYNC_NOTE
-                } else {
-                    crate::zones::LINKED_SYNC_NOTE
-                },
+                "sync_note": sync_note,
             }))
         }
         Err(error) => error_response(error),
@@ -630,6 +632,94 @@ async fn sonos_discover(request: HttpRequest, service: web::Data<ZoneService>) -
             "players": sonos.players().len(),
             "last_error": error,
         })),
+    }
+}
+
+#[derive(Deserialize)]
+struct BridgeRequest {
+    address: String,
+}
+
+fn is_admin(request: &HttpRequest) -> bool {
+    use actix_web::HttpMessage;
+    request
+        .extensions()
+        .get::<crate::api::auth::Claims>()
+        .is_some_and(|claims| claims.role == "admin")
+}
+
+fn bridges_of(service: &ZoneService) -> Option<std::sync::Arc<crate::outputs::bridge::BridgeHub>> {
+    service
+        .outputs()
+        .and_then(|outputs| outputs.bridges.clone())
+}
+
+/// Parson Bridges the server knows (found on the network or added).
+#[get("/bridges")]
+async fn bridge_status(request: HttpRequest, service: web::Data<ZoneService>) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    match bridges_of(&service) {
+        Some(hub) => HttpResponse::Ok().json(serde_json::json!({
+            "enabled": true,
+            "bridges": hub.status(),
+        })),
+        None => HttpResponse::Ok().json(serde_json::json!({"enabled": false, "bridges": []})),
+    }
+}
+
+/// Adds a bridge by address (when the network blocks discovery). Admins
+/// only: the server connects to whatever address is given.
+#[post("/bridges")]
+async fn add_bridge(
+    request: HttpRequest,
+    form: web::Json<BridgeRequest>,
+    service: web::Data<ZoneService>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    if !is_admin(&request) {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "admin_required"}));
+    }
+    let Some(hub) = bridges_of(&service) else {
+        return error_response(ZoneError::Unsupported("bridges_disabled"));
+    };
+    let address = form.into_inner().address;
+    match web::block(move || hub.add(&address)).await {
+        Ok(Ok(status)) => {
+            if let Some(outputs) = service.outputs() {
+                for renderer in outputs.renderers() {
+                    renderer.poll().await;
+                }
+            }
+            HttpResponse::Ok().json(status)
+        }
+        Ok(Err(error)) => HttpResponse::BadRequest().json(serde_json::json!({"error": error})),
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+#[delete("/bridges/{address}")]
+async fn remove_bridge(
+    request: HttpRequest,
+    address: web::Path<String>,
+    service: web::Data<ZoneService>,
+) -> HttpResponse {
+    if let Err(response) = authenticated_user_id(&request) {
+        return response;
+    }
+    if !is_admin(&request) {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "admin_required"}));
+    }
+    let Some(hub) = bridges_of(&service) else {
+        return error_response(ZoneError::Unsupported("bridges_disabled"));
+    };
+    if hub.remove(&address) {
+        HttpResponse::NoContent().finish()
+    } else {
+        error_response(ZoneError::NotFound)
     }
 }
 
@@ -978,6 +1068,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(sonos_discover)
             .service(pause_all)
             .service(outputs_discover)
+            .service(bridge_status)
+            .service(add_bridge)
+            .service(remove_bridge)
             .service(send_command)
             .service(update_settings)
             .service(loudness)
