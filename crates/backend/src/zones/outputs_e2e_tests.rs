@@ -829,7 +829,7 @@ async fn audio_device_zones_play_bit_perfect_and_follow_device_setup_end_to_end(
     assert!(exclusive);
     assert_eq!(format.sample_rate, 96_000);
     assert_eq!(
-        format.format,
+        format.sample_format,
         crate::outputs::device::SampleFormat::S24Packed
     );
     let mut expected = raw_a.clone();
@@ -1435,7 +1435,7 @@ fn bridge_endpoint(name: &str) -> (parson_bridge::endpoint::Endpoint, Arc<Simula
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
     let endpoint = parson_bridge::endpoint::Endpoint::start(
         listener,
-        Some(backend.clone() as Arc<dyn crate::outputs::device::DeviceBackend>),
+        Some(backend.clone() as Arc<dyn parson_output::Backend>),
         parson_bridge::endpoint::EndpointConfig {
             bridge_id: format!("{name}-id"),
             name: name.to_string(),
@@ -1749,7 +1749,7 @@ async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
 /// A bridge on another machine, with any audio backend.
 fn bridge_with(
     name: &str,
-    backend: Arc<dyn crate::outputs::device::DeviceBackend>,
+    backend: Arc<dyn parson_output::Backend>,
 ) -> parson_bridge::endpoint::Endpoint {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
     parson_bridge::endpoint::Endpoint::start(
@@ -1768,10 +1768,10 @@ fn bridge_with(
 
 #[actix_web::test]
 async fn dacs_on_windows_and_mac_bridges_are_bit_perfect_zones() {
-    use parson_bridge::audio::coreaudio::fake::{FakeHal, FakeHalDevice};
-    use parson_bridge::audio::coreaudio::{CoreAudioBackend, HalApi};
-    use parson_bridge::audio::wasapi::WasapiBackend;
-    use parson_bridge::audio::wasapi::fake::{FakeEndpoint, FakeWasapi};
+    use parson_output::coreaudio::fake::{FakeHal, FakeHalDevice};
+    use parson_output::coreaudio::{CoreAudioBackend, HalApi};
+    use parson_output::wasapi::WasapiBackend;
+    use parson_output::wasapi::fake::{FakeEndpoint, FakeWasapi};
 
     if !ffmpeg_available() {
         eprintln!("ffmpeg not installed; skipping");
@@ -1904,7 +1904,7 @@ async fn dacs_on_windows_and_mac_bridges_are_bit_perfect_zones() {
         .api()
         .capture(&format!("{{0.0.0.00000000}}.{{{guid}}}"));
     let (format, mode, _) = capture.opened[0];
-    assert_eq!(mode, parson_bridge::audio::wasapi::ShareMode::Exclusive);
+    assert_eq!(mode, parson_output::wasapi::ShareMode::Exclusive);
     assert_eq!(
         (format.sample_rate, format.container_bits, format.valid_bits),
         (96_000, 24, 24)

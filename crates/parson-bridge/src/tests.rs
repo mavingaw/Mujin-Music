@@ -6,17 +6,17 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::audio::simulated::SimulatedBackend;
-use crate::audio::{DeviceBackend, OutputStream, SampleFormat, StreamFormat};
 use crate::endpoint::{Endpoint, EndpointConfig};
 use crate::remote::{GroupMember, RemoteBridge, SyncGroup, common_device};
+use parson_output::simulated::SimulatedBackend;
+use parson_output::{Backend, SampleFormat, Sink, StreamFormat};
 
 fn endpoint(name: &str, speed: f64, clock_offset_us: i64) -> (Endpoint, Arc<SimulatedBackend>) {
     let backend = Arc::new(SimulatedBackend::with_default_devices(speed));
     let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
     let endpoint = Endpoint::start(
         listener,
-        Some(backend.clone() as Arc<dyn DeviceBackend>),
+        Some(backend.clone() as Arc<dyn Backend>),
         EndpointConfig {
             bridge_id: format!("{name}-id"),
             name: name.to_string(),
@@ -74,7 +74,7 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
     // 192 kHz/24-bit, exclusive: the DAC is opened at exactly that format.
     let format = StreamFormat {
         sample_rate: 192_000,
-        format: SampleFormat::S24Packed,
+        sample_format: SampleFormat::S24Packed,
         channels: 2,
     };
     let mut stream = bridge
@@ -85,7 +85,7 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
         stream.write(chunk).expect("write");
     }
     assert!(stream.delay_frames() > 0, "audio is still buffered");
-    stream.drain();
+    stream.drain().expect("drain");
     assert_eq!(stream.delay_frames(), 0);
     let capture = backend.capture("sim-usb-dac");
     assert_eq!(capture.opened, vec![(format, true)]);
@@ -104,7 +104,7 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
         )
         .err()
         .expect("HDMI output takes 48 kHz only");
-    assert!(error.contains("does not take"), "{error}");
+    assert!(error.to_string().contains("does not take"), "{error}");
 
     // Hardware volume and mute reach the device's own mixer.
     bridge
@@ -127,7 +127,7 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
     // Pause holds the position; a flush discards what is buffered.
     let format = StreamFormat {
         sample_rate: 44_100,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let mut stream = bridge.open("sim-usb-dac", format, true).expect("reopen");
@@ -141,12 +141,12 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(stream.delay_frames(), held, "nothing plays while paused");
     stream.pause(false).expect("resume");
-    stream.drop_buffer();
+    stream.flush().expect("flush");
     assert_eq!(stream.delay_frames(), 0);
     stream
         .write(&second[..4 * 4_410])
         .expect("write after flush");
-    stream.drain();
+    stream.drain().expect("drain");
 
     // Device changes reach the server (a DAC unplugged).
     backend.set_devices(vec![backend.devices()[0].clone()]);
@@ -203,14 +203,14 @@ fn grouped_bridges_play_sample_synced_to_the_clock_master() {
     );
     let device = group.device().expect("common format");
     assert_eq!(
-        device.description, "living-room + kitchen",
+        device.detail, "living-room + kitchen",
         "machines, master first"
     );
-    assert!(device.sample_rates.contains(&44_100));
+    assert!(device.sample_rates().contains(&44_100));
 
     let format = StreamFormat {
         sample_rate: 44_100,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let (mut stream, probe) = group.open_probe(format);
@@ -238,7 +238,7 @@ fn grouped_bridges_play_sample_synced_to_the_clock_master() {
         "the master is never touched"
     );
     let corrections = members[1].progress.corrections;
-    stream.drain();
+    stream.drain().expect("drain");
     drop(stream);
     assert!(errors_ms.len() > 5, "compared positions while playing");
     errors_ms.sort_by(f64::total_cmp);
@@ -289,11 +289,13 @@ fn groups_take_the_formats_every_member_shares() {
     let backend = SimulatedBackend::with_default_devices(1.0);
     let devices = backend.devices();
     let common = common_device("g", "Group", &devices).expect("shared format");
-    assert_eq!(common.sample_rates, vec![48_000]);
-    assert_eq!(common.formats, vec![SampleFormat::S16]);
+    assert_eq!(common.sample_rates(), vec![48_000]);
+    assert_eq!(common.sample_formats(), vec![SampleFormat::S16]);
     assert!(common.hardware_volume.is_none(), "HDMI has no mixer");
     let mut dac_only = devices[1].clone();
-    dac_only.sample_rates = vec![44_100];
+    if let Some(caps) = dac_only.caps.as_mut() {
+        caps.sample_rates = vec![44_100];
+    }
     assert!(common_device("g", "Group", &[devices[1].clone(), dac_only]).is_none());
 }
 
@@ -304,7 +306,7 @@ fn a_stream_whose_device_is_taken_over_fails_instead_of_hanging() {
     let bridge = connect(&endpoint);
     let format = StreamFormat {
         sample_rate: 44_100,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let mut old = bridge.open("sim-usb-dac", format, true).expect("open");
@@ -323,7 +325,10 @@ fn a_stream_whose_device_is_taken_over_fails_instead_of_hanging() {
         }
     }
     let error = failed.expect("the replaced stream reports the takeover");
-    assert!(error.contains("another stream took over"), "{error}");
+    assert!(
+        error.to_string().contains("another stream took over"),
+        "{error}"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "fails at once: {:?}",
@@ -338,7 +343,7 @@ fn a_stream_whose_device_is_taken_over_fails_instead_of_hanging() {
     // The newer stream plays every sample.
     let data = noise(8_820, 2, 11);
     new.write(&data).expect("the new stream plays");
-    new.drain();
+    new.drain().expect("drain");
     let capture = backend.capture("sim-usb-dac");
     assert!(
         capture.bytes.ends_with(&data),
@@ -356,7 +361,7 @@ fn a_late_start_never_costs_the_clock_master_a_sample() {
     let bridge = connect(&endpoint);
     let format = StreamFormat {
         sample_rate: 44_100,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let now = bridge
@@ -383,7 +388,7 @@ fn a_late_start_never_costs_the_clock_master_a_sample() {
             )
             .expect("open");
         stream.write(&data).expect("write");
-        stream.drain();
+        stream.drain().expect("drain");
         let capture = backend.capture(device);
         let frame = format.frame_bytes();
         let first = capture

@@ -5,9 +5,10 @@
 use std::net::TcpListener;
 use std::sync::Arc;
 
-use parson_bridge::audio::{self, DeviceBackend};
 use parson_bridge::endpoint::{Endpoint, EndpointConfig};
 use parson_bridge::protocol::DEFAULT_PORT;
+use parson_output::Backend;
+use parson_output::simulated::SimulatedBackend;
 
 const USAGE: &str = "parson-bridge: makes this machine's DACs and audio outputs Parson zones.
 
@@ -90,26 +91,30 @@ fn bridge_id() -> String {
     id
 }
 
-fn describe(backend: &dyn DeviceBackend) {
+fn describe(backend: &dyn Backend) {
     let devices = backend.devices();
     if devices.is_empty() {
         println!("No audio outputs found ({}).", backend.name());
     }
     for device in devices {
         let rates: Vec<String> = device
-            .sample_rates
+            .sample_rates()
             .iter()
             .map(|rate| format!("{}", f64::from(*rate) / 1000.0))
             .collect();
-        let formats: Vec<&str> = device.formats.iter().map(|format| format.name()).collect();
+        let formats: Vec<&str> = device
+            .sample_formats()
+            .iter()
+            .map(|format| format.alsa_name())
+            .collect();
         println!(
             "{}  [{}]\n    {}\n    {} kHz · {} · up to {} channels · {}{}",
             device.name,
             device.id,
-            device.description,
+            device.detail,
             rates.join(", "),
             formats.join(" / "),
-            device.max_channels,
+            device.max_channels(),
             match device.hardware_volume {
                 Some(volume) => format!(
                     "hardware volume {:.1} to {:.1} dB",
@@ -194,15 +199,10 @@ fn main() {
             }
         }
     }
-    let (backend, note): (Option<Arc<dyn DeviceBackend>>, Option<String>) = if simulated {
-        (
-            Some(Arc::new(
-                audio::simulated::SimulatedBackend::with_default_devices(1.0),
-            )),
-            None,
-        )
+    let (backend, note): (Option<Arc<dyn Backend>>, Option<String>) = if simulated {
+        (Some(Arc::new(SimulatedBackend::demo())), None)
     } else {
-        match audio::native_backend() {
+        match parson_output::platform_backend() {
             Ok(backend) => (Some(Arc::from(backend)), None),
             Err(error) => (None, Some(error)),
         }

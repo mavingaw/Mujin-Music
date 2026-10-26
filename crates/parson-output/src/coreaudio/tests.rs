@@ -51,17 +51,17 @@ fn lists_outputs_with_their_rates_depths_and_hardware_volume() {
     );
     assert_eq!(dac.name, "Qutest");
     assert_eq!(
-        dac.description,
+        dac.detail,
         "Chord Electronics Ltd · USB · CoreAudio hog mode"
     );
     assert_eq!(
-        dac.sample_rates,
+        dac.sample_rates(),
         vec![
             44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000
         ]
     );
     assert_eq!(
-        dac.formats,
+        dac.sample_formats(),
         vec![SampleFormat::S16, SampleFormat::S24Packed],
         "the HAL's float stage carries 24 bits exactly, so 32-bit sources are not offered"
     );
@@ -75,7 +75,7 @@ fn lists_outputs_with_their_rates_depths_and_hardware_volume() {
     );
     let speakers = &devices[1];
     assert_eq!(
-        speakers.sample_rates,
+        speakers.sample_rates(),
         vec![44_100, 48_000, 88_200, 96_000],
         "a continuous range lists the standard rates inside it"
     );
@@ -89,7 +89,7 @@ fn hogs_the_dac_switches_its_rate_and_plays_24_bit_bit_perfect() {
     // The DAC sits at 44.1 kHz; the file is 96 kHz/24-bit.
     let format = StreamFormat {
         sample_rate: 96_000,
-        format: SampleFormat::S24Packed,
+        sample_format: SampleFormat::S24Packed,
         channels: 2,
     };
     let mut stream = backend.open(&id, format, true).expect("open");
@@ -102,7 +102,7 @@ fn hogs_the_dac_switches_its_rate_and_plays_24_bit_bit_perfect() {
     for chunk in raw.chunks(4_800 * 6) {
         stream.write(chunk).expect("write");
     }
-    stream.drain();
+    stream.drain().expect("drain");
     drop(stream);
     assert_eq!(hal.hog_owner(DAC), Ok(-1), "released when done");
     let capture = hal.capture(DAC);
@@ -124,7 +124,7 @@ fn sixteen_bit_files_run_the_dac_at_16_bits_and_32_bit_sources_are_refused() {
             &id,
             StreamFormat {
                 sample_rate: 44_100,
-                format: SampleFormat::S16,
+                sample_format: SampleFormat::S16,
                 channels: 2,
             },
             true,
@@ -132,7 +132,7 @@ fn sixteen_bit_files_run_the_dac_at_16_bits_and_32_bit_sources_are_refused() {
         .expect("open 16-bit");
     let (raw, values) = noise(22_050, 16, 2, 9);
     stream.write(&raw).expect("write");
-    stream.drain();
+    stream.drain().expect("drain");
     drop(stream);
     let hal = backend.api();
     assert_eq!(hal.physical(DAC).map(|format| format.bits), Some(16));
@@ -146,14 +146,14 @@ fn sixteen_bit_files_run_the_dac_at_16_bits_and_32_bit_sources_are_refused() {
             &id,
             StreamFormat {
                 sample_rate: 44_100,
-                format: SampleFormat::S32,
+                sample_format: SampleFormat::S32,
                 channels: 2,
             },
             true,
         )
         .err()
         .expect("refused");
-    assert!(error.contains("S32_LE"), "{error}");
+    assert!(error.to_string().contains("S32_LE"), "{error}");
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn another_app_in_hog_mode_makes_the_dac_busy() {
             &id,
             StreamFormat {
                 sample_rate: 44_100,
-                format: SampleFormat::S16,
+                sample_format: SampleFormat::S16,
                 channels: 2,
             },
             true,
@@ -176,7 +176,9 @@ fn another_app_in_hog_mode_makes_the_dac_busy() {
         .err()
         .expect("refused");
     assert!(
-        error.contains("another app has the device in hog mode"),
+        error
+            .to_string()
+            .contains("another app has the device in hog mode"),
         "{error}"
     );
     assert_eq!(
@@ -192,7 +194,7 @@ fn pause_plays_silence_without_letting_go_and_seek_drops_the_buffer() {
     let id = backend.devices()[0].id.clone();
     let format = StreamFormat {
         sample_rate: 48_000,
-        format: SampleFormat::S16,
+        sample_format: SampleFormat::S16,
         channels: 2,
     };
     let mut stream = backend.open(&id, format, true).expect("open");
@@ -203,7 +205,7 @@ fn pause_plays_silence_without_letting_go_and_seek_drops_the_buffer() {
     std::thread::sleep(Duration::from_millis(40));
     assert_eq!(stream.delay_frames(), held, "nothing plays while paused");
     assert_eq!(backend.api().hog_owner(DAC), Ok(THIS_PROCESS));
-    stream.drop_buffer();
+    stream.flush().expect("flush");
     stream.pause(false).expect("resume");
     assert!(stream.delay_frames() <= u64::from(backend.api().latency_frames(DAC)));
     drop(stream);
@@ -218,7 +220,7 @@ fn shared_mode_leaves_hog_mode_alone_and_volume_is_in_db() {
             &devices[1].id,
             StreamFormat {
                 sample_rate: 48_000,
-                format: SampleFormat::S16,
+                sample_format: SampleFormat::S16,
                 channels: 2,
             },
             false,
@@ -250,14 +252,17 @@ fn refuses_rates_the_device_does_not_have() {
             &devices[1].id,
             StreamFormat {
                 sample_rate: 192_000,
-                format: SampleFormat::S16,
+                sample_format: SampleFormat::S16,
                 channels: 2,
             },
             true,
         )
         .err()
         .expect("refused");
-    assert_eq!(error, "MacBook Pro Speakers does not take 192000 Hz");
+    assert_eq!(
+        error.to_string(),
+        "MacBook Pro Speakers does not take 192000 Hz"
+    );
     assert_eq!(
         backend.api().hog_owner(SPEAKERS),
         Ok(-1),

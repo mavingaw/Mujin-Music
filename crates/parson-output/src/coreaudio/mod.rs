@@ -19,11 +19,15 @@ pub mod fake;
 pub mod hal;
 
 use std::collections::{HashMap, VecDeque};
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{DeviceBackend, DeviceInfo, HardwareVolume, OutputStream, SampleFormat, StreamFormat};
+use crate::{
+    Backend, DeviceCaps, DeviceInfo, Driver, HardwareVolume, STANDARD_RATES, SampleFormat, Sink,
+    StreamFormat,
+};
 
 pub type OsStatus = i32;
 
@@ -44,9 +48,7 @@ pub const PERMISSIONS: OsStatus = fourcc(b"!hog");
 pub const UNKNOWN_PROPERTY: OsStatus = fourcc(b"who?");
 
 /// Rates listed from continuous ranges.
-const PROBE_RATES: &[u32] = &[
-    44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000, 705_600, 768_000,
-];
+const PROBE_RATES: &[u32] = &STANDARD_RATES;
 /// How long a nominal rate change may take to land.
 const RATE_SWITCH_TIMEOUT: Duration = Duration::from_secs(3);
 /// Audio Parson keeps ahead of the device, in seconds.
@@ -187,11 +189,18 @@ fn transport_name(transport: u32) -> &'static str {
     }
 }
 
-fn bits_of(format: SampleFormat) -> u32 {
+/// Integer bits the physical format needs for `format` (the HAL's float
+/// stage carries 24 at most). `None` for DSD, which CoreAudio does not take.
+fn bits_of(format: SampleFormat) -> Option<u32> {
     match format {
-        SampleFormat::S16 => 16,
-        SampleFormat::S24Packed | SampleFormat::S32 => 24,
+        SampleFormat::S16 => Some(16),
+        SampleFormat::S24Packed | SampleFormat::S24In32 | SampleFormat::S32 => Some(24),
+        _ => None,
     }
+}
+
+fn io_error(message: String) -> io::Error {
+    io::Error::other(message)
 }
 
 #[derive(Clone, Debug)]
@@ -272,13 +281,26 @@ impl<A: HalApi> CoreAudioBackend<A> {
         } else {
             format!("{} · {transport} · CoreAudio hog mode", device.manufacturer)
         };
+        let max_channels = u8::try_from(device.output_channels).unwrap_or(u8::MAX);
         Some(DeviceInfo {
             id: device_id(&device.uid),
             name: device.name.clone(),
-            description,
-            sample_rates: rates,
-            formats,
-            max_channels: u8::try_from(device.output_channels).unwrap_or(u8::MAX),
+            detail: description,
+            driver: Driver::CoreAudio,
+            exclusive_capable: true,
+            caps: Some(DeviceCaps {
+                sample_rates: rates,
+                sample_formats: formats,
+                min_channels: 1,
+                max_channels,
+                dsd_formats: Vec::new(),
+                dsd_rates: Vec::new(),
+            }),
+            probe_error: busy.then(|| describe(PERMISSIONS)),
+            is_default: false,
+            hardware: None,
+            address: None,
+            network: None,
             hardware_volume,
             busy,
         })
@@ -313,7 +335,7 @@ impl<A: HalApi> CoreAudioBackend<A> {
     /// Integer PCM at the source's depth (or the shallowest deeper one) at
     /// `rate`, so the HAL's float-to-integer step is exact.
     fn choose_physical(&self, object_id: u32, format: StreamFormat) -> Option<PhysicalFormat> {
-        let wanted = bits_of(format.format);
+        let wanted = bits_of(format.sample_format)?;
         let formats = self.api.physical_formats(object_id).ok()?;
         formats
             .iter()
@@ -329,9 +351,9 @@ impl<A: HalApi> CoreAudioBackend<A> {
     }
 }
 
-impl<A: HalApi> DeviceBackend for CoreAudioBackend<A> {
-    fn name(&self) -> &'static str {
-        "CoreAudio"
+impl<A: HalApi> Backend for CoreAudioBackend<A> {
+    fn driver(&self) -> Driver {
+        Driver::CoreAudio
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {
@@ -364,26 +386,30 @@ impl<A: HalApi> DeviceBackend for CoreAudioBackend<A> {
         device_id: &str,
         format: StreamFormat,
         exclusive: bool,
-    ) -> Result<Box<dyn OutputStream>, String> {
+    ) -> io::Result<Box<dyn Sink>> {
         let known = self
             .lookup(device_id)
-            .ok_or_else(|| "device unplugged".to_string())?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device unplugged"))?;
         let name = known.info.name.clone();
         let object_id = known.object_id;
-        if !known.info.formats.contains(&format.format) {
-            return Err(format!(
+        let unsupported = |message: String| io::Error::new(io::ErrorKind::Unsupported, message);
+        if !known.info.sample_formats().contains(&format.sample_format) {
+            return Err(unsupported(format!(
                 "{name} does not take {} bit-perfect through CoreAudio",
-                format.format.name()
-            ));
+                format.sample_format.alsa_name()
+            )));
         }
-        if !known.info.sample_rates.contains(&format.sample_rate) {
-            return Err(format!("{name} does not take {} Hz", format.sample_rate));
+        if !known.info.sample_rates().contains(&format.sample_rate) {
+            return Err(unsupported(format!(
+                "{name} does not take {} Hz",
+                format.sample_rate
+            )));
         }
-        if format.channels == 0 || u32::from(format.channels) > u32::from(known.info.max_channels) {
-            return Err(format!(
+        if format.channels == 0 || format.channels > known.info.max_channels() {
+            return Err(unsupported(format!(
                 "{name} has fewer than {} channels",
                 format.channels
-            ));
+            )));
         }
         let pid = self.api.process_id();
         let mut hogged = false;
@@ -391,17 +417,17 @@ impl<A: HalApi> DeviceBackend for CoreAudioBackend<A> {
             let owner = self
                 .api
                 .hog_owner(object_id)
-                .map_err(|status| format!("{name}: {}", describe(status)))?;
+                .map_err(|status| io_error(format!("{name}: {}", describe(status))))?;
             if owner != -1 && owner != pid {
-                return Err(format!("{name}: {}", describe(PERMISSIONS)));
+                return Err(io_error(format!("{name}: {}", describe(PERMISSIONS))));
             }
             if owner == -1 {
                 let now = self
                     .api
                     .toggle_hog(object_id)
-                    .map_err(|status| format!("{name}: {}", describe(status)))?;
+                    .map_err(|status| io_error(format!("{name}: {}", describe(status))))?;
                 if now != pid {
-                    return Err(format!("{name}: {}", describe(PERMISSIONS)));
+                    return Err(io_error(format!("{name}: {}", describe(PERMISSIONS))));
                 }
             }
             hogged = true;
@@ -413,18 +439,18 @@ impl<A: HalApi> DeviceBackend for CoreAudioBackend<A> {
         };
         if let Err(status) = self.switch_rate(object_id, format.sample_rate) {
             release(&self.api);
-            return Err(format!(
+            return Err(io_error(format!(
                 "{name} did not switch to {} Hz: {}",
                 format.sample_rate,
                 describe(status)
-            ));
+            )));
         }
         let physical = self.choose_physical(object_id, format);
         if let Some(physical) = &physical
             && let Err(status) = self.api.set_physical_format(object_id, physical)
         {
             release(&self.api);
-            return Err(format!("{name}: {}", describe(status)));
+            return Err(io_error(format!("{name}: {}", describe(status))));
         }
         let channels = usize::from(format.channels);
         let ring = Arc::new(Ring {
@@ -449,24 +475,25 @@ impl<A: HalApi> DeviceBackend for CoreAudioBackend<A> {
         }))
     }
 
-    fn set_hardware_volume(&self, device_id: &str, db: f32) -> Result<(), String> {
+    fn set_hardware_volume(&self, device_id: &str, db: f32) -> io::Result<()> {
         let known = self
             .lookup(device_id)
-            .ok_or_else(|| "device unplugged".to_string())?;
-        let range = known
-            .info
-            .hardware_volume
-            .ok_or_else(|| format!("{} has no hardware volume", known.info.name))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device unplugged"))?;
+        let range = known.info.hardware_volume.ok_or_else(|| {
+            crate::unsupported(&format!("{} has no hardware volume", known.info.name))
+        })?;
         self.api
             .set_volume_db(known.object_id, db.clamp(range.min_db, range.max_db))
-            .map_err(describe)
+            .map_err(|status| io_error(describe(status)))
     }
 
-    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> Result<(), String> {
+    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> io::Result<()> {
         let known = self
             .lookup(device_id)
-            .ok_or_else(|| "device unplugged".to_string())?;
-        self.api.set_mute(known.object_id, muted).map_err(describe)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "device unplugged"))?;
+        self.api
+            .set_mute(known.object_id, muted)
+            .map_err(|status| io_error(describe(status)))
     }
 }
 
@@ -533,6 +560,15 @@ fn to_float(data: &[u8], format: SampleFormat, out: &mut VecDeque<f32>) {
                 out.push_back(value as f32 / 8_388_608.0);
             }
         }
+        // The sample in the low 24 bits (ALSA's S24_LE).
+        SampleFormat::S24In32 => {
+            for sample in data.as_chunks::<4>().0 {
+                let value = (i32::from_le_bytes(*sample) << 8) >> 8;
+                out.push_back(value as f32 / 8_388_608.0);
+            }
+        }
+        // Refused at open: CoreAudio takes no DSD.
+        _ => {}
     }
 }
 
@@ -551,7 +587,7 @@ pub struct CoreAudioStream<A: HalApi> {
 }
 
 impl<A: HalApi> CoreAudioStream<A> {
-    fn ensure_running(&mut self) -> Result<(), String> {
+    fn ensure_running(&mut self) -> io::Result<()> {
         if self.io.is_some() {
             return Ok(());
         }
@@ -563,7 +599,7 @@ impl<A: HalApi> CoreAudioStream<A> {
                 self.object_id,
                 Box::new(move |out, device_channels| ring.render(out, device_channels, channels)),
             )
-            .map_err(|status| format!("{}: {}", self.name, describe(status)))?;
+            .map_err(|status| io_error(format!("{}: {}", self.name, describe(status))))?;
         self.ring.running.store(true, Ordering::Relaxed);
         self.io = Some(handle);
         Ok(())
@@ -581,14 +617,10 @@ impl<A: HalApi> CoreAudioStream<A> {
     }
 }
 
-impl<A: HalApi> OutputStream for CoreAudioStream<A> {
-    fn format(&self) -> StreamFormat {
-        self.format
-    }
-
-    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+impl<A: HalApi> Sink for CoreAudioStream<A> {
+    fn write(&mut self, data: &[u8]) -> io::Result<()> {
         if !data.len().is_multiple_of(self.format.frame_bytes()) {
-            return Err("partial frame".to_string());
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "partial frame"));
         }
         let limit = self.capacity_frames * self.channels;
         let mut state = lock(&self.ring.state);
@@ -607,10 +639,10 @@ impl<A: HalApi> OutputStream for CoreAudioStream<A> {
                 pulls = now;
                 since = Instant::now();
             } else if since.elapsed() > STALL_TIMEOUT {
-                return Err(format!("{} stopped asking for audio", self.name));
+                return Err(io_error(format!("{} stopped asking for audio", self.name)));
             }
         }
-        to_float(data, self.format.format, &mut state.samples);
+        to_float(data, self.format.sample_format, &mut state.samples);
         let paused = state.paused;
         drop(state);
         if !paused {
@@ -628,21 +660,22 @@ impl<A: HalApi> OutputStream for CoreAudioStream<A> {
         }
     }
 
-    fn pause(&mut self, paused: bool) -> Result<(), String> {
+    fn pause(&mut self, paused: bool) -> io::Result<()> {
         // The device keeps running (and stays hogged), playing silence.
         lock(&self.ring.state).paused = paused;
         self.ring.space.notify_all();
         Ok(())
     }
 
-    fn drop_buffer(&mut self) {
+    fn flush(&mut self) -> io::Result<()> {
         lock(&self.ring.state).samples.clear();
         self.ring.space.notify_all();
+        Ok(())
     }
 
-    fn drain(&mut self) {
-        if self.queued_frames() > 0 && self.ensure_running().is_err() {
-            return;
+    fn drain(&mut self) -> io::Result<()> {
+        if self.queued_frames() > 0 {
+            self.ensure_running()?;
         }
         let deadline = Instant::now()
             + Duration::from_secs_f64(
@@ -659,6 +692,7 @@ impl<A: HalApi> OutputStream for CoreAudioStream<A> {
         std::thread::sleep(Duration::from_secs_f64(
             self.latency_frames as f64 / f64::from(self.format.sample_rate.max(1)),
         ));
+        Ok(())
     }
 }
 

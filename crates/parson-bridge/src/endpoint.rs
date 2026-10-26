@@ -15,11 +15,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::audio::{DeviceBackend, DeviceInfo, OutputStream, StreamFormat};
+use parson_output::{Backend, Sink, StreamFormat};
+
 use crate::clock::{Correction, drift_correction, monotonic_us};
 use crate::protocol::{
-    BridgeMessage, Frame, PROTOCOL_VERSION, ServerMessage, SyncStart, read_frame, write_message,
+    BridgeMessage, Frame, PROTOCOL_VERSION, ServerMessage, SyncStart, WireDevice, read_frame,
+    write_message,
 };
+
+/// This machine's devices as the server is told about them.
+fn wire_devices(backend: &dyn Backend) -> Vec<WireDevice> {
+    backend
+        .devices()
+        .iter()
+        .map(WireDevice::from_device)
+        .collect()
+}
 
 /// Frames per device write.
 const CHUNK_FRAMES: usize = 1_024;
@@ -81,7 +92,7 @@ impl Endpoint {
     /// Serves `listener` on a background thread.
     pub fn start(
         listener: TcpListener,
-        backend: Option<Arc<dyn DeviceBackend>>,
+        backend: Option<Arc<dyn Backend>>,
         config: EndpointConfig,
     ) -> std::io::Result<Self> {
         let address = listener.local_addr()?;
@@ -166,18 +177,18 @@ impl StreamShared {
 }
 
 struct Session {
-    backend: Option<Arc<dyn DeviceBackend>>,
+    backend: Option<Arc<dyn Backend>>,
     config: EndpointConfig,
     writer: Writer,
     streams: HashMap<u32, (Arc<StreamShared>, StreamFormat, String)>,
-    devices: Arc<Mutex<Vec<DeviceInfo>>>,
+    devices: Arc<Mutex<Vec<WireDevice>>>,
     alive: Arc<AtomicBool>,
 }
 
 impl Session {
     fn run(
         connection: TcpStream,
-        backend: Option<Arc<dyn DeviceBackend>>,
+        backend: Option<Arc<dyn Backend>>,
         config: EndpointConfig,
         current: Arc<Mutex<Option<Active>>>,
     ) -> std::io::Result<()> {
@@ -240,10 +251,7 @@ impl Session {
         tracing::info!(%server_name, "Parson server connected");
         // The server pings every second.
         connection.set_read_timeout(Some(Duration::from_secs(15)))?;
-        let devices = backend
-            .as_ref()
-            .map(|backend| backend.devices())
-            .unwrap_or_default();
+        let devices = backend.as_deref().map(wire_devices).unwrap_or_default();
         send(
             &writer,
             &BridgeMessage::Welcome {
@@ -310,7 +318,7 @@ impl Session {
             .spawn(move || {
                 while alive.load(Ordering::Relaxed) {
                     std::thread::sleep(DEVICE_POLL);
-                    let now = backend.devices();
+                    let now = wire_devices(backend.as_ref());
                     let mut known = devices
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -363,7 +371,7 @@ impl Session {
                 format,
                 exclusive,
                 sync,
-            } => self.open(stream, device, format, exclusive, sync),
+            } => self.open(stream, device, format.into(), exclusive, sync),
             ServerMessage::Pause { stream, paused } => {
                 self.with_stream(stream, |pending| pending.paused = paused)
             }
@@ -390,14 +398,26 @@ impl Session {
                 if let Some(backend) = &self.backend
                     && let Err(error) = backend.set_hardware_volume(&device, db)
                 {
-                    send(&self.writer, &BridgeMessage::DeviceError { device, error });
+                    send(
+                        &self.writer,
+                        &BridgeMessage::DeviceError {
+                            device,
+                            error: error.to_string(),
+                        },
+                    );
                 }
             }
             ServerMessage::Mute { device, muted } => {
                 if let Some(backend) = &self.backend
                     && let Err(error) = backend.set_hardware_mute(&device, muted)
                 {
-                    send(&self.writer, &BridgeMessage::DeviceError { device, error });
+                    send(
+                        &self.writer,
+                        &BridgeMessage::DeviceError {
+                            device,
+                            error: error.to_string(),
+                        },
+                    );
                 }
             }
         }
@@ -455,7 +475,13 @@ impl Session {
                 let output = match backend.open(&device, format, exclusive) {
                     Ok(output) => output,
                     Err(error) => {
-                        send(&writer, &BridgeMessage::Failed { stream, error });
+                        send(
+                            &writer,
+                            &BridgeMessage::Failed {
+                                stream,
+                                error: error.to_string(),
+                            },
+                        );
                         return;
                     }
                 };
@@ -486,7 +512,7 @@ impl Session {
 struct Player {
     stream: u32,
     shared: Arc<StreamShared>,
-    output: Box<dyn OutputStream>,
+    output: Box<dyn Sink>,
     format: StreamFormat,
     sync: Option<SyncStart>,
     writer: Writer,
@@ -564,14 +590,14 @@ impl Player {
             let mut pending = self.shared.lock();
             if pending.close {
                 drop(pending);
-                self.output.drop_buffer();
+                let _ = self.output.flush();
                 break;
             }
             if pending.flush {
                 pending.flush = false;
                 let received = pending.received;
                 drop(pending);
-                self.output.drop_buffer();
+                let _ = self.output.flush();
                 self.reset_counters(received);
                 self.report();
                 continue;
@@ -592,7 +618,7 @@ impl Player {
                 if pending.drain {
                     pending.drain = false;
                     drop(pending);
-                    self.output.drain();
+                    let _ = self.output.drain();
                     self.report();
                     send(
                         &self.writer,
@@ -675,7 +701,7 @@ impl Player {
                     &self.writer,
                     &BridgeMessage::Failed {
                         stream: self.stream,
-                        error,
+                        error: error.to_string(),
                     },
                 );
                 break;

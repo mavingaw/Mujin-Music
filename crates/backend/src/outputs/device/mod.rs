@@ -15,12 +15,8 @@ use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
 
-#[cfg(target_os = "linux")]
-pub use parson_bridge::audio::alsa;
-pub use parson_bridge::audio::simulated;
-pub use parson_bridge::audio::{
-    DeviceBackend, DeviceInfo, HardwareVolume, OutputStream, SampleFormat, StreamFormat,
-};
+pub use parson_output::simulated;
+pub use parson_output::{Backend, DeviceInfo, HardwareVolume, SampleFormat, Sink, StreamFormat};
 
 use super::renderer::{
     Renderer, RendererInfo, RendererSettings, RendererState, TrackRequest, to_device_scale,
@@ -50,13 +46,13 @@ pub fn choose_format(
     max: FormatLimits,
 ) -> (StreamFormat, bool) {
     let allowed_rates: Vec<u32> = device
-        .sample_rates
+        .sample_rates()
         .iter()
         .copied()
         .filter(|rate| *rate <= max.max_sample_rate)
         .collect();
     let rates = if allowed_rates.is_empty() {
-        device.sample_rates.clone()
+        device.sample_rates().to_vec()
     } else {
         allowed_rates
     };
@@ -89,17 +85,18 @@ pub fn choose_format(
         // Decoded lossy audio has more resolution than 16 bits.
         32
     };
-    let usable: Vec<SampleFormat> = device
-        .formats
+    let pcm: Vec<SampleFormat> = device
+        .sample_formats()
+        .iter()
+        .copied()
+        .filter(|format| !format.is_dsd())
+        .collect();
+    let usable: Vec<SampleFormat> = pcm
         .iter()
         .copied()
         .filter(|format| format.bits() <= max.max_bit_depth.max(16))
         .collect();
-    let formats = if usable.is_empty() {
-        device.formats.clone()
-    } else {
-        usable
-    };
+    let formats = if usable.is_empty() { pcm } else { usable };
     // The smallest container that holds every source bit, else the largest.
     let mut by_size = formats.clone();
     by_size.sort_by_key(|format| format.bits());
@@ -110,7 +107,7 @@ pub fn choose_format(
         .or_else(|| by_size.last().copied())
         .unwrap_or(SampleFormat::S16);
     let source_channels = source.channels.unwrap_or(2).max(1);
-    let channels = source_channels.min(device.max_channels.max(1));
+    let channels = source_channels.min(device.max_channels());
     let exact = sample_rate == source_rate
         && format.bits() >= source_bits.min(32)
         && channels == source_channels
@@ -118,7 +115,7 @@ pub fn choose_format(
     (
         StreamFormat {
             sample_rate,
-            format,
+            sample_format: format,
             channels,
         },
         exact,
@@ -175,7 +172,7 @@ pub fn untested_note(backend: &str) -> Option<String> {
 pub struct DeviceRenderer {
     zone_id: String,
     device: Mutex<DeviceInfo>,
-    backend: Arc<dyn DeviceBackend>,
+    backend: Arc<dyn Backend>,
     engine: engine::Engine,
     placement: Placement,
 }
@@ -185,7 +182,7 @@ impl DeviceRenderer {
     pub fn standalone(
         zone_id: String,
         device: DeviceInfo,
-        backend: Arc<dyn DeviceBackend>,
+        backend: Arc<dyn Backend>,
         changed: tokio::sync::broadcast::Sender<()>,
         placement: Placement,
     ) -> Self {
@@ -245,7 +242,7 @@ impl Renderer for DeviceRenderer {
         volume_modes.push(VolumeMode::Software);
         volume_modes.push(VolumeMode::Fixed);
         let rates: Vec<String> = device
-            .sample_rates
+            .sample_rates()
             .iter()
             .map(|rate| super::format_rate(*rate).replace(" kHz", ""))
             .collect();
@@ -253,8 +250,9 @@ impl Renderer for DeviceRenderer {
             "Takes {} kHz at {}.",
             rates.join(", "),
             device
-                .formats
+                .sample_formats()
                 .iter()
+                .filter(|format| !format.is_dsd())
                 .map(|format| format!("{}-bit", format.bits()))
                 .collect::<Vec<_>>()
                 .join(" / ")
@@ -268,8 +266,8 @@ impl Renderer for DeviceRenderer {
             kind: self.placement.kind,
             name: device.name.clone(),
             device: match &self.placement.host {
-                Some(host) => format!("{host} · {}", device.description),
-                None => device.description.clone(),
+                Some(host) => format!("{host} · {}", device.detail),
+                None => device.detail.clone(),
             },
             limits: device_limits(&device),
             volume_range: self.volume_range(&device),
@@ -343,6 +341,7 @@ impl Renderer for DeviceRenderer {
                         self.backend
                             .set_hardware_volume(&device.id, db)
                             .map(|()| self.engine.hardware_volume_set(level, db))
+                            .map_err(|error| error.to_string())
                     }
                     None => Err("no_hardware_volume".to_string()),
                 }
@@ -372,7 +371,7 @@ impl Renderer for DeviceRenderer {
 
 /// Every local device, kept in step with what the backend reports.
 pub struct DeviceManager {
-    backend: Option<Arc<dyn DeviceBackend>>,
+    backend: Option<Arc<dyn Backend>>,
     players: Mutex<HashMap<String, Arc<DeviceRenderer>>>,
     changed: tokio::sync::broadcast::Sender<()>,
     note: Option<String>,
@@ -388,7 +387,7 @@ impl DeviceManager {
         let value = std::env::var("PARSON_LOCAL_AUDIO").ok()?;
         match value.trim().to_ascii_lowercase().as_str() {
             "simulated" | "simulate" => Some(Self::new(
-                Arc::new(simulated::SimulatedBackend::with_default_devices(1.0)),
+                Arc::new(simulated::SimulatedBackend::demo()),
                 None,
             )),
             "1" | "on" | "true" | "yes" | "native" => Some(Self::native()),
@@ -399,9 +398,9 @@ impl DeviceManager {
     /// This machine's audio API: ALSA on Linux, WASAPI exclusive mode on
     /// Windows, CoreAudio hog mode on macOS.
     fn native() -> Self {
-        match parson_bridge::audio::native_backend() {
+        match parson_output::platform_backend() {
             Ok(backend) => {
-                let backend: Arc<dyn DeviceBackend> = Arc::from(backend);
+                let backend: Arc<dyn Backend> = Arc::from(backend);
                 let notes = untested_note(backend.name()).into_iter().collect();
                 Self::placed(
                     backend,
@@ -423,7 +422,7 @@ impl DeviceManager {
         }
     }
 
-    pub fn new(backend: Arc<dyn DeviceBackend>, note: Option<String>) -> Self {
+    pub fn new(backend: Arc<dyn Backend>, note: Option<String>) -> Self {
         Self::placed(
             backend,
             note,
@@ -435,7 +434,7 @@ impl DeviceManager {
     /// Devices somewhere else (a bridge, an AirPlay receiver), reporting
     /// changes on `changed`.
     pub fn placed(
-        backend: Arc<dyn DeviceBackend>,
+        backend: Arc<dyn Backend>,
         note: Option<String>,
         placement: Placement,
         changed: tokio::sync::broadcast::Sender<()>,
@@ -566,28 +565,42 @@ impl Drop for DeviceManager {
 
 #[cfg(test)]
 mod tests {
+    use parson_output::DeviceCaps;
+    use parson_output::simulated::simulated_device;
+
     use super::{DeviceInfo, HardwareVolume, SampleFormat, choose_format, device_limits};
     use crate::outputs::{FormatLimits, SourceFormat};
 
-    fn dac() -> DeviceInfo {
-        DeviceInfo {
-            id: "dac".into(),
-            name: "DAC".into(),
-            description: "USB".into(),
-            sample_rates: vec![44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
-            formats: vec![
-                SampleFormat::S16,
-                SampleFormat::S24Packed,
-                SampleFormat::S32,
-            ],
+    fn caps(rates: &[u32], formats: &[SampleFormat]) -> DeviceCaps {
+        DeviceCaps {
+            sample_rates: rates.to_vec(),
+            sample_formats: formats.to_vec(),
+            min_channels: 1,
             max_channels: 2,
-            hardware_volume: Some(HardwareVolume {
+            dsd_formats: Vec::new(),
+            dsd_rates: Vec::new(),
+        }
+    }
+
+    fn dac() -> DeviceInfo {
+        simulated_device(
+            "dac",
+            "DAC",
+            "USB",
+            caps(
+                &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
+                &[
+                    SampleFormat::S16,
+                    SampleFormat::S24Packed,
+                    SampleFormat::S32,
+                ],
+            ),
+            Some(HardwareVolume {
                 min_db: -127.5,
                 max_db: 0.0,
                 step_db: 0.5,
             }),
-            busy: false,
-        }
+        )
     }
 
     fn flac(rate: u32, bits: u8) -> SourceFormat {
@@ -615,10 +628,10 @@ mod tests {
         let (format, exact) = choose_format(&device, &flac(96_000, 24), limits);
         assert!(exact);
         assert_eq!(format.sample_rate, 96_000);
-        assert_eq!(format.format, SampleFormat::S24Packed);
+        assert_eq!(format.sample_format, SampleFormat::S24Packed);
         let (format, exact) = choose_format(&device, &flac(44_100, 16), limits);
         assert!(exact);
-        assert_eq!(format.format, SampleFormat::S16);
+        assert_eq!(format.sample_format, SampleFormat::S16);
         // 352.8 kHz goes down within its family, not to 192 kHz.
         let (format, exact) = choose_format(&device, &flac(352_800, 24), limits);
         assert!(!exact);
@@ -635,15 +648,14 @@ mod tests {
     #[test]
     fn hdmi_style_outputs_convert_and_say_so() {
         let device = DeviceInfo {
-            sample_rates: vec![48_000],
-            formats: vec![SampleFormat::S16],
+            caps: Some(caps(&[48_000], &[SampleFormat::S16])),
             hardware_volume: None,
             ..dac()
         };
         let (format, exact) = choose_format(&device, &flac(44_100, 24), device_limits(&device));
         assert!(!exact);
         assert_eq!(
-            (format.sample_rate, format.format),
+            (format.sample_rate, format.sample_format),
             (48_000, SampleFormat::S16)
         );
         let (format, exact) = choose_format(

@@ -248,6 +248,8 @@ pub fn device_info(receiver: &Receiver) -> DeviceInfo {
             manual: receiver.manual,
             verification: AIRPLAY_VERIFICATION.to_string(),
         }),
+        hardware_volume: None,
+        busy: false,
     }
 }
 

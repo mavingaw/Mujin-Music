@@ -459,7 +459,7 @@ mod tests {
 
     fn native() -> NativeOutputs {
         NativeOutputs::new(
-            vec![Arc::new(SimulatedBackend)],
+            vec![Arc::new(SimulatedBackend::dac_up_to_192k())],
             true,
             None,
             Arc::new(|_, _, _, _, _| Ok(Box::new(std::io::repeat(0)) as PcmSource)),
@@ -474,7 +474,7 @@ mod tests {
     async fn convolution_filters_and_device_pictures_are_served() {
         let dir = std::env::temp_dir().join(format!("parson-routes-{}", uuid::Uuid::new_v4()));
         let outputs = NativeOutputs::new(
-            vec![Arc::new(SimulatedBackend)],
+            vec![Arc::new(SimulatedBackend::dac_up_to_192k())],
             true,
             Some(dir.join("native-outputs.json")),
             Arc::new(|_, _, _, _, _| Ok(Box::new(std::io::repeat(0)) as PcmSource)),

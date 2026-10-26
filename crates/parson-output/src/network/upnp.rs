@@ -738,6 +738,8 @@ pub fn device_info(renderer: &Renderer, manual: bool, icon_url: Option<String>) 
             manual,
             verification: UPNP_VERIFICATION.to_string(),
         }),
+        hardware_volume: None,
+        busy: false,
     }
 }
 
@@ -854,6 +856,8 @@ fn unreachable_device(endpoint: &ManualEndpoint, error: String) -> DeviceInfo {
             manual: true,
             verification: UPNP_VERIFICATION.to_string(),
         }),
+        hardware_volume: None,
+        busy: false,
     }
 }
 

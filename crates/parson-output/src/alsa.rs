@@ -4,7 +4,8 @@
 //! rate converter and no format plug in front of it, so a format it accepts
 //! reaches the DAC bit for bit and only one program can use it at a time.
 //! `plughw:` is the same device with ALSA's conversion plugins enabled,
-//! used when exclusive mode is off.
+//! used when exclusive mode is off. Volume uses the card's own mixer, in
+//! dB, when it has one, so the samples stay untouched.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
@@ -16,10 +17,12 @@ use crate::pcm_chain::{PcmChain, parse_pcm_dump};
 use crate::procfs::{self, CapsSource, HardwareInfo, HardwareReporter, HardwareStatus};
 use crate::{
     ALSA_CONFIG_PCM_PREFIX, Backend, DSD_FORMATS, DSD_RATES, DeviceCaps, DeviceInfo, Driver,
-    STANDARD_RATES, SampleFormat, Sink, StreamFormat,
+    HardwareVolume, STANDARD_RATES, SampleFormat, Sink, StreamFormat,
 };
 
 type Ctl = c_void;
+type Mixer = c_void;
+type MixerElem = c_void;
 type Pcm = c_void;
 type PcmInfo = c_void;
 type CardInfo = c_void;
@@ -139,6 +142,20 @@ alsa_api! {
     snd_output_buffer_string: fn(*mut Output, *mut *mut c_char) -> usize;
     snd_output_close: fn(*mut Output) -> c_int;
     snd_pcm_dump: fn(*mut Pcm, *mut Output) -> c_int;
+    snd_pcm_pause: fn(*mut Pcm, c_int) -> c_int;
+    snd_mixer_open: fn(*mut *mut Mixer, c_int) -> c_int;
+    snd_mixer_attach: fn(*mut Mixer, *const c_char) -> c_int;
+    snd_mixer_selem_register: fn(*mut Mixer, *mut c_void, *mut *mut c_void) -> c_int;
+    snd_mixer_load: fn(*mut Mixer) -> c_int;
+    snd_mixer_close: fn(*mut Mixer) -> c_int;
+    snd_mixer_first_elem: fn(*mut Mixer) -> *mut MixerElem;
+    snd_mixer_elem_next: fn(*mut MixerElem) -> *mut MixerElem;
+    snd_mixer_selem_get_name: fn(*mut MixerElem) -> *const c_char;
+    snd_mixer_selem_has_playback_volume: fn(*mut MixerElem) -> c_int;
+    snd_mixer_selem_get_playback_dB_range: fn(*mut MixerElem, *mut c_long, *mut c_long) -> c_int;
+    snd_mixer_selem_set_playback_dB_all: fn(*mut MixerElem, c_long, c_int) -> c_int;
+    snd_mixer_selem_has_playback_switch: fn(*mut MixerElem) -> c_int;
+    snd_mixer_selem_set_playback_switch_all: fn(*mut MixerElem, c_int) -> c_int;
 }
 
 /// The card Parson's kernel-ABI emulator answers for, when it is loaded
@@ -178,6 +195,80 @@ fn error(api: &Api, code: c_int, context: &str) -> io::Error {
         format!("{context}: {message}")
     };
     io::Error::new(kind, message)
+}
+
+/// Runs `action` on the card's playback mixer element with a dB range
+/// (`PCM` first, then `Master`, `Digital`...), if it has one.
+fn with_mixer<T>(
+    api: &Api,
+    card: c_int,
+    action: impl FnOnce(&Api, *mut MixerElem) -> T,
+) -> Option<T> {
+    let name = CString::new(format!("hw:{card}")).ok()?;
+    let mut mixer: *mut Mixer = std::ptr::null_mut();
+    // SAFETY: the mixer is opened, used and closed in this scope; element
+    // pointers come from it and are not used after it closes.
+    unsafe {
+        if (api.snd_mixer_open)(&mut mixer, 0) < 0 || mixer.is_null() {
+            return None;
+        }
+        let ready = (api.snd_mixer_attach)(mixer, name.as_ptr()) >= 0
+            && (api.snd_mixer_selem_register)(mixer, std::ptr::null_mut(), std::ptr::null_mut())
+                >= 0
+            && (api.snd_mixer_load)(mixer) >= 0;
+        let mut chosen: *mut MixerElem = std::ptr::null_mut();
+        if ready {
+            let mut element = (api.snd_mixer_first_elem)(mixer);
+            let mut rank = usize::MAX;
+            while !element.is_null() {
+                if (api.snd_mixer_selem_has_playback_volume)(element) != 0 {
+                    let mut minimum: c_long = 0;
+                    let mut maximum: c_long = 0;
+                    let has_db = (api.snd_mixer_selem_get_playback_dB_range)(
+                        element,
+                        &mut minimum,
+                        &mut maximum,
+                    ) == 0
+                        && maximum > minimum;
+                    let label = (api.snd_mixer_selem_get_name)(element);
+                    let element_name = if label.is_null() {
+                        String::new()
+                    } else {
+                        CStr::from_ptr(label).to_string_lossy().into_owned()
+                    };
+                    let order = ["PCM", "Master", "Digital", "Speaker", "Headphone"]
+                        .iter()
+                        .position(|candidate| element_name.eq_ignore_ascii_case(candidate))
+                        .unwrap_or(10);
+                    if has_db && order < rank {
+                        rank = order;
+                        chosen = element;
+                    }
+                }
+                element = (api.snd_mixer_elem_next)(element);
+            }
+        }
+        let result = (!chosen.is_null()).then(|| action(api, chosen));
+        (api.snd_mixer_close)(mixer);
+        result
+    }
+}
+
+/// The card's mixer range in dB, when it has a playback volume control.
+fn hardware_volume(api: &Api, card: c_int) -> Option<HardwareVolume> {
+    with_mixer(api, card, |api, element| {
+        let mut minimum: c_long = 0;
+        let mut maximum: c_long = 0;
+        // SAFETY: `element` comes from the open mixer.
+        unsafe {
+            (api.snd_mixer_selem_get_playback_dB_range)(element, &mut minimum, &mut maximum);
+        }
+        HardwareVolume {
+            min_db: minimum as f32 / 100.0,
+            max_db: maximum as f32 / 100.0,
+            step_db: 0.5,
+        }
+    })
 }
 
 fn take_string(pointer: *mut c_char) -> Option<String> {
@@ -618,6 +709,8 @@ impl Backend for AlsaBackend {
                 hardware,
                 address: Some(format!("hw:{},{}", found.card, found.device)),
                 network: None,
+                hardware_volume: hardware_volume(api, found.card),
+                busy: false,
             }
         });
         let configured = enumerate_config_pcms(api)
@@ -639,6 +732,8 @@ impl Backend for AlsaBackend {
                     hardware: None,
                     address: Some(pcm),
                     network: None,
+                    hardware_volume: None,
+                    busy: false,
                 }
             });
         cards.chain(configured).collect()
@@ -689,6 +784,56 @@ impl Backend for AlsaBackend {
         let report = lock(&self.open).get(device_id).cloned()?;
         library_status(&report, stream)
     }
+
+    fn set_hardware_volume(&self, device_id: &str, db: f32) -> io::Result<()> {
+        let api = api().ok_or_else(|| io::Error::other("libasound is not available"))?;
+        let card = mixer_card(device_id)?;
+        let code = with_mixer(api, card, |api, element| {
+            // SAFETY: `element` comes from the open mixer.
+            unsafe {
+                (api.snd_mixer_selem_set_playback_dB_all)(
+                    element,
+                    (db * 100.0).round() as c_long,
+                    0,
+                )
+            }
+        })
+        .ok_or_else(|| crate::unsupported("the device has no volume control"))?;
+        if code < 0 {
+            return Err(error(api, code, "ALSA mixer"));
+        }
+        Ok(())
+    }
+
+    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> io::Result<()> {
+        let api = api().ok_or_else(|| io::Error::other("libasound is not available"))?;
+        let card = mixer_card(device_id)?;
+        let code = with_mixer(api, card, |api, element| {
+            // SAFETY: `element` comes from the open mixer.
+            unsafe {
+                if (api.snd_mixer_selem_has_playback_switch)(element) == 0 {
+                    return None;
+                }
+                Some((api.snd_mixer_selem_set_playback_switch_all)(
+                    element,
+                    c_int::from(!muted),
+                ))
+            }
+        })
+        .flatten()
+        .ok_or_else(|| crate::unsupported("the device cannot mute itself"))?;
+        if code < 0 {
+            return Err(error(api, code, "ALSA mixer"));
+        }
+        Ok(())
+    }
+}
+
+/// The card index of a sound card device id, for its mixer.
+fn mixer_card(device_id: &str) -> io::Result<c_int> {
+    card_and_device(device_id)
+        .and_then(|(card, _)| card_index(card))
+        .ok_or_else(|| crate::unsupported("only sound cards have a mixer"))
 }
 
 /// Opens an ALSA PCM by name for `format`. With `exclusive`, ALSA's
@@ -775,6 +920,16 @@ impl Sink for AlsaSink {
             return 0;
         }
         delay.max(0) as u64
+    }
+
+    fn pause(&mut self, paused: bool) -> io::Result<()> {
+        // SAFETY: the handle is open. Devices without pause support answer
+        // with an error, and the player falls back to flush and resume.
+        let code = unsafe { (self.api.snd_pcm_pause)(self.pcm, c_int::from(paused)) };
+        if code < 0 {
+            return Err(error(self.api, code, "ALSA pause"));
+        }
+        Ok(())
     }
 
     fn flush(&mut self) -> io::Result<()> {

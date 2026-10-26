@@ -26,11 +26,9 @@ pub mod procfs;
 pub mod simulated;
 
 #[cfg(target_os = "linux")]
-mod alsa;
-#[cfg(target_os = "macos")]
-mod coreaudio;
-#[cfg(windows)]
-mod wasapi;
+pub mod alsa;
+pub mod coreaudio;
+pub mod wasapi;
 
 use std::io;
 
@@ -66,6 +64,9 @@ pub enum Driver {
     /// An AirPlay receiver, sent ALAC over RTP (AirPlay 1 / RAOP).
     #[serde(rename = "airplay")]
     AirPlay,
+    /// An audio device of another machine running Parson Bridge, sent
+    /// the PCM over the bridge protocol.
+    Bridge,
 }
 
 impl Driver {
@@ -82,6 +83,21 @@ impl Driver {
             (Self::Simulated, false) => "Simulated shared output",
             (Self::Upnp, _) => "UPnP AV stream over HTTP",
             (Self::AirPlay, _) => "AirPlay (RAOP), ALAC 44.1kHz 16bit",
+            (Self::Bridge, true) => "Parson Bridge, exclusive",
+            (Self::Bridge, false) => "Parson Bridge, shared",
+        }
+    }
+
+    /// The audio API, e.g. `ALSA`, `WASAPI`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Alsa => "ALSA",
+            Self::Wasapi => "WASAPI",
+            Self::CoreAudio => "CoreAudio",
+            Self::Simulated => "Simulated",
+            Self::Upnp => "UPnP",
+            Self::AirPlay => "AirPlay",
+            Self::Bridge => "Parson Bridge",
         }
     }
 
@@ -164,6 +180,20 @@ impl SampleFormat {
         self.bits() == 1
     }
 
+    /// The ALSA name of the container, e.g. `S24_3LE`, as signal paths
+    /// show it.
+    pub fn alsa_name(self) -> &'static str {
+        match self {
+            Self::S16 => "S16_LE",
+            Self::S24Packed => "S24_3LE",
+            Self::S24In32 => "S24_LE",
+            Self::S32 => "S32_LE",
+            Self::DsdU8 | Self::DsdU16Le | Self::DsdU16Be | Self::DsdU32Le | Self::DsdU32Be => {
+                self.label()
+            }
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::S16 => "16-bit",
@@ -217,6 +247,16 @@ impl DeviceCaps {
         depths
     }
 
+    /// The highest PCM rate the device takes (48 kHz when unknown).
+    pub fn max_sample_rate(&self) -> u32 {
+        self.sample_rates.iter().copied().max().unwrap_or(48_000)
+    }
+
+    /// The deepest PCM container's precision (16 when unknown).
+    pub fn max_bits(&self) -> u8 {
+        self.bit_depths().into_iter().max().unwrap_or(16)
+    }
+
     /// The container used for `bits`, preferring an exact fit.
     pub fn format_for_bits(&self, bits: u8) -> Option<SampleFormat> {
         let order: &[SampleFormat] = match bits {
@@ -257,13 +297,54 @@ pub struct DeviceInfo {
     pub address: Option<String>,
     /// A network endpoint's protocol, identity and format limits.
     pub network: Option<network::NetworkInfo>,
+    /// The device's own volume control, when it has one.
+    pub hardware_volume: Option<HardwareVolume>,
+    /// Another app holds the device right now.
+    pub busy: bool,
 }
+
+/// A hardware volume control in dB (a DAC's mixer, an endpoint's own
+/// volume).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct HardwareVolume {
+    pub min_db: f32,
+    pub max_db: f32,
+    pub step_db: f32,
+}
+
+impl Eq for HardwareVolume {}
 
 /// Device ids of PCMs from the ALSA configuration (`aplay -L`), as
 /// opposed to `alsa:` sound cards.
 pub const ALSA_CONFIG_PCM_PREFIX: &str = "alsa-pcm:";
 
 impl DeviceInfo {
+    /// PCM rates the device takes natively (none when it was not probed).
+    pub fn sample_rates(&self) -> &[u32] {
+        self.caps.as_ref().map_or(&[], |caps| &caps.sample_rates)
+    }
+
+    /// PCM and DSD containers the device takes natively.
+    pub fn sample_formats(&self) -> &[SampleFormat] {
+        self.caps.as_ref().map_or(&[], |caps| &caps.sample_formats)
+    }
+
+    pub fn max_sample_rate(&self) -> u32 {
+        self.caps
+            .as_ref()
+            .map_or(48_000, DeviceCaps::max_sample_rate)
+    }
+
+    pub fn max_bits(&self) -> u8 {
+        self.caps.as_ref().map_or(16, DeviceCaps::max_bits)
+    }
+
+    pub fn max_channels(&self) -> u8 {
+        self.caps
+            .as_ref()
+            .map_or(2, |caps| caps.max_channels.max(1))
+    }
+
     /// A PCM defined in the ALSA configuration, which may be a chain of
     /// plugins rather than a sound card.
     pub fn is_alsa_config_pcm(&self) -> bool {
@@ -626,15 +707,34 @@ pub trait Sink: Send {
     fn write(&mut self, data: &[u8]) -> io::Result<()>;
     /// Frames written but not yet heard.
     fn delay_frames(&mut self) -> u64;
+    /// Pauses in place, keeping what is buffered. `Err` when the device
+    /// cannot: the player then flushes and resumes from the heard position.
+    fn pause(&mut self, _paused: bool) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this output cannot pause in place",
+        ))
+    }
     /// Stops output now, discarding what is buffered.
     fn flush(&mut self) -> io::Result<()>;
     /// Plays out what is buffered, then returns.
     fn drain(&mut self) -> io::Result<()>;
 }
 
-/// Lists devices and opens them.
+/// An error for a control a device does not have.
+pub fn unsupported(what: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, what.to_string())
+}
+
+/// Lists devices and opens them: the audio API of this machine (ALSA,
+/// WASAPI, CoreAudio), network players, Parson Bridges and simulated
+/// devices all look the same to the player.
 pub trait Backend: Send + Sync {
     fn driver(&self) -> Driver;
+    /// The audio API, e.g. `ALSA` or a bridge's own backend.
+    fn name(&self) -> &'static str {
+        self.driver().name()
+    }
     /// Enumerates and probes output devices. This opens each device
     /// briefly, so it is not free; callers cache the result.
     fn devices(&self) -> Vec<DeviceInfo>;
@@ -657,26 +757,38 @@ pub trait Backend: Send + Sync {
     /// Tells the backend which track the next `open` of `device_id` plays,
     /// for endpoints that show it (network renderers).
     fn prepare(&self, _device_id: &str, _track: &network::TrackInfo) {}
+    /// Sets the device's own volume, in dB on its [`HardwareVolume`] scale.
+    fn set_hardware_volume(&self, _device_id: &str, _db: f32) -> io::Result<()> {
+        Err(unsupported("this device has no hardware volume"))
+    }
+    fn set_hardware_mute(&self, _device_id: &str, _muted: bool) -> io::Result<()> {
+        Err(unsupported("this device cannot mute itself"))
+    }
 }
 
-/// This platform's native backend, or `None` where there is none (or the
-/// system audio library cannot be loaded).
-pub fn platform_backend() -> Option<Box<dyn Backend>> {
+/// What a machine without a supported audio API reports.
+pub const NATIVE_UNSUPPORTED: &str = "Bit-perfect output uses ALSA (Linux, including Raspberry Pi OS), WASAPI exclusive mode (Windows) or CoreAudio hog mode (macOS); this system has none of them, so it lists no devices";
+
+/// This platform's audio API (ALSA, WASAPI or CoreAudio), or why there is
+/// none (the system audio library could not be loaded).
+pub fn platform_backend() -> Result<Box<dyn Backend>, String> {
     #[cfg(target_os = "linux")]
     {
-        alsa::AlsaBackend::load().map(|backend| Box::new(backend) as Box<dyn Backend>)
+        alsa::AlsaBackend::load()
+            .map(|backend| Box::new(backend) as Box<dyn Backend>)
+            .ok_or_else(|| "libasound could not be loaded, so ALSA devices are unavailable".into())
     }
     #[cfg(windows)]
     {
-        Some(Box::new(wasapi::WasapiBackend))
+        wasapi::com::load().map(|backend| Box::new(backend) as Box<dyn Backend>)
     }
     #[cfg(target_os = "macos")]
     {
-        Some(Box::new(coreaudio::CoreAudioBackend))
+        coreaudio::hal::load().map(|backend| Box::new(backend) as Box<dyn Backend>)
     }
     #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
-        None
+        Err(NATIVE_UNSUPPORTED.to_string())
     }
 }
 
@@ -933,6 +1045,8 @@ mod tests {
             hardware: None,
             address: Some("hw:1,0".into()),
             network: None,
+            hardware_volume: None,
+            busy: false,
         };
         assert_eq!(card.mode_label(true), "ALSA hw:1,0 exclusive");
         assert_eq!(
