@@ -86,9 +86,36 @@ pub fn status_error(status: StatusCode, body: &str) -> ProviderError {
     }
 }
 
-/// Sends a request and reads a bounded body.
+/// Whether `url` may carry credentials: HTTPS, or plain HTTP to this
+/// machine only (local test services). Anything else would send tokens,
+/// codes and keys in clear text over the network.
+pub fn secure_url(url: &str) -> Result<reqwest::Url, ProviderError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|error| ProviderError::Invalid(format!("Invalid service address: {error}")))?;
+    let loopback = parsed.host_str().is_some_and(|host| {
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    match parsed.scheme() {
+        "https" => Ok(parsed),
+        "http" if loopback => Ok(parsed),
+        _ => Err(ProviderError::Invalid(
+            "Service addresses must use HTTPS so sign-in tokens never travel in clear text."
+                .to_string(),
+        )),
+    }
+}
+
+/// Sends a request and reads a bounded body. Every request goes to an
+/// address [`secure_url`] accepts.
 pub async fn send_bytes(request: RequestBuilder) -> Result<(StatusCode, Vec<u8>), ProviderError> {
-    let mut response = request.send().await?;
+    let (client, request) = request.build_split();
+    let request = request?;
+    secure_url(request.url().as_str())?;
+    let mut response = client.execute(request).await?;
     let status = response.status();
     if response
         .content_length()
@@ -123,6 +150,39 @@ pub async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credentials_only_travel_over_https_or_to_this_machine() {
+        for allowed in [
+            "https://accounts.spotify.com/api/token",
+            "http://127.0.0.1:41234/api/token",
+            "http://localhost:8080/v1",
+            "http://[::1]:9000/api",
+        ] {
+            assert!(secure_url(allowed).is_ok(), "{allowed}");
+        }
+        for refused in [
+            "http://accounts.spotify.com/api/token",
+            "http://192.168.1.20/api/token",
+            "ftp://example.com/token",
+            "not a url",
+        ] {
+            assert!(secure_url(refused).is_err(), "{refused}");
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_to_clear_text_addresses_are_never_sent() {
+        let client = client().expect("client");
+        let error = send_bytes(
+            client
+                .post("http://accounts.example.com/api/token")
+                .body("refresh_token=secret"),
+        )
+        .await
+        .expect_err("refused before sending");
+        assert!(error.to_string().contains("HTTPS"), "{error}");
+    }
 
     #[test]
     fn premium_and_quota_errors_are_explained() {
