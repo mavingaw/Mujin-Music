@@ -669,6 +669,10 @@ impl NativeOutputs {
                     .as_ref()
                     .and_then(|hardware| hardware.speed.as_deref()),
                 simulated: device.driver == Driver::Simulated,
+                kernel_emulator: device
+                    .hardware
+                    .as_ref()
+                    .is_some_and(|hardware| hardware.kernel_emulator),
                 resampler: self.resampler,
                 leveling: leveling.map(|leveling| NativeLeveling {
                     gain_db: leveling.gain_db,
@@ -1467,6 +1471,7 @@ mod tests {
                 matches_stream: parson_output::procfs::params_match(&params, stream),
                 params,
                 momentary_hz: Some(96_000),
+                kernel_emulator: false,
             })
         }
     }

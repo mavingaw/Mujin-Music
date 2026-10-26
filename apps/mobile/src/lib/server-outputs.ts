@@ -122,6 +122,7 @@ export function serverHardwareLine(device: NativeOutputDevice) {
     hardware.caps_source === "usb_descriptors"
       ? "formats from USB descriptors"
       : null,
+    hardware.kernel_emulator ? "kernel ABI emulator, no DAC hardware" : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -160,6 +161,7 @@ export function serverTransportLine(session: NativeOutputSession) {
     device.usb_id ? `USB ${device.usb_id}` : null,
     device.usb_speed,
     `${device.transport} on ${device.host}`,
+    device.kernel_emulator ? "kernel ABI emulator, no DAC hardware" : null,
   ]
     .filter(Boolean)
     .join(" · ");

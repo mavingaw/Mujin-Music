@@ -140,6 +140,9 @@ export function hardwareSummary(device: NativeOutputDevice) {
     hardware.caps_source === "driver"
       ? "formats probed by the driver"
       : "device busy: formats from its USB descriptors",
+    hardware.kernel_emulator
+      ? "kernel ABI emulator, no DAC hardware attached"
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");

@@ -175,6 +175,9 @@ pub struct OutputDeviceSummary {
     /// From the kernel's USB stream report, e.g. `high speed`.
     pub usb_speed: Option<String>,
     pub simulated: bool,
+    /// The card is answered by Parson's kernel-ABI emulator: the hw driver
+    /// path ran, but there is no DAC hardware behind it.
+    pub kernel_emulator: bool,
 }
 
 /// Bitrate the stream is transcoded at, or `None` for the original bytes.
@@ -735,6 +738,8 @@ pub struct NativeOutputTarget<'a> {
     pub usb_speed: Option<&'a str>,
     /// Whether the driver is a simulated device without hardware.
     pub simulated: bool,
+    /// Whether the card's kernel side is Parson's kernel-ABI emulator.
+    pub kernel_emulator: bool,
     /// e.g. `soxr, very high quality`.
     pub resampler: &'a str,
     /// Volume leveling the listener turned on, applied by the server.
@@ -1145,7 +1150,12 @@ pub fn describe_native_leg(
     }
     if let Some(usb_id) = target.usb_id {
         explanation.push_str(&format!(
-            " The kernel reports it as USB device {usb_id}{}.",
+            " {} it as USB device {usb_id}{}.",
+            if target.kernel_emulator {
+                "Its /proc/asound entry reports"
+            } else {
+                "The kernel reports"
+            },
             target
                 .usb_speed
                 .map(|speed| format!(", {speed}"))
@@ -1160,6 +1170,8 @@ pub fn describe_native_leg(
         quality: Some(quality),
         explanation: if target.simulated {
             format!("{explanation} This is a simulated device: it consumes audio in real time without a sound card.")
+        } else if target.kernel_emulator {
+            format!("{explanation} {KERNEL_EMULATOR_NOTE}")
         } else {
             explanation
         },
@@ -1211,9 +1223,13 @@ pub fn describe_native_leg(
             usb_id: target.usb_id.map(str::to_string),
             usb_speed: target.usb_speed.map(str::to_string),
             simulated: target.simulated,
+            kernel_emulator: target.kernel_emulator,
         }),
     }
 }
+
+/// Said wherever an emulated card appears, so no run on it reads as a DAC.
+pub const KERNEL_EMULATOR_NOTE: &str = "This card's kernel side is Parson's kernel-ABI emulator, not a kernel driver: libasound's hw path, the driver's format negotiation and its /proc/asound reports run for real, but no DAC hardware is attached, so this proves the path rather than a particular DAC.";
 
 /// Adds what the operating system reports the hardware is running at, read
 /// while the track plays, as the last stage of a native path. When it
@@ -1253,6 +1269,10 @@ pub fn add_hardware_report(
         stream.channels
     );
     let who = match hardware.reporter {
+        HardwareReporter::Kernel if hardware.kernel_emulator => format!(
+            "Read through the kernel's ALSA interface ({}), answered here by Parson's kernel-ABI emulator rather than a kernel driver",
+            hardware.source
+        ),
         HardwareReporter::Kernel => format!("Read from the kernel driver ({})", hardware.source),
         HardwareReporter::Library => format!(
             "Read from libasound ({}), which lists the plugin chain it built and the setup its bottom negotiated",
@@ -1434,6 +1454,7 @@ mod tests {
             matches_stream: parson_output::procfs::params_match(&params, &stream),
             params,
             momentary_hz: None,
+            kernel_emulator: false,
         };
         add_hardware_report(&mut path, "DragonFly Red", &report, &stream);
         add_hardware_report(&mut path, "DragonFly Red", &report, &stream);
@@ -1460,6 +1481,55 @@ mod tests {
         add_hardware_report(&mut path, "DragonFly Red", &wrong, &stream);
         assert_eq!(path.quality, SignalQuality::HighQuality);
         assert_eq!(path.stages.last().unwrap().title, "Converted below Parson");
+    }
+
+    #[test]
+    fn an_emulated_card_is_never_presented_as_a_dac() {
+        let audio = flac(96_000, 24, 2);
+        let plan = native_plan(&audio, &usb_dac(), true);
+        let bench = NativeOutputTarget {
+            device_name: "Parson Bench DAC (kernel ABI emulator)",
+            mode_label: "ALSA hw:1,0 exclusive",
+            usb_id: Some("1209:0001"),
+            usb_speed: Some("high speed"),
+            kernel_emulator: true,
+            ..DAC
+        };
+        let mut path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &bench);
+        let output = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-output")
+            .unwrap();
+        assert!(output.explanation.ends_with(KERNEL_EMULATOR_NOTE));
+        assert!(path.output_device.as_ref().unwrap().kernel_emulator);
+        let stream = parson_output::StreamFormat {
+            sample_rate: 96_000,
+            sample_format: parson_output::SampleFormat::S24Packed,
+            channels: 2,
+        };
+        let params = parson_output::procfs::parse_hw_params(
+            "format: S24_3LE\nchannels: 2\nrate: 96000 (96000/1)\n",
+        )
+        .unwrap();
+        let report = parson_output::procfs::HardwareStatus {
+            source: "/proc/asound/BenchDAC/pcm0p/sub0/hw_params".into(),
+            reporter: parson_output::procfs::HardwareReporter::Kernel,
+            chain: None,
+            matches_stream: true,
+            params,
+            momentary_hz: Some(96_000),
+            kernel_emulator: true,
+        };
+        add_hardware_report(&mut path, bench.device_name, &report, &stream);
+        let stage = path.stages.last().unwrap();
+        assert_eq!(stage.title, "Confirmed by the driver");
+        assert!(
+            stage
+                .explanation
+                .contains("answered here by Parson's kernel-ABI emulator")
+        );
+        assert!(!stage.explanation.contains("Read from the kernel driver"));
     }
 
     #[test]
@@ -1491,6 +1561,7 @@ mod tests {
             matches_stream: true,
             chain: Some(clean),
             momentary_hz: None,
+            kernel_emulator: false,
         };
         add_hardware_report(&mut path, "Parson capture", &report, &stream);
         let stage = path.stages.last().unwrap();
@@ -1752,6 +1823,7 @@ mod tests {
         usb_id: None,
         usb_speed: None,
         simulated: false,
+        kernel_emulator: false,
         resampler: "soxr, very high quality",
         leveling: None,
         processing: None,

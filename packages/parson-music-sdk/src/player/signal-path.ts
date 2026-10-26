@@ -118,6 +118,11 @@ export interface SignalOutputDevice {
   /** e.g. `high speed`. */
   usb_speed: string | null;
   simulated: boolean;
+  /**
+   * The card's kernel side is Parson's kernel-ABI emulator: the hw driver
+   * path ran for real, but no DAC hardware is attached.
+   */
+  kernel_emulator?: boolean;
 }
 
 export type SignalPlatform = "web" | "desktop" | "ios" | "android";
