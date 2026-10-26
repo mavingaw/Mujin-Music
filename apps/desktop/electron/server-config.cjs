@@ -333,6 +333,9 @@ const COMMANDS = Object.freeze({
   server_choose: "any",
   server_connect: "any",
   server_use_local: "any",
+  // The background server on this computer (start/stop/launch at startup).
+  server_service: "any",
+  server_service_set: "any",
   select_music_folder: "local",
   show_track_in_file_manager: "local",
 });

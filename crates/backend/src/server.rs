@@ -217,7 +217,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos", "upnp", "audio_devices", "bridges", "airplay", "chromecast"],
     });
     if let (Ok(secret), Some(challenge)) = (
-        std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
+        settings::host_setting("PARSON_DESKTOP_INSTANCE_TOKEN").ok_or(()),
         request
             .headers()
             .get(DESKTOP_CHALLENGE_HEADER)

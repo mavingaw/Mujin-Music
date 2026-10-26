@@ -155,3 +155,41 @@ export function watchDesktopServer(
   if (typeof window === "undefined") return () => {};
   return window.__PARSON_ELECTRON__?.watchServer?.(callback) ?? (() => {});
 }
+
+/**
+ * The server's background service on this computer ("Use this computer"):
+ * the Windows tray host, a macOS LaunchAgent with a menu-bar item, or a
+ * systemd user service on Linux. It runs apart from the desktop window.
+ */
+export type DesktopServiceKind =
+  "windows-tray" | "launch-agent" | "systemd-user" | "xdg-autostart";
+export type DesktopServiceState = {
+  kind: DesktopServiceKind | null;
+  label?: string;
+  available: boolean;
+  installed?: boolean;
+  running?: boolean;
+  autostart?: boolean;
+};
+
+export async function desktopServiceState(): Promise<DesktopServiceState | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    return (
+      (await electronInvoke<DesktopServiceState>("server_service")) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function updateDesktopService(change: {
+  autostart?: boolean;
+  action?: "start" | "stop" | "restart";
+}): Promise<DesktopServiceState | null> {
+  if (typeof window === "undefined") return null;
+  return (
+    (await electronInvoke<DesktopServiceState>("server_service_set", change)) ??
+    null
+  );
+}

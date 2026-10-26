@@ -115,13 +115,17 @@ pub fn run(
     if instance.is_null() {
         return Err(std::io::Error::last_os_error().into());
     }
+    let background = std::env::args().any(|arg| arg == "--background");
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        open_url(default_url());
+        // Parson Desktop starts this host with `--background` every time it
+        // opens; only a person double-clicking it again wants a browser.
+        if !background {
+            open_url(default_url());
+        }
         unsafe { CloseHandle(instance) };
         return Ok(());
     }
 
-    let background = std::env::args().any(|arg| arg == "--background");
     MODEL
         .set(Mutex::new(Model {
             status: ServerStatus::Stopped,
