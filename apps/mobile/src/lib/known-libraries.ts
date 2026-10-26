@@ -5,9 +5,16 @@
  */
 export type KnownLibrary = {
   instanceId: string;
+  /** The home-network address. */
   origin: string;
   name: string;
   lastConnectedAt: number;
+  /**
+   * Addresses for away from home (Tailscale, the owner's own HTTPS address,
+   * a router port forward). Only ever learned from the signed-in server
+   * itself, so this phone's sign-in is only sent where that server said.
+   */
+  remoteOrigins?: string[];
 };
 
 export type LibraryRow = KnownLibrary & {
@@ -22,6 +29,7 @@ export type LibraryRow = KnownLibrary & {
 };
 
 const MAX_LIBRARIES = 12;
+const MAX_REMOTE_ORIGINS = 6;
 
 function validOrigin(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 512) return false;
@@ -50,7 +58,11 @@ function validLibrary(value: unknown): value is KnownLibrary {
     library.name.trim().length > 0 &&
     library.name.length <= 256 &&
     typeof library.lastConnectedAt === "number" &&
-    Number.isFinite(library.lastConnectedAt)
+    Number.isFinite(library.lastConnectedAt) &&
+    (library.remoteOrigins === undefined ||
+      (Array.isArray(library.remoteOrigins) &&
+        library.remoteOrigins.length <= MAX_REMOTE_ORIGINS &&
+        library.remoteOrigins.every(validOrigin)))
   );
 }
 
@@ -79,7 +91,20 @@ export function rememberLibrary(
   library: Omit<KnownLibrary, "lastConnectedAt">,
   now = Date.now(),
 ): KnownLibrary[] {
-  const next = { ...library, lastConnectedAt: now };
+  const existing = libraries.find(
+    (item) => item.instanceId === library.instanceId,
+  );
+  const remoteOrigins = (
+    library.remoteOrigins ??
+    existing?.remoteOrigins ??
+    []
+  ).filter((origin) => origin !== library.origin);
+  const next: KnownLibrary = {
+    ...library,
+    lastConnectedAt: now,
+    ...(remoteOrigins.length ? { remoteOrigins } : {}),
+  };
+  if (!remoteOrigins.length) delete next.remoteOrigins;
   if (!validLibrary(next)) return libraries;
   return [
     next,
@@ -167,4 +192,101 @@ export function libraryRowDetail(row: LibraryRow, now = Date.now()) {
     );
   }
   return parts.join(" · ");
+}
+
+/** The home address first, then the away-from-home addresses. */
+export function libraryRoutes(library: KnownLibrary): string[] {
+  return [...new Set([library.origin, ...(library.remoteOrigins ?? [])])];
+}
+
+/** True when `origin` is one of the library's away-from-home addresses. */
+export function isRemoteRoute(
+  library: KnownLibrary | undefined,
+  origin: string,
+) {
+  return Boolean(
+    library &&
+    origin !== library.origin &&
+    library.remoteOrigins?.includes(origin),
+  );
+}
+
+/**
+ * Whether this phone may send `instanceId`'s sign-in to `origin`: only the
+ * home address and the addresses the signed-in server handed out.
+ */
+export function isTrustedRoute(
+  libraries: KnownLibrary[],
+  instanceId: string,
+  origin: string,
+) {
+  const library = libraries.find((item) => item.instanceId === instanceId);
+  return Boolean(library && libraryRoutes(library).includes(origin));
+}
+
+/** Stores the away-from-home addresses the server reported. */
+export function setRemoteOrigins(
+  libraries: KnownLibrary[],
+  instanceId: string,
+  origins: string[],
+): KnownLibrary[] {
+  const index = libraries.findIndex((item) => item.instanceId === instanceId);
+  if (index < 0) return libraries;
+  const library = libraries[index]!;
+  const next = [...new Set(origins)]
+    .filter((origin) => validOrigin(origin) && origin !== library.origin)
+    .slice(0, MAX_REMOTE_ORIGINS);
+  const current = library.remoteOrigins ?? [];
+  if (
+    next.length === current.length &&
+    next.every((origin, position) => origin === current[position])
+  )
+    return libraries;
+  const updated: KnownLibrary = { ...library, remoteOrigins: next };
+  if (!next.length) delete updated.remoteOrigins;
+  return libraries.map((item, position) =>
+    position === index ? updated : item,
+  );
+}
+
+/** Marks a library as used now without changing its home address. */
+export function touchLibrary(
+  libraries: KnownLibrary[],
+  instanceId: string,
+  now = Date.now(),
+): KnownLibrary[] {
+  return libraries.map((library) =>
+    library.instanceId === instanceId
+      ? { ...library, lastConnectedAt: now }
+      : library,
+  );
+}
+
+export type RouteProbe<T> = (
+  origin: string,
+) => Promise<{ instanceId: string; manifest: T }>;
+
+/**
+ * Tries every route at once and returns the first one, in route order (home
+ * first), that answers as this library. Away from home the home address
+ * times out while Tailscale or the owner's address answers.
+ */
+export async function pickReachableRoute<T>(
+  routes: string[],
+  instanceId: string,
+  probe: RouteProbe<T>,
+): Promise<{ origin: string; manifest: T } | null> {
+  const results = await Promise.all(
+    routes.map(async (origin) => {
+      try {
+        const answer = await probe(origin);
+        return answer.instanceId === instanceId
+          ? { origin, manifest: answer.manifest }
+          : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return results.find((result) => result !== null) ?? null;
 }

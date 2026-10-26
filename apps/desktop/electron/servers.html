@@ -732,7 +732,7 @@
               <input
                 aria-label="Server address"
                 id="address"
-                placeholder="Address, e.g. 192.168.1.20 or music-nas.local:1993"
+                placeholder="Address: 192.168.1.20, music-nas.local or https://music.example.com"
                 spellcheck="false"
               />
               <button id="manual-connect" type="submit">Connect</button>
@@ -885,19 +885,24 @@
           return;
         }
         for (const row of rows) {
-          const online = row.nearby || row.online;
+          // One state per row: server-config decides `online`, and the
+          // connected row is never also "Offline".
+          const online = Boolean(row.online);
           const meta = el("div", { class: "meta" }, [
             el("span", { text: hostOf(row.origin) }),
             row.serverVersion
               ? el("span", { text: `v${row.serverVersion}` })
               : null,
             row.active
-              ? el("span", { class: "badge good", text: "Connected" })
+              ? el("span", {
+                  class: online ? "badge good" : "badge",
+                  text: online ? "Connected" : "Reconnecting…",
+                })
               : null,
             row.signedIn
               ? el("span", { class: "badge", text: "Signed in" })
               : null,
-            !online && row.saved
+            !online && row.saved && !row.active
               ? el("span", {
                   text: row.lastConnectedAt
                     ? `Offline · last used ${ago(row.lastConnectedAt)}`

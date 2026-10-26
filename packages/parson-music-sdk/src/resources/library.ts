@@ -103,6 +103,11 @@ export interface LibraryRefreshResult {
 
 export interface LibraryRoot {
   path: string;
+  /**
+   * False when the folder is missing on this server, for example after a
+   * backup from another computer was restored here. Older servers omit it.
+   */
+  available?: boolean;
 }
 
 export interface SetupStatus {
@@ -187,6 +192,32 @@ export async function getLibraryClassificationDiagnostics(
     { params: { offset, limit } },
   );
   return Array.isArray(response.data) ? response.data : [];
+}
+
+export interface RelocationReport {
+  /** Tracks found again in the new folder. */
+  matched_tracks: number;
+  /** Tracks of the old folder that are not in the new one. */
+  missing_tracks: number;
+  /** Playlist entries, favourites, history and edits moved to the new folder. */
+  moved_rows: number;
+}
+
+/**
+ * Points Parson at the new location of a music folder (for example after
+ * restoring a backup from another computer). Playlists, favourites, history
+ * and edits follow the tracks to the new folder; the old folder is removed.
+ */
+export async function relocateLibraryRoot(
+  from: string,
+  to: string,
+): Promise<RelocationReport> {
+  const response = await api.post<RelocationReport>(
+    "/library/roots/relocate",
+    { from, to },
+    { timeout: 30 * 60 * 1000 },
+  );
+  return response.data;
 }
 
 export async function removeLibraryRoot(path: string): Promise<LibraryRoot[]> {

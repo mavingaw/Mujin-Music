@@ -27,6 +27,11 @@ export type DesktopServerState = {
   name: string;
   origin: string;
   localAvailable: boolean;
+  /**
+   * True while this computer's own background server is running, even when
+   * this window is a remote for another server. Older desktop builds omit it.
+   */
+  localRunning?: boolean;
 };
 export type DesktopServerEvent = { type: "restarted" };
 

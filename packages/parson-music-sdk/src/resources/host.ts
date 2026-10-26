@@ -14,6 +14,15 @@ export type HostAddress = {
   kind: HostAddressKind;
 };
 
+/** An address for away from home (VPN, the owner's own URL, a port forward). */
+export type RemoteHostAddress = {
+  origin: string;
+  kind: "vpn" | "manual" | "router";
+  label: string;
+  /** Outcome of the server's last check of this address; null if unchecked. */
+  verified: boolean | null;
+};
+
 export type HostInfo = {
   instanceId: string;
   name: string;
@@ -27,13 +36,20 @@ export type HostInfo = {
   advertising: boolean;
   publicUrl: string | null;
   addresses: HostAddress[];
+  /** Addresses the phone app saves for when it is away from home. */
+  remote: RemoteHostAddress[];
 };
 
 export type ConnectLink = {
   origin: string;
   name: string | null;
   instanceId: string | null;
+  /** Addresses for away from home carried by the link. */
+  remote: string[];
 };
+
+const REMOTE_KINDS = new Set(["vpn", "manual", "router"]);
+const MAX_REMOTE_ADDRESSES = 6;
 
 const ADDRESS_KINDS = new Set<HostAddressKind>([
   "lan",
@@ -98,7 +114,40 @@ export function parseHostInfo(value: unknown): HostInfo | null {
     advertising: raw.advertising === true,
     publicUrl: httpOrigin(raw.publicUrl),
     addresses,
+    remote: Array.isArray(raw.remote)
+      ? raw.remote
+          .flatMap((entry): RemoteHostAddress[] => {
+            if (!entry || typeof entry !== "object") return [];
+            const remote = entry as Record<string, unknown>;
+            const origin = httpOrigin(remote.origin);
+            if (!origin || !REMOTE_KINDS.has(String(remote.kind))) return [];
+            return [
+              {
+                origin,
+                kind: remote.kind as RemoteHostAddress["kind"],
+                label: boundedText(remote.label, 64) ?? "Away from home",
+                verified:
+                  typeof remote.verified === "boolean" ? remote.verified : null,
+              },
+            ];
+          })
+          .slice(0, MAX_REMOTE_ADDRESSES)
+      : [],
   };
+}
+
+/**
+ * Addresses worth saving for away from home: everything except ones the
+ * server checked and found unreachable.
+ */
+export function usableRemoteOrigins(info: Pick<HostInfo, "remote">): string[] {
+  return [
+    ...new Set(
+      info.remote
+        .filter((address) => address.verified !== false)
+        .map((address) => address.origin),
+    ),
+  ];
 }
 
 export async function getHostInfo(): Promise<HostInfo | null> {
@@ -137,7 +186,8 @@ export function hostAddressLabel(address: HostAddress): string {
  * which works on any phone without installing anything.
  */
 export function connectLink(
-  info: Pick<HostInfo, "instanceId" | "name">,
+  info: Pick<HostInfo, "instanceId" | "name"> &
+    Partial<Pick<HostInfo, "remote">>,
   origin: string,
   target: "app" | "browser",
 ): string {
@@ -149,6 +199,12 @@ export function connectLink(
     name: info.name,
     id: info.instanceId,
   });
+  // The phone also learns how to reach the library away from home.
+  for (const remote of info.remote
+    ? usableRemoteOrigins({ remote: info.remote })
+    : []) {
+    if (remote !== normalized) params.append("remote", remote);
+  }
   return `parson://connect?${params.toString()}`;
 }
 
@@ -171,6 +227,16 @@ export function parseConnectLink(value: string): ConnectLink | null {
     origin,
     name: boundedText(url.searchParams.get("name")),
     instanceId: boundedText(url.searchParams.get("id")),
+    remote: [
+      ...new Set(
+        url.searchParams
+          .getAll("remote")
+          .map(httpOrigin)
+          .filter(
+            (value): value is string => Boolean(value) && value !== origin,
+          ),
+      ),
+    ].slice(0, MAX_REMOTE_ADDRESSES),
   };
 }
 

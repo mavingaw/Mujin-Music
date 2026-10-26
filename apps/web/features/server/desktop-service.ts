@@ -43,3 +43,17 @@ export function serviceSummary(
     autostartLabel: mechanism.autostart,
   };
 }
+
+/**
+ * What the role card says when this app is a remote. It never claims that no
+ * server runs here while this computer's own background server is running.
+ */
+export function remoteRoleCopy(state: {
+  name: string;
+  localRunning?: boolean;
+}): string {
+  if (state.localRunning) {
+    return `Your library, queue and zones come from ${state.name}. This computer also runs its own Parson server in the background for other devices.`;
+  }
+  return "No server runs on this computer. Your library, queue and zones live on that server and stay in sync with every other app.";
+}

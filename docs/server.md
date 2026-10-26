@@ -93,12 +93,121 @@ The Android app also finds servers on the same Wi-Fi by itself. It keeps a
 list of your libraries in Settings → Devices, so moving between, say, a home
 NAS and a studio computer takes one tap.
 
+## Away from home
+
+Settings → Connections → **Away from home** (administrators) sets up how the
+library is reached outside the home network. The Parson phone app learns these
+addresses from the server after it signs in at home, and switches to them by
+itself when the home address stops answering. It goes back to the home
+address the next time it connects at home. Your sign-in is only ever sent to
+addresses the signed-in server handed out.
+
+There are three ways in. The first is the best for most people:
+
+1. **Tailscale or another VPN (recommended).** Install
+   [Tailscale](https://tailscale.com/download) on the server and on your phone,
+   and sign both in to the same tailnet. Nothing is opened to the internet and
+   the connection is encrypted. Parson sees the VPN address (100.x.y.z) and,
+   when the `tailscale` command is available, the machine's MagicDNS name, and
+   offers both to the phone. WireGuard and other VPNs work the same way.
+2. **My address.** Use this when you already run a reverse proxy with HTTPS
+   (Caddy, nginx, Traefik, Synology's reverse proxy) or have a dynamic-DNS
+   name. Enter the address, for example `https://music.example.com`. With
+   Caddy the whole configuration is:
+
+   ```
+   music.example.com {
+     reverse_proxy 127.0.0.1:1993
+   }
+   ```
+
+   Also set `PARSON_PUBLIC_URL=https://music.example.com` on the server, so
+   that browser sign-ins over that address use secure cookies.
+
+3. **Router.** Parson asks your router to forward a port to the server with
+   UPnP (Internet Gateway Device v1/v2, `WANIPConnection`/`WANPPPConnection`).
+   It renews the forward every 30 minutes with a one-hour lease, so the
+   forward lapses on its own if the server stops. If the router only allows
+   permanent forwards, Parson removes the forward when you switch this off.
+   This uses plain HTTP, so sign-ins and music cross the internet
+   unencrypted. Use it to get going, and use Tailscale or your own HTTPS
+   address every day. If the router reports a shared or private public
+   address (carrier-grade NAT, `100.64.0.0/10`, or a second router in front),
+   Parson says that a forward can't work there and doesn't offer it to phones.
+
+**Check connection** connects to every address and confirms that it reaches
+_this_ server. It doesn't just accept anything that answers: a different
+Parson server, a router login page or a misconfigured proxy each fail with a
+reason. The check runs from the server, so a router port forward is tested
+through the router's own public address. Some routers can't loop a
+connection back to themselves. If that check fails, open the Parson app on
+mobile data: **Settings → Devices → Check from here** runs the same check from
+the phone.
+
+What has been tested: the UPnP client was run against a protocol-level fake
+router. The fake answers SSDP and serves a real IGD description and the
+`AddPortMapping`/`GetExternalIPAddress`/`DeletePortMapping` SOAP actions,
+including the "permanent leases only" (725) and "conflict" (718) faults. The
+connectivity check was run against live HTTP servers. It has not been run
+against a physical consumer router or over a real Tailscale tailnet.
+
+## Moving to a new server and backups
+
+A backup holds the whole library state: accounts, playlists, favourites,
+listening history, metadata edits, artwork and the library index. It does not
+hold your music files or session secrets.
+
+**Scheduled backups.** Settings → Data → Scheduled backups. Choose daily,
+weekly or off, and optionally a folder on another drive or a mounted NAS share
+(for example `/mnt/nas/parson-backups` or `\\nas\backups`). Every backup is
+written to the server's own `Backups` folder first and then copied to that
+folder under a temporary name, so an interrupted copy never looks like a
+backup. Parson keeps the newest N copies there. The page shows when the last
+copy was made, or why it failed (for example, the share is not mounted).
+
+**Moving the library** (to a NAS, or because the machine is replaced):
+
+1. On the old server: Settings → Data → **Back up now**. In Parson Desktop,
+   **Use another server** offers this before you switch.
+2. On the new server: when it asks for the first account, choose **Moving
+   from another Parson server?** and pick the backup. Parson looks in its own
+   backup folder, in the scheduled backup folder, in `/backups` inside Docker,
+   and in any folder you type. You can also upload the file.
+3. Leave **Take over the old library** on (the default). The new server then
+   answers with the old library's identity, so phones and computers that knew
+   the old server find this one as the same library at its new address. They
+   ask you to sign in once, because a backup never carries sign-in sessions.
+   Switch the old server off first.
+4. Parson checks the backup, restarts itself to apply it, and keeps the data
+   it replaced in `Recovery/before-restore-…` as a rollback copy. It
+   re-executes itself in place, so systemd, launchd, Docker, the Windows tray
+   and Parson Desktop's background service all keep running it. If the
+   server runs in a terminal without a supervisor, it starts again in the
+   same terminal.
+5. If the music lives somewhere else on the new server, Settings → Library
+   marks the old folder **Not found on this server**. Choose **Locate…** and
+   pick the new folder. Parson indexes it, finds each track at the same place
+   inside the folder, moves playlists, favourites, history, preferences and
+   metadata edits over to it, and only then removes the old folder. It
+   reports any tracks that were not in the new folder.
+
+In Docker, mount a folder for backups so that it can be both a scheduled
+destination and a place to restore from:
+
+```yaml
+volumes:
+  - "/path/to/config:/Parson"
+  - "/path/to/music:/music:ro"
+  - "/path/to/backups:/backups"
+```
+
 ## Ports and firewalls
 
 | Port | Protocol | Purpose                                               |
 | ---- | -------- | ----------------------------------------------------- |
 | 1993 | TCP      | The Parson app and API (change it with `PARSON_PORT`) |
 | 5353 | UDP      | mDNS: remotes find the server automatically           |
+| 1900 | UDP      | SSDP: only when Router remote access is on (outgoing) |
 
 Remotes need to reach TCP 1993 on the server. If discovery is blocked (some
 guest networks, VLANs, Docker bridge networking), connect by address.

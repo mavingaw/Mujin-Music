@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSession } from "@/features/account/session-provider";
 import FileBrowser from "@/features/setup/file-browser";
+import RestoreFlow from "@/features/migration/restore-flow";
 import { setupScreenFor, type SetupScreen } from "@/features/setup/setup-state";
 import {
   getSetupStatus,
@@ -14,7 +15,7 @@ import {
   type SetupStatus,
   validPasswordLength,
 } from "@parson/music-sdk";
-import { Folder, Loader2 } from "lucide-react";
+import { ArchiveRestore, Folder, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -26,7 +27,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 
-type View = SetupScreen | "loading" | "error";
+type View = SetupScreen | "loading" | "error" | "restore";
 
 export default function SetupFlow() {
   const router = useRouter();
@@ -171,6 +172,30 @@ export default function SetupFlow() {
     );
   }
 
+  if (view === "restore") {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-[640px] flex-col justify-center px-5 py-16 sm:px-7">
+        <p className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
+          Moving to a new server
+        </p>
+        <h1 className="mt-3 text-3xl font-semibold">Restore a backup</h1>
+        <p className="mt-3 max-w-lg text-sm leading-6 text-zinc-400">
+          Bring your library over from the old server: back it up there
+          (Settings → Data), then pick that backup here. Parson finds backups in
+          its own folder, in the scheduled backup folder and in any folder or
+          mounted NAS share you type.
+        </p>
+        <div className="mt-8">
+          <RestoreFlow
+            mode="setup"
+            onCancel={() => setView("account")}
+            onRestored={() => router.replace("/login")}
+          />
+        </div>
+      </main>
+    );
+  }
+
   if (view === "account") {
     return (
       <SetupFrame
@@ -211,6 +236,23 @@ export default function SetupFlow() {
           >
             {creatingAccount ? "Creating account…" : "Create account"}
           </Button>
+          <div className="mt-4 border-t border-white/10 pt-5">
+            <button
+              className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition-colors hover:bg-white/[0.06]"
+              onClick={() => setView("restore")}
+              type="button"
+            >
+              <ArchiveRestore className="h-5 w-5 shrink-0 text-zinc-300" />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-white">
+                  Moving from another Parson server?
+                </span>
+                <span className="block text-xs text-zinc-500">
+                  Restore a backup: accounts, playlists and history come along.
+                </span>
+              </span>
+            </button>
+          </div>
           <Link
             className="text-center text-sm text-zinc-500 hover:text-white"
             href="/connect"

@@ -2,6 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   changeUsername as changeUsernameRequest,
   checkDevicePairing,
+  getHostInfo,
+  usableRemoteOrigins,
   getSetupStatus,
   indexSetupLibrary,
   isValid,
@@ -46,8 +48,14 @@ import {
 } from "@/lib/secure-storage";
 import {
   forgetLibrary as forgetKnownLibrary,
+  isRemoteRoute,
+  isTrustedRoute,
+  libraryRoutes,
   parseKnownLibraries,
+  pickReachableRoute,
   rememberLibrary,
+  setRemoteOrigins,
+  touchLibrary,
   type KnownLibrary,
 } from "@/lib/known-libraries";
 import {
@@ -88,6 +96,11 @@ type SessionContextValue = {
   savedAccounts: { current: boolean; key: string; username: string }[];
   /** Every library this phone has used, most recent first. */
   knownLibraries: KnownLibrary[];
+  /**
+   * `home` on the library's home-network address, `away` on one of its
+   * away-from-home addresses (VPN, the owner's address, a port forward).
+   */
+  connectionRoute: "home" | "away" | null;
   /** Instance ids of every saved account (one entry per account). */
   accountLibraryIds: string[];
   phase: SessionPhase;
@@ -120,9 +133,12 @@ type SessionContextValue = {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-async function readManifest(origin: string): Promise<DiscoveryManifest> {
+async function readManifest(
+  origin: string,
+  timeoutMs = 8_000,
+): Promise<DiscoveryManifest> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${origin}/.well-known/parson`, {
       headers: { Accept: "application/json" },
@@ -319,7 +335,26 @@ export function SessionProvider({ children }: PropsWithChildren) {
         }
         const setup = await getSetupStatus(`${nextOrigin}/api/v1`);
         if (currentGeneration !== generation.current) return false;
-        if (serverIdentityChanged(previousServer, nextIdentity)) {
+        // Moving between a library's own addresses (home network and the
+        // away-from-home addresses that server handed out) keeps the
+        // sign-in; any other change of address signs out.
+        const sameLibraryRoute =
+          previousServer.instanceId === manifest.instanceId &&
+          isTrustedRoute(
+            knownLibrariesRef.current,
+            manifest.instanceId,
+            nextOrigin,
+          ) &&
+          (!previousServer.origin ||
+            isTrustedRoute(
+              knownLibrariesRef.current,
+              manifest.instanceId,
+              previousServer.origin,
+            ));
+        if (
+          serverIdentityChanged(previousServer, nextIdentity) &&
+          !sameLibraryRoute
+        ) {
           await clearAuthentication();
           if (currentGeneration !== generation.current) return false;
         }
@@ -335,12 +370,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setSecureItem(INSTANCE_KEY, manifest.instanceId),
           setSecureItem(LIBRARY_KEY, manifest.name),
         ]);
+        const known = knownLibrariesRef.current.find(
+          (library) => library.instanceId === manifest.instanceId,
+        );
         replaceKnownLibraries(
-          rememberLibrary(knownLibrariesRef.current, {
-            instanceId: manifest.instanceId,
-            origin: nextOrigin,
-            name: manifest.name,
-          }),
+          isRemoteRoute(known, nextOrigin)
+            ? touchLibrary(knownLibrariesRef.current, manifest.instanceId)
+            : rememberLibrary(knownLibrariesRef.current, {
+                instanceId: manifest.instanceId,
+                origin: nextOrigin,
+                name: manifest.name,
+              }),
         );
         await resolveSetup(setup, currentGeneration);
         return true;
@@ -360,10 +400,37 @@ export function SessionProvider({ children }: PropsWithChildren) {
     [clearAuthentication, replaceKnownLibraries, resolveSetup],
   );
 
+  /**
+   * Connects to a saved library by whichever of its addresses answers: the
+   * home address at home, Tailscale or the owner's address away from home.
+   */
+  const connectBest = useCallback(
+    async (target: string) => {
+      const library = knownLibrariesRef.current.find((item) =>
+        libraryRoutes(item).includes(target),
+      );
+      if (!library?.remoteOrigins?.length) return connect(target);
+      const routes = [
+        target,
+        ...libraryRoutes(library).filter((route) => route !== target),
+      ];
+      const route = await pickReachableRoute(
+        routes,
+        library.instanceId,
+        async (candidate) => {
+          const manifest = await readManifest(candidate, 4_000);
+          return { instanceId: manifest.instanceId, manifest };
+        },
+      );
+      return route ? connect(route.origin, route.manifest) : connect(target);
+    },
+    [connect],
+  );
+
   const retry = useCallback(async () => {
-    if (origin) await connect(origin);
+    if (origin) await connectBest(origin);
     else setPhase("discovering");
-  }, [connect, origin]);
+  }, [connectBest, origin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -420,7 +487,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       if (cancelled) return;
       if (downloadedRecords().length) {
         if (
-          !(await connect(savedOrigin)) &&
+          !(await connectBest(savedOrigin)) &&
           !cancelled &&
           !pendingServerReplacement.current
         )
@@ -428,7 +495,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         return;
       }
       for (let attempt = 0; attempt < 8 && !cancelled; attempt += 1) {
-        if (await connect(savedOrigin)) return;
+        if (await connectBest(savedOrigin)) return;
         if (pendingServerReplacement.current) return;
         if (attempt < 7)
           await new Promise((resolve) => setTimeout(resolve, 750));
@@ -437,7 +504,31 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
     };
-  }, [connect]);
+  }, [connectBest]);
+
+  // Once signed in, learn this library's away-from-home addresses from the
+  // server itself (an authenticated answer), so the app can switch to them
+  // when the home network is out of reach.
+  useEffect(() => {
+    if (Platform.OS === "web" || phase !== "ready" || !instanceId) return;
+    let active = true;
+    void getHostInfo()
+      .then((info) => {
+        if (!active || !info || info.instanceId !== instanceId) return;
+        const next = setRemoteOrigins(
+          knownLibrariesRef.current,
+          instanceId,
+          usableRemoteOrigins(info),
+        );
+        if (next !== knownLibrariesRef.current) replaceKnownLibraries(next);
+      })
+      .catch(() => {
+        // Older servers have no host endpoint; nothing to learn.
+      });
+    return () => {
+      active = false;
+    };
+  }, [instanceId, phase, replaceKnownLibraries]);
 
   useEffect(() => {
     if (
@@ -888,12 +979,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const switchLibrary = useCallback(
     async (target: string) => {
       if (userOperationInFlight.current) return false;
-      if (!(await connect(target))) return false;
+      if (!(await connectBest(target))) return false;
       const identity = serverIdentity.current;
       const account = storedAccountsRef.current.find(
         (item) =>
           item.instanceId === identity.instanceId &&
-          item.origin === identity.origin,
+          (item.origin === identity.origin ||
+            (identity.instanceId !== null &&
+              isTrustedRoute(
+                knownLibrariesRef.current,
+                identity.instanceId,
+                item.origin,
+              ))),
       );
       if (!account) return true;
       const expectedGeneration = generation.current;
@@ -923,7 +1020,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         userOperationInFlight.current = false;
       }
     },
-    [connect, queryClient, storeNativeAuthentication],
+    [connectBest, queryClient, storeNativeAuthentication],
   );
 
   const forgetLibrary = useCallback(
@@ -951,7 +1048,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
       savedAccounts: storedAccounts
         .filter(
           (account) =>
-            account.instanceId === instanceId && account.origin === origin,
+            account.instanceId === instanceId &&
+            (account.origin === origin ||
+              isTrustedRoute(knownLibraries, instanceId, account.origin)),
         )
         .map((account) => ({
           current: account.sub === claims?.sub,
@@ -959,6 +1058,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
           username: account.username,
         })),
       knownLibraries,
+      connectionRoute:
+        origin && instanceId
+          ? isRemoteRoute(
+              knownLibraries.find(
+                (library) => library.instanceId === instanceId,
+              ),
+              origin,
+            )
+            ? "away"
+            : "home"
+          : null,
       accountLibraryIds: storedAccounts.map((account) => account.instanceId),
       phase,
       setupStatus,

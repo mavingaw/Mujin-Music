@@ -43,6 +43,7 @@ const {
   startupPlan,
   useLocalServer,
   useRemoteServer,
+  isThisComputer,
 } = require("./server-config.cjs");
 const { createServerMonitor } = require("./server-monitor.cjs");
 const {
@@ -684,15 +685,20 @@ async function connectRemote(
     return { ok: false, message: probeMessage(result, origin) };
   }
   const manifest = result.manifest;
-  if (
-    serverSettings.localInstanceId &&
-    manifest.instanceId === serverSettings.localInstanceId &&
-    serverMode === "local"
-  ) {
+  if (isThisComputer(manifest.instanceId, serverSettings.localInstanceId)) {
     // This is the server on this computer, reached by its network address:
-    // stay on it instead of becoming a remote of ourselves.
-    await loadRemoteApp();
-    return { ok: true };
+    // use it as "this computer" instead of becoming a remote of ourselves
+    // (which would also misreport that no server runs here).
+    if (serverMode === "local") {
+      await loadRemoteApp();
+      return { ok: true };
+    }
+    if (localServerAvailable()) {
+      const ok = await startLocal({ persist });
+      return ok
+        ? { ok }
+        : { ok, message: "This computer's server could not start." };
+    }
   }
   if (
     !trustNewIdentity &&
@@ -749,6 +755,12 @@ function currentRows() {
     config: serverSettings,
     discovered,
     localInstanceId: serverSettings.localInstanceId,
+    activeId:
+      serverMode === "remote" && currentRemote
+        ? currentRemote.instanceId || currentRemote.id
+        : null,
+    // The window is connected unless the monitor lost the server.
+    activeOnline: chooserView !== "reconnecting" && !reconnectState,
   });
 }
 
@@ -779,7 +791,6 @@ async function serversState() {
     rows: rows.map((row) => ({
       ...row,
       signedIn: Boolean(row.instanceId && signedIn.has(row.instanceId)),
-      active: serverMode === "remote" && currentRemote?.origin === row.origin,
     })),
   };
 }
@@ -874,12 +885,9 @@ async function handleServersAction(action, args = {}) {
         (candidate) => candidate.id === args.id,
       );
       if (server) {
+        // A forgotten server that is still on the network stays listed
+        // (signed out), so it can be connected to again right away.
         updateServerSettings(forgetServer(serverSettings, server.id));
-        discovered = discovered.filter(
-          (entry) =>
-            entry.instanceId !== server.instanceId &&
-            entry.origin !== server.origin,
-        );
         // Sign out of that server, wherever it was reached.
         try {
           if (server.instanceId) await vault?.forget(server.instanceId);
@@ -997,6 +1005,12 @@ function installDesktopBridge() {
               : "This computer",
           origin: appOrigin,
           localAvailable: localServerAvailable(),
+          // Whether this computer's own background server is running, so a
+          // remote-mode window never claims that no server runs here.
+          localRunning:
+            serverMode === "local" ||
+            (localServerAvailable() &&
+              (await probeBackend()).kind === "trusted"),
         };
       case "server_service":
         return (await localService()).status();
