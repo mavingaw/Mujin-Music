@@ -20,7 +20,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import getBaseURL from "@/lib/api/server-url";
 import { defaultCover } from "@/lib/images/default-cover";
 import {
@@ -589,15 +589,15 @@ function SongsView({
 }
 
 function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
-  const player = usePlayer();
-  const active = player.song.id === song.id;
+  const playback = useZonePlayback();
+  const active = playback.currentSongId === song.id;
   const artwork = song.coverPath
     ? `${getBaseURL()}/media/images/${encodeURIComponent(song.coverPath)}`
     : defaultCover;
 
   const play = () => {
     if (active) {
-      player.togglePlayPause();
+      void playback.togglePlayPause();
       return;
     }
     const artist = { id: song.artistId, name: song.artistName };
@@ -613,10 +613,7 @@ function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
       path: song.path,
       duration: song.durationSeconds,
     };
-    player.setQueue([{ song: track, artist, album }]);
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(track, artist, album);
-    player.playAudioSource();
+    void playback.playQueue([{ song: track, artist, album }]);
   };
 
   return (
@@ -631,12 +628,12 @@ function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
     >
       <div className="group grid grid-cols-[2rem_3rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-white/6 px-3 py-2 last:border-0 hover:bg-white/[0.035] sm:grid-cols-[2rem_3rem_minmax(0,1fr)_minmax(8rem,0.6fr)_auto] sm:gap-3">
         <button
-          aria-label={`${active && player.isPlaying ? "Pause" : "Play"} ${song.name}`}
+          aria-label={`${active && playback.isPlaying ? "Pause" : "Play"} ${song.name}`}
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-500 hover:bg-white/10 hover:text-white"
           onClick={play}
           type="button"
         >
-          {active && player.isPlaying ? (
+          {active && playback.isPlaying ? (
             <Pause className="h-4 w-4 fill-current text-white" />
           ) : (
             <>

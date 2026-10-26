@@ -373,6 +373,8 @@ async function startBackend() {
         ...process.env,
         PARSON_BIND_ADDRESS: "0.0.0.0",
         PARSON_DESKTOP_INSTANCE_TOKEN: backendInstanceKey,
+        // This computer's audio devices (USB DACs, outputs) become zones.
+        PARSON_LOCAL_AUDIO: process.env.PARSON_LOCAL_AUDIO || "on",
         PARSON_PORT: String(backendPort),
         PARSON_PUBLIC_URL: backendOrigin,
       },

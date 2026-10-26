@@ -2,6 +2,7 @@
 
 import { ReactNode, Suspense, useState } from "react";
 import { PlayerProvider } from "@/features/player/player-context";
+import { ZonesProvider } from "@/features/player/zones/zones-provider";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import TitleMetadata from "@/components/app/title-metadata";
 import { getLibraryUnavailable, isApiError } from "@parson/music-sdk";
@@ -35,10 +36,12 @@ export default function AppProviders({ children }: AppProvidersProps) {
   return (
     <QueryClientProvider client={queryClient}>
       <PlayerProvider>
-        <Suspense>
-          <TitleMetadata />
-        </Suspense>
-        {children}
+        <ZonesProvider>
+          <Suspense>
+            <TitleMetadata />
+          </Suspense>
+          {children}
+        </ZonesProvider>
       </PlayerProvider>
     </QueryClientProvider>
   );

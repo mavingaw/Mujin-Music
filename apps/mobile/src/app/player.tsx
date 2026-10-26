@@ -64,6 +64,7 @@ import {
   usePlayerPosition,
   type AudioPreset,
 } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   downloadSong,
   isSongDownloaded,
@@ -86,6 +87,7 @@ import { ServerOutputs } from "@/components/server-outputs";
 import { dspAvailable } from "@/lib/signal-path";
 import { useSignalPath } from "@/hooks/use-signal-path";
 import type { SignalPath } from "@parson/music-sdk";
+import { ZoneButton } from "@/components/zone-sheet";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -337,6 +339,9 @@ function NowPlayingPanel({
       <View style={styles.panelButtons}>
         <View style={styles.castButton}>
           <CastOutputButton />
+        </View>
+        <View style={styles.castButton}>
+          <ZoneButton />
         </View>
         <Pressable
           {...immediatePressFeedback}
@@ -662,6 +667,7 @@ function PlayerDrawers({
   onSoundClose: () => void;
   online: boolean;
 }) {
+  const playback = useZonePlayback();
   const [playlistPicker, setPlaylistPicker] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(false);
@@ -676,7 +682,7 @@ function PlayerDrawers({
           icon={ListPlus}
           label="Play next"
           onPress={() => {
-            player.addNext(song);
+            playback.addNext(song);
             onActionsClose();
           }}
         />
@@ -684,7 +690,7 @@ function PlayerDrawers({
           icon={ListEnd}
           label="Add to queue"
           onPress={() => {
-            player.addToQueue([song]);
+            playback.addToQueue([song]);
             onActionsClose();
           }}
         />

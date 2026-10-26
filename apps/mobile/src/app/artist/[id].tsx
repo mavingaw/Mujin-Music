@@ -24,7 +24,7 @@ import { AlbumActions } from "@/components/album-actions";
 import { BannedMark, useRadioBans } from "@/components/radio-bans";
 import { songBanned } from "@/lib/radio-queue";
 import { palette } from "@/constants/colors";
-import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   immediateBorderlessPressFeedback,
   immediatePressFeedback,
@@ -33,7 +33,7 @@ import {
 export default function ArtistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const bans = useRadioBans();
   const [selected, setSelected] = useState<Album | null>(null);
   const artist = useQuery({
@@ -168,7 +168,7 @@ export default function ArtistScreen() {
                     const allowed = songs.filter(
                       (song) => !songBanned(bans.index, song),
                     );
-                    player.playShuffled(allowed.length ? allowed : songs);
+                    playback.playShuffled(allowed.length ? allowed : songs);
                   }}
                 >
                   <Shuffle color="white" size={22} />
@@ -178,7 +178,7 @@ export default function ArtistScreen() {
                   accessibilityLabel={`Play ${data.name}`}
                   accessibilityRole="button"
                   style={styles.play}
-                  onPress={() => songs[0] && player.playSong(songs[0], songs)}
+                  onPress={() => songs[0] && playback.playSong(songs[0], songs)}
                 >
                   <Play color="black" fill="black" size={27} />
                 </Pressable>

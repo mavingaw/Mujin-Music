@@ -13,6 +13,8 @@ pub mod http;
 pub mod library;
 #[cfg(feature = "server")]
 pub mod native_output;
+#[cfg(feature = "server")]
+pub mod outputs;
 pub mod persistence;
 mod playlist_rules;
 pub mod product;
@@ -22,4 +24,8 @@ pub mod recommendation;
 pub mod server;
 pub mod settings;
 pub mod signal_path;
+#[cfg(feature = "server")]
+pub mod sonos;
 pub mod startup;
+#[cfg(feature = "server")]
+pub mod zones;

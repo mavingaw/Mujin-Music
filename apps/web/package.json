@@ -7,7 +7,8 @@
     "dev": "bun --bun next dev --webpack",
     "type-check": "node -e \"require('fs').rmSync('.next/types',{recursive:true,force:true})\" && bun --bun next typegen && bun --bun tsc --pretty --noEmit",
     "build": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && bun --bun next build --webpack",
-    "start": "bunx serve out"
+    "start": "bunx serve out",
+    "e2e:zones": "node e2e/zone-library-play.e2e.cjs"
   },
   "dependencies": {
     "@parson/music-sdk": "*",

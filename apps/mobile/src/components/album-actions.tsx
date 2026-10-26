@@ -33,7 +33,7 @@ import {
   removeDownloads,
   useDownloadsRevision,
 } from "@/lib/downloads";
-import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { PlaylistPicker } from "@/components/playlist-picker";
 import { useSession } from "@/providers/session-provider";
 import { palette } from "@/constants/colors";
@@ -60,7 +60,7 @@ export function AlbumActions({
   showArtist?: boolean;
 }) {
   const router = useRouter();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const session = useSession();
   const client = useQueryClient();
   const [pickingPlaylist, setPickingPlaylist] = useState(false);
@@ -165,7 +165,7 @@ export function AlbumActions({
             void load()
               .then((album) => {
                 if (album.songs[0])
-                  player.playSong(album.songs[0], album.songs);
+                  playback.playSong(album.songs[0], album.songs);
                 onClose();
               })
               .catch(() => setOperationError("Could not load this album."));
@@ -178,7 +178,7 @@ export function AlbumActions({
             setOperationError("");
             void load()
               .then((album) => {
-                player.playShuffled(album.songs);
+                playback.playShuffled(album.songs);
                 onClose();
               })
               .catch(() => setOperationError("Could not load this album."));
@@ -201,7 +201,7 @@ export function AlbumActions({
             setOperationError("");
             void load()
               .then((album) => {
-                player.addToQueue(album.songs);
+                playback.addToQueue(album.songs);
                 onClose();
               })
               .catch(() => setOperationError("Could not load this album."));
