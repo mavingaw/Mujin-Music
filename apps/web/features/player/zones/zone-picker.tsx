@@ -435,6 +435,7 @@ function ZoneRow({
         ) : null}
         <button
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          data-zone-select={zone.id}
           disabled={grouping}
           onClick={onSelect}
           type="button"

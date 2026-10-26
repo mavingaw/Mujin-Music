@@ -61,6 +61,7 @@ import {
   usePlayerPosition,
   type AudioPreset,
 } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   downloadSong,
   isSongDownloaded,
@@ -609,6 +610,7 @@ function PlayerDrawers({
   onSoundClose: () => void;
   online: boolean;
 }) {
+  const playback = useZonePlayback();
   const [playlistPicker, setPlaylistPicker] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(false);
@@ -623,7 +625,7 @@ function PlayerDrawers({
           icon={ListPlus}
           label="Play next"
           onPress={() => {
-            player.addNext(song);
+            playback.addNext(song);
             onActionsClose();
           }}
         />
@@ -631,7 +633,7 @@ function PlayerDrawers({
           icon={ListEnd}
           label="Add to queue"
           onPress={() => {
-            player.addToQueue([song]);
+            playback.addToQueue([song]);
             onActionsClose();
           }}
         />

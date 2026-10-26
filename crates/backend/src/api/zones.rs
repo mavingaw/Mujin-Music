@@ -282,6 +282,7 @@ fn cast_command(
         ZoneCommand::MoveQueueItem { .. }
         | ZoneCommand::RemoveQueueItem { .. }
         | ZoneCommand::ClearUpcoming
+        | ZoneCommand::AddToQueue { .. }
         | ZoneCommand::SetRepeat { .. }
         | ZoneCommand::SetShuffle { .. } => {
             // The phone that started the cast owns the Chromecast queue.
@@ -811,6 +812,7 @@ async fn send_command(
                 | ZoneCommand::MoveQueueItem { .. }
                 | ZoneCommand::RemoveQueueItem { .. }
                 | ZoneCommand::ClearUpcoming
+                | ZoneCommand::AddToQueue { .. }
                 | ZoneCommand::SetShuffle { .. }
         ) {
             library_cache(&lifecycle).await

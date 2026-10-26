@@ -7,7 +7,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { getArtistInfo } from "@parson/music-sdk";
 import { Play, UserRound } from "lucide-react";
 import Link from "next/link";
@@ -20,7 +20,7 @@ export default function ArtistMenu({
   artistId: string;
   children: React.ReactNode;
 }) {
-  const player = usePlayer();
+  const playback = useZonePlayback();
 
   const play = async () => {
     try {
@@ -37,14 +37,10 @@ export default function ArtistMenu({
           })
           .map((song) => ({ song, album, artist })),
       );
-      const first = queue[0];
-      if (!first) {
+      if (!queue.length) {
         return;
       }
-      player.setQueue(queue);
-      player.setCurrentSongIndex(0);
-      player.setSongCallback(first.song, artist, first.album);
-      player.playAudioSource();
+      await playback.playQueue(queue);
     } catch {
       toast("Could not play this artist.");
     }

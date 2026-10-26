@@ -22,7 +22,7 @@ import { Artwork } from "@/components/artwork";
 import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { palette } from "@/constants/colors";
-import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   immediateBorderlessPressFeedback,
   immediatePressFeedback,
@@ -31,7 +31,7 @@ import {
 export default function ArtistScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const [selected, setSelected] = useState<Album | null>(null);
   const artist = useQuery({
     queryKey: ["artist", id],
@@ -156,7 +156,7 @@ export default function ArtistScreen() {
                   accessibilityLabel={`Shuffle ${data.name}`}
                   accessibilityRole="button"
                   style={styles.shuffle}
-                  onPress={() => player.playShuffled(songs)}
+                  onPress={() => playback.playShuffled(songs)}
                 >
                   <Shuffle color="white" size={22} />
                 </Pressable>
@@ -165,7 +165,7 @@ export default function ArtistScreen() {
                   accessibilityLabel={`Play ${data.name}`}
                   accessibilityRole="button"
                   style={styles.play}
-                  onPress={() => songs[0] && player.playSong(songs[0], songs)}
+                  onPress={() => songs[0] && playback.playSong(songs[0], songs)}
                 >
                   <Play color="black" fill="black" size={27} />
                 </Pressable>

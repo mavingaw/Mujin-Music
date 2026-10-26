@@ -26,6 +26,10 @@ const SYNC_LEAD: Duration = Duration::from_millis(500);
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 /// No message for this long: the bridge is gone.
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(6);
+/// An open stream the bridge has not reported on for this long has ended
+/// there (bridges report every 50 ms, paused or not): writes fail instead
+/// of waiting forever for audio that will not be played.
+const STREAM_STALL: Duration = Duration::from_secs(3);
 
 /// What a bridge said about itself.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +47,8 @@ pub struct BridgeInfo {
 #[derive(Clone, Debug, Default)]
 struct StreamStatus {
     opened: Option<Result<(), String>>,
+    /// When the bridge said it opened the device.
+    opened_at: Option<Instant>,
     received: u64,
     heard: u64,
     /// Server time of the report.
@@ -166,15 +172,26 @@ impl Link {
                 self.notify();
             }
             BridgeMessage::Opened { stream } => {
-                self.streams().entry(stream).or_default().opened = Some(Ok(()));
+                let mut streams = self.streams();
+                let status = streams.entry(stream).or_default();
+                status.opened = Some(Ok(()));
+                status.opened_at = Some(Instant::now());
+                drop(streams);
                 self.wake.notify_all();
             }
             BridgeMessage::Failed { stream, error } => {
                 let mut streams = self.streams();
+                let replaced = error == crate::endpoint::REPLACED;
+                if replaced && !streams.contains_key(&stream) {
+                    // A stream this server already closed: nothing to do.
+                    return;
+                }
                 let status = streams.entry(stream).or_default();
                 status.opened = Some(Err(error.clone()));
                 drop(streams);
-                self.push_error(error);
+                if !replaced {
+                    self.push_error(error);
+                }
                 self.wake.notify_all();
             }
             BridgeMessage::Status {
@@ -612,6 +629,13 @@ impl OutputStream for RemoteStream {
             }
             if self.sent.saturating_sub(self.heard_now(&status)) <= window {
                 break;
+            }
+            if status
+                .at
+                .or(status.opened_at)
+                .is_some_and(|last| last.elapsed() >= STREAM_STALL)
+            {
+                return Err("the bridge stopped playing this stream".into());
             }
             streams = self
                 .link

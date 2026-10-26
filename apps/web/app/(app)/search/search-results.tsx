@@ -1,6 +1,6 @@
 "use client";
 
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import getBaseURL from "@/lib/api/server-url";
 import { AlbumArtFallback, getLibraryImageUrl } from "@/lib/images/image-url";
 import {
@@ -136,8 +136,7 @@ export default function SearchResults() {
       results.map((item) => [`${item.item_type}-${item.id}`, item] as const),
     ).values(),
   );
-  const { setCurrentSongIndex, setQueue, setSongCallback, playAudioSource } =
-    usePlayer();
+  const playback = useZonePlayback();
   const [playingKey, setPlayingKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -173,10 +172,9 @@ export default function SearchResults() {
           toast("This album has no playable songs.");
           return;
         }
-        setQueue(album.songs.map((song) => ({ song, artist, album })));
-        setCurrentSongIndex(0);
-        setSongCallback(firstSong, artist, album);
-        playAudioSource();
+        await playback.playQueue(
+          album.songs.map((song) => ({ song, artist, album })),
+        );
         return;
       }
 
@@ -188,10 +186,7 @@ export default function SearchResults() {
         artist: artist.name,
         duration: item.song_object?.duration ?? 0,
       };
-      setQueue([{ song: track, artist, album }]);
-      setCurrentSongIndex(0);
-      setSongCallback(track, artist, album);
-      playAudioSource();
+      await playback.playQueue([{ song: track, artist, album }]);
     } catch {
       toast(
         item.item_type === "album"

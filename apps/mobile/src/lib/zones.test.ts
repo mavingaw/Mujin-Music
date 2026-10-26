@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { Zone } from "@parson/music-sdk";
 
 import {
   applyMobileZoneCommand,
@@ -9,6 +10,7 @@ import {
   zonePollInterval,
   signedLabel,
   steppedValue,
+  mobilePlaybackTarget,
   type MobileZoneControls,
 } from "./zones";
 
@@ -28,6 +30,9 @@ function controls(playing: boolean) {
     move: (from, to) => calls.push(`move:${from}->${to}`),
     remove: (index) => calls.push(`remove:${index}`),
     clearUpcoming: () => calls.push("clear"),
+    addSongs: async (ids, next) => {
+      calls.push(`add:${ids.join(",")}${next ? ":next" : ""}`);
+    },
     setRepeat: (mode) => calls.push(`repeat:${mode}`),
     setShuffle: (enabled) => calls.push(`shuffle:${enabled}`),
   };
@@ -119,4 +124,41 @@ test("settings steppers stay inside their range", () => {
   expect(signedLabel(2, "dB")).toBe("+2 dB");
   expect(signedLabel(-3, "dB")).toBe("-3 dB");
   expect(signedLabel(0, "dB")).toBe("0 dB");
+});
+
+test("library actions follow the picked zone and remote adds reach the phone", async () => {
+  const { value, calls } = controls(true);
+  await applyMobileZoneCommand(
+    { command: "add_to_queue", song_ids: ["x", "y"], next: true },
+    value,
+  );
+  await applyMobileZoneCommand(
+    { command: "add_to_queue", song_ids: ["z"] },
+    value,
+  );
+  expect(calls).toEqual(["add:x,y:next", "add:z"]);
+
+  const kitchen = {
+    id: "sonos:RINCON_1",
+    name: "Kitchen",
+    capabilities: { transfer_target: true, queue_edit: true },
+    queue: { song_ids: ["a"], current_position: 0 },
+  } as unknown as Zone;
+  expect(mobilePlaybackTarget(null, "client:phone", [kitchen], true)).toEqual({
+    kind: "local",
+  });
+  expect(
+    mobilePlaybackTarget("client:phone", "client:phone", [kitchen], true),
+  ).toEqual({ kind: "local" });
+  expect(
+    mobilePlaybackTarget("sonos:RINCON_1", "client:phone", [kitchen], true),
+  ).toMatchObject({ kind: "zone", zoneId: "sonos:RINCON_1", name: "Kitchen" });
+  // Still loading: keep the picked zone rather than play on the phone.
+  expect(mobilePlaybackTarget("sonos:RINCON_1", null, [], false)).toMatchObject(
+    { kind: "zone", zoneId: "sonos:RINCON_1" },
+  );
+  // Gone: back to the phone.
+  expect(mobilePlaybackTarget("sonos:GONE", null, [kitchen], true)).toEqual({
+    kind: "local",
+  });
 });

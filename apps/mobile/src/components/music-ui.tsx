@@ -19,6 +19,7 @@ import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   downloadSong,
   isSongDownloaded,
@@ -87,6 +88,7 @@ export function SongRow({
   albumType?: string | null;
 }) {
   const player = usePlayer();
+  const playback = useZonePlayback();
   const session = useSession();
   const router = useRouter();
   const [menu, setMenu] = useState(false);
@@ -119,7 +121,7 @@ export function SongRow({
         onPress={() => {
           if (menu) return;
           if (active) player.toggle();
-          else player.playSong(song, queue);
+          else playback.playSong(song, queue);
         }}
         onLongPress={() => setMenu(true)}
         delayLongPress={220}
@@ -160,7 +162,7 @@ export function SongRow({
           label="Play"
           onPress={() => {
             setMenu(false);
-            player.playSong(song, queue);
+            playback.playSong(song, queue);
           }}
         />
         <DrawerAction
@@ -168,7 +170,7 @@ export function SongRow({
           label="Play next"
           onPress={() => {
             setMenu(false);
-            player.addNext(song);
+            playback.addNext(song);
           }}
         />
         <DrawerAction
@@ -176,7 +178,7 @@ export function SongRow({
           label="Add to queue"
           onPress={() => {
             setMenu(false);
-            player.addToQueue([song]);
+            playback.addToQueue([song]);
           }}
         />
         {session.phase !== "offline" && song.album_object?.id ? (

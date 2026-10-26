@@ -331,6 +331,11 @@ export type ZoneCommand =
   | { command: "move_queue_item"; from: number; to: number; song_id?: string }
   | { command: "remove_queue_item"; queue_position: number; song_id?: string }
   | { command: "clear_upcoming" }
+  /**
+   * "Play next" (`next: true`, right after the current track) or "Add to
+   * queue" (the end). A zone with nothing queued starts the songs.
+   */
+  | { command: "add_to_queue"; song_ids: string[]; next?: boolean }
   | { command: "set_repeat"; mode: ZoneRepeatMode }
   | { command: "set_shuffle"; enabled: boolean };
 
@@ -438,6 +443,48 @@ export async function sendZoneCommand(
     command,
     zoneRequest({ timeout: 8_000 }),
   );
+}
+
+/** The most songs a zone queue holds (the server's limit). */
+export const MAX_ZONE_QUEUE_SONGS = 500;
+
+/**
+ * Starts `songIds` on a zone from `index`, as a library Play button does:
+ * the zone's queue is replaced and it plays at once.
+ */
+export function playOnZoneCommand(
+  songIds: string[],
+  index = 0,
+): Extract<ZoneCommand, { command: "load" }> {
+  const ids = songIds.filter(Boolean);
+  if (!ids.length) throw new Error("Nothing to play");
+  // Keep the chosen track inside the server's queue limit.
+  const start = Math.min(Math.max(index, 0), ids.length - 1);
+  const from = Math.max(
+    0,
+    Math.min(
+      start - Math.floor(MAX_ZONE_QUEUE_SONGS / 2),
+      ids.length - MAX_ZONE_QUEUE_SONGS,
+    ),
+  );
+  const window = ids.slice(from, from + MAX_ZONE_QUEUE_SONGS);
+  return {
+    command: "load",
+    song_ids: window,
+    current_position: start - from,
+    position_ms: 0,
+    play: true,
+  };
+}
+
+/** "Play next" or "Add to queue" on a zone. */
+export function queueOnZoneCommand(
+  songIds: string[],
+  next: boolean,
+): Extract<ZoneCommand, { command: "add_to_queue" }> {
+  const ids = songIds.filter(Boolean).slice(0, MAX_ZONE_QUEUE_SONGS);
+  if (!ids.length) throw new Error("Nothing to queue");
+  return { command: "add_to_queue", song_ids: ids, next };
 }
 
 /** Moves the queue, track and position from one zone to another. */
@@ -977,6 +1024,17 @@ export function previewQueueEdit(
     }
     case "clear_upcoming":
       return next.slice(0, current + 1);
+    case "add_to_queue": {
+      if (next.length + command.song_ids.length > MAX_ZONE_QUEUE_SONGS) {
+        return null;
+      }
+      const at =
+        command.next && next.length
+          ? Math.min(current + 1, next.length)
+          : next.length;
+      next.splice(at, 0, ...command.song_ids);
+      return next;
+    }
     default:
       return next;
   }

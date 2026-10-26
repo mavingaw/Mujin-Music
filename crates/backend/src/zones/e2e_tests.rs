@@ -1008,6 +1008,48 @@ async fn sonos_queue_is_managed_remotely_through_zone_commands() {
     // With repeat-all on, the speaker starts over after the last track.
     fake.advance(DEN);
     assert_eq!(fake.player(DEN).track, 1);
+
+    // Play next and Add to queue from the library: the speaker's own queue
+    // grows without the playing track stopping.
+    let adds_before = fake.calls("AddURIToQueue").len();
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::AddToQueue {
+                song_ids: vec!["song-3".into()],
+                next: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("play next");
+    service
+        .command(
+            USER,
+            &zone_id,
+            ZoneCommand::AddToQueue {
+                song_ids: vec!["song-2".into()],
+                next: false,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("add to queue");
+    assert_eq!(queue_titles(&fake, DEN), ["song-1", "song-3", "song-2"]);
+    let zone = service.zone(USER, &zone_id, Some(&cache)).expect("zone");
+    assert_eq!(zone.queue.song_ids, ["song-1", "song-3", "song-2"]);
+    assert_eq!(fake.player(DEN).state, "PLAYING");
+    assert_eq!(fake.player(DEN).track, 1, "the playing track carries on");
+    assert!(
+        fake.calls("AddURIToQueue").len() > adds_before,
+        "added natively"
+    );
+    assert_eq!(
+        fake.calls("RemoveAllTracksFromQueue").len(),
+        removes_before,
+        "adding never reloads the whole queue"
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -1092,6 +1134,69 @@ async fn client_zone_queue_edits_show_at_once_and_reach_the_client() {
                 mode: RepeatMode::One
             },
         ]
+    );
+
+    // Play next from a remote shows at once and reaches the client.
+    service
+        .command(
+            USER,
+            zone_id,
+            ZoneCommand::AddToQueue {
+                song_ids: vec!["song-9".into()],
+                next: true,
+            },
+            None,
+        )
+        .await
+        .expect("play next on the client");
+    let zone = service.zone(USER, zone_id, None).expect("zone");
+    assert_eq!(
+        zone.queue.song_ids[2], "song-9",
+        "right after the current track"
+    );
+    let pending = service
+        .register_client(
+            USER,
+            "browser-edit01",
+            web_client(ZoneStatus::Playing, None),
+        )
+        .expect("heartbeat");
+    assert!(pending.commands.iter().any(|command| command.command
+        == ZoneCommand::AddToQueue {
+            song_ids: vec!["song-9".into()],
+            next: true,
+        }));
+
+    // A client with nothing queued starts the songs instead.
+    service
+        .register_client(
+            USER,
+            "browser-idle01",
+            web_client(ZoneStatus::Idle, Some(Vec::new())),
+        )
+        .expect("register idle");
+    service
+        .command(
+            USER,
+            "client:browser-idle01",
+            ZoneCommand::AddToQueue {
+                song_ids: vec!["song-2".into()],
+                next: false,
+            },
+            None,
+        )
+        .await
+        .expect("add to an empty zone");
+    let pending = service
+        .register_client(USER, "browser-idle01", web_client(ZoneStatus::Idle, None))
+        .expect("heartbeat");
+    assert!(
+        matches!(
+            pending.commands.last().map(|command| &command.command),
+            Some(ZoneCommand::Load { song_ids, play: true, .. }) if song_ids == &["song-2"]
+        ),
+        "{:?}",
+        pending.commands
     );
 }
 

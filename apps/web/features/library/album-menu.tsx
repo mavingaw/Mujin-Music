@@ -8,9 +8,16 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useSession } from "@/features/account/session-provider";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { getAlbumInfo, type LibraryAlbum } from "@parson/music-sdk";
-import { Disc3, Download, Play, UserRound } from "lucide-react";
+import {
+  Disc3,
+  Download,
+  ListEnd,
+  ListStart,
+  Play,
+  UserRound,
+} from "lucide-react";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -28,23 +35,28 @@ export default function AlbumMenu({
   children,
   showArtist = true,
 }: AlbumMenuProps) {
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const { session } = useSession();
 
   const loadAlbum = () =>
     getAlbumInfo(album_id, false) as Promise<LibraryAlbum>;
 
-  const play = async () => {
-    const album = await loadAlbum();
-    const firstSong = album.songs?.[0];
-    const artist = album.artist_object;
-    if (!firstSong || !artist) {
+  const run = async (action: "play" | "next" | "end") => {
+    let album: LibraryAlbum;
+    try {
+      album = await loadAlbum();
+    } catch {
+      toast("Could not load this album.");
       return;
     }
-    player.setQueue(album.songs.map((song) => ({ song, album, artist })));
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(firstSong, artist, album);
-    player.playAudioSource();
+    const artist = album.artist_object;
+    if (!album.songs?.length || !artist) {
+      return;
+    }
+    const items = album.songs.map((song) => ({ song, album, artist }));
+    if (action === "play") await playback.playQueue(items);
+    else if (action === "next") await playback.playNext(items, album.name);
+    else await playback.addToQueue(items, album.name);
   };
 
   const save = async () => {
@@ -59,9 +71,17 @@ export default function AlbumMenu({
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-60">
-        <ContextMenuItem onSelect={() => void play()}>
+        <ContextMenuItem onSelect={() => void run("play")}>
           <Play className="h-4 w-4" />
           Play
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => void run("next")}>
+          <ListStart className="h-4 w-4" />
+          Play next
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => void run("end")}>
+          <ListEnd className="h-4 w-4" />
+          Add to queue
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem asChild>
