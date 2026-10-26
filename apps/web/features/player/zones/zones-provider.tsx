@@ -1,7 +1,10 @@
 "use client";
 
 import {
+  addBridge,
+  type BridgeStatus,
   discoverOutputs,
+  removeBridge,
   discoverSonos,
   pauseAllZones,
   getSongInfos,
@@ -84,6 +87,9 @@ type ZonesContextValue = {
   rescanSonos: () => Promise<void>;
   /** Looks for UPnP renderers and audio devices now. */
   rescanOutputs: () => Promise<void>;
+  /** Adds a Parson Bridge by address (admins). */
+  addBridge: (address: string) => Promise<BridgeStatus>;
+  removeBridge: (address: string) => Promise<void>;
   /** Pauses every playing zone; returns how many. */
   pauseAll: () => Promise<number>;
   busy: boolean;
@@ -541,6 +547,11 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       },
       rescanOutputs: async () => {
         await run(() => discoverOutputs());
+      },
+      addBridge: async (address) =>
+        (await run(() => addBridge(address))) as BridgeStatus,
+      removeBridge: async (address) => {
+        await run(() => removeBridge(address));
       },
       pauseAll: async () => {
         const result = (await run(() => pauseAllZones())) as Awaited<

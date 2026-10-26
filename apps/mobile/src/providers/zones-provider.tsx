@@ -15,6 +15,7 @@ import {
   type PendingZoneCommand,
   type Zone,
   type ZoneCommand,
+  type ZoneList,
   type ZoneSettingsPatch,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -47,6 +48,8 @@ import { useSession } from "@/providers/session-provider";
 
 type ZonesValue = {
   zones: Zone[];
+  /** Bridges, AirPlay and Chromecast the server plays to. */
+  outputs: ZoneList["outputs"] | null;
   fetchedAt: number;
   localZoneId: string | null;
   selectedZone: Zone | null;
@@ -254,6 +257,7 @@ export function ZonesProvider({ children }: PropsWithChildren) {
   const value = useMemo<ZonesValue>(
     () => ({
       zones,
+      outputs: query.data?.outputs ?? null,
       fetchedAt: query.dataUpdatedAt,
       localZoneId,
       selectedZone,
@@ -292,7 +296,15 @@ export function ZonesProvider({ children }: PropsWithChildren) {
         return paused;
       },
     }),
-    [localZoneId, query.dataUpdatedAt, refresh, report, selectedZone, zones],
+    [
+      localZoneId,
+      query.data?.outputs,
+      query.dataUpdatedAt,
+      refresh,
+      report,
+      selectedZone,
+      zones,
+    ],
   );
 
   return (

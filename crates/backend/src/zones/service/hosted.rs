@@ -133,7 +133,38 @@ impl ZoneService {
         outputs
             .renderers()
             .iter()
-            .map(|renderer| hosted_zone_view(state, &self.loudness, renderer.as_ref(), cache, now))
+            .map(|renderer| {
+                let mut zone =
+                    hosted_zone_view(state, &self.loudness, renderer.as_ref(), cache, now);
+                let members = renderer.group_members();
+                if !members.is_empty() {
+                    zone.group = Some(ZoneGroupInfo {
+                        id: zone.id.clone(),
+                        synced: true,
+                        sync_note: crate::outputs::bridge::GROUP_SYNC_NOTE,
+                        members: members
+                            .iter()
+                            .filter_map(|member| outputs.renderer(member))
+                            .map(|member| {
+                                let view = hosted_zone_view(
+                                    state,
+                                    &self.loudness,
+                                    member.as_ref(),
+                                    None,
+                                    now,
+                                );
+                                ZoneGroupMember {
+                                    id: view.id,
+                                    name: view.name,
+                                    kind: view.kind,
+                                    volume: view.volume,
+                                }
+                            })
+                            .collect(),
+                    });
+                }
+                zone
+            })
             .collect()
     }
 
@@ -193,6 +224,10 @@ impl ZoneService {
             uri: String::new(),
             metadata: String::new(),
             mime_type: String::new(),
+            title: song.name.clone(),
+            artist: song.artist.clone(),
+            album: String::new(),
+            art_uri: None,
             gain_db: None,
             dsp: settings.dsp,
         };
@@ -240,6 +275,8 @@ impl ZoneService {
                     crate::api::cast::encoded(&album.cover_url)
                 )
             });
+        request.album = album.map(|album| album.name.clone()).unwrap_or_default();
+        request.art_uri = album_art_uri.clone();
         request.metadata = crate::sonos::didl::render(&crate::sonos::didl::DidlTrack {
             item_id: format!("parson:{song_id}"),
             title: song.name.clone(),
@@ -351,6 +388,28 @@ impl ZoneService {
         cache: Option<&LibraryCache>,
     ) -> Result<(), ZoneError> {
         let renderer = self.renderer(zone_id).ok_or(ZoneError::NotFound)?;
+        // A member's own volume in a synced group.
+        if let ZoneCommand::SetVolume {
+            member_id: Some(member),
+            ..
+        }
+        | ZoneCommand::AdjustVolume {
+            member_id: Some(member),
+            ..
+        }
+        | ZoneCommand::SetMute {
+            member_id: Some(member),
+            ..
+        } = &command
+        {
+            if !renderer.group_members().contains(member) {
+                return Err(ZoneError::Invalid("member_not_in_group"));
+            }
+            let member = member.clone();
+            let mut command = command.clone();
+            strip_member(&mut command);
+            return Box::pin(self.hosted_command(&member, command, cache)).await;
+        }
         let info = renderer.info();
         let settings = self
             .lock()
@@ -797,7 +856,8 @@ fn hosted_zone_view(
         });
         volume.device_range = Some(range);
     }
-    let is_device = info.kind == ZoneKind::Device;
+    // Parson decodes for these itself and opens the DAC exclusively.
+    let is_device = matches!(info.kind, ZoneKind::Device | ZoneKind::Bridge);
     let stream = if info.network {
         current_song.and_then(|song_id| {
             network_stream_info(
@@ -832,7 +892,7 @@ fn hosted_zone_view(
             crossfade: false,
             leveling: true,
             volume_limits: !fixed,
-            private: is_device,
+            private: info.kind == ZoneKind::Device,
             dsp: true,
             exclusive: info.exclusive_capable,
             volume_modes: info.volume_modes.clone(),
@@ -841,7 +901,9 @@ fn hosted_zone_view(
         setting_notes,
     );
     view_settings.volume_mode = effective.volume_mode;
-    let note = if is_device {
+    let note = if info.kind == ZoneKind::Airplay {
+        "AirPlay carries 44.1 kHz/16-bit lossless (ALAC) by design. Parson decodes each file itself; 16-bit CD-quality files reach the receiver bit for bit, anything else is converted to 44.1 kHz/16-bit first.".to_string()
+    } else if is_device {
         // Devices decode the file themselves: nothing is re-encoded.
         format!(
             "This device plays up to {}/{}-bit. Files within that reach it untouched (bit-perfect in exclusive mode); anything else is resampled to the nearest rate it takes and fitted to its bit depth.",

@@ -14,6 +14,7 @@ import {
   FileAudio,
   Gauge,
   Package,
+  RefreshCcw,
   SlidersHorizontal,
   Speaker,
   type LucideIcon,
@@ -86,6 +87,7 @@ const STAGE_ICONS: Record<SignalStageIcon, LucideIcon> = {
   dsp: SlidersHorizontal,
   decode: FileAudio,
   encode: Package,
+  sync: RefreshCcw,
   output: Speaker,
 };
 

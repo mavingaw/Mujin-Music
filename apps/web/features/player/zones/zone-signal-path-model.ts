@@ -1,7 +1,15 @@
 import type { Zone, ZoneStreamInfo } from "@parson/music-sdk";
 
 export type SignalStageIcon =
-  "source" | "rate" | "depth" | "gain" | "dsp" | "decode" | "encode" | "output";
+  | "source"
+  | "rate"
+  | "depth"
+  | "gain"
+  | "dsp"
+  | "decode"
+  | "encode"
+  | "sync"
+  | "output";
 
 export interface SignalStage {
   /** `Source` and `Output` stages carry a kicker; steps do not. */
@@ -24,6 +32,7 @@ export function stepIcon(step: string): SignalStageIcon {
     return "gain";
   if (step.startsWith("DSP")) return "dsp";
   if (step.startsWith("Decoded")) return "decode";
+  if (step.startsWith("Sync")) return "sync";
   return "encode";
 }
 
@@ -51,9 +60,13 @@ export function signalPathCaveat(zone: Pick<Zone, "kind">): string | null {
     case "upnp":
       return "What the renderer does after it receives the stream is not shown. UPnP support is tested against a protocol-level renderer simulator, not yet on renderer hardware.";
     case "chromecast":
-      return "What the Cast device does after it receives the stream is not shown. Cast support is tested against a simulated receiver, not yet on Cast hardware.";
+      return "What the Cast device does after it receives the stream is not shown. Cast support (the Android app's sender and the server's own Cast v2 driver) is tested against simulated receivers, not yet on Cast hardware.";
     case "device":
       return "The DAC's own filters and analog stage are not shown. Device output is tested against simulated DACs and ALSA's null device, not yet on a USB DAC.";
+    case "bridge":
+      return "Parson decodes here and sends the samples to the bridge uncompressed; the bridge writes them to the DAC as sent. The DAC's own filters and analog stage are not shown. Parson Bridge is tested against simulated DACs over real network sockets, not yet on a USB DAC.";
+    case "airplay":
+      return "AirPlay carries 44.1 kHz/16-bit ALAC by design, so hi-res files are converted first. What the receiver does after that is not shown. AirPlay is tested against a protocol-level receiver and ffmpeg's ALAC decoder, not yet on Apple hardware.";
     default:
       return null;
   }

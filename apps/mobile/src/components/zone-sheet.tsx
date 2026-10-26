@@ -6,6 +6,7 @@ import {
   orderZones,
   sleepTimerLabel,
   zoneKindLabel,
+  zoneOutputsSummary,
   zoneQualityLabel,
   zoneStatusLabel,
   type Zone,
@@ -50,6 +51,26 @@ function failure(error: unknown, fallback: string) {
   const data = (error as { response?: { data?: { error?: string } } })?.response
     ?.data;
   Alert.alert("Zones", data?.error?.replaceAll("_", " ") ?? fallback);
+}
+
+/** Network outputs and what has been tested, under the zone list. */
+function OutputsFooter() {
+  const { outputs } = useZones();
+  const summary = zoneOutputsSummary(outputs);
+  const bridgesOn = outputs?.bridges?.enabled ?? false;
+  if (!summary && !bridgesOn) return null;
+  return (
+    <View style={styles.outputsFooter}>
+      {summary ? <Text style={styles.outputsTitle}>{summary}</Text> : null}
+      <Text style={styles.outputsNote}>
+        {summary
+          ? "Each output is its own zone. Bridges play bit-perfect and group sample-synced."
+          : "Run parson-bridge on the computer your DAC is plugged into (Linux or Raspberry Pi) and its outputs appear here as zones."}{" "}
+        Tested against simulated DACs and protocol-level fake devices, not yet
+        on real hardware.
+      </Text>
+    </View>
+  );
 }
 
 /** Button that opens the zone sheet; shows the zone being controlled. */
@@ -333,7 +354,9 @@ export function ZoneSheet({
               <Text style={styles.primaryText}>Save group</Text>
             </Pressable>
           </View>
-        ) : null}
+        ) : (
+          <OutputsFooter />
+        )}
       </View>
       <ZoneSettingsSheet
         onClose={() => setSettingsFor(null)}
@@ -469,6 +492,15 @@ const styles = StyleSheet.create({
   },
   title: { color: "white", fontSize: 24, fontWeight: "700" },
   subtitle: { color: palette.secondary, fontSize: 13, marginTop: 6 },
+  outputsFooter: {
+    borderTopColor: "rgba(255,255,255,0.08)",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 4,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+  outputsTitle: { color: "white", fontSize: 12, fontWeight: "600" },
+  outputsNote: { color: palette.secondary, fontSize: 11, lineHeight: 15 },
   toolbar: { flexDirection: "row", gap: 8, marginTop: 14 },
   chip: {
     borderColor: palette.borderStrong,

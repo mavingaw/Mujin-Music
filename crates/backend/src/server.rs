@@ -212,7 +212,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos", "upnp", "audio_devices"],
+        "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos", "upnp", "audio_devices", "bridges", "airplay", "chromecast"],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),

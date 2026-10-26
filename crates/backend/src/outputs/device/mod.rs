@@ -8,15 +8,19 @@
 //! Anything that changes samples (a rate the device cannot take, software
 //! volume, leveling, DSP) is shown in the zone's signal path.
 
-#[cfg(target_os = "linux")]
-pub mod alsa;
 pub mod engine;
-pub mod simulated;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
+
+#[cfg(target_os = "linux")]
+pub use parson_bridge::audio::alsa;
+pub use parson_bridge::audio::simulated;
+pub use parson_bridge::audio::{
+    DeviceBackend, DeviceInfo, HardwareVolume, OutputStream, SampleFormat, StreamFormat,
+};
 
 use super::renderer::{
     Renderer, RendererInfo, RendererSettings, RendererState, TrackRequest, to_device_scale,
@@ -24,141 +28,18 @@ use super::renderer::{
 use super::{FormatLimits, SourceFormat};
 use crate::zones::{DeviceVolumeRange, VolumeMode, ZoneKind};
 
-/// Sample formats Parson writes to devices (interleaved, little endian).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SampleFormat {
-    S16,
-    /// 24 bits in 3 bytes (`S24_3LE`), common on USB DACs.
-    S24Packed,
-    /// 32-bit container; 24-bit sources fill the top 24 bits.
-    S32,
-}
-
-impl SampleFormat {
-    pub fn bytes(self) -> usize {
-        match self {
-            Self::S16 => 2,
-            Self::S24Packed => 3,
-            Self::S32 => 4,
-        }
+/// What a device plays untouched: any decodable lossless file at a rate
+/// and depth it takes.
+pub fn device_limits(device: &DeviceInfo) -> FormatLimits {
+    FormatLimits {
+        max_sample_rate: device.max_sample_rate(),
+        max_bit_depth: device.max_bits().min(32),
+        flac: true,
+        wav: true,
+        alac: true,
+        mp3: true,
+        aac: true,
     }
-
-    /// Significant bits the format carries.
-    pub fn bits(self) -> u8 {
-        match self {
-            Self::S16 => 16,
-            Self::S24Packed => 24,
-            Self::S32 => 32,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::S16 => "S16_LE",
-            Self::S24Packed => "S24_3LE",
-            Self::S32 => "S32_LE",
-        }
-    }
-}
-
-/// What a stream is opened with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StreamFormat {
-    pub sample_rate: u32,
-    pub format: SampleFormat,
-    pub channels: u8,
-}
-
-impl StreamFormat {
-    pub fn frame_bytes(&self) -> usize {
-        self.format.bytes() * usize::from(self.channels)
-    }
-}
-
-/// A hardware volume control in dB.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct HardwareVolume {
-    pub min_db: f32,
-    pub max_db: f32,
-    pub step_db: f32,
-}
-
-/// One output as the backend reports it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeviceInfo {
-    /// Stable id, part of the zone id.
-    pub id: String,
-    /// e.g. `Topping E30 II`.
-    pub name: String,
-    /// e.g. `USB Audio · hw:2,0`.
-    pub description: String,
-    /// Sample rates the device accepts natively, ascending.
-    pub sample_rates: Vec<u32>,
-    pub formats: Vec<SampleFormat>,
-    pub max_channels: u8,
-    pub hardware_volume: Option<HardwareVolume>,
-    /// Another app holds the device right now.
-    pub busy: bool,
-}
-
-impl DeviceInfo {
-    pub fn max_sample_rate(&self) -> u32 {
-        self.sample_rates.iter().copied().max().unwrap_or(48_000)
-    }
-
-    pub fn max_bits(&self) -> u8 {
-        self.formats
-            .iter()
-            .map(|format| format.bits())
-            .max()
-            .unwrap_or(16)
-    }
-
-    /// What the device plays untouched: any decodable lossless file at a
-    /// rate and depth it takes.
-    pub fn limits(&self) -> FormatLimits {
-        FormatLimits {
-            max_sample_rate: self.max_sample_rate(),
-            max_bit_depth: self.max_bits().min(32),
-            flac: true,
-            wav: true,
-            alac: true,
-            mp3: true,
-            aac: true,
-        }
-    }
-}
-
-/// An open playback stream (used from the playback thread only).
-pub trait OutputStream: Send {
-    fn format(&self) -> StreamFormat;
-    /// Writes whole interleaved frames, blocking until the device takes them.
-    fn write(&mut self, data: &[u8]) -> Result<(), String>;
-    /// Frames written but not yet heard.
-    fn delay_frames(&mut self) -> u64;
-    /// Pauses in place; `Err` when the device cannot (then the buffer is
-    /// dropped and playback restarts from the heard position).
-    fn pause(&mut self, paused: bool) -> Result<(), String>;
-    /// Discards buffered audio at once (seek, stop).
-    fn drop_buffer(&mut self);
-    /// Plays out buffered audio.
-    fn drain(&mut self);
-}
-
-/// An audio API: ALSA on Linux, or simulated devices for tests and demos.
-pub trait DeviceBackend: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn devices(&self) -> Vec<DeviceInfo>;
-    /// Opens `device_id` at exactly `format`. `exclusive` asks for direct
-    /// hardware access with no mixing or conversion in between.
-    fn open(
-        &self,
-        device_id: &str,
-        format: StreamFormat,
-        exclusive: bool,
-    ) -> Result<Box<dyn OutputStream>, String>;
-    fn set_hardware_volume(&self, device_id: &str, db: f32) -> Result<(), String>;
-    fn set_hardware_mute(&self, device_id: &str, muted: bool) -> Result<(), String>;
 }
 
 /// The stream format for `source` on `device`, and whether it is exact
@@ -244,15 +125,77 @@ pub fn choose_format(
     )
 }
 
+/// Where a manager's devices are: this machine, a Parson Bridge, an
+/// AirPlay receiver.
+#[derive(Clone, Debug)]
+pub struct Placement {
+    /// Zone id prefix, e.g. `device:` or `bridge:<bridge id>:`.
+    pub prefix: String,
+    pub kind: ZoneKind,
+    /// Shown before the device description, e.g. `kitchen-pi · Parson Bridge`.
+    pub host: Option<String>,
+    /// Added to the signal path's output, e.g. `on kitchen-pi via Parson Bridge`.
+    pub route: Option<String>,
+    /// A step every stream takes (sync corrections of a group).
+    pub step: Option<String>,
+    /// Facts the zone shows (what was tested, what the protocol allows).
+    pub notes: Vec<String>,
+}
+
+impl Placement {
+    pub fn local() -> Self {
+        Self {
+            prefix: "device:".to_string(),
+            kind: ZoneKind::Device,
+            host: None,
+            route: None,
+            step: None,
+            notes: Vec::new(),
+        }
+    }
+}
+
 /// One device zone.
 pub struct DeviceRenderer {
     zone_id: String,
     device: Mutex<DeviceInfo>,
     backend: Arc<dyn DeviceBackend>,
     engine: engine::Engine,
+    placement: Placement,
 }
 
 impl DeviceRenderer {
+    /// A renderer outside any manager (a synced group of bridge devices).
+    pub fn standalone(
+        zone_id: String,
+        device: DeviceInfo,
+        backend: Arc<dyn DeviceBackend>,
+        changed: tokio::sync::broadcast::Sender<()>,
+        placement: Placement,
+    ) -> Self {
+        Self {
+            engine: engine::Engine::start(
+                backend.clone(),
+                device.clone(),
+                changed,
+                engine::Route {
+                    suffix: placement.route.clone(),
+                    step: placement.step.clone(),
+                    modeless: placement.kind == ZoneKind::Airplay,
+                },
+            ),
+            zone_id,
+            device: Mutex::new(device),
+            backend,
+            placement,
+        }
+    }
+
+    /// Ends the playback thread.
+    pub fn shutdown(&self) {
+        self.engine.send(engine::Control::Shutdown);
+    }
+
     fn device(&self) -> DeviceInfo {
         self.device
             .lock()
@@ -303,16 +246,20 @@ impl Renderer for DeviceRenderer {
         if device.busy {
             notes.push("Another app is using this device; Parson cannot open it exclusively until it lets go.".to_string());
         }
+        notes.extend(self.placement.notes.iter().cloned());
         RendererInfo {
             id: self.zone_id.clone(),
-            kind: ZoneKind::Device,
+            kind: self.placement.kind,
             name: device.name.clone(),
-            device: device.description.clone(),
-            limits: device.limits(),
+            device: match &self.placement.host {
+                Some(host) => format!("{host} · {}", device.description),
+                None => device.description.clone(),
+            },
+            limits: device_limits(&device),
             volume_range: self.volume_range(&device),
             volume_modes,
             gapless: true,
-            exclusive_capable: true,
+            exclusive_capable: self.placement.kind != ZoneKind::Airplay,
             network: false,
             notes,
         }
@@ -413,6 +360,7 @@ pub struct DeviceManager {
     players: Mutex<HashMap<String, Arc<DeviceRenderer>>>,
     changed: tokio::sync::broadcast::Sender<()>,
     note: Option<String>,
+    placement: Placement,
 }
 
 impl DeviceManager {
@@ -440,6 +388,7 @@ impl DeviceManager {
                 players: Mutex::new(HashMap::new()),
                 changed: tokio::sync::broadcast::channel(16).0,
                 note: Some(format!("Audio devices are unavailable: {error}.")),
+                placement: Placement::local(),
             },
         }
     }
@@ -454,15 +403,33 @@ impl DeviceManager {
                 "Audio-device zones use ALSA (Linux) in this build. WASAPI exclusive mode (Windows) and CoreAudio hog mode (macOS) are not implemented yet."
                     .to_string(),
             ),
+            placement: Placement::local(),
         }
     }
 
     pub fn new(backend: Arc<dyn DeviceBackend>, note: Option<String>) -> Self {
+        Self::placed(
+            backend,
+            note,
+            Placement::local(),
+            tokio::sync::broadcast::channel(64).0,
+        )
+    }
+
+    /// Devices somewhere else (a bridge, an AirPlay receiver), reporting
+    /// changes on `changed`.
+    pub fn placed(
+        backend: Arc<dyn DeviceBackend>,
+        note: Option<String>,
+        placement: Placement,
+        changed: tokio::sync::broadcast::Sender<()>,
+    ) -> Self {
         let manager = Self {
             backend: Some(backend),
             players: Mutex::new(HashMap::new()),
-            changed: tokio::sync::broadcast::channel(64).0,
+            changed,
             note,
+            placement,
         };
         manager.refresh();
         manager
@@ -496,7 +463,7 @@ impl DeviceManager {
         {
             let mut players = self.lock();
             for device in &devices {
-                let zone_id = format!("device:{}", device.id);
+                let zone_id = format!("{}{}", self.placement.prefix, device.id);
                 match players.get(&zone_id) {
                     Some(player) => {
                         let mut current = player
@@ -517,7 +484,13 @@ impl DeviceManager {
                                 backend.clone(),
                                 device.clone(),
                                 self.changed.clone(),
+                                engine::Route {
+                                    suffix: self.placement.route.clone(),
+                                    step: self.placement.step.clone(),
+                                    modeless: self.placement.kind == ZoneKind::Airplay,
+                                },
                             ),
+                            placement: self.placement.clone(),
                         };
                         players.insert(zone_id, Arc::new(renderer));
                         changed = true;
@@ -527,7 +500,7 @@ impl DeviceManager {
             players.retain(|zone_id, player| {
                 let present = devices
                     .iter()
-                    .any(|device| format!("device:{}", device.id) == *zone_id);
+                    .any(|device| format!("{}{}", self.placement.prefix, device.id) == *zone_id);
                 if !present {
                     changed = true;
                     player.engine.send(engine::Control::Shutdown);
@@ -557,6 +530,16 @@ impl DeviceManager {
     }
 }
 
+impl DeviceManager {
+    /// Stops every engine (the devices went away).
+    pub fn shutdown(&self) {
+        for player in self.lock().drain().map(|(_, player)| player) {
+            player.engine.send(engine::Control::Shutdown);
+        }
+        let _ = self.changed.send(());
+    }
+}
+
 impl Drop for DeviceManager {
     fn drop(&mut self) {
         for player in self.lock().values() {
@@ -567,7 +550,7 @@ impl Drop for DeviceManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceInfo, HardwareVolume, SampleFormat, choose_format};
+    use super::{DeviceInfo, HardwareVolume, SampleFormat, choose_format, device_limits};
     use crate::outputs::{FormatLimits, SourceFormat};
 
     fn dac() -> DeviceInfo {
@@ -603,7 +586,7 @@ mod tests {
     #[test]
     fn picks_the_exact_format_when_the_device_takes_it() {
         let device = dac();
-        let limits = device.limits();
+        let limits = device_limits(&device);
         let (format, exact) = choose_format(&device, &flac(96_000, 24), limits);
         assert!(exact);
         assert_eq!(format.sample_rate, 96_000);
@@ -632,7 +615,7 @@ mod tests {
             hardware_volume: None,
             ..dac()
         };
-        let (format, exact) = choose_format(&device, &flac(44_100, 24), device.limits());
+        let (format, exact) = choose_format(&device, &flac(44_100, 24), device_limits(&device));
         assert!(!exact);
         assert_eq!(
             (format.sample_rate, format.format),

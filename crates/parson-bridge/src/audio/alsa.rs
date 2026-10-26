@@ -732,7 +732,7 @@ impl Drop for AlsaStream {
 #[cfg(test)]
 mod tests {
     use super::AlsaBackend;
-    use crate::outputs::device::{DeviceBackend, SampleFormat, StreamFormat};
+    use crate::audio::{DeviceBackend, SampleFormat, StreamFormat};
 
     /// The real ALSA write path against ALSA's `null` PCM (no sound card
     /// needed): open with exact parameters, write, pause, drain, close.
