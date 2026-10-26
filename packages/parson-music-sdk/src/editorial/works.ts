@@ -1,6 +1,7 @@
 import type {
   AlbumAbout,
   ComposerWork,
+  ComposerWorks,
   EditorialText,
   PersonRef,
   TrackWork,
@@ -93,10 +94,15 @@ export function composerWorkFacets(works: readonly ComposerWork[]): WorkFacets {
   };
 }
 
+/** Which part of a composer's catalogue a list shows. */
+export type CatalogueScope = "all" | "library" | "notable";
+
 export interface WorkFilter {
   form?: string | null;
   period?: string | null;
   key?: string | null;
+  /** All works (default), those in the library, or the notable ones. */
+  scope?: CatalogueScope | null;
 }
 
 export function filterComposerWorks(
@@ -104,11 +110,88 @@ export function filterComposerWorks(
   filter: WorkFilter,
 ) {
   return works.filter(
-    ({ work }) =>
-      (!filter.form || work.form === filter.form) &&
-      (!filter.period || work.period === filter.period) &&
-      (!filter.key || work.key === filter.key),
+    (entry) =>
+      (!filter.form || entry.work.form === filter.form) &&
+      (!filter.period || entry.work.period === filter.period) &&
+      (!filter.key || entry.work.key === filter.key) &&
+      (filter.scope !== "library" || entry.track_count > 0) &&
+      (filter.scope !== "notable" || isNotable(entry)),
   );
+}
+
+/** Whether a work is one of the composer's notable works: Wikidata names
+ * it, or (before the catalogue is read) it is in the library. */
+export function isNotable(entry: ComposerWork) {
+  return entry.notable_rank != null;
+}
+
+/**
+ * The composer's notable works, Roon's "Notable compositions": the works
+ * Wikidata lists as notable, in its order, then up to `limit` in all with
+ * the works most recorded in the library. A composer whose catalogue was
+ * not read yet shows their most recorded works.
+ */
+export function notableWorks(works: readonly ComposerWork[], limit = 12) {
+  const ranked = works
+    .filter(isNotable)
+    .sort(
+      (left, right) => (left.notable_rank ?? 0) - (right.notable_rank ?? 0),
+    );
+  const recorded = works
+    .filter((entry) => !isNotable(entry) && entry.track_count > 0)
+    .sort(
+      (left, right) =>
+        right.recording_count - left.recording_count ||
+        right.track_count - left.track_count ||
+        left.work.title.localeCompare(right.work.title),
+    );
+  return [...ranked, ...recorded].slice(0, limit);
+}
+
+/** "Composed 1804–1808" under a work, when the year is known. */
+export function composedLine(work: Pick<WorkSummary, "composed">) {
+  return work.composed ? `Composed ${work.composed}` : null;
+}
+
+/** "In your library · 2 recordings" or "Not in your library". */
+export function libraryLine(entry: ComposerWork) {
+  if (entry.track_count <= 0) return "Not in your library";
+  const recordings = entry.recording_count || 1;
+  return `In your library · ${recordings} ${recordings === 1 ? "recording" : "recordings"}`;
+}
+
+/** The headline over a composer's catalogue. */
+export function catalogueHeadline(
+  works: readonly ComposerWork[],
+  catalogue: ComposerWorks["catalogue"],
+) {
+  const inLibrary = works.filter((entry) => entry.track_count > 0).length;
+  const pieces = works.length;
+  const parts = [
+    `${pieces.toLocaleString("en-US")} ${pieces === 1 ? "work" : "works"}`,
+    `${inLibrary.toLocaleString("en-US")} in your library`,
+  ];
+  if (catalogue?.notable) parts.push(`${catalogue.notable} notable`);
+  return parts.join(" · ");
+}
+
+/** What the catalogue note says while it is not read (or not complete). */
+export function catalogueStatusText(catalogue: ComposerWorks["catalogue"]) {
+  if (!catalogue) return null;
+  switch (catalogue.state) {
+    case "pending":
+      return "Reading the full catalogue from MusicBrainz…";
+    case "failed":
+      return "MusicBrainz did not answer; the full catalogue will be read later.";
+    case "off":
+      return "Turn on online metadata to see every work this composer wrote, not only those in your library.";
+    case "none":
+      return null;
+    default:
+      return catalogue.complete
+        ? null
+        : `MusicBrainz lists ${catalogue.musicbrainz_total.toLocaleString("en-US")} works (movements included); Parson shows the first 4,000.`;
+  }
 }
 
 export interface WorkFormGroup {
@@ -292,22 +375,31 @@ export interface AlbumTextPanel {
  */
 export function albumTextPanels(
   about:
-    Pick<AlbumAbout, "review" | "background" | "work_texts"> | null | undefined,
+    | Pick<AlbumAbout, "review" | "background" | "work_texts" | "text_sources">
+    | null
+    | undefined,
+  sourceId?: string | null,
 ): AlbumTextPanel[] {
   if (!about) return [];
   const panels: AlbumTextPanel[] = [];
-  if (about.review)
-    panels.push({ key: "review", label: "Review", text: about.review });
-  if (about.background)
-    panels.push({ key: "background", label: "About", text: about.background });
+  // The chosen editorial source (another Wikipedia) when there is one.
+  const source = sourceId
+    ? about.text_sources?.find((candidate) => candidate.id === sourceId)
+    : undefined;
+  const review = source ? source.review : about.review;
+  const background = source ? source.background : about.background;
+  if (review) panels.push({ key: "review", label: "Review", text: review });
+  if (background)
+    panels.push({ key: "background", label: "About", text: background });
   const works = (about.work_texts ?? []).filter(
-    (work) => work.text.url !== about.background?.url,
+    (work) =>
+      work.text.url !== background?.url &&
+      work.text.url !== about.background?.url,
   );
   for (const work of works) {
     panels.push({
       key: `work:${work.work_mbid}`,
-      label:
-        works.length === 1 && !about.background ? "About the work" : work.title,
+      label: works.length === 1 && !background ? "About the work" : work.title,
       text: work.text,
       workMbid: work.work_mbid,
       workTitle: work.title,

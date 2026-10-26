@@ -1,4 +1,6 @@
 import {
+  chooseTextSource,
+  pageTextSources,
   creditRoleLabel,
   creditRolesLabel,
   discographySections,
@@ -39,6 +41,7 @@ import { Screen, SectionTitle, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { EditorialBlock, NoteBlock } from "@/components/credits";
 import { CompositionsSection } from "@/components/works";
+import { TextSourceChips } from "@/components/text-sources";
 import { GenreChips } from "@/components/genres";
 import { FocusBar } from "@/components/focus";
 import { RelatedPeople } from "@/components/related-people";
@@ -68,6 +71,12 @@ export default function ArtistScreen() {
     enabled: !!id,
     staleTime: 60_000,
   });
+  const [pickedSource, setPickedSource] = useState<string | null>(null);
+  const bioSources = pageTextSources(about.data).filter(
+    (source) => source.biography,
+  );
+  const bioSource = chooseTextSource(bioSources, pickedSource);
+  const biography = bioSource?.biography ?? about.data?.biography ?? null;
   const credits = useQuery({
     queryKey: ["artist-credits", id],
     queryFn: () => getArtistCredits(id),
@@ -292,13 +301,18 @@ export default function ArtistScreen() {
               </View>
             ) : null}
           </View>
-          {about.data?.biography && tab !== "credits" ? (
+          {biography && tab !== "credits" ? (
             <View style={styles.bio}>
               <SectionTitle>Biography</SectionTitle>
-              <EditorialBlock text={about.data.biography} />
+              <TextSourceChips
+                active={bioSource?.id}
+                onPick={setPickedSource}
+                sources={bioSources}
+              />
+              <EditorialBlock key={biography.url} text={biography} />
             </View>
           ) : null}
-          {!about.data?.biography &&
+          {!biography &&
           tab !== "credits" &&
           enrichmentWaitingLabel(about.data?.enrichment.task, "artist") ? (
             <Text style={styles.waiting}>
@@ -308,7 +322,10 @@ export default function ArtistScreen() {
           {works.data?.works.length ? (
             <View>
               <SectionTitle>Compositions</SectionTitle>
-              <CompositionsSection works={works.data.works} />
+              <CompositionsSection
+                catalogue={works.data.catalogue}
+                works={works.data.works}
+              />
             </View>
           ) : null}
           {related.data && tab !== "credits" ? (

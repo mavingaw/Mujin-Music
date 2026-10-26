@@ -441,7 +441,11 @@ export type EnrichmentStage =
   | "wikipedia"
   | "commons"
   | "relations"
-  | "coverart";
+  | "coverart"
+  /** A composer's whole MusicBrainz catalogue with Wikidata's notable works. */
+  | "catalogue"
+  /** The same article in the other editorial sources turned on. */
+  | "sources";
 
 export interface EnrichmentTaskState {
   status: "pending" | "done" | "skipped" | "failed" | (string & {});
@@ -480,6 +484,40 @@ export interface AlbumReleaseFacts {
   labels?: { name: string; catalog_number: string | null }[];
 }
 
+/** One editorial text source a page can switch to: the same article in
+ * another Wikipedia, like Roon's source list under an album review. */
+export interface TextSource {
+  /** `wikipedia:<language>`. */
+  id: string;
+  /** "English Wikipedia", "German Wikipedia", ... */
+  name: string;
+  language: string;
+  /** The highest source in the administrator's priority list with text. */
+  preferred: boolean;
+  biography: EditorialText | null;
+  background: EditorialText | null;
+  review: EditorialText | null;
+}
+
+/** One publication's rating from an article's "Review scores" table. */
+export interface ReviewScore {
+  publication: string;
+  /** As printed: "5/5", "A+", "10/10". */
+  rating: string;
+  score: number | null;
+  max: number | null;
+}
+
+/** The review scores table of an album article, with its attribution. */
+export interface ReviewScores {
+  scores: ReviewScore[];
+  title: string;
+  url: string;
+  language: string;
+  license: string;
+  license_url: string;
+}
+
 export interface AlbumAbout {
   album_id: string;
   credits: AboutCredit[];
@@ -513,6 +551,11 @@ export interface AlbumAbout {
    * leave this out.
    */
   sources?: AlbumSources;
+  /** Every editorial source with text about the album, in priority order;
+   * older servers leave this out. */
+  text_sources?: TextSource[];
+  /** Publications' ratings from the article's review scores table. */
+  review_scores?: ReviewScores | null;
 }
 
 /** Where an album fact comes from. */
@@ -724,6 +767,9 @@ export interface ArtistAbout {
   enrichment: EnrichmentStatus;
   /** The artist's genres, or those of the albums they are credited on. */
   genres?: GenreRef[];
+  /** Every editorial source with a biography, in priority order; older
+   * servers leave this out. */
+  text_sources?: TextSource[];
 }
 
 export interface CreditRoleRef {
@@ -761,6 +807,19 @@ export interface EnrichmentSettings {
   artist_images: boolean;
   /** Genres from MusicBrainz or from file tags; older servers leave this out. */
   genre_source?: GenreSource;
+  /**
+   * Editorial text sources in priority order, each on or off (Roon's
+   * "Editorial sources"). The first one on is the main source. Older
+   * servers leave this out.
+   */
+  editorial_sources?: EditorialSource[];
+}
+
+/** One editorial text source and whether it is used. */
+export interface EditorialSource {
+  /** `wikipedia:<language>`, e.g. `wikipedia:de`. */
+  id: string;
+  enabled: boolean;
 }
 
 export interface EnrichmentOverview extends EnrichmentSettings {
@@ -850,14 +909,43 @@ export interface WorkPage {
 
 export interface ComposerWork {
   work: WorkSummary;
+  /** Library tracks performing the work; 0 for a catalogue work you do not have. */
   track_count: number;
+  /** Library albums with a recording of the work. */
   recording_count: number;
+  /** Position among the composer's notable works (Wikidata), or null. */
+  notable_rank?: number | null;
+  /** Whether the work came from the composer's MusicBrainz catalogue. */
+  in_catalogue?: boolean;
+  wikidata_id?: string | null;
+}
+
+/** Where a composer's full catalogue stands. */
+export interface CatalogueSummary {
+  /** `ready`, `pending` (being read), `failed`, `none` (MusicBrainz lists
+   * nothing) or `off` (online metadata is off). */
+  state: "ready" | "pending" | "failed" | "none" | "off" | (string & {});
+  composer_mbid: string | null;
+  /** Works MusicBrainz lists, movements included. */
+  musicbrainz_total: number;
+  /** Pieces in the catalogue; movements are listed under their piece. */
+  pieces: number;
+  in_library: number;
+  notable: number;
+  /** False when the composer has more works than Parson reads. */
+  complete: boolean;
+  musicbrainz_url: string | null;
+  wikidata_url: string | null;
+  updated_at: string | null;
 }
 
 export interface ComposerWorks {
   artist_id: string;
   name: string | null;
+  /** The library's works and the composer's whole catalogue. */
   works: ComposerWork[];
+  /** Older servers leave this out. */
+  catalogue?: CatalogueSummary;
 }
 
 export interface AlbumIdentification {

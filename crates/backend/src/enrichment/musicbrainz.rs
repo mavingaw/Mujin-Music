@@ -140,6 +140,31 @@ pub fn work_lookup_url(mbid: &str) -> String {
     format!("{API_ROOT}/work/{mbid}?inc=url-rels&fmt=json")
 }
 
+/// Works MusicBrainz lists for a composer (browse works by artist), with
+/// the composer relations that carry the years, the parent of each
+/// movement and the Wikidata link. MusicBrainz serves 100 per page.
+pub fn work_browse_url(artist_mbid: &str, offset: usize) -> String {
+    format!(
+        "{API_ROOT}/work?artist={artist_mbid}&inc=artist-rels+work-rels+url-rels&limit={WORK_PAGE_SIZE}&offset={offset}&fmt=json"
+    )
+}
+
+pub const WORK_PAGE_SIZE: usize = 100;
+
+/// The total number of works and this page's works from a browse answer.
+pub fn parse_work_browse(body: &Value) -> (usize, &[Value]) {
+    let total = body
+        .get("work-count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as usize;
+    (total, array(body, "works"))
+}
+
+/// The page listing a composer's works on MusicBrainz.
+pub fn artist_works_page_url(mbid: &str) -> String {
+    format!("https://musicbrainz.org/artist/{mbid}/works")
+}
+
 pub fn artist_page_url(mbid: &str) -> String {
     format!("https://musicbrainz.org/artist/{mbid}")
 }

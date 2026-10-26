@@ -50,7 +50,9 @@ use crate::persistence::connection::{DbPool, connect};
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
 // 18: MusicBrainz release, recording and artist ids are read from tags.
 // 19: Release facts (catalog number, country, original date, barcode).
-const TAG_PARSER_VERSION: &str = "19";
+// 20: Ogg Vorbis and Opus lengths read from the real last page (scans that
+//     prefetch only a file's head and tail read the length from the head).
+const TAG_PARSER_VERSION: &str = "20";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -1579,7 +1581,6 @@ fn storage_queue_depth(path: &Path, incurs_seek_penalty: Option<bool>) -> usize 
 #[derive(Debug, Clone, Copy)]
 enum TagRegion {
     Start(usize),
-    End(usize),
 }
 
 #[derive(Debug)]
@@ -2088,7 +2089,6 @@ fn read_tag_region<R: Read + Seek>(
 ) -> Result<Vec<u8>, String> {
     let (offset, requested) = match region {
         TagRegion::Start(length) => (0, length),
-        TagRegion::End(length) => (file_length.saturating_sub(length as u64), length),
     };
     let available = file_length.saturating_sub(offset).min(requested as u64) as usize;
     reader
@@ -3906,16 +3906,56 @@ fn ogg_packets(bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
         .ok_or_else(|| "Ogg pages not found".to_string())
 }
 
-fn final_ogg_granule(bytes: &[u8]) -> Option<u64> {
+/// The granule position of the last complete page of the logical stream
+/// `serial` in a window from the end of the file. A page header is only
+/// trusted when its version byte is zero and its serial number matches,
+/// so "OggS" inside compressed audio or a second multiplexed stream never
+/// sets the length.
+fn final_ogg_granule(bytes: &[u8], serial: Option<u32>) -> Option<u64> {
     bytes
         .windows(4)
         .enumerate()
-        .filter(|(offset, marker)| *marker == b"OggS" && offset + 14 <= bytes.len())
+        .filter(|(offset, marker)| {
+            *marker == b"OggS" && offset + 18 <= bytes.len() && bytes[offset + 4] == 0
+        })
+        .filter(|(offset, _)| {
+            serial.is_none_or(|serial| {
+                u32::from_le_bytes(bytes[offset + 14..offset + 18].try_into().expect("serial"))
+                    == serial
+            })
+        })
         .map(|(offset, _)| {
             u64::from_le_bytes(bytes[offset + 6..offset + 14].try_into().expect("granule"))
         })
         .rfind(|granule| *granule != u64::MAX)
 }
+
+/// Reads exactly `length` bytes ending at the end of the file, or fails.
+/// A short read never passes for the tail: the prefetching reader only
+/// holds the head and the tail of a file, and a tail request that reaches
+/// into the head would otherwise return the head's bytes, so the length
+/// would be read from the first page or so of audio.
+fn read_file_tail<R: Read + Seek>(
+    reader: &mut R,
+    file_length: u64,
+    length: usize,
+) -> Result<Vec<u8>, String> {
+    let length = (length as u64).min(file_length) as usize;
+    reader
+        .seek(SeekFrom::Start(file_length - length as u64))
+        .map_err(|error| error.to_string())?;
+    let mut bytes = vec![0; length];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
+/// Tail sizes tried for the last Ogg page, largest first. An Ogg page is at
+/// most 65,307 bytes and audio pages are usually a few kilobytes, so the
+/// smaller sizes still hold the final page and fit inside the tail region
+/// the prefetching reader keeps.
+const OGG_TAIL_WINDOWS: [usize; 5] = [128 * 1024, 64 * 1024, 32 * 1024, 16 * 1024, 8 * 1024];
 
 fn parse_ogg_fast<R: Read + Seek>(
     reader: &mut R,
@@ -3983,8 +4023,26 @@ fn parse_ogg_fast<R: Read + Seek>(
     for packet in packets.iter().take(4) {
         parse_vorbis_comment_packet(&mut metadata, packet)?;
     }
-    let end = read_tag_region(reader, file_length, TagRegion::End(WINDOW))?;
-    if let Some(granule) = final_ogg_granule(&end).filter(|_| sample_rate > 0) {
+    let serial = (start.len() >= 18 && start.starts_with(b"OggS"))
+        .then(|| u32::from_le_bytes(start[14..18].try_into().expect("Ogg serial")));
+    let mut final_granule = None;
+    let mut readable = false;
+    for window in OGG_TAIL_WINDOWS {
+        let Ok(end) = read_file_tail(reader, file_length, window) else {
+            continue;
+        };
+        readable = true;
+        final_granule = final_ogg_granule(&end, serial);
+        if final_granule.is_some() || window as u64 >= file_length {
+            break;
+        }
+    }
+    if !readable {
+        // The tail is not available from this reader (a prefetched head
+        // and tail that are too small); the caller reads the whole file.
+        return Err("Ogg tail is not readable".to_string());
+    }
+    if let Some(granule) = final_granule.filter(|_| sample_rate > 0) {
         metadata.duration_seconds = granule.saturating_sub(pre_skip) as f64 / sample_rate as f64;
         metadata.duration_source = Some(DurationSource::Exact);
     } else {
@@ -10057,6 +10115,10 @@ mod external_library_tests {
         snapshot_to_parsed, split_genres, stage_superseded_file_identities,
         sync_core_file_references,
     };
+    use super::{
+        PrefetchedRegions, RawAudioMetadata, SparseRegionReader, TagBuffer, tag_region_plan,
+    };
+    use std::io::BufReader;
 
     #[test]
     fn missing_and_blank_metadata_have_stable_path_fallbacks() {
@@ -12562,6 +12624,147 @@ mod external_library_tests {
         assert_eq!(metadata.title.as_deref(), Some("Edge Song"));
         assert_eq!(metadata.track_artists, ["Edge Artist"]);
         assert!((metadata.duration_seconds - 1.0).abs() < 0.001);
+    }
+
+    /// A Vorbis or Opus file the way an encoder writes it: headers, then
+    /// many small audio pages, the granule growing by `step` each page.
+    fn ogg_stream(head: &[u8], tags: &[u8], pages: u32, step: u64, serial: u32) -> Vec<u8> {
+        fn page(serial: u32, sequence: u32, granule: u64, flags: u8, packet: &[u8]) -> Vec<u8> {
+            let mut output = Vec::new();
+            output.extend_from_slice(b"OggS\0");
+            output.push(flags);
+            output.extend_from_slice(&granule.to_le_bytes());
+            output.extend_from_slice(&serial.to_le_bytes());
+            output.extend_from_slice(&sequence.to_le_bytes());
+            output.extend_from_slice(&0_u32.to_le_bytes());
+            let mut lacing = vec![255_u8; packet.len() / 255];
+            lacing.push((packet.len() % 255) as u8);
+            output.push(lacing.len() as u8);
+            output.extend_from_slice(&lacing);
+            output.extend_from_slice(packet);
+            output
+        }
+        let mut bytes = page(serial, 0, 0, 2, head);
+        bytes.extend(page(serial, 1, 0, 0, tags));
+        for index in 0..pages {
+            // Audio bytes that happen to contain "OggS" must not be taken
+            // for a page header.
+            let mut audio = vec![0x41_u8; 480];
+            audio[100..104].copy_from_slice(b"OggS");
+            let flags = if index + 1 == pages { 4 } else { 0 };
+            bytes.extend(page(
+                serial,
+                index + 2,
+                step * u64::from(index + 1),
+                flags,
+                &audio,
+            ));
+        }
+        bytes
+    }
+
+    fn comment_packet(prefix: &[u8], title: &str) -> Vec<u8> {
+        let mut tags = prefix.to_vec();
+        tags.extend_from_slice(&0_u32.to_le_bytes());
+        tags.extend_from_slice(&1_u32.to_le_bytes());
+        let value = format!("TITLE={title}");
+        tags.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        tags.extend_from_slice(value.as_bytes());
+        tags
+    }
+
+    /// Reads a file the way the io_uring scan does: only the head and tail
+    /// regions `tag_region_plan` asks for are in memory.
+    fn parse_prefetched(format: AudioFormat, bytes: &[u8]) -> RawAudioMetadata {
+        let length = bytes.len() as u64;
+        let (start, end) = tag_region_plan(format, length);
+        let regions = vec![
+            (0, TagBuffer::new(bytes[..start].to_vec())),
+            (
+                length - end as u64,
+                TagBuffer::new(bytes[bytes.len() - end..].to_vec()),
+            ),
+        ];
+        let mut reader = BufReader::with_capacity(
+            4 * 1024,
+            SparseRegionReader::new(PrefetchedRegions {
+                file_length: length,
+                regions,
+                bytes_read: 0,
+                read_calls: 0,
+            }),
+        );
+        parse_ogg_fast(&mut reader, length).expect("prefetched Ogg parses")
+    }
+
+    #[test]
+    fn ogg_lengths_come_from_the_last_page_when_only_head_and_tail_are_read() {
+        // 150 s of Opus (48 kHz granules, 312 samples of pre-skip) in about
+        // 600 pages: far more than the prefetched head and tail hold. The
+        // scan used to read the tail window from the head's bytes and
+        // report the length of the first few pages (about 2 s).
+        let mut head = b"OpusHead\x01\x02\x38\x01\x44\xac\0\0\0\0\0".to_vec();
+        head.resize(19, 0);
+        let mut opus = ogg_stream(
+            &head,
+            &comment_packet(b"OpusTags", "Excursions"),
+            600,
+            12_000,
+            7,
+        );
+        // The real final granule includes the pre-skip.
+        let last = opus.len() - (27 + 2 + 480);
+        opus[last + 6..last + 14].copy_from_slice(&(7_200_000_u64 + 312).to_le_bytes());
+        for metadata in [
+            parse_prefetched(AudioFormat::Opus, &opus),
+            parse_ogg_fast(&mut Cursor::new(opus.clone()), opus.len() as u64).unwrap(),
+        ] {
+            assert_eq!(metadata.title.as_deref(), Some("Excursions"));
+            assert!(
+                (metadata.duration_seconds - 150.0).abs() < 0.001,
+                "Opus read as {} s",
+                metadata.duration_seconds
+            );
+            assert_eq!(metadata.duration_source, Some(DurationSource::Exact));
+        }
+
+        // 213 s of Vorbis at 44.1 kHz.
+        let mut identification = b"\x01vorbis".to_vec();
+        identification.extend_from_slice(&0_u32.to_le_bytes());
+        identification.push(2);
+        identification.extend_from_slice(&44_100_u32.to_le_bytes());
+        identification.extend_from_slice(&0_i32.to_le_bytes());
+        identification.extend_from_slice(&160_000_i32.to_le_bytes());
+        identification.extend_from_slice(&0_i32.to_le_bytes());
+        identification.extend_from_slice(&[0xb8, 1]);
+        let vorbis = ogg_stream(
+            &identification,
+            &comment_packet(b"\x03vorbis", "Moanin'"),
+            300,
+            44_100 * 213 / 300,
+            9,
+        );
+        let metadata = parse_prefetched(AudioFormat::Ogg, &vorbis);
+        assert_eq!(metadata.title.as_deref(), Some("Moanin'"));
+        assert!(
+            (metadata.duration_seconds - 213.0).abs() < 0.001,
+            "Vorbis read as {} s",
+            metadata.duration_seconds
+        );
+        assert_eq!(metadata.technical.bitrate_kbps, Some(160));
+    }
+
+    #[test]
+    fn a_second_ogg_stream_does_not_set_the_length() {
+        let mut head = b"OpusHead\x01\x02\0\0\x80\xbb\0\0\0\0\0".to_vec();
+        head.resize(19, 0);
+        let mut bytes = ogg_stream(&head, &comment_packet(b"OpusTags", "x"), 50, 48_000, 1);
+        // A trailing page from another logical stream (serial 2) with a
+        // much larger granule.
+        let other = ogg_stream(&head, &comment_packet(b"OpusTags", "y"), 1, 48_000 * 900, 2);
+        bytes.extend_from_slice(&other[other.len() - (27 + 2 + 480)..]);
+        let metadata = parse_ogg_fast(&mut Cursor::new(bytes.clone()), bytes.len() as u64).unwrap();
+        assert!((metadata.duration_seconds - 50.0).abs() < 0.001);
     }
 
     #[test]

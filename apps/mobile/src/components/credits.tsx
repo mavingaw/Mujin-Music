@@ -1,4 +1,5 @@
 import {
+  editorialSourceName,
   groupCredits,
   paragraphs,
   saveNote,
@@ -24,8 +25,6 @@ import { palette } from "@/constants/colors";
 import { artistRoute } from "@/lib/credit-links";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
-const SOURCE_NAMES: Record<string, string> = { wikipedia: "Wikipedia" };
-
 /** Wikipedia text with the CC BY-SA attribution it needs. */
 export function EditorialBlock({ text }: { text: EditorialText }) {
   const [expanded, setExpanded] = useState(false);
@@ -48,7 +47,8 @@ export function EditorialBlock({ text }: { text: EditorialText }) {
         </Pressable>
       ) : null}
       <Text style={styles.attribution}>
-        From the {SOURCE_NAMES[text.source] ?? text.source} article{" "}
+        From the {editorialSourceName(`${text.source}:${text.language}`)}{" "}
+        article{" "}
         <Text
           accessibilityRole="link"
           onPress={() => void Linking.openURL(text.url)}

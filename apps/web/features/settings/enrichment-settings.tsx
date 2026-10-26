@@ -3,14 +3,19 @@
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  editorialSourceName,
+  editorialSourceNativeName,
   enrichmentStageLine,
   getEnrichment,
+  moveEditorialSource,
+  toggleEditorialSource,
   updateEnrichment,
+  type EditorialSource,
   type EnrichmentSettings as Settings,
   type GenreSource,
 } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Globe2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 const LANGUAGES: [code: string, name: string][] = [
@@ -25,6 +30,108 @@ const LANGUAGES: [code: string, name: string][] = [
   ["pt", "Português"],
   ["sv", "Svenska"],
 ];
+
+/**
+ * Roon's "Editorial sources": each Wikipedia language on or off, in the
+ * order pages use them. The first one on is the main source; the others
+ * are fetched too, so album and artist pages can switch text source.
+ */
+function EditorialSources({
+  sources,
+  disabled,
+  onChange,
+}: {
+  sources: EditorialSource[];
+  disabled: boolean;
+  onChange: (sources: EditorialSource[]) => void;
+}) {
+  const main = sources.find((source) => source.enabled)?.id;
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="font-medium text-zinc-200">Editorial sources</p>
+        <p className="mt-0.5 text-xs leading-5 text-zinc-500">
+          Biographies, album background and reviews come from the first source
+          turned on. The others are fetched too, so album and artist pages can
+          switch to them. Use the arrows to set the order.
+        </p>
+      </div>
+      <ol
+        aria-label="Editorial sources in priority order"
+        className="divide-y divide-white/6 overflow-hidden rounded-md border border-white/8"
+      >
+        {sources.map((source, index) => {
+          const native = editorialSourceNativeName(source.id);
+          const name = editorialSourceName(source.id);
+          return (
+            <li
+              className={`flex items-center gap-3 px-3 py-2 ${
+                source.enabled ? "bg-white/[0.03]" : ""
+              }`}
+              key={source.id}
+            >
+              <span className="w-5 text-right text-xs tabular-nums text-zinc-600">
+                {index + 1}
+              </span>
+              <Checkbox
+                aria-label={`Use ${name}`}
+                checked={source.enabled}
+                disabled={
+                  disabled ||
+                  (source.enabled &&
+                    source.id === main &&
+                    sources.filter((item) => item.enabled).length === 1)
+                }
+                onCheckedChange={() =>
+                  onChange(toggleEditorialSource(sources, source.id))
+                }
+              />
+              <span
+                className={`min-w-0 flex-1 truncate ${
+                  source.enabled ? "text-zinc-100" : "text-zinc-500"
+                }`}
+              >
+                {name}
+                {native && (
+                  <span className="ml-1.5 text-xs text-zinc-500">{native}</span>
+                )}
+              </span>
+              {source.id === main && (
+                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-300">
+                  Main
+                </span>
+              )}
+              <span className="flex shrink-0">
+                <button
+                  aria-label={`Move ${name} up`}
+                  className="rounded p-1 text-zinc-500 transition-colors hover:bg-white/8 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+                  disabled={disabled || index === 0}
+                  onClick={() =>
+                    onChange(moveEditorialSource(sources, source.id, -1))
+                  }
+                  type="button"
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </button>
+                <button
+                  aria-label={`Move ${name} down`}
+                  className="rounded p-1 text-zinc-500 transition-colors hover:bg-white/8 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+                  disabled={disabled || index === sources.length - 1}
+                  onClick={() =>
+                    onChange(moveEditorialSource(sources, source.id, 1))
+                  }
+                  type="button"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
 
 /**
  * Online metadata is off by default: Parson only contacts MusicBrainz and
@@ -71,11 +178,12 @@ export default function EnrichmentSettings() {
             Online metadata
           </h2>
           <p className="mt-1 max-w-xl text-sm leading-6 text-zinc-500">
-            Adds credits from MusicBrainz; biographies, album background and
-            critical reception from Wikipedia; influences and followers from
-            Wikidata; and front covers from the Cover Art Archive for albums
-            without artwork, with their sources and licenses shown. Off by
-            default.
+            Adds credits and composers&apos; full catalogues from MusicBrainz;
+            biographies, album background, critical reception and review scores
+            from Wikipedia, in every language you turn on below; notable works,
+            influences and followers from Wikidata; and front covers from the
+            Cover Art Archive for albums without artwork, with their sources and
+            licenses shown. Off by default.
           </p>
         </div>
         <Button
@@ -129,8 +237,21 @@ export default function EnrichmentSettings() {
             })}
           </ul>
         )}
+        {data?.editorial_sources?.length ? (
+          <EditorialSources
+            disabled={update.isPending}
+            onChange={(editorial_sources) =>
+              update.mutate({ editorial_sources })
+            }
+            sources={data.editorial_sources}
+          />
+        ) : null}
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
-          <label className="flex items-center gap-2 text-zinc-300">
+          <label
+            className={`flex items-center gap-2 text-zinc-300 ${
+              data?.editorial_sources?.length ? "hidden" : ""
+            }`}
+          >
             <span>Wikipedia language</span>
             <select
               className="h-9 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-zinc-100"

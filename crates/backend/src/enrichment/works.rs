@@ -177,6 +177,10 @@ const TITLE_FORMS: &[(&str, &str)] = &[
     ("motet", "Motet"),
     ("madrigal", "Madrigal"),
     ("lied", "Song"),
+    ("bagatelle", "Bagatelle"),
+    ("rondo", "Rondo"),
+    ("minuet", "Minuet"),
+    ("impromptu", "Impromptu"),
 ];
 
 /// Form from a title when MusicBrainz gives no work type.
@@ -351,6 +355,51 @@ pub fn parse_work(work: &Value, depth: usize) -> Option<WorkInfo> {
     })
 }
 
+/// A work as listed in a composer's catalogue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogueWork {
+    pub info: WorkInfo,
+    /// The composer as this work names them (the catalogue's composer).
+    pub composer: WorkComposer,
+    /// The work's Wikidata item, from its MusicBrainz URL relationship.
+    pub wikidata_id: Option<String>,
+}
+
+/// One work from a "browse works by artist" page, when `composer` wrote it.
+/// Works the composer only wrote words for, arranged or had dedicated to
+/// them are not their compositions, and an arrangement of another work is
+/// left out (its original is listed).
+pub fn catalogue_work(work: &Value, composer: &str) -> Option<CatalogueWork> {
+    let relations = array(work, "relations");
+    let arrangement = relations.iter().any(|relation| {
+        relation.get("type").and_then(Value::as_str) == Some("arrangement")
+            && relation.get("direction").and_then(Value::as_str) == Some("backward")
+            && relation.get("target-type").and_then(Value::as_str) == Some("work")
+    });
+    if arrangement {
+        return None;
+    }
+    let info = parse_work(work, 0)?;
+    let named = info
+        .composers
+        .iter()
+        .find(|known| known.mbid.as_deref() == Some(composer))?
+        .clone();
+    let wikidata_id = relations.iter().find_map(|relation| {
+        if relation.get("type").and_then(Value::as_str) != Some("wikidata") {
+            return None;
+        }
+        let resource = relation.get("url").and_then(|url| text(url, "resource"))?;
+        let id = resource.rsplit('/').next()?;
+        super::musicbrainz::is_wikidata_id(id).then(|| id.to_string())
+    });
+    Some(CatalogueWork {
+        info,
+        composer: named,
+        wikidata_id,
+    })
+}
+
 /// The works a recording performs.
 pub fn recording_works(recording: &Value) -> Vec<WorkInfo> {
     let mut works: Vec<WorkInfo> = Vec::new();
@@ -490,6 +539,56 @@ mod tests {
         assert_eq!(
             part_title(&symphony.title, &movement.title),
             "IV. Presto – Allegro assai"
+        );
+    }
+
+    #[test]
+    fn a_catalogue_keeps_the_composers_own_works_with_their_wikidata_items() {
+        const ODE: &str = "33333333-3333-4333-8333-333333333333";
+        let composer = json!({"type": "composer", "target-type": "artist", "direction": "backward",
+            "begin": "1804", "end": "1808",
+            "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}});
+        let symphony = json!({"id": SYMPHONY, "title": "Symphony no. 5 in C minor, op. 67",
+            "type": "Symphony", "relations": [composer.clone(),
+                {"type": "wikidata", "target-type": "url", "direction": "backward",
+                 "url": {"resource": "https://www.wikidata.org/wiki/Q193778"}}]});
+        let found = catalogue_work(&symphony, BEETHOVEN).unwrap();
+        assert_eq!(found.info.title, "Symphony No. 5 in C minor, Op. 67");
+        assert_eq!(found.info.composed.as_deref(), Some("1804–1808"));
+        assert_eq!(found.wikidata_id.as_deref(), Some("Q193778"));
+        assert_eq!(found.composer.mbid.as_deref(), Some(BEETHOVEN));
+
+        // A movement keeps its piece.
+        let movement = json!({"id": MOVEMENT, "title": "Symphony no. 5 in C minor, op. 67: I. Allegro con brio",
+            "relations": [composer.clone(), {"type": "parts", "target-type": "work",
+                "direction": "backward", "ordering-key": 1,
+                "work": {"id": SYMPHONY, "title": "Symphony no. 5 in C minor, op. 67"}}]});
+        let found = catalogue_work(&movement, BEETHOVEN).unwrap();
+        assert_eq!(
+            found
+                .info
+                .parent
+                .as_deref()
+                .map(|parent| parent.mbid.as_str()),
+            Some(SYMPHONY)
+        );
+        assert_eq!(found.info.position, Some(1));
+
+        // Someone else's arrangement and words written to Beethoven's
+        // music are not his compositions.
+        let arrangement = json!({"id": ODE, "title": "Ode to Joy (arr. for piano)",
+            "relations": [composer.clone(), {"type": "arrangement", "target-type": "work",
+                "direction": "backward", "work": {"id": SYMPHONY, "title": "x"}}]});
+        assert!(catalogue_work(&arrangement, BEETHOVEN).is_none());
+        let lyrics = json!({"id": ODE, "title": "An die Freude",
+            "relations": [{"type": "lyricist", "target-type": "artist", "direction": "backward",
+                "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}}]});
+        assert!(catalogue_work(&lyrics, BEETHOVEN).is_none());
+        // A namesake's work is not in this composer's catalogue.
+        assert!(catalogue_work(&symphony, MOVEMENT).is_none());
+        assert_eq!(
+            form_from_title("Bagatelle in A minor").as_deref(),
+            Some("Bagatelle")
         );
     }
 

@@ -7,6 +7,7 @@ export * from "./editorial/people";
 export * from "./editorial/related";
 export * from "./editorial/release-match";
 export * from "./editorial/sources";
+export * from "./editorial/text-sources";
 export * from "./player/audio-presets";
 export * from "./resources/albums";
 export * from "./resources/artists";

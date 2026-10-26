@@ -62,6 +62,91 @@ pub struct ExternalLink {
     pub url: String,
 }
 
+/// One editorial text source a page can switch to, like Roon's source
+/// list under an album review: the same article in another Wikipedia.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TextSource {
+    /// `wikipedia:<language>`.
+    pub id: String,
+    /// "English Wikipedia", "German Wikipedia", ...
+    pub name: String,
+    pub language: String,
+    /// The source the page shows first: the highest in the administrator's
+    /// priority list that has text.
+    pub preferred: bool,
+    pub biography: Option<EditorialText>,
+    pub background: Option<EditorialText>,
+    pub review: Option<EditorialText>,
+}
+
+/// An album article's review scores table, with its attribution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewScores {
+    pub scores: Vec<crate::enrichment::wikimedia::ReviewScore>,
+    pub title: String,
+    pub url: String,
+    pub language: String,
+    pub license: String,
+    pub license_url: String,
+}
+
+/// Texts grouped by source and ordered by the priority list (`languages`,
+/// the sources turned on); a source no longer turned on still shows, last.
+/// The main stage's text wins over another source's in the same language.
+pub fn text_sources(
+    main: &[EditorialText],
+    others: &[EditorialText],
+    languages: &[String],
+) -> Vec<TextSource> {
+    let mut sources: Vec<TextSource> = Vec::new();
+    for text in main.iter().chain(others) {
+        let id = format!("{}:{}", text.source, text.language);
+        let index = match sources.iter().position(|source| source.id == id) {
+            Some(index) => index,
+            None => {
+                sources.push(TextSource {
+                    name: crate::enrichment::wikimedia::source_name(&text.source, &text.language),
+                    id,
+                    language: text.language.clone(),
+                    preferred: false,
+                    biography: None,
+                    background: None,
+                    review: None,
+                });
+                sources.len() - 1
+            }
+        };
+        let source = &mut sources[index];
+        let slot = match text.kind.as_str() {
+            "biography" => &mut source.biography,
+            "reception" => &mut source.review,
+            _ => &mut source.background,
+        };
+        if slot.is_none() {
+            *slot = Some(text.clone());
+        }
+    }
+    let rank = |source: &TextSource| {
+        languages
+            .iter()
+            .position(|language| *language == source.language)
+            .unwrap_or(languages.len())
+    };
+    sources.sort_by_key(rank);
+    if let Some(first) = sources.first_mut() {
+        first.preferred = true;
+    }
+    sources
+}
+
+fn review_scores(profile: Option<&store::ProfileRow>) -> Option<ReviewScores> {
+    let value = serde_json::from_str::<Value>(&profile?.profile_json).ok()?;
+    let scores = value.get(crate::enrichment::worker::REVIEW_SCORES_KEY)?;
+    serde_json::from_value::<ReviewScores>(scores.clone())
+        .ok()
+        .filter(|scores| !scores.scores.is_empty())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AlbumAbout {
     pub album_id: String,
@@ -93,6 +178,12 @@ pub struct AlbumAbout {
     /// Each fact with its source (tags, online or a frozen edit), the
     /// album's own choices and the library defaults.
     pub sources: crate::api::album_sources::AlbumSources,
+    /// Every editorial source with text about the album, in the
+    /// administrator's priority order, for the source switcher.
+    pub text_sources: Vec<TextSource>,
+    /// The publications that reviewed the album and their ratings, from
+    /// the article's review scores table.
+    pub review_scores: Option<ReviewScores>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,6 +263,8 @@ pub struct ArtistAbout {
     pub enrichment: EnrichmentStatus,
     /// The artist's genres, or those of the albums they are credited on.
     pub genres: Vec<GenreRef>,
+    /// Every editorial source with a biography, in priority order.
+    pub text_sources: Vec<TextSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -696,6 +789,11 @@ fn links(profile: &store::ProfileRow, entity: &str) -> Vec<ExternalLink> {
 struct Stored {
     profile: Option<store::ProfileRow>,
     texts: HashMap<String, EditorialText>,
+    /// The main texts and those of the other sources, for the switcher.
+    all_texts: Vec<EditorialText>,
+    source_texts: Vec<EditorialText>,
+    /// Languages of the editorial sources turned on, in priority order.
+    source_languages: Vec<String>,
     image: Option<ImageRow>,
     /// The id the image is stored under.
     image_id: String,
@@ -774,9 +872,14 @@ async fn load_stored(
                     text_id.clone(),
                 ),
             };
+            let all_texts = store::load_texts(connection, entity_type, &text_id)?;
+            let settings = store::load_settings(connection)?;
             Ok(Stored {
                 profile,
-                texts: texts_by_kind(store::load_texts(connection, entity_type, &text_id)?),
+                texts: texts_by_kind(all_texts.clone()),
+                all_texts,
+                source_texts: store::load_source_texts(connection, entity_type, &text_id)?,
+                source_languages: settings.source_languages(),
                 image,
                 image_id,
                 note: match user_id {
@@ -785,7 +888,7 @@ async fn load_stored(
                     }
                     None => None,
                 },
-                enabled: store::load_settings(connection)?.enabled,
+                enabled: settings.enabled,
                 task: store::task_state(connection, entity_type, &entity_id)?,
                 credits,
             })
@@ -920,6 +1023,8 @@ pub async fn album_about(
     if untrusted {
         stored.profile = None;
         stored.texts.clear();
+        stored.all_texts.clear();
+        stored.source_texts.clear();
         stored.credits.clear();
     }
     let work_texts = if untrusted { Vec::new() } else { work_texts };
@@ -944,6 +1049,12 @@ pub async fn album_about(
         }
     };
     let mut texts = stored.texts;
+    let text_sources = text_sources(
+        &stored.all_texts,
+        &stored.source_texts,
+        &stored.source_languages,
+    );
+    let scores = review_scores(stored.profile.as_ref());
     let identity = load_identity(image_pool.clone(), cache.clone()).await;
     let mut credits = merge_album_credits_with(album, &known, &stored.credits, &identity);
     let ids = credits
@@ -990,6 +1101,8 @@ pub async fn album_about(
         credits,
         background: texts.remove("background"),
         review: texts.remove("reception"),
+        text_sources,
+        review_scores: scores,
         facts,
         sources,
         links: stored
@@ -1110,8 +1223,15 @@ pub async fn artist_about(
         // biography, photo or facts for it.
         stored.profile = None;
         stored.texts.clear();
+        stored.all_texts.clear();
+        stored.source_texts.clear();
         stored.image = None;
     }
+    let text_sources = text_sources(
+        &stored.all_texts,
+        &stored.source_texts,
+        &stored.source_languages,
+    );
     let mut texts = stored.texts;
     let album_ids = match cache.artist(&artist_id) {
         Some(artist) if !artist.albums.is_empty() => artist
@@ -1134,6 +1254,7 @@ pub async fn artist_about(
     };
     HttpResponse::Ok().json(ArtistAbout {
         genres,
+        text_sources,
         image: stored.image.map(|image| EditorialImage {
             url: artist_image_url(&stored.image_id),
             author: image.author,
@@ -1290,9 +1411,22 @@ async fn overview(pool: DbPool) -> HttpResponse {
     match web::block(move || {
         let mut connection = pool.get().map_err(|error| error.to_string())?;
         Ok::<_, String>(EnrichmentOverview {
-            settings: store::load_settings(&mut connection).map_err(|error| error.to_string())?,
+            settings: {
+                let mut settings =
+                    store::load_settings(&mut connection).map_err(|error| error.to_string())?;
+                settings.editorial_sources = settings.ordered_sources();
+                settings
+            },
             counts: store::task_counts(&mut connection).map_err(|error| error.to_string())?,
-            sources: store::Stage::ALL.iter().map(|stage| stage.host()).collect(),
+            sources: {
+                let mut hosts = Vec::new();
+                for host in store::Stage::ALL.iter().map(|stage| stage.host()) {
+                    if !hosts.contains(&host) {
+                        hosts.push(host);
+                    }
+                }
+                hosts
+            },
             stages: store::Stage::ALL
                 .iter()
                 .map(|stage| {
@@ -1327,6 +1461,8 @@ pub struct EnrichmentPatch {
     pub language: Option<String>,
     pub artist_images: Option<bool>,
     pub genre_source: Option<crate::enrichment::genres::GenreSource>,
+    /// Editorial sources in priority order with their on/off state.
+    pub editorial_sources: Option<Vec<store::EditorialSource>>,
 }
 
 #[put("/enrichment")]
@@ -1345,11 +1481,47 @@ pub async fn put_enrichment(
             "invalid_language",
         );
     }
+    if let Some(sources) = &patch.editorial_sources {
+        if sources.len() > 32
+            || sources
+                .iter()
+                .any(|source| store::source_language(&source.id).is_none())
+        {
+            return bad_request(
+                "Editorial sources are Wikipedia languages such as wikipedia:en.",
+                "invalid_sources",
+            );
+        }
+        if !sources.iter().any(|source| source.enabled) {
+            return bad_request(
+                "Keep at least one editorial source turned on.",
+                "invalid_sources",
+            );
+        }
+    }
     let write_pool = pool.get_ref().clone();
     let saved = web::block(move || {
         let mut connection = write_pool.get().map_err(|error| error.to_string())?;
         let mut settings =
             store::load_settings(&mut connection).map_err(|error| error.to_string())?;
+        let mut patch = patch;
+        let previous_sources = settings.source_languages();
+        if let Some(sources) = patch.editorial_sources.take() {
+            settings.editorial_sources = sources;
+            // The first source turned on is the main language.
+            if let Some(main) = settings.source_languages().into_iter().next() {
+                patch.language = Some(main);
+            }
+        } else if let Some(language) = &patch.language
+            && store::source_language(&format!("wikipedia:{language}")).is_some()
+        {
+            // Choosing a main language moves it to the top of the list.
+            let mut sources = settings.ordered_sources();
+            let id = format!("wikipedia:{language}");
+            sources.retain(|source| source.id != id);
+            sources.insert(0, store::EditorialSource { id, enabled: true });
+            settings.editorial_sources = sources;
+        }
         let language_changed = patch
             .language
             .as_ref()
@@ -1367,6 +1539,20 @@ pub async fn put_enrichment(
             settings.genre_source = genre_source;
         }
         store::save_settings(&mut connection, &settings).map_err(|error| error.to_string())?;
+        if settings.source_languages() != previous_sources {
+            // Fetch the other sources again for everything with an item.
+            diesel::RunQueryDsl::execute(
+                diesel::sql_query(
+                    "INSERT INTO metadata_task (provider, entity_type, entity_id)
+                     SELECT 'wikipedia-sources', entity_type, entity_id FROM editorial_profile
+                     WHERE entity_type IN ('artist', 'album') AND wikidata_id IS NOT NULL
+                     ON CONFLICT(provider, entity_type, entity_id) DO UPDATE SET
+                         status = 'pending', attempts = 0, last_error = NULL, not_before = NULL",
+                ),
+                &mut connection,
+            )
+            .map_err(|error| error.to_string())?;
+        }
         if language_changed {
             // Texts are per language; look everything up again.
             diesel::RunQueryDsl::execute(
@@ -1863,5 +2049,69 @@ mod tests {
             person_query(&cache, "teo"),
             (Some("teo macero".into()), None)
         );
+    }
+
+    fn text(kind: &str, language: &str, body: &str) -> EditorialText {
+        EditorialText {
+            kind: kind.into(),
+            source: "wikipedia".into(),
+            language: language.into(),
+            title: "Kind of Blue".into(),
+            body: body.into(),
+            url: format!("https://{language}.wikipedia.org/wiki/Kind_of_Blue"),
+            license: "CC BY-SA 4.0".into(),
+            license_url: "https://creativecommons.org/licenses/by-sa/4.0/".into(),
+        }
+    }
+
+    #[test]
+    fn text_sources_follow_the_priority_list() {
+        let main = [
+            text("background", "en", "English lead"),
+            text("reception", "en", "English reception"),
+        ];
+        let others = [
+            text("background", "fr", "Résumé"),
+            text("background", "de", "Einleitung"),
+            text("reception", "de", "Rezeption"),
+            // A stale copy of the main language never replaces it.
+            text("background", "en", "Old English lead"),
+        ];
+        let languages = ["de", "en", "fr"].map(String::from);
+        let sources = text_sources(&main, &others, &languages);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| (source.id.as_str(), source.name.as_str(), source.preferred))
+                .collect::<Vec<_>>(),
+            [
+                ("wikipedia:de", "German Wikipedia", true),
+                ("wikipedia:en", "English Wikipedia", false),
+                ("wikipedia:fr", "French Wikipedia", false),
+            ]
+        );
+        assert_eq!(sources[0].review.as_ref().unwrap().body, "Rezeption");
+        assert_eq!(sources[1].background.as_ref().unwrap().body, "English lead");
+        assert!(sources[2].review.is_none());
+        // A source turned off since keeps showing, after the others.
+        let sources = text_sources(&main, &others, &["fr".to_string()]);
+        assert_eq!(sources[0].id, "wikipedia:fr");
+        assert!(sources[0].preferred);
+        assert_eq!(sources.len(), 3);
+
+        let profile = store::ProfileRow {
+            profile_json: serde_json::json!({"review_scores": {
+                "scores": [{"publication": "AllMusic", "rating": "5/5", "score": 5.0, "max": 5.0}],
+                "title": "Kind of Blue", "url": "https://en.wikipedia.org/wiki/Kind_of_Blue",
+                "language": "en", "license": "CC BY-SA 4.0",
+                "license_url": "https://creativecommons.org/licenses/by-sa/4.0/"
+            }})
+            .to_string(),
+            ..Default::default()
+        };
+        let scores = review_scores(Some(&profile)).unwrap();
+        assert_eq!(scores.scores[0].publication, "AllMusic");
+        // The table is not a release fact.
+        assert!(parse_facts(Some(&profile)).is_none());
     }
 }

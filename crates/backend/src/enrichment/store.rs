@@ -2,7 +2,7 @@
 //! credits and user notes.
 
 use diesel::prelude::*;
-use diesel::sql_types::{BigInt, Integer, Nullable, Text};
+use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Text};
 use diesel::sqlite::SqliteConnection;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +25,92 @@ pub struct EnrichmentSettings {
     /// in the files' tags (each falls back to the other).
     #[serde(default)]
     pub genre_source: crate::enrichment::genres::GenreSource,
+    /// Editorial text sources in priority order, like Roon's "Editorial
+    /// sources": each Wikipedia language can be turned on or off and moved
+    /// up or down. The first one turned on is the main source (and sets
+    /// `language`); the others are fetched too, so an album or artist page
+    /// can switch to them. Empty in settings saved before sources existed;
+    /// [`EnrichmentSettings::ordered_sources`] fills it in.
+    #[serde(default)]
+    pub editorial_sources: Vec<EditorialSource>,
+}
+
+/// One editorial text source and whether it is used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorialSource {
+    /// `wikipedia:<language>`, e.g. `wikipedia:de`.
+    pub id: String,
+    pub enabled: bool,
+}
+
+/// At most this many sources after the main one are fetched per page.
+pub const MAX_EXTRA_SOURCES: usize = 4;
+
+pub fn source_language(id: &str) -> Option<&str> {
+    id.strip_prefix("wikipedia:")
+        .filter(|language| crate::enrichment::wikimedia::SOURCE_LANGUAGES.contains(language))
+}
+
+impl EnrichmentSettings {
+    /// Every known source in priority order. Settings saved before sources
+    /// existed get the defaults (English, German and French Wikipedia on)
+    /// with their chosen language first; unknown ids are dropped and new
+    /// languages are appended, turned off.
+    pub fn ordered_sources(&self) -> Vec<EditorialSource> {
+        let mut sources: Vec<EditorialSource> = Vec::new();
+        if self.editorial_sources.is_empty() {
+            let mut languages = vec![self.language.as_str()];
+            languages.extend(crate::enrichment::wikimedia::SOURCE_LANGUAGES);
+            for language in languages {
+                let id = format!("wikipedia:{language}");
+                if source_language(&id).is_some() && !sources.iter().any(|known| known.id == id) {
+                    sources.push(EditorialSource {
+                        enabled: sources.is_empty() || ["en", "de", "fr"].contains(&language),
+                        id,
+                    });
+                }
+            }
+            return sources;
+        }
+        for source in &self.editorial_sources {
+            if source_language(&source.id).is_some()
+                && !sources.iter().any(|known| known.id == source.id)
+            {
+                sources.push(source.clone());
+            }
+        }
+        for language in crate::enrichment::wikimedia::SOURCE_LANGUAGES {
+            let id = format!("wikipedia:{language}");
+            if !sources.iter().any(|known| known.id == id) {
+                sources.push(EditorialSource { id, enabled: false });
+            }
+        }
+        sources
+    }
+
+    /// Languages of the sources turned on, in priority order.
+    pub fn source_languages(&self) -> Vec<String> {
+        self.ordered_sources()
+            .iter()
+            .filter(|source| source.enabled)
+            .filter_map(|source| source_language(&source.id).map(str::to_string))
+            .collect()
+    }
+
+    /// The languages fetched besides `main` (the language the main text
+    /// was found in), in priority order.
+    pub fn extra_languages(&self, main: Option<&str>) -> Vec<String> {
+        let mut languages = self.source_languages();
+        if languages.is_empty() {
+            return Vec::new();
+        }
+        let main = main
+            .map(str::to_string)
+            .unwrap_or_else(|| languages[0].clone());
+        languages.retain(|language| *language != main);
+        languages.truncate(MAX_EXTRA_SOURCES);
+        languages
+    }
 }
 
 fn default_language() -> String {
@@ -42,6 +128,7 @@ impl Default for EnrichmentSettings {
             language: default_language(),
             artist_images: true,
             genre_source: Default::default(),
+            editorial_sources: Vec::new(),
         }
     }
 }
@@ -101,7 +188,7 @@ pub fn task_counts(connection: &mut SqliteConnection) -> QueryResult<TaskCounts>
 pub fn stage_counts(connection: &mut SqliteConnection, stage: Stage) -> QueryResult<TaskCounts> {
     let rows = diesel::sql_query(
         "SELECT status, COUNT(*) AS count FROM metadata_task
-         WHERE provider = ? AND entity_type IN ('album', 'artist') GROUP BY status",
+         WHERE provider = ? AND entity_type IN ('album', 'artist', 'composer') GROUP BY status",
     )
     .bind::<Text, _>(stage.provider())
     .load::<CountRow>(connection)?;
@@ -186,7 +273,27 @@ pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
          ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
     )
     .execute(connection)?;
-    Ok(queued + linked + text + people + relations + covers)
+    // Composers of works in the library get their whole catalogue, and
+    // matched items with a Wikidata item their other text sources.
+    let catalogues = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT DISTINCT 'musicbrainz-works', 'composer', work.composer_mbid FROM work
+         WHERE length(work.composer_mbid) = 36
+           AND EXISTS (SELECT 1 FROM track_work tw
+                       WHERE tw.work_mbid = work.mbid
+                          OR tw.work_mbid IN (SELECT part.mbid FROM work part
+                                              WHERE part.parent_mbid = work.mbid))
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    let sources = diesel::sql_query(
+        "INSERT INTO metadata_task (provider, entity_type, entity_id)
+         SELECT 'wikipedia-sources', entity_type, entity_id FROM editorial_profile
+         WHERE entity_type IN ('artist', 'album') AND wikidata_id IS NOT NULL
+         ON CONFLICT(provider, entity_type, entity_id) DO NOTHING",
+    )
+    .execute(connection)?;
+    Ok(queued + linked + text + people + relations + covers + catalogues + sources)
 }
 
 /// The enrichment stages. Each one talks to a single host and has its own
@@ -213,22 +320,34 @@ pub enum Stage {
     /// Download the front cover of the matched release from the Cover Art
     /// Archive for an album that has no artwork of its own.
     CoverArt,
+    /// A composer's whole catalogue: every work MusicBrainz lists for them
+    /// (browse works by artist), then the notable works, years, keys and
+    /// forms Wikidata adds.
+    Catalogue,
+    /// The same article in the other editorial sources (Wikipedia
+    /// languages) after the first, so a page can switch text source.
+    Sources,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 6] = [
+    pub const ALL: [Stage; 8] = [
         Stage::Musicbrainz,
         Stage::Wikipedia,
         Stage::Wikidata,
         Stage::Commons,
         Stage::Relations,
         Stage::CoverArt,
+        Stage::Catalogue,
+        Stage::Sources,
     ];
 
     /// Whether the stage fills an entity's page text or photo, so a page
     /// waiting on it says so. Relations and cover art arrive quietly.
     pub fn feeds_page_text(self) -> bool {
-        !matches!(self, Stage::Relations | Stage::CoverArt)
+        !matches!(
+            self,
+            Stage::Relations | Stage::CoverArt | Stage::Catalogue | Stage::Sources
+        )
     }
 
     /// The `metadata_task.provider` value for the stage's queue.
@@ -240,6 +359,8 @@ impl Stage {
             Stage::Commons => "commons",
             Stage::Relations => "wikidata-query",
             Stage::CoverArt => "coverart",
+            Stage::Catalogue => "musicbrainz-works",
+            Stage::Sources => "wikipedia-sources",
         }
     }
 
@@ -252,6 +373,8 @@ impl Stage {
             Stage::Commons => "commons.wikimedia.org",
             Stage::Relations => "query.wikidata.org",
             Stage::CoverArt => "coverartarchive.org",
+            Stage::Catalogue => "musicbrainz.org",
+            Stage::Sources => "wikipedia.org",
         }
     }
 
@@ -354,7 +477,7 @@ pub fn next_stage_task(
     let mut tasks = diesel::sql_query(
         "SELECT id, entity_type, entity_id, attempts FROM metadata_task
          WHERE provider = ? AND status = 'pending'
-           AND entity_type IN ('album', 'artist', 'genre', 'work')
+           AND entity_type IN ('album', 'artist', 'genre', 'work', 'composer')
            AND (not_before IS NULL OR not_before <= CURRENT_TIMESTAMP)
          ORDER BY attempts,
                   CASE entity_type WHEN 'album' THEN 0 WHEN 'artist' THEN 1
@@ -1286,9 +1409,10 @@ pub fn works_by_ids(
     Ok(rows)
 }
 
-/// Works whose composer has one of these MusicBrainz ids or this normalized
-/// name, with the number of library tracks performing each (parts count
-/// toward their parent).
+/// Works in the library whose composer has one of these MusicBrainz ids or
+/// this normalized name, with the number of library tracks performing each
+/// (parts count toward their parent). The rest of a composer's catalogue
+/// is read with [`catalogue_works`].
 pub fn composer_works(
     connection: &mut SqliteConnection,
     normalized_name: Option<&str>,
@@ -1327,6 +1451,9 @@ pub fn composer_works(
                   AS album_count
          FROM work w
          WHERE w.parent_mbid IS NULL AND (w.composer_normalized = ?{by_id})
+           AND EXISTS (SELECT 1 FROM track_work tw
+                       WHERE tw.work_mbid = w.mbid
+                          OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
          ORDER BY w.title LIMIT 2000"
     ))
     .bind::<Text, _>(normalized_name.unwrap_or("\u{0}"))
@@ -1335,6 +1462,361 @@ pub fn composer_works(
         .into_iter()
         .map(|row| (row.work, row.track_count, row.album_count))
         .collect())
+}
+
+/// What is known of a composer's whole catalogue.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, QueryableByName)]
+pub struct CatalogueRow {
+    #[diesel(sql_type = Text)]
+    pub composer_mbid: String,
+    #[diesel(sql_type = Text)]
+    pub composer_name: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub wikidata_id: Option<String>,
+    /// Works MusicBrainz lists for the composer, movements included.
+    #[diesel(sql_type = BigInt)]
+    pub musicbrainz_total: i64,
+    /// Works stored (movements included).
+    #[diesel(sql_type = BigInt)]
+    pub stored_works: i64,
+    #[diesel(sql_type = Bool)]
+    pub complete: bool,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub musicbrainz_fetched_at: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub wikidata_fetched_at: Option<String>,
+}
+
+const CATALOGUE_COLUMNS: &str = "composer_mbid, composer_name, wikidata_id, musicbrainz_total,
+     stored_works, complete, CAST(musicbrainz_fetched_at AS TEXT) AS musicbrainz_fetched_at,
+     CAST(wikidata_fetched_at AS TEXT) AS wikidata_fetched_at";
+
+pub fn load_catalogue(
+    connection: &mut SqliteConnection,
+    composer_mbid: &str,
+) -> QueryResult<Option<CatalogueRow>> {
+    let mut rows = diesel::sql_query(format!(
+        "SELECT {CATALOGUE_COLUMNS} FROM composer_catalogue WHERE composer_mbid = ?"
+    ))
+    .bind::<Text, _>(composer_mbid)
+    .load::<CatalogueRow>(connection)?;
+    Ok(rows.pop())
+}
+
+/// Whether the MusicBrainz part of a catalogue was read within `days`, so
+/// a retry after a busy Wikidata does not page through MusicBrainz again.
+pub fn catalogue_read_recently(
+    connection: &mut SqliteConnection,
+    composer_mbid: &str,
+    days: i64,
+) -> QueryResult<bool> {
+    let rows = diesel::sql_query(
+        "SELECT composer_mbid AS value FROM composer_catalogue
+         WHERE composer_mbid = ? AND musicbrainz_fetched_at IS NOT NULL
+           AND musicbrainz_fetched_at >= datetime('now', '-' || ? || ' days')",
+    )
+    .bind::<Text, _>(composer_mbid)
+    .bind::<BigInt, _>(days)
+    .load::<ValueRow>(connection)?;
+    Ok(!rows.is_empty())
+}
+
+/// One work of a composer's catalogue with its Wikidata item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogueEntry {
+    pub work: WorkRow,
+    pub wikidata_id: Option<String>,
+}
+
+/// Stores the works MusicBrainz lists for a composer and replaces the
+/// composer's catalogue membership. Notable ranks from an earlier
+/// Wikidata read are kept for works still listed.
+pub fn save_catalogue(
+    connection: &mut SqliteConnection,
+    composer_mbid: &str,
+    composer_name: &str,
+    musicbrainz_total: i64,
+    complete: bool,
+    entries: &[CatalogueEntry],
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        for entry in entries {
+            upsert_work(connection, &entry.work)?;
+        }
+        diesel::sql_query(
+            "CREATE TEMP TABLE IF NOT EXISTS catalogue_rank(work_mbid TEXT PRIMARY KEY, notable_rank INTEGER)",
+        )
+        .execute(connection)?;
+        diesel::sql_query("DELETE FROM catalogue_rank").execute(connection)?;
+        diesel::sql_query(
+            "INSERT INTO catalogue_rank SELECT work_mbid, notable_rank FROM composer_catalogue_work
+             WHERE composer_mbid = ? AND notable_rank IS NOT NULL",
+        )
+        .bind::<Text, _>(composer_mbid)
+        .execute(connection)?;
+        diesel::sql_query("DELETE FROM composer_catalogue_work WHERE composer_mbid = ?")
+            .bind::<Text, _>(composer_mbid)
+            .execute(connection)?;
+        for entry in entries {
+            diesel::sql_query(
+                "INSERT INTO composer_catalogue_work (composer_mbid, work_mbid, wikidata_id, notable_rank)
+                 VALUES (?, ?, ?, (SELECT notable_rank FROM catalogue_rank WHERE work_mbid = ?))
+                 ON CONFLICT(composer_mbid, work_mbid) DO UPDATE SET
+                     wikidata_id = COALESCE(excluded.wikidata_id, composer_catalogue_work.wikidata_id)",
+            )
+            .bind::<Text, _>(composer_mbid)
+            .bind::<Text, _>(&entry.work.mbid)
+            .bind::<Nullable<Text>, _>(entry.wikidata_id.as_deref())
+            .bind::<Text, _>(&entry.work.mbid)
+            .execute(connection)?;
+        }
+        diesel::sql_query("DELETE FROM catalogue_rank").execute(connection)?;
+        diesel::sql_query(
+            "INSERT INTO composer_catalogue
+                 (composer_mbid, composer_name, musicbrainz_total, stored_works, complete,
+                  musicbrainz_fetched_at)
+             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(composer_mbid) DO UPDATE SET
+                 composer_name = excluded.composer_name,
+                 musicbrainz_total = excluded.musicbrainz_total,
+                 stored_works = excluded.stored_works,
+                 complete = excluded.complete,
+                 musicbrainz_fetched_at = excluded.musicbrainz_fetched_at,
+                 updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind::<Text, _>(composer_mbid)
+        .bind::<Text, _>(composer_name)
+        .bind::<BigInt, _>(musicbrainz_total)
+        .bind::<BigInt, _>(entries.len() as i64)
+        .bind::<Bool, _>(complete)
+        .execute(connection)?;
+        Ok(())
+    })
+}
+
+/// Every work (and movement) in a composer's catalogue.
+pub fn catalogue_work_ids(
+    connection: &mut SqliteConnection,
+    composer_mbid: &str,
+) -> QueryResult<Vec<String>> {
+    Ok(diesel::sql_query(
+        "SELECT work_mbid AS value FROM composer_catalogue_work WHERE composer_mbid = ?",
+    )
+    .bind::<Text, _>(composer_mbid)
+    .load::<ValueRow>(connection)?
+    .into_iter()
+    .map(|row| row.value)
+    .collect())
+}
+
+/// A composer's Wikidata item, from their stored artist profile.
+pub fn wikidata_for_musicbrainz_artist(
+    connection: &mut SqliteConnection,
+    mbid: &str,
+) -> QueryResult<Option<String>> {
+    Ok(diesel::sql_query(
+        "SELECT wikidata_id AS value FROM editorial_profile
+         WHERE entity_type = 'artist' AND musicbrainz_id = ? AND wikidata_id IS NOT NULL
+         UNION ALL SELECT wikidata_id FROM composer_catalogue
+         WHERE composer_mbid = ? AND wikidata_id IS NOT NULL
+         LIMIT 1",
+    )
+    .bind::<Text, _>(mbid)
+    .bind::<Text, _>(mbid)
+    .load::<ValueRow>(connection)?
+    .pop()
+    .map(|row| row.value))
+}
+
+/// Catalogue works that have a Wikidata item, in catalogue order.
+pub fn catalogue_wikidata_items(
+    connection: &mut SqliteConnection,
+    composer_mbid: &str,
+) -> QueryResult<Vec<(String, String)>> {
+    #[derive(QueryableByName)]
+    struct Item {
+        #[diesel(sql_type = Text)]
+        work_mbid: String,
+        #[diesel(sql_type = Text)]
+        wikidata_id: String,
+    }
+    Ok(diesel::sql_query(
+        "SELECT cw.work_mbid, cw.wikidata_id FROM composer_catalogue_work cw
+         JOIN work w ON w.mbid = cw.work_mbid
+         WHERE cw.composer_mbid = ? AND cw.wikidata_id IS NOT NULL
+         ORDER BY w.parent_mbid IS NOT NULL, w.title",
+    )
+    .bind::<Text, _>(composer_mbid)
+    .load::<Item>(connection)?
+    .into_iter()
+    .map(|item| (item.work_mbid, item.wikidata_id))
+    .collect())
+}
+
+/// Facts Wikidata adds to a catalogue work. Each fills only a fact
+/// MusicBrainz left empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkFactsUpdate {
+    pub work_mbid: String,
+    pub composed: Option<String>,
+    pub musical_key: Option<String>,
+    pub form: Option<String>,
+}
+
+/// Records what Wikidata says about a composer's catalogue: the composer's
+/// item, the notable works (rank = position in the P800 list) and facts
+/// for works MusicBrainz described less fully.
+pub fn save_catalogue_wikidata(
+    connection: &mut SqliteConnection,
+    composer_mbid: &str,
+    wikidata_id: Option<&str>,
+    notable: &[(String, i64)],
+    facts: &[WorkFactsUpdate],
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        diesel::sql_query(
+            "UPDATE composer_catalogue_work SET notable_rank = NULL WHERE composer_mbid = ?",
+        )
+        .bind::<Text, _>(composer_mbid)
+        .execute(connection)?;
+        for (work_mbid, rank) in notable {
+            diesel::sql_query(
+                "UPDATE composer_catalogue_work SET notable_rank = ?
+                 WHERE composer_mbid = ? AND work_mbid = ?",
+            )
+            .bind::<BigInt, _>(*rank)
+            .bind::<Text, _>(composer_mbid)
+            .bind::<Text, _>(work_mbid)
+            .execute(connection)?;
+        }
+        for fact in facts {
+            diesel::sql_query(
+                "UPDATE work SET composed = COALESCE(composed, ?),
+                                 musical_key = COALESCE(musical_key, ?),
+                                 form = COALESCE(form, ?),
+                                 updated_at = CURRENT_TIMESTAMP
+                 WHERE mbid = ?",
+            )
+            .bind::<Nullable<Text>, _>(fact.composed.as_deref())
+            .bind::<Nullable<Text>, _>(fact.musical_key.as_deref())
+            .bind::<Nullable<Text>, _>(fact.form.as_deref())
+            .bind::<Text, _>(&fact.work_mbid)
+            .execute(connection)?;
+        }
+        diesel::sql_query(
+            "UPDATE composer_catalogue SET wikidata_id = COALESCE(?, wikidata_id),
+                 wikidata_fetched_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE composer_mbid = ?",
+        )
+        .bind::<Nullable<Text>, _>(wikidata_id)
+        .bind::<Text, _>(composer_mbid)
+        .execute(connection)?;
+        Ok(())
+    })
+}
+
+/// A piece of a composer's catalogue with its Wikidata item, notable rank
+/// and the library tracks and albums that perform it (movements count
+/// toward their piece).
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct CatalogueListing {
+    #[diesel(embed)]
+    pub work: WorkRow,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub wikidata_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    pub notable_rank: Option<i64>,
+    #[diesel(sql_type = BigInt)]
+    pub track_count: i64,
+    #[diesel(sql_type = BigInt)]
+    pub album_count: i64,
+}
+
+/// A composer's catalogue: pieces, not movements.
+pub fn catalogue_works(
+    connection: &mut SqliteConnection,
+    composer_mbids: &[String],
+) -> QueryResult<Vec<CatalogueListing>> {
+    let mut rows = Vec::new();
+    for composer in composer_mbids
+        .iter()
+        .filter(|mbid| super::musicbrainz::is_mbid(mbid))
+    {
+        rows.extend(
+            diesel::sql_query(
+                "SELECT w.mbid, w.title, w.form, w.musical_key, w.catalogue, w.composed, w.composer_name,
+                        w.composer_normalized, w.composer_mbid, w.language, w.parent_mbid, w.part_position,
+                        cw.wikidata_id, cw.notable_rank,
+                        (SELECT COUNT(DISTINCT tw.track_id) FROM track_work tw
+                         WHERE tw.work_mbid = w.mbid
+                            OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
+                          AS track_count,
+                        (SELECT COUNT(DISTINCT tw.album_id) FROM track_work tw
+                         WHERE tw.work_mbid = w.mbid
+                            OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
+                          AS album_count
+                 FROM composer_catalogue_work cw JOIN work w ON w.mbid = cw.work_mbid
+                 WHERE cw.composer_mbid = ? AND w.parent_mbid IS NULL
+                 ORDER BY w.title LIMIT 5000",
+            )
+            .bind::<Text, _>(composer)
+            .load::<CatalogueListing>(connection)?,
+        );
+    }
+    Ok(rows)
+}
+
+/// Text from the editorial sources after the first, for one entity.
+pub fn load_source_texts(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+) -> QueryResult<Vec<EditorialText>> {
+    diesel::sql_query(
+        "SELECT kind, source, language, title, body, url, license, license_url
+         FROM editorial_text_source WHERE entity_type = ? AND entity_id = ?
+         ORDER BY language, kind",
+    )
+    .bind::<Text, _>(entity_type)
+    .bind::<Text, _>(entity_id)
+    .load::<EditorialText>(connection)
+}
+
+/// Replaces an entity's text from the other editorial sources.
+pub fn replace_source_texts(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+    texts: &[EditorialText],
+) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        diesel::sql_query(
+            "DELETE FROM editorial_text_source WHERE entity_type = ? AND entity_id = ?",
+        )
+        .bind::<Text, _>(entity_type)
+        .bind::<Text, _>(entity_id)
+        .execute(connection)?;
+        for text in texts {
+            diesel::sql_query(
+                "INSERT INTO editorial_text_source
+                     (entity_type, entity_id, kind, source, language, title, body, url, license, license_url)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(entity_type, entity_id, kind, source, language) DO NOTHING",
+            )
+            .bind::<Text, _>(entity_type)
+            .bind::<Text, _>(entity_id)
+            .bind::<Text, _>(&text.kind)
+            .bind::<Text, _>(&text.source)
+            .bind::<Text, _>(&text.language)
+            .bind::<Text, _>(&text.title)
+            .bind::<Text, _>(&text.body)
+            .bind::<Text, _>(&text.url)
+            .bind::<Text, _>(&text.license)
+            .bind::<Text, _>(&text.license_url)
+            .execute(connection)?;
+        }
+        Ok(())
+    })
 }
 
 /// The MusicBrainz release an administrator chose for an album.
@@ -1481,7 +1963,12 @@ pub fn clear_editorial(
     entity_type: &str,
     entity_id: &str,
 ) -> QueryResult<()> {
-    for table in ["editorial_profile", "editorial_text", "editorial_image"] {
+    for table in [
+        "editorial_profile",
+        "editorial_text",
+        "editorial_text_source",
+        "editorial_image",
+    ] {
         diesel::sql_query(format!(
             "DELETE FROM {table} WHERE entity_type = ? AND entity_id = ?"
         ))
@@ -1612,9 +2099,82 @@ mod tests {
             language: "de".into(),
             artist_images: false,
             genre_source: crate::enrichment::genres::GenreSource::Tags,
+            editorial_sources: vec![EditorialSource {
+                id: "wikipedia:de".into(),
+                enabled: true,
+            }],
         };
         save_settings(&mut connection, &enabled).unwrap();
         assert_eq!(load_settings(&mut connection).unwrap(), enabled);
+    }
+
+    #[test]
+    fn editorial_sources_keep_their_order_and_fill_in_new_languages() {
+        // Saved before sources existed: the chosen language leads, then
+        // English, German and French are on and the rest off.
+        let legacy = EnrichmentSettings {
+            language: "sv".into(),
+            ..EnrichmentSettings::default()
+        };
+        let sources = legacy.ordered_sources();
+        assert_eq!(sources[0].id, "wikipedia:sv");
+        assert_eq!(
+            legacy.source_languages(),
+            ["sv", "en", "de", "fr"].map(String::from)
+        );
+        assert_eq!(
+            sources.len(),
+            crate::enrichment::wikimedia::SOURCE_LANGUAGES.len()
+        );
+        // The language the main text came in is not fetched twice, and at
+        // most four others are.
+        assert_eq!(
+            legacy.extra_languages(Some("en")),
+            ["sv", "de", "fr"].map(String::from)
+        );
+
+        let chosen = EnrichmentSettings {
+            editorial_sources: vec![
+                EditorialSource {
+                    id: "wikipedia:fr".into(),
+                    enabled: true,
+                },
+                EditorialSource {
+                    id: "wikipedia:xx".into(),
+                    enabled: true,
+                },
+                EditorialSource {
+                    id: "wikipedia:en".into(),
+                    enabled: false,
+                },
+                EditorialSource {
+                    id: "wikipedia:fr".into(),
+                    enabled: false,
+                },
+                EditorialSource {
+                    id: "wikipedia:it".into(),
+                    enabled: true,
+                },
+            ],
+            ..EnrichmentSettings::default()
+        };
+        let sources = chosen.ordered_sources();
+        assert_eq!(
+            sources
+                .iter()
+                .take(3)
+                .map(|source| source.id.as_str())
+                .collect::<Vec<_>>(),
+            ["wikipedia:fr", "wikipedia:en", "wikipedia:it"]
+        );
+        // Unknown and repeated ids are dropped; missing languages are off.
+        assert_eq!(
+            sources.len(),
+            crate::enrichment::wikimedia::SOURCE_LANGUAGES.len()
+        );
+        assert!(sources[3..].iter().all(|source| !source.enabled));
+        assert_eq!(chosen.source_languages(), ["fr", "it"].map(String::from));
+        assert_eq!(chosen.extra_languages(None), ["it"].map(String::from));
     }
 
     #[test]
@@ -1730,8 +2290,15 @@ mod tests {
         )
         .unwrap();
         // It also gets a Wikipedia stage of its own, which does not wait
-        // for Wikidata, and its influences are looked up.
-        assert_eq!(seed_tasks(&mut connection).unwrap(), 3);
+        // for Wikidata, its influences are looked up and its biography is
+        // read from the other editorial sources.
+        assert_eq!(seed_tasks(&mut connection).unwrap(), 4);
+        assert_eq!(
+            next_stage_task(&mut connection, Stage::Sources)
+                .unwrap()
+                .map(|task| task.entity_id),
+            Some("karajan".into())
+        );
         assert_eq!(
             next_stage_task(&mut connection, Stage::Relations)
                 .unwrap()
@@ -1938,6 +2505,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(by_id.len(), 1);
+
+        // The composer of a work in the library gets their whole catalogue.
+        seed_tasks(&mut connection).unwrap();
+        assert_eq!(
+            next_stage_task(&mut connection, Stage::Catalogue)
+                .unwrap()
+                .map(|task| (task.entity_type, task.entity_id)),
+            Some((
+                "composer".to_string(),
+                "1f9df192-a621-4f54-8850-2c5373b7eac9".to_string()
+            ))
+        );
 
         // Looking the album up again replaces its links but keeps others'.
         replace_album_works(&mut connection, "karajan", &[], &[]).unwrap();
