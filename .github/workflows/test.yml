@@ -102,6 +102,20 @@ jobs:
       - name: Build optimized backend and native bridge
         run: cargo build --release --workspace
 
+  home-assistant:
+    name: Home Assistant integration
+    if: inputs.release != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install the Home Assistant test harness
+        run: |
+          pipx run uv venv --python 3.13 .venv-ha
+          pipx run uv pip install --python .venv-ha/bin/python -r tests/home_assistant/requirements.txt
+      - name: Test the Mujin Music integration against a fake server
+        run: .venv-ha/bin/python -m pytest -c tests/home_assistant/pytest.ini tests/home_assistant -q
+
   linux-packages:
     name: Linux desktop (${{ matrix.arch }})
     strategy:

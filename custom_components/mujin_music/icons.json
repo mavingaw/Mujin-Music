@@ -1,0 +1,22 @@
+{
+  "services": {
+    "start_radio": {
+      "service": "mdi:radio"
+    },
+    "thumbs_up": {
+      "service": "mdi:thumb-up"
+    },
+    "thumbs_down": {
+      "service": "mdi:thumb-down"
+    },
+    "transfer": {
+      "service": "mdi:transfer"
+    },
+    "sleep_timer": {
+      "service": "mdi:sleep"
+    },
+    "pause_all": {
+      "service": "mdi:pause-circle"
+    }
+  }
+}

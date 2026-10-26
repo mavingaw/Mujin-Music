@@ -30,13 +30,13 @@ const MAX_LOUDNESS_MEASURED_NOW: usize = 2;
 
 /// Who sent a request: the app's zone device and whether it came from
 /// this computer (private audio-device zones only show there).
-struct RequestViewer {
+pub(crate) struct RequestViewer {
     device: Option<String>,
     local: bool,
 }
 
 impl RequestViewer {
-    fn view(&self) -> Viewer<'_> {
+    pub(crate) fn view(&self) -> Viewer<'_> {
         Viewer {
             device: self.device.as_deref(),
             local: self.local,
@@ -44,7 +44,7 @@ impl RequestViewer {
     }
 }
 
-fn viewer_device(request: &HttpRequest) -> RequestViewer {
+pub(crate) fn viewer_device(request: &HttpRequest) -> RequestViewer {
     RequestViewer {
         device: request
             .headers()
@@ -111,7 +111,7 @@ impl ZoneMediaQuery {
     }
 }
 
-fn error_response(error: ZoneError) -> HttpResponse {
+pub(crate) fn error_response(error: ZoneError) -> HttpResponse {
     match error {
         ZoneError::NotFound => {
             HttpResponse::NotFound().json(serde_json::json!({"error": "zone_not_found"}))
@@ -129,7 +129,9 @@ fn error_response(error: ZoneError) -> HttpResponse {
     }
 }
 
-async fn library_cache(lifecycle: &LibraryLifecycle) -> Option<std::sync::Arc<LibraryCache>> {
+pub(crate) async fn library_cache(
+    lifecycle: &LibraryLifecycle,
+) -> Option<std::sync::Arc<LibraryCache>> {
     lifecycle.cache().await.ok()
 }
 
@@ -308,7 +310,7 @@ fn cast_command(
     }
 }
 
-async fn all_zones(
+pub(crate) async fn all_zones(
     service: &ZoneService,
     pool: &DbPool,
     user_id: i32,
@@ -772,6 +774,49 @@ async fn outputs_discover(request: HttpRequest, service: web::Data<ZoneService>)
     HttpResponse::Ok().json(outputs.status())
 }
 
+/// Sends one command to a zone: cast sessions through their command
+/// channel, every other zone through the zone service.
+pub(crate) async fn dispatch_command(
+    user_id: i32,
+    zone_id: &str,
+    command: ZoneCommand,
+    service: &ZoneService,
+    pool: &DbPool,
+    lifecycle: &LibraryLifecycle,
+) -> Result<(), ZoneError> {
+    if zone_id.starts_with("cast:") {
+        match cast_snapshot(pool, user_id).await {
+            Some(snapshot) if format!("cast:{}", snapshot.session_id) == zone_id => {
+                let pool = pool.clone();
+                web::block(move || cast_command(&pool, user_id, &snapshot, &command))
+                    .await
+                    .unwrap_or_else(|error| Err(ZoneError::Device(error.to_string())))
+            }
+            _ => Err(ZoneError::NotFound),
+        }
+    } else {
+        let cache = if matches!(
+            command,
+            ZoneCommand::Load { .. }
+                | ZoneCommand::Jump { .. }
+                | ZoneCommand::Next
+                | ZoneCommand::Previous
+                | ZoneCommand::MoveQueueItem { .. }
+                | ZoneCommand::RemoveQueueItem { .. }
+                | ZoneCommand::ClearUpcoming
+                | ZoneCommand::AddToQueue { .. }
+                | ZoneCommand::SetShuffle { .. }
+        ) {
+            library_cache(lifecycle).await
+        } else {
+            None
+        };
+        service
+            .command(user_id, zone_id, command, cache.as_deref())
+            .await
+    }
+}
+
 #[post("/{zone_id}/commands")]
 async fn send_command(
     request: HttpRequest,
@@ -792,37 +837,15 @@ async fn send_command(
     if !service.visible_to(&zone_id, viewer_device(&request).view()) {
         return error_response(ZoneError::NotFound);
     }
-    let result = if zone_id.starts_with("cast:") {
-        match cast_snapshot(pool.get_ref(), user_id).await {
-            Some(snapshot) if format!("cast:{}", snapshot.session_id) == *zone_id => {
-                let pool = pool.get_ref().clone();
-                web::block(move || cast_command(&pool, user_id, &snapshot, &command))
-                    .await
-                    .unwrap_or_else(|error| Err(ZoneError::Device(error.to_string())))
-            }
-            _ => Err(ZoneError::NotFound),
-        }
-    } else {
-        let cache = if matches!(
-            command,
-            ZoneCommand::Load { .. }
-                | ZoneCommand::Jump { .. }
-                | ZoneCommand::Next
-                | ZoneCommand::Previous
-                | ZoneCommand::MoveQueueItem { .. }
-                | ZoneCommand::RemoveQueueItem { .. }
-                | ZoneCommand::ClearUpcoming
-                | ZoneCommand::AddToQueue { .. }
-                | ZoneCommand::SetShuffle { .. }
-        ) {
-            library_cache(&lifecycle).await
-        } else {
-            None
-        };
-        service
-            .command(user_id, &zone_id, command, cache.as_deref())
-            .await
-    };
+    let result = dispatch_command(
+        user_id,
+        &zone_id,
+        command,
+        &service,
+        pool.get_ref(),
+        &lifecycle,
+    )
+    .await;
     match result {
         Ok(()) => HttpResponse::Accepted().json(serde_json::json!({"accepted": true})),
         Err(error) => error_response(error),
@@ -1073,6 +1096,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(bridge_status)
             .service(add_bridge)
             .service(remove_bridge)
+            .service(crate::api::control::play_item)
+            .service(crate::api::control::start_radio)
+            .service(crate::api::control::rate_track)
             .service(send_command)
             .service(update_settings)
             .service(loudness)

@@ -133,7 +133,8 @@ export type PlaybackEventType =
   | "playlist_add"
   | "recommendation_impression"
   | "recommendation_selected"
-  | "disliked";
+  | "disliked"
+  | "thumbs_up";
 
 export interface PlaybackEvent {
   event_key: string;
