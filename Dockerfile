@@ -31,6 +31,7 @@ RUN apt-get update \
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/backend ./crates/backend
+COPY crates/parson-bridge ./crates/parson-bridge
 COPY crates/parson-core ./crates/parson-core
 COPY crates/windows-bridge ./crates/windows-bridge
 COPY crates/windows-server ./crates/windows-server

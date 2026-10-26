@@ -5,6 +5,7 @@ const {
   ipcMain,
   Menu,
   powerMonitor,
+  session,
   shell,
 } = require("electron");
 const { spawn } = require("node:child_process");
@@ -28,19 +29,55 @@ const {
 } = require("./backend-trust.cjs");
 const { classifyStartupFailure } = require("./failure-state.cjs");
 const { createUpdates, updateSupport } = require("./updates.cjs");
+const { browse } = require("./mdns.cjs");
+const {
+  commandAllowed,
+  forgetServer,
+  loadConfig,
+  normalizeServerAddress,
+  probeMessage,
+  probeServer,
+  saveConfig,
+  serverRows,
+  startupPlan,
+  useLocalServer,
+  useRemoteServer,
+} = require("./server-config.cjs");
+const { createServerMonitor } = require("./server-monitor.cjs");
 
 const DEFAULT_PORT = 1993;
 let backendPort = DEFAULT_PORT;
 let backendOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
 let backendInstanceKey = "";
-const ALLOWED_LOCAL_PAGES = ["startup.html", "startup-error.html"].map(
-  (name) => pathToFileURL(path.join(__dirname, name)).href,
-);
+const ALLOWED_LOCAL_PAGES = [
+  "startup.html",
+  "startup-error.html",
+  "servers.html",
+].map((name) => pathToFileURL(path.join(__dirname, name)).href);
+const SERVERS_PAGE = path.join(__dirname, "servers.html");
 const STARTUP_POLL_MS = 10;
 let backend = null;
 let mainWindow = null;
 let quitting = false;
 let updates = null;
+
+// Server/remote split. `serverMode` is "local" when this app runs the Parson
+// server sidecar, "remote" when it is a remote for a server elsewhere (and
+// never starts one), and null while the user is choosing. `appOrigin` is the
+// origin of the Parson web app the window shows.
+let serverMode = null;
+let appOrigin = "";
+let currentRemote = null;
+let serverSettings = null;
+let serverSettingsExist = false;
+let hadLocalInstall = false;
+let discovered = [];
+let discovering = null;
+let chooserView = "choose";
+let chooserWarning = null;
+let reconnectState = null;
+let monitor = null;
+let resumeUrl = null;
 
 const primary = app.requestSingleInstanceLock();
 if (!primary) {
@@ -390,7 +427,7 @@ async function startBackend() {
   });
   backend.once("exit", (code, signal) => {
     backend = null;
-    if (!quitting && !mainWindow?.isDestroyed()) {
+    if (!quitting && serverMode === "local" && !mainWindow?.isDestroyed()) {
       const detail = backendFailureDetail(
         logPath,
         `Backend stopped (${code ?? signal ?? "unknown"}).`,
@@ -433,6 +470,80 @@ async function showStartupFailure(kind, detail) {
 }
 
 async function loadApplication() {
+  const plan = startupPlan({
+    config: serverSettings,
+    configExists: serverSettingsExist,
+    hasLocalLibrary: hadLocalInstall,
+    env: process.env,
+    argv: process.argv,
+  });
+  if (plan.kind === "local") {
+    return startLocal({ persist: false });
+  }
+  if (plan.kind === "remote") {
+    await mainWindow.loadFile(path.join(__dirname, "startup.html"));
+    const result = await connectRemote(plan.server, {
+      persist: !plan.forced,
+      reconnectIfDown: true,
+    });
+    return result.ok;
+  }
+  if (!serverSettingsExist) {
+    // Remember that this install has been offered the choice, so quitting
+    // at the chooser does not later look like an existing local install.
+    updateServerSettings(serverSettings);
+  }
+  await showChooser();
+  return false;
+}
+
+function updateServerSettings(next) {
+  serverSettings = next;
+  serverSettingsExist = true;
+  try {
+    saveConfig(app.getPath("userData"), next);
+  } catch (error) {
+    console.error("Could not save the server choice", error);
+  }
+}
+
+function currentAppUrl() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  const url = mainWindow.webContents.getURL();
+  try {
+    return appOrigin && new URL(url).origin === appOrigin ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function sendToWindow(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+function stopMonitor() {
+  monitor?.stop();
+  monitor = null;
+}
+
+function resumeTarget(origin) {
+  const target = resumeUrl?.startsWith(`${origin}/`) ? resumeUrl : origin;
+  resumeUrl = null;
+  return target;
+}
+
+async function startLocal({ persist = true } = {}) {
+  stopMonitor();
+  if (serverMode !== "local") resumeUrl = null;
+  serverMode = "local";
+  appOrigin = "";
+  currentRemote = null;
+  chooserWarning = null;
+  chooserView = "choose";
+  reconnectState = null;
+  if (persist) updateServerSettings(useLocalServer(serverSettings));
   await mainWindow.loadFile(path.join(__dirname, "startup.html"));
   try {
     await startBackend();
@@ -441,13 +552,364 @@ async function loadApplication() {
     await showStartupFailure(classifyStartupFailure(detail), detail);
     return false;
   }
+  appOrigin = backendOrigin;
+  const identity = await probeServer(backendOrigin);
+  if (
+    identity.kind === "ok" &&
+    identity.manifest.instanceId !== serverSettings.localInstanceId
+  ) {
+    updateServerSettings({
+      ...serverSettings,
+      localInstanceId: identity.manifest.instanceId,
+    });
+  }
   try {
-    await mainWindow.loadURL(backendOrigin);
+    await mainWindow.loadURL(resumeTarget(appOrigin));
     return true;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await showStartupFailure("webview_failed", detail);
     return false;
+  }
+}
+
+async function loadRemoteApp() {
+  chooserView = "choose";
+  reconnectState = null;
+  try {
+    await mainWindow.loadURL(resumeTarget(currentRemote.origin));
+  } catch (error) {
+    console.error("Could not load the remote Parson app", error);
+  }
+}
+
+function watchRemote({ down = false } = {}) {
+  stopMonitor();
+  const server = currentRemote;
+  if (!server) return;
+  monitor = createServerMonitor({
+    probe: () => probeServer(server.origin),
+    instanceId: server.instanceId,
+    bootId: server.bootId,
+    initiallyDown: down,
+    onDown: ({ lastSeenAt }) => {
+      resumeUrl = currentAppUrl() ?? resumeUrl;
+      reconnectState = {
+        name: server.name,
+        origin: server.origin,
+        lastSeenAt,
+        attempt: 0,
+        nextAt: Date.now() + 1_000,
+        local: false,
+      };
+      chooserView = "reconnecting";
+      void mainWindow.loadFile(SERVERS_PAGE);
+    },
+    onAttempt: ({ attempt, nextInMs }) => {
+      if (!reconnectState) return;
+      reconnectState = {
+        ...reconnectState,
+        attempt,
+        nextAt: Date.now() + nextInMs,
+      };
+      void publishServersState();
+    },
+    onUp: () => {
+      void loadRemoteApp();
+    },
+    onRestart: (manifest) => {
+      // The server restarted between two probes. The web app's live
+      // connections reconnect on their own; tell it to refetch everything.
+      server.bootId = manifest.bootId;
+      sendToWindow("parson:server-event", { type: "restarted" });
+    },
+    onReplaced: (manifest) => {
+      chooserWarning = {
+        title: "This address now belongs to a different Parson server. ",
+        body: `${server.origin} answers as “${manifest.name || "another library"}”, not “${server.name}”. Choose it below if you trust it.`,
+      };
+      void showChooser();
+    },
+  });
+  monitor.start();
+}
+
+/**
+ * Connects this window to a Parson server on the network. Never starts the
+ * local server; stops it if it was running.
+ */
+async function connectRemote(
+  target,
+  { persist = true, trustNewIdentity = false, reconnectIfDown = false } = {},
+) {
+  const origin = normalizeServerAddress(target?.origin);
+  if (!origin) {
+    return { ok: false, message: "Enter a valid server address." };
+  }
+  const result = await probeServer(origin);
+  if (result.kind !== "ok") {
+    if (reconnectIfDown && result.kind === "unreachable") {
+      // Startup with a saved server that is offline: wait for it rather
+      // than dropping the user into the chooser.
+      if (backend) await stopBackendForRetry();
+      serverMode = "remote";
+      appOrigin = origin;
+      currentRemote = {
+        id: target.id || target.instanceId || origin,
+        instanceId: target.instanceId || "",
+        name: target.name || new URL(origin).host,
+        origin,
+        bootId: "",
+      };
+      reconnectState = {
+        name: currentRemote.name,
+        origin,
+        lastSeenAt: target.lastConnectedAt || 0,
+        attempt: 0,
+        nextAt: Date.now() + 1_000,
+        local: false,
+      };
+      chooserView = "reconnecting";
+      await mainWindow.loadFile(SERVERS_PAGE);
+      watchRemote({ down: true });
+    }
+    return { ok: false, message: probeMessage(result, origin) };
+  }
+  const manifest = result.manifest;
+  if (
+    serverSettings.localInstanceId &&
+    manifest.instanceId === serverSettings.localInstanceId &&
+    serverMode === "local"
+  ) {
+    // This is the server this app already runs, reached by its network
+    // address: stay on it instead of becoming a remote of ourselves.
+    await mainWindow.loadURL(resumeTarget(appOrigin));
+    return { ok: true };
+  }
+  if (
+    !trustNewIdentity &&
+    target.instanceId &&
+    manifest.instanceId !== target.instanceId
+  ) {
+    chooserWarning = {
+      title: "This address now belongs to a different Parson server. ",
+      body: `${new URL(origin).host} now answers as “${manifest.name}”. Connect to it from the list if you trust it.`,
+    };
+    await showChooser();
+    return { ok: false, message: chooserWarning.title.trim() };
+  }
+  stopMonitor();
+  if (backend) await stopBackendForRetry();
+  if (serverMode !== "remote" || appOrigin !== origin) resumeUrl = null;
+  serverMode = "remote";
+  appOrigin = origin;
+  chooserWarning = null;
+  currentRemote = {
+    id: manifest.instanceId,
+    instanceId: manifest.instanceId,
+    name: manifest.name || new URL(origin).host,
+    origin,
+    bootId: typeof manifest.bootId === "string" ? manifest.bootId : "",
+  };
+  if (persist) {
+    updateServerSettings(
+      useRemoteServer(serverSettings, {
+        instanceId: manifest.instanceId,
+        name: manifest.name,
+        origin,
+        serverVersion: manifest.serverVersion,
+        manual: Boolean(target.manual),
+      }),
+    );
+  }
+  await loadRemoteApp();
+  watchRemote();
+  return { ok: true };
+}
+
+async function showChooser() {
+  stopMonitor();
+  if (chooserView !== "reconnecting") {
+    resumeUrl = currentAppUrl() ?? resumeUrl;
+  }
+  chooserView = "choose";
+  reconnectState = null;
+  await mainWindow.loadFile(SERVERS_PAGE);
+}
+
+async function signedInOrigins(origins) {
+  const signedIn = new Set();
+  await Promise.all(
+    origins.map(async (origin) => {
+      try {
+        const cookies = await session.defaultSession.cookies.get({
+          url: origin,
+          name: "plm_refreshToken",
+        });
+        if (cookies.length) signedIn.add(origin);
+      } catch {}
+    }),
+  );
+  return signedIn;
+}
+
+function currentRows() {
+  return serverRows({
+    config: serverSettings,
+    discovered,
+    localInstanceId: serverSettings.localInstanceId,
+  });
+}
+
+async function serversState() {
+  const rows = currentRows();
+  const signedIn = await signedInOrigins(rows.map((row) => row.origin));
+  const current =
+    serverMode === "remote" && currentRemote && chooserView !== "reconnecting"
+      ? { name: currentRemote.name, origin: currentRemote.origin }
+      : serverMode === "local" && backend
+        ? { name: "this computer", origin: backendOrigin }
+        : null;
+  return {
+    view: chooserView,
+    mode: serverMode,
+    current,
+    warning: chooserWarning,
+    reconnect: reconnectState,
+    local: { available: fs.existsSync(backendExecutable()) },
+    rows: rows.map((row) => ({
+      ...row,
+      signedIn: signedIn.has(row.origin),
+      active: serverMode === "remote" && currentRemote?.origin === row.origin,
+    })),
+  };
+}
+
+async function publishServersState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    if (new URL(mainWindow.webContents.getURL()).protocol !== "file:") return;
+  } catch {
+    return;
+  }
+  mainWindow.webContents.send("parson:servers-state", await serversState());
+}
+
+/**
+ * Looks for Parson servers: mDNS answers plus every saved server, each
+ * confirmed by asking it for its manifest. Results stream to the chooser.
+ */
+function discoverServers() {
+  if (discovering) return discovering;
+  discovering = (async () => {
+    const reachable = new Map();
+    const checked = new Set();
+    const check = async (origin) => {
+      const normalized = normalizeServerAddress(origin);
+      if (!normalized || checked.has(normalized)) return;
+      checked.add(normalized);
+      const result = await probeServer(normalized, { timeoutMs: 1_800 });
+      if (result.kind !== "ok") return;
+      reachable.set(result.manifest.instanceId, {
+        instanceId: result.manifest.instanceId,
+        name: result.manifest.name,
+        origin: normalized,
+        serverVersion: result.manifest.serverVersion,
+      });
+      discovered = [...reachable.values()];
+      void publishServersState();
+    };
+    const pending = serverSettings.servers.map((server) =>
+      check(server.origin),
+    );
+    await browse({
+      durationMs: 2_400,
+      onService: (service) => pending.push(check(service.origin)),
+    });
+    await Promise.allSettled(pending);
+    discovered = [...reachable.values()];
+  })().finally(() => {
+    discovering = null;
+  });
+  return discovering;
+}
+
+async function handleServersAction(action, args = {}) {
+  switch (action) {
+    case "state":
+      return serversState();
+    case "discover":
+      await discoverServers();
+      return serversState();
+    case "connect": {
+      if (typeof args.address === "string") {
+        const result = await connectRemote({
+          origin: args.address,
+          manual: true,
+        });
+        return result.ok ? result : { ...result, state: await serversState() };
+      }
+      const row = currentRows().find((candidate) => candidate.id === args.id);
+      if (!row) {
+        return { ok: false, message: "That server is no longer listed." };
+      }
+      const result = await connectRemote(row, {
+        // A server just confirmed on the network, or one the user picked
+        // from the list after a warning, is trusted as it answers now.
+        trustNewIdentity: row.nearby || Boolean(chooserWarning),
+      });
+      return result.ok ? result : { ...result, state: await serversState() };
+    }
+    case "use-local": {
+      if (!fs.existsSync(backendExecutable())) {
+        return {
+          ok: false,
+          message: "This copy of Parson does not include the server.",
+        };
+      }
+      const ok = await startLocal();
+      return ok ? { ok } : { ok, message: "The server could not start." };
+    }
+    case "forget": {
+      const server = serverSettings.servers.find(
+        (candidate) => candidate.id === args.id,
+      );
+      if (server) {
+        updateServerSettings(forgetServer(serverSettings, server.id));
+        discovered = discovered.filter(
+          (entry) =>
+            entry.instanceId !== server.instanceId &&
+            entry.origin !== server.origin,
+        );
+        // Per-server sign-in lives in that origin's cookies and storage.
+        try {
+          await session.defaultSession.clearStorageData({
+            origin: server.origin,
+          });
+        } catch (error) {
+          console.error("Could not clear the forgotten server's data", error);
+        }
+      }
+      return serversState();
+    }
+    case "back":
+      if (serverMode === "remote" && currentRemote) {
+        await connectRemote(currentRemote, { persist: false });
+      } else if (serverMode === "local" && backend) {
+        appOrigin = backendOrigin;
+        await mainWindow.loadURL(resumeTarget(appOrigin));
+      }
+      return true;
+    case "retry":
+      if (monitor) await monitor.check();
+      return true;
+    case "choose":
+      stopMonitor();
+      chooserView = "choose";
+      reconnectState = null;
+      return serversState();
+    default:
+      throw new Error(`Unknown server action: ${action}`);
   }
 }
 
@@ -475,7 +937,7 @@ function installDesktopBridge() {
     if (
       !isAllowedNavigation(
         event.senderFrame.url,
-        backendOrigin,
+        appOrigin,
         ALLOWED_LOCAL_PAGES,
       )
     ) {
@@ -506,13 +968,61 @@ function installDesktopBridge() {
     }
   });
 
+  ipcMain.on("parson:server-mode", (event) => {
+    try {
+      event.returnValue =
+        appOrigin && new URL(event.senderFrame.url).origin === appOrigin
+          ? serverMode
+          : null;
+    } catch {
+      event.returnValue = null;
+    }
+  });
+
+  ipcMain.handle("parson:servers", async (event, action, args = {}) => {
+    if (!isAllowedNavigation(event.senderFrame.url, "", ALLOWED_LOCAL_PAGES)) {
+      throw new Error("Server selection is only available to Parson Desktop.");
+    }
+    return handleServersAction(action, args ?? {});
+  });
+
   ipcMain.handle("parson:invoke", async (event, command, args = {}) => {
-    if (new URL(event.senderFrame.url).origin !== backendOrigin) {
+    if (!appOrigin || new URL(event.senderFrame.url).origin !== appOrigin) {
       throw new Error(
-        "Desktop commands are only available to the local Parson app.",
+        "Desktop commands are only available to the Parson app this window shows.",
+      );
+    }
+    if (!commandAllowed(command, serverMode)) {
+      throw new Error(
+        serverMode === "remote"
+          ? `${command} is only available when Parson runs the server on this computer.`
+          : `Unknown desktop command: ${command}`,
       );
     }
     switch (command) {
+      case "server_state":
+        return {
+          mode: serverMode,
+          name:
+            serverMode === "remote"
+              ? (currentRemote?.name ?? "")
+              : "This computer",
+          origin: appOrigin,
+          localAvailable: fs.existsSync(backendExecutable()),
+        };
+      case "server_choose":
+        setImmediate(() => void showChooser());
+        return true;
+      case "server_connect": {
+        const origin = normalizeServerAddress(args.origin);
+        if (!origin) throw new Error("A valid server address is required.");
+        const result = await connectRemote({ origin, manual: true });
+        if (!result.ok) throw new Error(result.message);
+        return true;
+      }
+      case "server_use_local":
+        setImmediate(() => void startLocal());
+        return true;
       case "updates_state":
         return updates.state();
       case "updates_check":
@@ -551,7 +1061,7 @@ function installDesktopBridge() {
     if (
       !isAllowedNavigation(
         event.senderFrame.url,
-        backendOrigin,
+        appOrigin,
         ALLOWED_LOCAL_PAGES,
       )
     ) {
@@ -620,7 +1130,7 @@ async function createWindow() {
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (isAllowedNavigation(url, backendOrigin, ALLOWED_LOCAL_PAGES)) {
+    if (isAllowedNavigation(url, appOrigin, ALLOWED_LOCAL_PAGES)) {
       return;
     }
     event.preventDefault();
@@ -642,6 +1152,12 @@ if (primary) {
     .whenReady()
     .then(async () => {
       app.setName("Parson");
+      hadLocalInstall = fs.existsSync(
+        path.join(app.getPath("userData"), "desktop-instance.key"),
+      );
+      ({ config: serverSettings, exists: serverSettingsExist } = loadConfig(
+        app.getPath("userData"),
+      ));
       backendInstanceKey = loadDesktopInstanceKey();
       if (process.platform !== "darwin") {
         Menu.setApplicationMenu(null);
@@ -670,9 +1186,12 @@ if (primary) {
           }
         },
         stopBackend: stopBackendForRetry,
-        restartBackend: startBackend,
+        // A remote never runs the server, not even after an update attempt.
+        restartBackend: () =>
+          serverMode === "local" ? startBackend() : Promise.resolve(),
       });
       const publishPowerResume = () => {
+        void monitor?.check();
         if (!mainWindow?.isDestroyed()) {
           mainWindow.webContents.send("parson:power-resume");
         }

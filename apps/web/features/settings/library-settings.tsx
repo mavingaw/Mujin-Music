@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { hasDesktopBridge, selectMusicFolder } from "@/lib/desktop/bridge";
+import { hasLocalDesktopBridge, selectMusicFolder } from "@/lib/desktop/bridge";
 import {
   getLibraryCatalog,
   getLibraryReadiness,
@@ -44,7 +44,7 @@ export default function LibrarySettings() {
     queryFn: () => getLibraryCatalog(0, 1),
   });
 
-  useEffect(() => setDesktop(hasDesktopBridge()), []);
+  useEffect(() => setDesktop(hasLocalDesktopBridge()), []);
 
   async function addLibrary(nextPath: string) {
     const selected = nextPath.trim();
@@ -67,7 +67,7 @@ export default function LibrarySettings() {
   }
 
   async function changeFolder() {
-    if (hasDesktopBridge()) {
+    if (hasLocalDesktopBridge()) {
       const selected = await selectMusicFolder();
       if (selected) await addLibrary(selected);
       return;

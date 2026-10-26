@@ -7,6 +7,13 @@ Windows notification-area server with an embedded web UI.
 Run `ParsonMusicServer.exe`. Data is stored in `%LOCALAPPDATA%\Parson` and the UI
 opens at `http://127.0.0.1:1993`.
 
+This is the server only, for a PC that serves music to the rest of the house.
+Use Parson Desktop on other computers in remote mode ("Connect to a server on
+my network"), the Android app, or any browser. The tray menu item **Connect a
+phone or another computer…** shows this server's network address and a QR
+code. Allow Parson through Windows Firewall on private networks. See
+[docs/server.md](../../docs/server.md).
+
 Environment variables: `PARSON_DATA_DIR`, `PARSON_PORT`, and
 `PARSON_LIBRARY_NAME`. FFmpeg is required for transcoding.
 

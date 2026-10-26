@@ -1,0 +1,34 @@
+# systemd unit for a headless Parson server (Debian, Ubuntu, Fedora, Arch,
+# Raspberry Pi OS, most NAS distributions with systemd). See docs/server.md.
+# Install: sudo install -m 0755 parson-music-server /usr/local/bin/
+#          sudo cp parson-music.service /etc/systemd/system/
+#          sudo systemctl enable --now parson-music
+[Unit]
+Description=Parson music server
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/parson-music-server
+DynamicUser=yes
+StateDirectory=parson
+Environment=PARSON_DATA_DIR=/var/lib/parson
+Environment=PARSON_PORT=1993
+# Listen on the network so phones, browsers and Parson Desktop (in remote
+# mode) can connect. Use 127.0.0.1 to keep the server private to this host.
+Environment=PARSON_BIND_ADDRESS=0.0.0.0
+# Optional: name shown to remotes, and this machine's DACs as zones.
+#Environment=PARSON_LIBRARY_NAME=Living room
+#Environment=PARSON_LOCAL_AUDIO=on
+#SupplementaryGroups=audio
+# The whole system, music included, is readable but not writable; Parson only
+# writes to its own state directory. Parson never modifies music files.
+ProtectHome=read-only
+ProtectSystem=strict
+NoNewPrivileges=yes
+PrivateTmp=yes
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

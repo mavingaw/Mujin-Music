@@ -17,9 +17,23 @@ export type DesktopUpdateState = {
   releaseUrl: string;
 };
 
+/**
+ * How Parson Desktop is set up: `local` runs the Parson server on this
+ * computer; `remote` is a remote for a server elsewhere on the network.
+ */
+export type DesktopServerMode = "local" | "remote";
+export type DesktopServerState = {
+  mode: DesktopServerMode | null;
+  name: string;
+  origin: string;
+  localAvailable: boolean;
+};
+export type DesktopServerEvent = { type: "restarted" };
+
 declare global {
   interface Window {
     __PARSON_ELECTRON__?: {
+      serverMode?: DesktopServerMode | null;
       invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
       windowControls: {
         close(): Promise<boolean>;
@@ -30,6 +44,7 @@ declare global {
       };
       watchPowerResume(callback: () => void): () => void;
       watchUpdates(callback: (state: DesktopUpdateState) => void): () => void;
+      watchServer?(callback: (event: DesktopServerEvent) => void): () => void;
     };
   }
 }
@@ -89,4 +104,54 @@ export async function showTrackInFileManager(path: string): Promise<boolean> {
     (await electronInvoke<boolean>("show_track_in_file_manager", { path })) ??
     false
   );
+}
+
+/**
+ * True when this page runs inside Parson Desktop and the desktop app also
+ * runs the server, so native helpers that touch this computer's files (the
+ * folder picker, "show in folder") act on the same machine as the library.
+ */
+export function hasLocalDesktopBridge(): boolean {
+  return (
+    hasDesktopBridge() && window.__PARSON_ELECTRON__?.serverMode !== "remote"
+  );
+}
+
+export function desktopServerMode(): DesktopServerMode | null {
+  if (typeof window === "undefined") return null;
+  return window.__PARSON_ELECTRON__?.serverMode ?? null;
+}
+
+export async function desktopServerState(): Promise<DesktopServerState | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    return (await electronInvoke<DesktopServerState>("server_state")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Opens Parson Desktop's server chooser. */
+export async function chooseDesktopServer(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  return Boolean(await electronInvoke<boolean>("server_choose"));
+}
+
+/** Makes Parson Desktop a remote for the server at `origin`. */
+export async function connectDesktopServer(origin: string): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  return Boolean(await electronInvoke<boolean>("server_connect", { origin }));
+}
+
+/** Makes Parson Desktop run the server on this computer. */
+export async function runDesktopLocalServer(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  return Boolean(await electronInvoke<boolean>("server_use_local"));
+}
+
+export function watchDesktopServer(
+  callback: (event: DesktopServerEvent) => void,
+) {
+  if (typeof window === "undefined") return () => {};
+  return window.__PARSON_ELECTRON__?.watchServer?.(callback) ?? (() => {});
 }

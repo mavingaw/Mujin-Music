@@ -212,6 +212,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
+        "bootId": crate::discovery::boot_id(),
+        "startedAt": crate::discovery::started_at(),
         "capabilities": ["streaming", "downloads", "lyrics", "casting", "zones", "sonos", "upnp", "audio_devices", "bridges", "airplay", "chromecast"],
     });
     if let (Ok(secret), Some(challenge)) = (
@@ -225,6 +227,25 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         manifest["desktopProof"] = serde_json::Value::String(proof);
     }
     HttpResponse::Ok().json(manifest)
+}
+
+async fn host_details() -> HttpResponse {
+    let port = match settings::port() {
+        Ok(port) => port,
+        Err(error) => {
+            tracing::error!(%error, "could not read the server port");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    match crate::discovery::host_info(port) {
+        Ok(info) => HttpResponse::Ok()
+            .insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"))
+            .json(info),
+        Err(error) => {
+            tracing::error!(%error, "could not describe this Parson host");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }
 
 async fn nearby_servers() -> HttpResponse {
@@ -344,6 +365,11 @@ pub async fn build_server_with_shutdown_timeout(
             )
             .service(web::scope("/api/v1/setup").configure(setup::configure))
             .route("/api/v1/discovery/nearby", web::get().to(nearby_servers))
+            .service(
+                web::resource("/api/v1/host")
+                    .wrap(HttpAuthentication::with_fn(validator))
+                    .route(web::get().to(host_details)),
+            )
             .route(
                 "/api/v1/cast/media/{song}/stream",
                 web::get().to(cast::cast_media),
@@ -370,6 +396,11 @@ pub async fn build_server_with_shutdown_timeout(
                     )
                     .service(web::scope("/setup").configure(setup::configure))
                     .route("/discovery/nearby", web::get().to(nearby_servers))
+                    .service(
+                        web::resource("/host")
+                            .wrap(HttpAuthentication::with_fn(validator))
+                            .route(web::get().to(host_details)),
+                    )
                     .service(
                         web::resource("/libraries")
                             .wrap(HttpAuthentication::with_fn(admin_guard))
@@ -403,6 +434,8 @@ pub async fn build_server_with_shutdown_timeout(
 }
 
 pub async fn run() -> std::io::Result<()> {
+    // Fix the process start time before the (possibly slow) startup work.
+    let _ = crate::discovery::boot_id();
     let (server, port) = build_server().await?;
     let _advertisement = match crate::discovery::advertise(port) {
         Ok(advertisement) => Some(advertisement),
@@ -451,6 +484,12 @@ mod tests {
         );
         assert!(value.get("libraryPath").is_none());
         assert!(value.get("desktopProof").is_none());
+        assert_eq!(value["bootId"], crate::discovery::boot_id());
+        assert!(
+            value["startedAt"]
+                .as_u64()
+                .is_some_and(|started| started > 0)
+        );
     }
 
     #[actix_web::test]

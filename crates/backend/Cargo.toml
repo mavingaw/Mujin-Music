@@ -25,6 +25,7 @@ server = [
     "dep:jsonwebtoken",
     "dep:mime_guess",
     "dep:mdns-sd",
+    "dep:if-addrs",
     "dep:ravif",
     "dep:reqwest",
     "dep:roxmltree",
@@ -58,6 +59,7 @@ libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }
 lofty = "0.25.4"
 mime_guess = { version = "2.0.5", optional = true }
 mdns-sd = { version = "0.21.5", optional = true }
+if-addrs = { version = "0.15.0", optional = true }
 notify = "8.2.0"
 percent-encoding = "2.3.2"
 rand = "0.10.3"
