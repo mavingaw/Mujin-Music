@@ -1,5 +1,7 @@
 import {
   albumFormat,
+  albumHeroYear,
+  resolvedFact,
   albumTextPanels,
   albumWorkSections,
   getAlbumAbout,
@@ -23,6 +25,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AlbumFacts } from "@/components/album-facts";
 import { Artwork } from "@/components/artwork";
 import { AlbumActions } from "@/components/album-actions";
 import { PauseGlyph } from "@/components/pause-glyph";
@@ -94,13 +97,18 @@ export default function AlbumScreen() {
       sources: ["tags"],
     }));
   const facts = about.data?.facts;
-  const year = /^\d{4}/.exec(
-    (facts?.exact
-      ? facts.first_release_date || data.first_release_date
-      : data.first_release_date || facts?.first_release_date) || "",
-  )?.[0];
-  const label =
-    data.label ?? (facts?.exact ? facts.labels?.[0]?.name : undefined);
+  const sources = about.data?.sources;
+  // The hero follows the original release, never the edition year.
+  const year = sources
+    ? (albumHeroYear(about.data, data.first_release_date) ?? undefined)
+    : /^\d{4}/.exec(
+        (facts?.exact
+          ? facts.first_release_date || data.first_release_date
+          : data.first_release_date || facts?.first_release_date) || "",
+      )?.[0];
+  const label = sources
+    ? (resolvedFact(about.data, "label")?.value ?? undefined)
+    : (data.label ?? (facts?.exact ? facts.labels?.[0]?.name : undefined));
   // Review / About / the pieces' own articles, as on the web.
   const texts = albumTextPanels(about.data);
   const shownPanel =
@@ -270,6 +278,12 @@ export default function AlbumScreen() {
                 ))}
               </View>
               <EditorialBlock text={shownText} />
+            </View>
+          ) : null}
+          {sources ? (
+            <View style={styles.section}>
+              <SectionTitle>Release</SectionTitle>
+              <AlbumFacts sources={sources} />
             </View>
           ) : null}
           {credits.length ? (

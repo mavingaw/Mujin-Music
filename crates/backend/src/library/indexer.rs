@@ -31,7 +31,9 @@ use crate::domain::{Album, Artist, AudioProperties, Credit, Song, codec_is_lossl
 use crate::library::artist_names::{
     artist_credit_names, featured_artists_from_title, format_contributing_artists,
 };
-use crate::library::credits::{ARTIST_ROLES, TagCredit, TagCredits, role_rank, split_role_key};
+use crate::library::credits::{
+    ARTIST_ROLES, ReleaseTags, TagCredit, TagCredits, role_rank, split_role_key,
+};
 use crate::library::identity::{
     hash_album, hash_artist, hash_normalized_album, hash_normalized_artist, hash_normalized_song,
     hash_song, normalize_album_identity, normalize_artist_identity, normalize_song_identity,
@@ -47,7 +49,8 @@ use crate::persistence::connection::{DbPool, connect};
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
 // 18: MusicBrainz release, recording and artist ids are read from tags.
-const TAG_PARSER_VERSION: &str = "18";
+// 19: Release facts (catalog number, country, original date, barcode).
+const TAG_PARSER_VERSION: &str = "19";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -279,6 +282,8 @@ struct ParsedFile {
     label: String,
     #[serde(default)]
     isrc: String,
+    #[serde(default)]
+    release_tags: ReleaseTags,
     #[serde(skip)]
     tag_parse_us: u64,
     #[serde(skip)]
@@ -811,6 +816,8 @@ struct ExistingFileSnapshot {
     label: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     isrc: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    release_json: Option<String>,
 }
 
 #[derive(Debug, QueryableByName)]
@@ -2289,6 +2296,7 @@ struct FileExtrasStage<'a> {
     credits: &'a [TagCredit],
     label: Option<&'a str>,
     isrc: Option<&'a str>,
+    release: Option<&'a ReleaseTags>,
 }
 
 fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
@@ -2303,6 +2311,7 @@ fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
         credits: &parsed.credits,
         label: (!parsed.label.is_empty()).then_some(parsed.label.as_str()),
         isrc: (!parsed.isrc.is_empty()).then_some(parsed.isrc.as_str()),
+        release: (!parsed.release_tags.is_empty()).then_some(&parsed.release_tags),
     })
 }
 
@@ -5142,6 +5151,7 @@ fn parsed_file_from_result(
         technical,
         label: metadata.credits.label().unwrap_or_default().to_string(),
         isrc: metadata.credits.isrc.clone().unwrap_or_default(),
+        release_tags: metadata.credits.release.clone(),
         credits: metadata.credits.credits,
         tag_parse_us: metadata.tag_parse_us,
         duration_us: metadata.duration_us,
@@ -5237,6 +5247,11 @@ fn snapshot_to_parsed(snapshot: &ExistingFileSnapshot) -> ParsedFile {
         credits: serde_json::from_str(&snapshot.credits_json).unwrap_or_default(),
         label: snapshot.label.clone().unwrap_or_default(),
         isrc: snapshot.isrc.clone().unwrap_or_default(),
+        release_tags: snapshot
+            .release_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default(),
         tag_parse_us: 0,
         duration_us: 0,
         parse_strategy: ParserStrategy::Reused,
@@ -6741,7 +6756,7 @@ fn existing_snapshots(
                 rfm.musicbrainz_artist_id, rfm.musicbrainz_album_artist_id, rfm.error,
                 rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
-                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc
+                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc, rfm.release_json
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.root_id = {root_id}"
@@ -6761,7 +6776,7 @@ fn all_available_snapshots(conn: &mut SqliteConnection) -> QueryResult<Vec<Exist
                 rfm.musicbrainz_artist_id, rfm.musicbrainz_album_artist_id, rfm.error,
                 rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
-                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc
+                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc, rfm.release_json
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.availability = 'available'",
@@ -7099,7 +7114,8 @@ fn upsert_file_metadata(
              track_number, disc_number, duration_seconds, duration_source, musicbrainz_recording_id,
              musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id, error,
              embedded_artwork_offset, embedded_artwork_length,
-             codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc)
+             codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc,
+             release_json)
          SELECT file.id, stage.title, stage.album, stage.track_artists_json, stage.album_artists_json,
                 stage.genres_json, stage.release_date, stage.cover_url, stage.parser_version,
                 stage.cover_resolver_version, stage.classification_version,
@@ -7110,7 +7126,8 @@ fn upsert_file_metadata(
                 json_extract(stage.extras_json, '$.sample_rate'), json_extract(stage.extras_json, '$.bit_depth'),
                 json_extract(stage.extras_json, '$.channels'), json_extract(stage.extras_json, '$.bitrate'),
                 COALESCE(json_extract(stage.extras_json, '$.credits'), '[]'),
-                json_extract(stage.extras_json, '$.label'), json_extract(stage.extras_json, '$.isrc')
+                json_extract(stage.extras_json, '$.label'), json_extract(stage.extras_json, '$.isrc'),
+                json_extract(stage.extras_json, '$.release')
          FROM file_metadata_stage stage JOIN file_entry file USING(path) WHERE stage.was_parsed
          ON CONFLICT(file_id) DO UPDATE SET
              title = excluded.title, album = excluded.album, track_artists_json = excluded.track_artists_json,
@@ -7133,6 +7150,7 @@ fn upsert_file_metadata(
              sample_rate = excluded.sample_rate, bit_depth = excluded.bit_depth,
              channels = excluded.channels, bitrate = excluded.bitrate,
              credits_json = excluded.credits_json, label = excluded.label, isrc = excluded.isrc,
+             release_json = excluded.release_json,
              parsed_at = CURRENT_TIMESTAMP
          WHERE raw_file_metadata.title IS NOT excluded.title OR raw_file_metadata.album IS NOT excluded.album
             OR raw_file_metadata.track_artists_json IS NOT excluded.track_artists_json
@@ -7158,7 +7176,8 @@ fn upsert_file_metadata(
             OR raw_file_metadata.bitrate IS NOT excluded.bitrate
             OR raw_file_metadata.credits_json IS NOT excluded.credits_json
             OR raw_file_metadata.label IS NOT excluded.label
-            OR raw_file_metadata.isrc IS NOT excluded.isrc;
+            OR raw_file_metadata.isrc IS NOT excluded.isrc
+            OR raw_file_metadata.release_json IS NOT excluded.release_json;
 
          DELETE FROM duration_repair_queue
          WHERE file_id IN (
@@ -10190,6 +10209,7 @@ mod external_library_tests {
             credits: Vec::new(),
             label: String::new(),
             isrc: String::new(),
+            release_tags: crate::library::credits::ReleaseTags::default(),
             tag_parse_us: 0,
             duration_us: 0,
             parse_strategy: ParserStrategy::Test,
@@ -10616,6 +10636,7 @@ mod external_library_tests {
             credits_json: "[]".into(),
             label: None,
             isrc: None,
+            release_json: None,
         }
     }
 
@@ -13774,6 +13795,11 @@ mod technical_and_credit_tests {
             ))
             .expect("technical and credits schema");
         connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-11-01-000000_metadata_preferences/up.sql"
+            ))
+            .expect("release facts schema");
+        connection
     }
 
     fn credited_track() -> ParsedFile {
@@ -13880,7 +13906,13 @@ mod technical_and_credit_tests {
     #[test]
     fn technical_properties_and_credits_survive_the_raw_metadata_round_trip() {
         let mut connection = catalog_schema();
-        let parsed = credited_track();
+        let mut parsed = credited_track();
+        parsed.release_tags = crate::library::credits::ReleaseTags {
+            catalog_number: Some("CL 1355".into()),
+            country: Some("US".into()),
+            original_date: Some("1959-08-17".into()),
+            barcode: None,
+        };
         let file = discovered("flac-96k-24bit-stereo.flac", 32_182);
         let files = vec![file.clone()];
         connection
@@ -13924,6 +13956,7 @@ mod technical_and_credit_tests {
         assert_eq!(reused.credits, parsed.credits);
         assert_eq!(reused.label, parsed.label);
         assert_eq!(reused.isrc, parsed.isrc);
+        assert_eq!(reused.release_tags, parsed.release_tags);
     }
 
     #[test]

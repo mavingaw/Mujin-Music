@@ -6,6 +6,16 @@ import { creditHref, creditTracksLabel, groupCredits } from "./credit-roles";
 import { PersonAvatar } from "./person-avatar";
 
 function SourceMark({ sources }: { sources: AboutCredit["sources"] }) {
+  if (sources.includes("edited")) {
+    return (
+      <span
+        className="rounded border border-sky-300/25 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-sky-200"
+        title="From the album's edited credits list (frozen against lookups)"
+      >
+        Edited
+      </span>
+    );
+  }
   if (!sources.includes("musicbrainz")) return null;
   return (
     <span

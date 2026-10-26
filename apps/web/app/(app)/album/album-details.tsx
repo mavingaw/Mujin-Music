@@ -4,6 +4,7 @@ import getBaseURL from "@/lib/api/server-url";
 import { getLibraryImageUrl } from "@/lib/images/image-url";
 import {
   addAlbumToPlaylist as addAlbumTracksToPlaylist,
+  albumHeroYear,
   getPlaylists,
   refreshEnrichment,
   type LibraryAlbum,
@@ -20,6 +21,8 @@ import {
   ListPlus,
   Loader2,
   MoreHorizontal,
+  Pencil,
+  SlidersHorizontal,
   Pause,
   Play,
   Plus,
@@ -33,7 +36,10 @@ import { AlbumGenresDialog } from "@/features/library/genres/album-genres-dialog
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { usePlayer } from "@/features/player/player-context";
 import { useSession } from "@/features/account/session-provider";
-import AlbumEditor from "@/features/library/album-editor";
+import AlbumEditor, {
+  type AlbumEditorTab,
+} from "@/features/library/album-editor";
+import { CreditsEditor } from "@/features/library/credits/credits-editor";
 import { useAlbum } from "@/features/library/use-library-entity";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import {
@@ -52,7 +58,7 @@ import { AlbumAboutSection } from "./album-about";
 import { CreditsList } from "@/features/library/credits/credits-list";
 import { tagCreditsAsAbout } from "@/features/library/credits/credit-roles";
 import { useAlbumAbout } from "@/features/library/credits/use-editorial";
-import type { AboutCredit } from "@parson/music-sdk/types";
+import type { AboutCredit, AlbumAbout } from "@parson/music-sdk/types";
 import EntityPageState from "@/features/library/entity-page-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -81,15 +87,12 @@ function splitQualifiedTitle(title: string) {
   return [title.slice(0, splitAt).trimEnd(), title.slice(splitAt)] as const;
 }
 
-function releaseYear(
-  album: LibraryAlbum,
-  facts:
-    | { first_release_date?: string | null; exact?: boolean | null }
-    | null
-    | undefined,
-) {
-  // A release matched by title alone may be a later recording; the tags'
-  // year then wins.
+function releaseYear(album: LibraryAlbum, about: AlbumAbout | undefined) {
+  // The hero follows the original release, never the edition year.
+  if (about?.sources) return albumHeroYear(about, album.first_release_date);
+  const facts = about?.facts;
+  // Older servers: a release matched by title alone may be a later
+  // recording; the tags' year then wins.
   const value =
     (facts?.exact
       ? facts.first_release_date || album.first_release_date
@@ -111,6 +114,8 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const [createOpen, setCreateOpen] = useState(false);
   const [identifyOpen, setIdentifyOpen] = useState(false);
   const [genresOpen, setGenresOpen] = useState(false);
+  const [editorTab, setEditorTab] = useState<AlbumEditorTab | null>(null);
+  const [editingCredits, setEditingCredits] = useState(false);
   const playlists = useQuery({
     queryKey: ["playlists"],
     queryFn: getPlaylists,
@@ -325,10 +330,12 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               >
                 {artist.name}
               </Link>
-              {releaseYear(album, aboutQuery.data?.facts) && (
+              {releaseYear(album, aboutQuery.data) && (
                 <>
                   <span className="text-zinc-500">•</span>
-                  <span>{releaseYear(album, aboutQuery.data?.facts)}</span>
+                  <span title="Original release">
+                    {releaseYear(album, aboutQuery.data)}
+                  </span>
                 </>
               )}
               <span className="text-zinc-500">•</span>
@@ -457,10 +464,32 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
                 </DropdownMenuItem>
               )}
               {session?.role === "admin" && (
-                <AlbumEditor albumId={album.id} trigger="dropdown" />
+                <DropdownMenuItem onSelect={() => setEditorTab("details")}>
+                  <Pencil className="h-4 w-4" />
+                  Edit album metadata
+                </DropdownMenuItem>
+              )}
+              {session?.role === "admin" && aboutQuery.data?.sources && (
+                <DropdownMenuItem onSelect={() => setEditorTab("sources")}>
+                  <SlidersHorizontal className="h-4 w-4" />
+                  Metadata preference…
+                </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          {session?.role === "admin" && (
+            <AlbumEditor
+              albumId={album.id}
+              initialTab={editorTab ?? "details"}
+              onEditCredits={() => {
+                setTab("credits");
+                setEditingCredits(true);
+              }}
+              onOpenChange={(next) => !next && setEditorTab(null)}
+              open={editorTab !== null}
+              trigger="none"
+            />
+          )}
           <CreatePlaylistDialog
             initialAlbumId={album?.id}
             onOpenChange={setCreateOpen}
@@ -490,6 +519,11 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           about={aboutQuery.data}
           album={album}
           isAdmin={session?.role === "admin"}
+          onEditSources={
+            session?.role === "admin" && aboutQuery.data?.sources
+              ? () => setEditorTab("sources")
+              : undefined
+          }
           onIdentify={() => setIdentifyOpen(true)}
         />
 
@@ -553,15 +587,44 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
             id="album-credits"
             role="tabpanel"
           >
-            <CreditsList
-              credits={albumCredits}
-              emptyMessage={
-                aboutQuery.data?.enrichment.enabled
-                  ? "No credits were found in this album's tags or on MusicBrainz."
-                  : "No credits in this album's tags. Composer, producer and performer tags appear here, and online metadata can add MusicBrainz credits."
-              }
-              tracks={album.songs}
-            />
+            {session?.role === "admin" &&
+              aboutQuery.data?.sources &&
+              !editingCredits && (
+                <div className="-mt-2 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs text-zinc-500">
+                    {aboutQuery.data.sources.credits_edited
+                      ? "These credits were edited by hand and are frozen against lookups."
+                      : "Credits from your tags, plus MusicBrainz where the album prefers it."}
+                  </p>
+                  <button
+                    className="flex items-center gap-1.5 rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition-colors hover:border-white/25 hover:text-white"
+                    onClick={() => setEditingCredits(true)}
+                    type="button"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit credits
+                  </button>
+                </div>
+              )}
+            {editingCredits && aboutQuery.data ? (
+              <CreditsEditor
+                albumId={album.id}
+                credits={albumCredits}
+                edited={Boolean(aboutQuery.data.sources?.credits_edited)}
+                onDone={() => setEditingCredits(false)}
+                tracks={album.songs}
+              />
+            ) : (
+              <CreditsList
+                credits={albumCredits}
+                emptyMessage={
+                  aboutQuery.data?.enrichment.enabled
+                    ? "No credits were found in this album's tags or on MusicBrainz."
+                    : "No credits in this album's tags. Composer, producer and performer tags appear here, and online metadata can add MusicBrainz credits."
+                }
+                tracks={album.songs}
+              />
+            )}
             {releaseCredits.length > 0 &&
               releaseCredits.length < albumCredits.length && (
                 <p className="text-xs text-zinc-500">

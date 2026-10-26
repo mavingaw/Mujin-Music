@@ -76,6 +76,16 @@ Before anything from a release found this way is used, Parson checks it against 
 
 When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. Results that fit your files are marked, and choosing a release with a different number of tracks asks you to confirm first, because tracks are then paired by title. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
 
+When your files name a composer or conductor, releases that credit them are listed first, and you can show only those.
+
+### Tags or online, field by field
+
+Under **Edit album → Metadata preference** an administrator chooses, for each fact, whether the album shows its file tags or the matched MusicBrainz release: original release date, this edition's date, label, catalog number, country, barcode, cover, performers and other credits. When the chosen source has nothing, the other fills in, and the album page marks every fact with where it came from. Library-wide defaults are under **Settings → Library → Metadata preference**; out of the box, edition facts and covers come from your tags and credits add what MusicBrainz knows.
+
+Parson reads release facts that taggers such as Picard write: `CATALOGNUMBER`, `RELEASECOUNTRY`, `ORIGINALDATE` or `ORIGINALYEAR` (ID3 `TDOR`/`TORY`) and `BARCODE`. The year next to the album title is the original release, never the year of a reissue. A release found automatically may be another pressing, so its catalog number, country, barcode and edition date only appear where you choose Online for that field.
+
+Typing a value freezes it: looking the album up again, or identifying it, never changes it until you unfreeze it. The **Credits** tab has **Edit credits** to add or remove a person, change a role or instrument, or limit a credit to chosen tracks. An edited list replaces the tag and MusicBrainz credits on the album and on every person's page, and it is frozen the same way. None of this writes to your files.
+
 ### Albums and editions
 
 Albums are identified from normalized album title plus resolved album artist. Parson recognizes edition qualifiers such as deluxe, anniversary, remastered, expanded, special, collector's, limited, legacy, reissue, regional, mono/stereo, and bonus editions. It links confident variants into a release group while preserving the edition's visible title and tracks.

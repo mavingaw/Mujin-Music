@@ -377,7 +377,7 @@ export interface Relationship {
 }
 
 /** Where a credit came from: file tags or an external source such as MusicBrainz. */
-export type CreditSource = "tags" | "musicbrainz" | (string & {});
+export type CreditSource = "tags" | "musicbrainz" | "edited" | (string & {});
 
 /**
  * A credit on an album page, merged across tags and external sources.
@@ -507,6 +507,86 @@ export interface AlbumAbout {
   work_texts?: WorkText[];
   /** The match check behind the MusicBrainz release; older servers leave this out. */
   release_match?: ReleaseMatchCheck | null;
+  /**
+   * Each fact with its source (file tags, the online release or a frozen
+   * edit), the album's own choices and the library defaults. Older servers
+   * leave this out.
+   */
+  sources?: AlbumSources;
+}
+
+/** Where an album fact comes from. */
+export type FactSource = "tags" | "online";
+
+/** The album facts a person can choose a source for. */
+export type AlbumField =
+  | "original_date"
+  | "release_date"
+  | "label"
+  | "catalog_number"
+  | "country"
+  | "barcode"
+  | "cover"
+  | "performers"
+  | "credits";
+
+/** One album fact with both candidates and the one shown. */
+export interface ResolvedFact {
+  field: AlbumField;
+  /** What the album shows. */
+  value: string | null;
+  /** `edited` (frozen), `tags` or `online`; null when nothing is known. */
+  source: "edited" | FactSource | null;
+  /** The source this album prefers: its own choice or the library default. */
+  preferred: FactSource;
+  /** This album's own choice; null follows the library default. */
+  choice: FactSource | null;
+  library_default: FactSource;
+  tags: string | null;
+  online: string | null;
+  /** The value a person typed. While set, lookups never change the field. */
+  edited: string | null;
+  /** The preferred source had nothing, so the other one filled in. */
+  fallback: boolean;
+}
+
+/** The library-wide default source per field. */
+export type FieldSources = Record<AlbumField, FactSource>;
+
+/** A credit in an edited credits list; no tracks means the whole album. */
+export interface EditedCredit {
+  name: string;
+  role: CreditRole | (string & {});
+  instrument?: string | null;
+  track_ids: string[];
+  /** The linked person (a library artist or `mb:<id>`), when known. */
+  artist_id?: string | null;
+}
+
+export interface AlbumSources {
+  facts: ResolvedFact[];
+  /** The year the hero shows: the original release, not this edition. */
+  hero_year: string | null;
+  /** A person edited the credits list; it is frozen until reverted. */
+  credits_edited: boolean;
+  edited_credits: EditedCredit[] | null;
+  /** A verified online release backs the Online values. */
+  online_release: boolean;
+  /** The online release is this exact edition, so it has edition facts. */
+  online_edition: boolean;
+  /**
+   * The release was found automatically, so its pressing is a guess: its
+   * edition facts never fill in for missing tags. Older servers leave this
+   * out.
+   */
+  edition_guessed?: boolean;
+  library: FieldSources;
+}
+
+/** Changes to an album's sources: `null` restores the default or unfreezes. */
+export interface AlbumSourcesPatch {
+  sources?: Partial<Record<AlbumField, FactSource | null>>;
+  edits?: Partial<Record<AlbumField, string | null>>;
 }
 
 /** A piece on an album and its Wikipedia About text. */
@@ -813,6 +893,12 @@ export interface ReleaseMatch {
   /** The release automatic matching found and rejected. */
   suggested?: boolean;
   url: string;
+  /** Every name in the release's artist credit. Older servers leave this out. */
+  artist_names?: string[];
+  /** The release credits a composer tagged on the files. */
+  credits_tagged_composer?: boolean;
+  /** The release credits a conductor tagged on the files. */
+  credits_tagged_conductor?: boolean;
 }
 
 /** One piece of evidence for or against a MusicBrainz release. */
@@ -864,6 +950,10 @@ export interface IdentifySearch {
   local_track_count: number;
   identification: AlbumIdentification | null;
   releases: ReleaseMatch[];
+  /** Composers tagged on the files; releases crediting them come first. */
+  tagged_composers?: string[];
+  /** Conductors tagged on the files; releases crediting them come first. */
+  tagged_conductors?: string[];
 }
 
 /** A Focus facet group. */

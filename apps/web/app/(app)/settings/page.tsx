@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
 import EnrichmentSettings from "@/features/settings/enrichment-settings";
+import MetadataSourcesSettings from "@/features/settings/metadata-sources-settings";
 
 const settingsTabs = [
   "account",
@@ -88,6 +89,9 @@ export default function SettingsPage() {
               <LibrarySettings />
               <div className="mt-8">
                 <EnrichmentSettings />
+              </div>
+              <div className="mt-8">
+                <MetadataSourcesSettings />
               </div>
             </>
           )}
