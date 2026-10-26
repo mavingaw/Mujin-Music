@@ -16,7 +16,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Artwork } from "@/components/artwork";
 import { AlbumActions } from "@/components/album-actions";
 import { PauseGlyph } from "@/components/pause-glyph";
-import { Screen, SongRow } from "@/components/music-ui";
+import { AlbumFocusTracks } from "@/components/album-focus-tracks";
+import { Screen } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { formatCollectionDuration } from "@/lib/format";
@@ -143,17 +144,7 @@ export default function AlbumScreen() {
               </Pressable>
             </View>
           </View>
-          {data.songs.map((song, index) => (
-            <SongRow
-              key={song.id}
-              song={song}
-              queue={data.songs}
-              index={index}
-              showAlbum={false}
-              albumArtist={artist}
-              albumType={data.primary_type}
-            />
-          ))}
+          <AlbumFocusTracks album={data} albumArtist={artist} />
           {data.description ? (
             <Text style={styles.description}>{data.description}</Text>
           ) : null}

@@ -1,5 +1,6 @@
 import api from "../core/http";
 import type { LibrarySong } from "../domain/types";
+import type { SmartPlaylistInfo } from "./focus";
 
 const MAX_BATCH_TRACK_IDS = 500;
 
@@ -17,6 +18,8 @@ export interface PlaylistSummary extends PlaylistBase {
   song_count: number;
   total_duration: number;
   cover_songs: LibrarySong[];
+  /** Present when the playlist's tracks come from a library focus. */
+  smart?: SmartPlaylistInfo;
 }
 
 export type PlaylistsResponse = PlaylistSummary;

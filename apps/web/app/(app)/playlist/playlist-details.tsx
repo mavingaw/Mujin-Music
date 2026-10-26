@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import PlaylistCover from "@/features/library/playlist-cover";
+import SmartPlaylistBanner from "@/features/library/focus/smart-playlist-banner";
 import { usePlayer } from "@/features/player/player-context";
 import {
   deletePlaylist,
@@ -309,6 +310,9 @@ function UserPlaylistDetails() {
           </p>
         </div>
       </header>
+      {playlist.data.smart && (
+        <SmartPlaylistBanner playlistId={id} smart={playlist.data.smart} />
+      )}
 
       <PlaylistActions
         deleteOpen={deleteOpen}

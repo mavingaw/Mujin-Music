@@ -3,6 +3,7 @@ pub mod credits;
 pub mod delivery;
 pub(crate) mod discovery;
 pub mod dsd;
+pub mod focus;
 pub mod formats;
 pub mod identity;
 pub mod indexer;
@@ -11,3 +12,6 @@ pub mod probe;
 pub mod search;
 pub mod state;
 pub mod storage;
+pub mod works;
+#[cfg(feature = "server")]
+pub mod works_online;

@@ -5,6 +5,7 @@ pub mod cast;
 pub mod data;
 pub mod error;
 pub mod filesystem;
+pub mod focus;
 pub mod genres;
 pub mod home;
 pub mod image;

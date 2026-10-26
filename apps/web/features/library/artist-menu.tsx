@@ -14,6 +14,11 @@ import { useStartRadio } from "@/features/player/radio/radio-controls";
 import Link from "next/link";
 import { BanMenuItem } from "@/features/library/radio-bans";
 import { toast } from "sonner";
+import { useState } from "react";
+import {
+  CreateTagDialog,
+  TagSubmenu,
+} from "@/features/library/focus/tag-submenu";
 
 export default function ArtistMenu({
   artistId,
@@ -26,6 +31,7 @@ export default function ArtistMenu({
 }) {
   const player = usePlayer();
   const startRadio = useStartRadio();
+  const [createTagOpen, setCreateTagOpen] = useState(false);
 
   const play = async () => {
     try {
@@ -56,30 +62,45 @@ export default function ArtistMenu({
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-60">
-        <ContextMenuItem onSelect={() => void play()}>
-          <Play className="h-4 w-4" />
-          Play
-        </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={() => void startRadio({ kind: "artist", id: artistId })}
-        >
-          <Radio className="h-4 w-4" />
-          Start radio
-        </ContextMenuItem>
-        <BanMenuItem
-          target={{ kind: "artist", id: artistId, name: artistName }}
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent className="w-60">
+          <ContextMenuItem onSelect={() => void play()}>
+            <Play className="h-4 w-4" />
+            Play
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => void startRadio({ kind: "artist", id: artistId })}
+          >
+            <Radio className="h-4 w-4" />
+            Start radio
+          </ContextMenuItem>
+          <BanMenuItem
+            target={{ kind: "artist", id: artistId, name: artistName }}
+          />
+          <ContextMenuSeparator />
+          <ContextMenuItem asChild>
+            <Link href={`/artist?id=${artistId}`}>
+              <UserRound className="h-4 w-4" />
+              View artist
+            </Link>
+          </ContextMenuItem>
+          <TagSubmenu
+            entityId={artistId}
+            entityType="artist"
+            onCreateTag={() => setCreateTagOpen(true)}
+          />
+        </ContextMenuContent>
+      </ContextMenu>
+      {createTagOpen && (
+        <CreateTagDialog
+          entityId={artistId}
+          entityType="artist"
+          onOpenChange={setCreateTagOpen}
+          open={createTagOpen}
         />
-        <ContextMenuSeparator />
-        <ContextMenuItem asChild>
-          <Link href={`/artist?id=${artistId}`}>
-            <UserRound className="h-4 w-4" />
-            View artist
-          </Link>
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+      )}
+    </>
   );
 }

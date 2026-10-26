@@ -46,7 +46,7 @@ use crate::library::storage::get_cover_art_path;
 use crate::persistence::connection::{DbPool, connect};
 
 use crate::library::formats::AUDIO_EXTENSIONS;
-const TAG_PARSER_VERSION: &str = "18";
+const TAG_PARSER_VERSION: &str = "19";
 const COVER_RESOLVER_VERSION: &str = "5";
 // Bump when release inference semantics change.
 const CLASSIFICATION_VERSION: &str = "8";
@@ -300,6 +300,23 @@ impl DurationSource {
     }
 }
 
+/// Work, movement and release type tags of one file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct TagWork {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    movement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    movement_number: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    composed_year: Option<u16>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ParsedFile {
     path: Arc<str>,
@@ -328,6 +345,8 @@ struct ParsedFile {
     label: String,
     #[serde(default)]
     isrc: String,
+    #[serde(default)]
+    work: TagWork,
     #[serde(skip)]
     tag_parse_us: u64,
     #[serde(skip)]
@@ -860,6 +879,18 @@ struct ExistingFileSnapshot {
     label: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     isrc: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    work: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    movement: Option<String>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    movement_number: Option<i32>,
+    #[diesel(sql_type = Nullable<Text>)]
+    release_type: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    work_mbid: Option<String>,
+    #[diesel(sql_type = Nullable<Integer>)]
+    composed_year: Option<i32>,
 }
 
 #[derive(Debug, QueryableByName)]
@@ -2346,6 +2377,12 @@ struct FileExtrasStage<'a> {
     credits: &'a [TagCredit],
     label: Option<&'a str>,
     isrc: Option<&'a str>,
+    work: Option<&'a str>,
+    movement: Option<&'a str>,
+    movement_number: Option<u16>,
+    release_type: Option<&'a str>,
+    work_mbid: Option<&'a str>,
+    composed_year: Option<u16>,
 }
 
 fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
@@ -2360,6 +2397,12 @@ fn file_extras_json(parsed: &ParsedFile) -> QueryResult<String> {
         credits: &parsed.credits,
         label: (!parsed.label.is_empty()).then_some(parsed.label.as_str()),
         isrc: (!parsed.isrc.is_empty()).then_some(parsed.isrc.as_str()),
+        work: parsed.work.work.as_deref(),
+        movement: parsed.work.movement.as_deref(),
+        movement_number: parsed.work.movement_number,
+        release_type: parsed.work.release_type.as_deref(),
+        work_mbid: parsed.work.work_id.as_deref(),
+        composed_year: parsed.work.composed_year,
     })
 }
 
@@ -3411,6 +3454,9 @@ fn wanted_id3_text_frame(id: &[u8]) -> bool {
             | b"TPB"
             | b"TRC"
             | b"TXX"
+            // Apple movement frames.
+            | b"MVNM"
+            | b"MVIN"
     )
 }
 
@@ -3547,6 +3593,50 @@ fn populate_id3_metadata(metadata: &mut RawAudioMetadata, tag: &id3::Tag) {
     populate_id3_credits(&mut metadata.credits, tag);
 }
 
+/// Decodes a raw ID3v2 text frame body: an encoding byte, then the text.
+fn decode_id3_text(data: &[u8]) -> Option<String> {
+    let (&encoding, body) = data.split_first()?;
+    let text = match encoding {
+        0 => body
+            .iter()
+            .map(|byte| char::from(*byte))
+            .collect::<String>(),
+        3 => String::from_utf8_lossy(body).into_owned(),
+        1 | 2 => {
+            let mut units = body
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| {
+                    if encoding == 2 {
+                        u16::from_be_bytes([pair[0], pair[1]])
+                    } else {
+                        u16::from_le_bytes([pair[0], pair[1]])
+                    }
+                })
+                .collect::<Vec<_>>();
+            if encoding == 1 {
+                match units.first() {
+                    Some(0xFEFF) => {
+                        units.remove(0);
+                    }
+                    Some(0xFFFE) => {
+                        units.remove(0);
+                        for unit in &mut units {
+                            *unit = unit.swap_bytes();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            String::from_utf16_lossy(&units)
+        }
+        _ => return None,
+    };
+    let text = text.trim_matches(char::from(0)).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 fn populate_id3_credits(credits: &mut TagCredits, tag: &id3::Tag) {
     use id3::Content;
     for frame in tag.frames() {
@@ -3556,6 +3646,12 @@ fn populate_id3_credits(credits: &mut TagCredits, tag: &id3::Tag) {
             }
             Content::ExtendedText(extended) => {
                 credits.apply_named(&extended.description, &extended.value);
+            }
+            // The id3 crate does not decode Apple's movement frames.
+            Content::Unknown(unknown) if matches!(frame.id(), "MVNM" | "MVIN") => {
+                if let Some(value) = decode_id3_text(&unknown.data) {
+                    credits.apply_id3_frame(frame.id(), &value);
+                }
             }
             Content::InvolvedPeopleList(list) => {
                 let musicians = frame.id() == "TMCL";
@@ -4375,6 +4471,32 @@ fn apply_mp4_value(
                 metadata.credits.apply_named("COMPOSER", &value);
             }
         }
+        b"\xa9wrk" => {
+            if let Some(value) = text() {
+                metadata.credits.apply_named("WORK", &value);
+            }
+        }
+        b"\xa9mvn" => {
+            if let Some(value) = text() {
+                metadata.credits.apply_named("MOVEMENTNAME", &value);
+            }
+        }
+        b"\xa9mvi" if !value.is_empty() && value.len() <= 8 => {
+            if let Some(value) = text() {
+                metadata.credits.apply_named("MOVEMENT", &value);
+            } else {
+                // Apple writes an integer atom, big-endian.
+                let number = value
+                    .iter()
+                    .fold(0_u64, |number, byte| (number << 8) | u64::from(*byte));
+                if let Ok(number) = u16::try_from(number)
+                    && number > 0
+                    && metadata.credits.movement_number.is_none()
+                {
+                    metadata.credits.movement_number = Some(number);
+                }
+            }
+        }
         b"trkn" if value.len() >= 4 => {
             metadata.track_number = u16::from_be_bytes([value[2], value[3]]);
         }
@@ -4949,6 +5071,11 @@ fn populate_lofty_credits(credits: &mut TagCredits, tag: &lofty::tag::Tag) {
         (ItemKey::Label, "LABEL"),
         (ItemKey::Publisher, "PUBLISHER"),
         (ItemKey::Isrc, "ISRC"),
+        (ItemKey::Work, "WORK"),
+        (ItemKey::Movement, "MOVEMENTNAME"),
+        (ItemKey::MovementNumber, "MOVEMENT"),
+        (ItemKey::MusicBrainzReleaseType, "RELEASETYPE"),
+        (ItemKey::MusicBrainzWorkId, "MUSICBRAINZ_WORKID"),
     ] {
         for value in tag.get_strings(key) {
             credits.apply_named(role, value);
@@ -5462,6 +5589,14 @@ fn parsed_file_from_result(
         technical,
         label: metadata.credits.label().unwrap_or_default().to_string(),
         isrc: metadata.credits.isrc.clone().unwrap_or_default(),
+        work: TagWork {
+            work: metadata.credits.work.clone(),
+            movement: metadata.credits.movement.clone(),
+            movement_number: metadata.credits.movement_number,
+            release_type: metadata.credits.release_type.clone(),
+            work_id: metadata.credits.work_id.clone(),
+            composed_year: metadata.credits.composed_year,
+        },
         credits: metadata.credits.credits,
         tag_parse_us: metadata.tag_parse_us,
         duration_us: metadata.duration_us,
@@ -5487,7 +5622,7 @@ fn split_genres(value: &str) -> Vec<String> {
     genres
 }
 
-fn normalize_genre_key(value: &str) -> String {
+pub(crate) fn normalize_genre_key(value: &str) -> String {
     value
         .to_lowercase()
         .chars()
@@ -5557,6 +5692,18 @@ fn snapshot_to_parsed(snapshot: &ExistingFileSnapshot) -> ParsedFile {
         credits: serde_json::from_str(&snapshot.credits_json).unwrap_or_default(),
         label: snapshot.label.clone().unwrap_or_default(),
         isrc: snapshot.isrc.clone().unwrap_or_default(),
+        work: TagWork {
+            work: snapshot.work.clone(),
+            movement: snapshot.movement.clone(),
+            movement_number: snapshot
+                .movement_number
+                .and_then(|value| u16::try_from(value).ok()),
+            release_type: snapshot.release_type.clone(),
+            work_id: snapshot.work_mbid.clone(),
+            composed_year: snapshot
+                .composed_year
+                .and_then(|value| u16::try_from(value).ok()),
+        },
         tag_parse_us: 0,
         duration_us: 0,
         parse_strategy: ParserStrategy::Reused,
@@ -7098,7 +7245,9 @@ fn existing_snapshots(
                 rfm.musicbrainz_artist_id, rfm.musicbrainz_album_artist_id, rfm.error,
                 rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
-                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc
+                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc,
+                rfm.work, rfm.movement, rfm.movement_number, rfm.release_type,
+                rfm.work_mbid, rfm.composed_year
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.root_id = {root_id}"
@@ -7118,7 +7267,9 @@ fn all_available_snapshots(conn: &mut SqliteConnection) -> QueryResult<Vec<Exist
                 rfm.musicbrainz_artist_id, rfm.musicbrainz_album_artist_id, rfm.error,
                 rfm.embedded_artwork_offset, rfm.embedded_artwork_length,
                 rfm.codec, rfm.container, rfm.sample_rate, rfm.bit_depth, rfm.channels,
-                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc
+                rfm.bitrate, rfm.credits_json, rfm.label, rfm.isrc,
+                rfm.work, rfm.movement, rfm.movement_number, rfm.release_type,
+                rfm.work_mbid, rfm.composed_year
          FROM file_entry fe
          JOIN raw_file_metadata rfm ON rfm.file_id = fe.id
          WHERE fe.availability = 'available'",
@@ -7456,7 +7607,8 @@ fn upsert_file_metadata(
              track_number, disc_number, duration_seconds, duration_source, musicbrainz_recording_id,
              musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id, error,
              embedded_artwork_offset, embedded_artwork_length,
-             codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc)
+             codec, container, sample_rate, bit_depth, channels, bitrate, credits_json, label, isrc,
+             work, movement, movement_number, release_type, work_mbid, composed_year)
          SELECT file.id, stage.title, stage.album, stage.track_artists_json, stage.album_artists_json,
                 stage.genres_json, stage.release_date, stage.cover_url, stage.parser_version,
                 stage.cover_resolver_version, stage.classification_version,
@@ -7467,7 +7619,12 @@ fn upsert_file_metadata(
                 json_extract(stage.extras_json, '$.sample_rate'), json_extract(stage.extras_json, '$.bit_depth'),
                 json_extract(stage.extras_json, '$.channels'), json_extract(stage.extras_json, '$.bitrate'),
                 COALESCE(json_extract(stage.extras_json, '$.credits'), '[]'),
-                json_extract(stage.extras_json, '$.label'), json_extract(stage.extras_json, '$.isrc')
+                json_extract(stage.extras_json, '$.label'), json_extract(stage.extras_json, '$.isrc'),
+                json_extract(stage.extras_json, '$.work'), json_extract(stage.extras_json, '$.movement'),
+                json_extract(stage.extras_json, '$.movement_number'),
+                json_extract(stage.extras_json, '$.release_type'),
+                json_extract(stage.extras_json, '$.work_mbid'),
+                json_extract(stage.extras_json, '$.composed_year')
          FROM file_metadata_stage stage JOIN file_entry file USING(path) WHERE stage.was_parsed
          ON CONFLICT(file_id) DO UPDATE SET
              title = excluded.title, album = excluded.album, track_artists_json = excluded.track_artists_json,
@@ -7490,6 +7647,9 @@ fn upsert_file_metadata(
              sample_rate = excluded.sample_rate, bit_depth = excluded.bit_depth,
              channels = excluded.channels, bitrate = excluded.bitrate,
              credits_json = excluded.credits_json, label = excluded.label, isrc = excluded.isrc,
+             work = excluded.work, movement = excluded.movement,
+             movement_number = excluded.movement_number, release_type = excluded.release_type,
+             work_mbid = excluded.work_mbid, composed_year = excluded.composed_year,
              parsed_at = CURRENT_TIMESTAMP
          WHERE raw_file_metadata.title IS NOT excluded.title OR raw_file_metadata.album IS NOT excluded.album
             OR raw_file_metadata.track_artists_json IS NOT excluded.track_artists_json
@@ -7515,7 +7675,13 @@ fn upsert_file_metadata(
             OR raw_file_metadata.bitrate IS NOT excluded.bitrate
             OR raw_file_metadata.credits_json IS NOT excluded.credits_json
             OR raw_file_metadata.label IS NOT excluded.label
-            OR raw_file_metadata.isrc IS NOT excluded.isrc;
+            OR raw_file_metadata.isrc IS NOT excluded.isrc
+            OR raw_file_metadata.work IS NOT excluded.work
+            OR raw_file_metadata.movement IS NOT excluded.movement
+            OR raw_file_metadata.movement_number IS NOT excluded.movement_number
+            OR raw_file_metadata.release_type IS NOT excluded.release_type
+            OR raw_file_metadata.work_mbid IS NOT excluded.work_mbid
+            OR raw_file_metadata.composed_year IS NOT excluded.composed_year;
 
          DELETE FROM duration_repair_queue
          WHERE file_id IN (
@@ -10547,6 +10713,7 @@ mod external_library_tests {
             credits: Vec::new(),
             label: String::new(),
             isrc: String::new(),
+            work: super::TagWork::default(),
             tag_parse_us: 0,
             duration_us: 0,
             parse_strategy: ParserStrategy::Test,
@@ -10973,6 +11140,12 @@ mod external_library_tests {
             credits_json: "[]".into(),
             label: None,
             isrc: None,
+            work: None,
+            movement: None,
+            movement_number: None,
+            release_type: None,
+            work_mbid: None,
+            composed_year: None,
         }
     }
 
@@ -14033,6 +14206,138 @@ mod technical_and_credit_tests {
     }
 
     #[test]
+    fn classical_tags_yield_performers_works_movements_and_release_types() {
+        // FLAC Vorbis comments, as Picard writes them.
+        let source = include_bytes!("../../testdata/audio/flac-44k-16bit-mono.flac").to_vec();
+        let mut file =
+            lofty::flac::FlacFile::read_from(&mut Cursor::new(source.clone()), ParseOptions::new())
+                .expect("read FLAC");
+        let mut comments = lofty::ogg::tag::VorbisComments::default();
+        for (key, value) in [
+            ("TITLE", "Fixture"),
+            ("PERFORMER", "Martha Argerich (piano)"),
+            ("CONDUCTOR", "Claudio Abbado"),
+            ("ENSEMBLE", "Berliner Philharmoniker"),
+            ("ARTISTS", "Martha Argerich"),
+            ("WORK", "Piano Concerto No. 1"),
+            ("MOVEMENTNAME", "Allegro maestoso"),
+            ("MOVEMENT", "1"),
+            ("RELEASETYPE", "album"),
+        ] {
+            comments.push(key.into(), value.into());
+        }
+        file.set_vorbis_comments(comments);
+        let mut output = Cursor::new(source);
+        file.save_to(&mut output, WriteOptions::default())
+            .expect("write Vorbis comments");
+        let flac = parse_bytes("flac-44k-16bit-mono.flac", output.into_inner());
+        let mut credits = credit_keys(&flac);
+        credits.sort();
+        assert_eq!(
+            credits,
+            keys(&[
+                ("conductor", "Claudio Abbado"),
+                ("ensemble", "Berliner Philharmoniker"),
+                ("performer", "Martha Argerich"),
+                ("performer:piano", "Martha Argerich"),
+            ])
+        );
+        assert_eq!(flac.work.work.as_deref(), Some("Piano Concerto No. 1"));
+        assert_eq!(flac.work.movement.as_deref(), Some("Allegro maestoso"));
+        assert_eq!(flac.work.movement_number, Some(1));
+        assert_eq!(flac.work.release_type.as_deref(), Some("album"));
+
+        // MP4 work and movement atoms plus the MusicBrainz freeform type.
+        let source = include_bytes!("../../testdata/audio/alac-44k-16bit-mono.m4a").to_vec();
+        let mut tagged = Probe::new(Cursor::new(source.clone()))
+            .guess_file_type()
+            .unwrap()
+            .read()
+            .unwrap();
+        let tag = tagged.primary_tag_mut().expect("MP4 ilst");
+        tag.insert_text(ItemKey::Work, "Goldberg Variations".into());
+        tag.insert_text(ItemKey::Movement, "Aria".into());
+        tag.insert_text(ItemKey::MovementNumber, "1".into());
+        tag.insert_text(ItemKey::MusicBrainzReleaseType, "ep".into());
+        let mut output = Cursor::new(source);
+        tagged
+            .save_to(&mut output, WriteOptions::default())
+            .expect("write MP4 work");
+        let mp4 = parse_bytes("alac-44k-16bit-mono.m4a", output.into_inner());
+        assert_eq!(mp4.parse_strategy, ParserStrategy::Mp4Fast);
+        assert_eq!(mp4.work.work.as_deref(), Some("Goldberg Variations"));
+        assert_eq!(mp4.work.movement.as_deref(), Some("Aria"));
+        assert_eq!(mp4.work.movement_number, Some(1));
+        assert_eq!(mp4.work.release_type.as_deref(), Some("ep"));
+
+        // ID3: TXXX WORK and release type, Apple's MVNM / MVIN frames.
+        use id3::frame::{Content, ExtendedText, Frame, Unknown};
+        use id3::{Tag, TagLike, Version};
+        let apple_text = |text: &str| {
+            let mut data = vec![3_u8];
+            data.extend_from_slice(text.as_bytes());
+            Content::Unknown(Unknown {
+                data,
+                version: Version::Id3v24,
+            })
+        };
+        let mut tag = Tag::new();
+        tag.set_title("Variation 1");
+        tag.add_frame(ExtendedText {
+            description: "WORK".into(),
+            value: "Goldberg Variations".into(),
+        });
+        tag.add_frame(ExtendedText {
+            description: "MusicBrainz Album Type".into(),
+            value: "Single".into(),
+        });
+        tag.add_frame(ExtendedText {
+            description: "ARTISTS".into(),
+            value: "Glenn Gould".into(),
+        });
+        tag.add_frame(Frame::with_content("MVNM", apple_text("Variatio 1")));
+        tag.add_frame(Frame::with_content("MVIN", apple_text("2/32")));
+        let mut bytes = Vec::new();
+        tag.write_to(&mut bytes, Version::Id3v24)
+            .expect("encode ID3 work");
+        bytes.extend_from_slice(include_bytes!(
+            "../../testdata/audio/mp3-44k-cbr192-stereo.mp3"
+        ));
+        let mp3 = parse_bytes("mp3-44k-cbr192-stereo.mp3", bytes);
+        assert_eq!(mp3.work.work.as_deref(), Some("Goldberg Variations"));
+        assert_eq!(mp3.work.movement.as_deref(), Some("Variatio 1"));
+        assert_eq!(mp3.work.movement_number, Some(2));
+        assert_eq!(mp3.work.release_type.as_deref(), Some("single"));
+        assert_eq!(credit_keys(&mp3), keys(&[("performer", "Glenn Gould")]));
+
+        // Untagged files have no release type: it is never guessed.
+        let plain = parse_bytes(
+            "flac-96k-24bit-stereo.flac",
+            include_bytes!("../../testdata/audio/flac-96k-24bit-stereo.flac").to_vec(),
+        );
+        assert_eq!(plain.work, TagWork::default());
+    }
+
+    #[test]
+    fn id3_text_bodies_decode_every_encoding() {
+        assert_eq!(decode_id3_text(b"\x00Aria\x00").as_deref(), Some("Aria"));
+        assert_eq!(
+            decode_id3_text("\u{3}Variatio 1".as_bytes()).as_deref(),
+            Some("Variatio 1")
+        );
+        assert_eq!(
+            decode_id3_text(&[1, 0xFF, 0xFE, b'A', 0, b'b', 0]).as_deref(),
+            Some("Ab")
+        );
+        assert_eq!(
+            decode_id3_text(&[2, 0, b'A', 0, b'b']).as_deref(),
+            Some("Ab")
+        );
+        assert_eq!(decode_id3_text(&[9, b'x']), None);
+        assert_eq!(decode_id3_text(&[]), None);
+    }
+
+    #[test]
     fn id3_credit_frames_map_to_roles_for_v23_and_v24() {
         use id3::frame::{
             Content, ExtendedText, Frame, InvolvedPeopleList, InvolvedPeopleListItem,
@@ -14127,9 +14432,29 @@ mod technical_and_credit_tests {
             .expect("baseline schema");
         connection
             .batch_execute(include_str!(
+                "../../migrations/2026-07-25-000000_sessions_and_data_change_tracking/up.sql"
+            ))
+            .expect("data change tracking schema");
+        connection
+            .batch_execute(include_str!(
                 "../../migrations/2026-10-24-000000_track_technical_and_credits/up.sql"
             ))
             .expect("technical and credits schema");
+        connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-10-25-093000_library_focus/up.sql"
+            ))
+            .expect("library focus schema");
+        connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-10-26-114500_focus_works_and_composers/up.sql"
+            ))
+            .expect("works and composers schema");
+        connection
+            .batch_execute(include_str!(
+                "../../migrations/2026-10-27-121500_focus_compositions/up.sql"
+            ))
+            .expect("compositions schema");
         connection
     }
 
@@ -14237,7 +14562,15 @@ mod technical_and_credit_tests {
     #[test]
     fn technical_properties_and_credits_survive_the_raw_metadata_round_trip() {
         let mut connection = catalog_schema();
-        let parsed = credited_track();
+        let mut parsed = credited_track();
+        parsed.work = TagWork {
+            work: Some("Symphony No. 5".into()),
+            movement: Some("Allegro con brio".into()),
+            movement_number: Some(1),
+            release_type: Some("album".into()),
+            work_id: Some("1f9df192-a621-4e4d-9a53-9a0e8b8a4b1e".into()),
+            composed_year: Some(1808),
+        };
         let file = discovered("flac-96k-24bit-stereo.flac", 32_182);
         let files = vec![file.clone()];
         connection
@@ -14276,8 +14609,19 @@ mod technical_and_credit_tests {
         assert_eq!(snapshot.label.as_deref(), Some("Fixture Records"));
         assert_eq!(snapshot.isrc.as_deref(), Some("USRC17607839"));
 
+        assert_eq!(snapshot.work.as_deref(), Some("Symphony No. 5"));
+        assert_eq!(snapshot.movement.as_deref(), Some("Allegro con brio"));
+        assert_eq!(snapshot.movement_number, Some(1));
+        assert_eq!(snapshot.release_type.as_deref(), Some("album"));
+        assert_eq!(
+            snapshot.work_mbid.as_deref(),
+            Some("1f9df192-a621-4e4d-9a53-9a0e8b8a4b1e")
+        );
+        assert_eq!(snapshot.composed_year, Some(1808));
+
         let reused = snapshot_to_parsed(snapshot);
         assert_eq!(reused.technical, parsed.technical);
+        assert_eq!(reused.work, parsed.work);
         assert_eq!(reused.credits, parsed.credits);
         assert_eq!(reused.label, parsed.label);
         assert_eq!(reused.isrc, parsed.isrc);

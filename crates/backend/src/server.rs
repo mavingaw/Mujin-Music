@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, song_delivery, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    album, artist, cast, data, filesystem, focus, genres, home, lyrics, metadata, playback,
+    playlist, search, setup, song, user,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -35,6 +35,16 @@ fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .wrap(HttpAuthentication::with_fn(validator))
                 .service(library_catalog)
                 .service(library_catalog_artists),
+        )
+        .service(
+            web::scope("/focus")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(focus::configure_focus),
+        )
+        .service(
+            web::scope("/tags")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(focus::configure_tags),
         )
         .service(
             web::scope("")
@@ -212,7 +222,15 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting", "lossless-delivery", "radio"],
+        "capabilities": [
+            "streaming",
+            "downloads",
+            "lyrics",
+            "casting",
+            "lossless-delivery",
+            "radio",
+            "focus"
+        ],
     });
     if let (Ok(secret), Some(challenge)) = (
         std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
@@ -262,6 +280,7 @@ pub async fn build_server_with_shutdown_timeout(
         .expect("new library lifecycle has no active scan");
     let database = web::Data::new(local_app.database);
     data::start_automatic_backups(database.get_ref().clone());
+    crate::library::works_online::start_musicbrainz_enrichment(database.get_ref().clone());
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
