@@ -133,7 +133,14 @@ export type PlaybackEventType =
   | "playlist_add"
   | "recommendation_impression"
   | "recommendation_selected"
-  | "disliked";
+  /** Thumbs down: the track is skipped now and kept out of Radio. */
+  | "disliked"
+  /** Thumbs up on a Radio pick: more like this. */
+  | "thumbs_up"
+  /** Skip reason "Not right now": rests the track without banning it. */
+  | "skip_not_now"
+  /** Skip reason "Doesn't fit": a poor follow-up to the previous track. */
+  | "skip_doesnt_fit";
 
 export interface PlaybackEvent {
   event_key: string;

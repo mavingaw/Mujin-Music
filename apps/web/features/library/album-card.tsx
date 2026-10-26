@@ -5,6 +5,7 @@ import getBaseURL from "@/lib/api/server-url";
 import Image from "next/image";
 import Link from "next/link";
 import AlbumMenu from "@/features/library/album-menu";
+import { BannedBadge } from "@/features/library/radio-bans";
 
 type AlbumCardProps = {
   artist_id: string;
@@ -30,7 +31,11 @@ export default function AlbumCard({
       : `${getBaseURL()}/media/images/${encodeURIComponent(album_cover)}`;
 
   return (
-    <AlbumMenu album_id={album_id} artist_id={artist_id}>
+    <AlbumMenu
+      album_id={album_id}
+      album_name={album_name}
+      artist_id={artist_id}
+    >
       <div className="group relative w-full min-w-0">
         <Link
           aria-label={`View ${album_name}`}
@@ -47,6 +52,10 @@ export default function AlbumCard({
               event.currentTarget.src = defaultCover;
             }}
             className="h-full w-full object-cover"
+          />
+          <BannedBadge
+            className="absolute bottom-2 left-2 rounded-full bg-black/75 p-1"
+            target={{ kind: "album", id: album_id }}
           />
         </div>
 

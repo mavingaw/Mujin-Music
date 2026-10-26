@@ -48,11 +48,18 @@ import {
 import { useSession } from "@/providers/session-provider";
 import { usePlayer } from "@/providers/player-provider";
 import { PlaylistCover } from "@/components/playlist-cover";
+import { BannedSection } from "@/components/banned-section";
 
 const PAGE_SIZE = 100;
 
 type Section =
-  "albums" | "songs" | "downloads" | "liked" | "artists" | "playlists";
+  | "albums"
+  | "songs"
+  | "downloads"
+  | "liked"
+  | "artists"
+  | "playlists"
+  | "banned";
 
 export default function LibraryScreen() {
   const session = useSession();
@@ -219,6 +226,7 @@ export default function LibraryScreen() {
                   "liked",
                   "artists",
                   "playlists",
+                  "banned",
                 ]) as readonly Section[]
           ).map((value) => (
             <Pressable
@@ -260,6 +268,7 @@ export default function LibraryScreen() {
               paddingBottom: layout.tabBar + layout.miniPlayer + 28,
             }}
           >
+            {section === "banned" ? <BannedSection /> : null}
             {section === "playlists" ? (
               <Pressable
                 accessibilityLabel="Create playlist"

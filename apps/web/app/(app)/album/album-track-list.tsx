@@ -9,6 +9,7 @@ import {
   isExplicitSongTitle,
 } from "@/features/library/song-presentation";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
+import { BannedBadge } from "@/features/library/radio-bans";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
 
 function formatDuration(duration: number) {
@@ -107,6 +108,10 @@ export function AlbumTrackList({
                 <div className="pointer-events-none relative z-10 flex min-w-0 flex-col pr-4 text-left">
                   <span className="truncate font-medium text-white">
                     <SongTitle title={track.name} />
+                    <BannedBadge
+                      className="ml-1.5 align-[-2px]"
+                      target={{ kind: "song", id: track.id }}
+                    />
                   </span>
                   {(artistCredit || isExplicitSongTitle(track.name)) && (
                     <span className="mt-0.5 truncate text-zinc-400">

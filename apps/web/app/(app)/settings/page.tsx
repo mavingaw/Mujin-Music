@@ -9,6 +9,7 @@ import { useSession } from "@/features/account/session-provider";
 import { useState } from "react";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
+import RadioSettings from "@/features/settings/radio-settings";
 
 const settingsTabs = [
   "account",
@@ -70,7 +71,10 @@ export default function SettingsPage() {
             </>
           )}
           {activeTab === "playback" && (
-            <BitrateForm initialBitrate={session?.bitrate ?? 0} />
+            <>
+              <BitrateForm initialBitrate={session?.bitrate ?? 0} />
+              <RadioSettings />
+            </>
           )}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && <LibrarySettings />}

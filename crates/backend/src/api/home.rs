@@ -185,11 +185,15 @@ async fn home(
         .iter()
         .map(|song| song.id.as_str())
         .collect::<HashSet<_>>();
+    let bans = super::radio_library::listener_bans(&request, Some(&pool)).await;
     let shuffle = fetch_random_songs(SECTION_SIZE * 4, None, &cache)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|song| !recommended_song_ids.contains(song.id.as_str()))
+        .filter(|song| {
+            !recommended_song_ids.contains(song.id.as_str())
+                && !bans.excludes_song(&song.id, &cache)
+        })
         .collect::<Vec<_>>();
 
     let mut albums = recommended_albums(&recommendation_ids, &cache);

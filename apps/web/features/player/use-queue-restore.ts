@@ -22,9 +22,9 @@ import { persistedQueueItems } from "./player-model";
 import type { Album, Artist } from "@parson/music-sdk/types";
 
 export function useQueueRestore({
+  commitIndex,
   currentOrigin,
   generation,
-  index,
   persistedQueue,
   queue,
   setError,
@@ -32,9 +32,9 @@ export function useQueueRestore({
   setSong,
   userId,
 }: {
+  commitIndex: (index: number) => void;
   currentOrigin: MutableRefObject<QueueOrigin>;
   generation: MutableRefObject<number>;
-  index: MutableRefObject<number>;
   persistedQueue: MutableRefObject<{ id: string; revision: number } | null>;
   queue: MutableRefObject<QueueItem[]>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -60,7 +60,7 @@ export function useQueueRestore({
       )
         return false;
       queue.current = snapshot.items;
-      index.current = snapshot.index;
+      commitIndex(snapshot.index);
       currentOrigin.current =
         snapshot.items[snapshot.index]?.origin ?? "manual";
       persistedQueue.current = null;
@@ -87,7 +87,7 @@ export function useQueueRestore({
         );
         if (!items.length) return;
         queue.current = items;
-        index.current = savedIndex;
+        commitIndex(savedIndex);
         currentOrigin.current = items[savedIndex]?.origin ?? "manual";
         persistedQueue.current = { id: saved.id, revision: saved.revision };
         storeQueueSnapshot(userId, items, savedIndex);
@@ -107,9 +107,9 @@ export function useQueueRestore({
       cancelled = true;
     };
   }, [
+    commitIndex,
     currentOrigin,
     generation,
-    index,
     persistedQueue,
     queue,
     setError,

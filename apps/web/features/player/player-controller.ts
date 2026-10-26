@@ -1,9 +1,30 @@
 "use client";
 
-import { createPlaybackQueue } from "@parson/music-sdk";
+import {
+  createPlaybackQueue,
+  defaultRadioSettings,
+  getRadioPicks,
+  getRadioSettings,
+  radioExhaustedNotice,
+  radioMinimumUpcomingPicks,
+  radioPicksExhaustedNotice,
+  radioQueueHistory,
+  radioSectionStart,
+  radioSeedParams,
+  radioSkipReasonEvent,
+  shouldContinueWithRadio,
+  updateRadioSettings,
+  upcomingRadioPicks,
+  type RadioSeed,
+  type RadioSettings,
+  type RadioSkipReasonId,
+  type ResolvedRadioSeed,
+} from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/features/account/session-provider";
+import { useRadioBanIndex } from "@/features/library/radio-bans";
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
 import streamUrl from "@/lib/api/stream-url";
@@ -17,6 +38,7 @@ import {
   manualQueueItems,
   normalizeSong,
   persistedQueueItems,
+  radioPickItems,
   type PlayerInput,
   type QueueInput,
   type QueueItem,
@@ -41,6 +63,18 @@ import {
   activeQueueIndexAfterMove,
   moveQueueItem,
 } from "./player-queue-reorder";
+import {
+  appendRadioPicks,
+  markRadioPickLiked,
+  withoutBannedRadioPicks,
+  removeUpcomingItem,
+  withoutRadioSection,
+} from "./radio-queue";
+
+const radioSettingsKey = ["radio-settings"] as const;
+const radioContinuationItems = 25;
+
+export type PendingRadioSkip = { song: LibrarySong; cover: string };
 const cover = (path?: string) =>
   path
     ? `${getBaseURL()}/media/images/${encodeURIComponent(path)}`
@@ -89,7 +123,41 @@ export function usePlayerController() {
   const [duration, setDuration] = useState(0);
   const loopingRef = useRef(false);
   const [looping, setLooping] = useState(false);
-  const { sendPlaybackEvent, telemetry } = usePlaybackTelemetry({
+  const queryClient = useQueryClient();
+  const [activeIndex, setActiveIndex] = useState(0);
+  const commitIndex = useCallback((next: number) => {
+    index.current = next;
+    setActiveIndex(next);
+  }, []);
+  const radioSettingsQuery = useQuery({
+    queryKey: radioSettingsKey,
+    queryFn: getRadioSettings,
+    enabled: Boolean(session?.sub),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const radioSettings = radioSettingsQuery.data ?? defaultRadioSettings;
+  const radioEnabledRef = useRef(radioSettings.enabled);
+  useEffect(() => {
+    radioEnabledRef.current = radioSettings.enabled;
+  }, [radioSettings.enabled]);
+  const [radioSeed, setRadioSeedState] = useState<ResolvedRadioSeed | null>(
+    null,
+  );
+  const radioSeedRef = useRef<ResolvedRadioSeed | null>(null);
+  const setRadioSeed = useCallback((seed: ResolvedRadioSeed | null) => {
+    radioSeedRef.current = seed;
+    setRadioSeedState(seed);
+  }, []);
+  const rejectedSongs = useRef(new Set<string>());
+  const radioTopUp = useRef<{ inFlight: boolean; exhaustedKey: string }>({
+    inFlight: false,
+    exhaustedKey: "",
+  });
+  const manualQueuePending = useRef(false);
+  const [pendingRadioSkip, setPendingRadioSkip] =
+    useState<PendingRadioSkip | null>(null);
+  const { sendPlaybackEvent, sendSongEvent, telemetry } = usePlaybackTelemetry({
     activeSong,
     audio,
     currentOrigin,
@@ -132,8 +200,10 @@ export function usePlayerController() {
       if (
         currentOrigin.current === "manual" &&
         !persistedQueue.current &&
-        queueRef.current.length
+        queueRef.current.length &&
+        radioEnabledRef.current
       ) {
+        manualQueuePending.current = true;
         const explicitSongIds = queueRef.current
           .slice(index.current)
           .map((item) => item.song.id)
@@ -163,16 +233,20 @@ export function usePlayerController() {
               revision: created.revision,
             };
             queueRef.current = items;
-            index.current = 0;
+            commitIndex(0);
+            setRadioSeed(created.seed ?? null);
             currentOrigin.current = items[0]?.origin ?? "manual";
             storeQueue(created.id);
             storeQueueSnapshot(session?.sub, items, 0);
             setQueueState(items);
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => {
+            manualQueuePending.current = false;
+          });
       }
     },
-    [session?.bitrate, session?.sub, setAudioSource],
+    [commitIndex, session?.bitrate, session?.sub, setAudioSource, setRadioSeed],
   );
   const setQueue = useCallback(
     (items: QueueInput[]) => {
@@ -182,11 +256,12 @@ export function usePlayerController() {
       currentOrigin.current = "manual";
       persistedQueue.current = null;
       storeQueue(null);
-      index.current = 0;
+      commitIndex(0);
+      setRadioSeed(null);
       storeQueueSnapshot(session?.sub, normalized, 0);
       setQueueState(normalized);
     },
-    [session?.sub],
+    [commitIndex, session?.sub, setRadioSeed],
   );
   const addToQueue = useCallback(
     (items: QueueInput[]) => {
@@ -251,7 +326,7 @@ export function usePlayerController() {
         destinationIndex,
       );
       queueRef.current = next;
-      index.current = nextActiveIndex;
+      commitIndex(nextActiveIndex);
       currentOrigin.current =
         next[nextActiveIndex]?.origin ?? currentOrigin.current;
       persistedQueue.current = null;
@@ -259,7 +334,7 @@ export function usePlayerController() {
       storeQueueSnapshot(session?.sub, next, nextActiveIndex);
       setQueueState(next);
     },
-    [session?.sub],
+    [commitIndex, session?.sub],
   );
   const persistQueuePosition = useCallback((position: number | null) => {
     if (position === null || !persistedQueue.current) {
@@ -286,7 +361,7 @@ export function usePlayerController() {
       if (!item) {
         return false;
       }
-      index.current = nextIndex;
+      commitIndex(nextIndex);
       currentOrigin.current = item.origin;
       storeQueueSnapshot(session?.sub, queueRef.current, nextIndex);
       persistQueuePosition(item.queuePosition);
@@ -294,7 +369,13 @@ export function usePlayerController() {
       playAudioSource();
       return true;
     },
-    [persistQueuePosition, playAudioSource, session?.sub, setSongCallback],
+    [
+      commitIndex,
+      persistQueuePosition,
+      playAudioSource,
+      session?.sub,
+      setSongCallback,
+    ],
   );
   const handleMediaError = useCallback(
     (code: number | undefined) => {
@@ -334,6 +415,13 @@ export function usePlayerController() {
       telemetry.current.listenedSeconds < Math.min(30, element.duration * 0.3)
     ) {
       sendPlaybackEvent("early_skip", element.currentTime, element.duration);
+      const skipped = activeSong.current;
+      if (skipped.id) {
+        setPendingRadioSkip({
+          song: skipped,
+          cover: cover(skipped.album_object.cover_url),
+        });
+      }
     }
     if (
       queueRef.current.length &&
@@ -382,6 +470,70 @@ export function usePlayerController() {
     loopingRef.current = next;
     setLooping(next);
   }, []);
+  /** Replaces a finished queue with a fresh Radio queue when Radio is on. */
+  const continueWithRadio = useCallback(() => {
+    const endingSongId = activeSong.current.id;
+    if (
+      !endingSongId ||
+      !shouldContinueWithRadio({
+        enabled: radioEnabledRef.current,
+        repeating: loopingRef.current,
+      })
+    ) {
+      return;
+    }
+    const generation = playbackGeneration.current;
+    const request = ++radioRequest.current;
+    const seed: RadioSeed =
+      currentOrigin.current === "generated" && radioSeedRef.current
+        ? radioSeedRef.current
+        : { kind: "song", id: endingSongId };
+    void createPlaybackQueue({
+      ...radioSeedParams(seed),
+      // The queue so far: Radio prefers fresh songs and, once the library
+      // is used up, brings back the ones heard longest ago.
+      exclude_song_ids: radioQueueHistory(
+        queueRef.current.map((item) => item.song.id),
+        100,
+      ),
+      reject_song_ids: [...rejectedSongs.current],
+      generated_items: radioContinuationItems,
+      source: "radio",
+    })
+      .then((nextQueue) => {
+        if (
+          !isCurrentTrackGeneration(
+            generation,
+            playbackGeneration.current,
+            endingSongId,
+            activeSong.current.id,
+          ) ||
+          radioRequest.current !== request
+        ) {
+          return;
+        }
+        const items = persistedQueueItems(nextQueue.items);
+        if (!items.length) {
+          return;
+        }
+        persistedQueue.current = {
+          id: nextQueue.id,
+          revision: nextQueue.revision,
+        };
+        storeQueue(nextQueue.id);
+        queueRef.current = items;
+        setRadioSeed(nextQueue.seed ?? null);
+        storeQueueSnapshot(session?.sub, items, 0);
+        setQueueState(items);
+        playItem(0);
+      })
+      .catch((error: unknown) => {
+        // Radio only runs out when everything left is banned or thumbed
+        // down: say so rather than stopping silently.
+        const notice = radioExhaustedNotice(error);
+        if (notice && radioRequest.current === request) setError(notice);
+      });
+  }, [playItem, session?.sub, setError, setRadioSeed]);
   const handleEnded = useCallback(() => {
     if (loopingRef.current && audio.current) {
       audio.current.currentTime = 0;
@@ -407,44 +559,8 @@ export function usePlayerController() {
       playItem(index.current + 1);
       return;
     }
-    if (song.id) {
-      const generation = playbackGeneration.current;
-      const request = ++radioRequest.current;
-      void createPlaybackQueue({
-        seed_song_id: song.id,
-        generated_items: 20,
-        source: "radio",
-      })
-        .then((nextQueue) => {
-          if (
-            !isCurrentTrackGeneration(
-              generation,
-              playbackGeneration.current,
-              song.id,
-              activeSong.current.id,
-            ) ||
-            radioRequest.current !== request ||
-            !song.id
-          ) {
-            return;
-          }
-          const items = persistedQueueItems(nextQueue.items);
-          if (!items.length) {
-            return;
-          }
-          persistedQueue.current = {
-            id: nextQueue.id,
-            revision: nextQueue.revision,
-          };
-          storeQueue(nextQueue.id);
-          queueRef.current = items;
-          storeQueueSnapshot(session?.sub, items, 0);
-          setQueueState(items);
-          playItem(0);
-        })
-        .catch(() => {});
-    }
-  }, [playAudioSource, playItem, sendPlaybackEvent, session?.sub, song.id]);
+    continueWithRadio();
+  }, [continueWithRadio, playAudioSource, playItem, sendPlaybackEvent]);
 
   useEffect(() => {
     if (looping) {
@@ -471,6 +587,313 @@ export function usePlayerController() {
     song.id,
   ]);
 
+  const replaceQueueLocally = useCallback(
+    (items: QueueItem[], nextIndex = index.current) => {
+      queueRef.current = items;
+      persistedQueue.current = null;
+      storeQueue(null);
+      commitIndex(nextIndex);
+      storeQueueSnapshot(session?.sub, items, nextIndex);
+      setQueueState(items);
+    },
+    [commitIndex, session?.sub],
+  );
+
+  /** Appends Radio picks to the end of the queue (the Radio section). */
+  const requestRadioPicks = useCallback(
+    (limit: number) => {
+      const topUp = radioTopUp.current;
+      if (topUp.inFlight) return;
+      const base = queueRef.current;
+      const last = base.at(-1);
+      const key = `${base.length}:${last?.song.id ?? ""}:${radioSeedRef.current?.id ?? ""}`;
+      if (topUp.exhaustedKey === key) return;
+      const seed: RadioSeed | null =
+        radioSeedRef.current ??
+        (last?.song.id ? { kind: "song", id: last.song.id } : null);
+      topUp.inFlight = true;
+      void getRadioPicks({
+        seed,
+        exclude_song_ids: radioQueueHistory(base.map((item) => item.song.id)),
+        reject_song_ids: [...rejectedSongs.current],
+        limit,
+      })
+        .then((result) => {
+          const current = queueRef.current;
+          if (!current.length || current[0]?.song.id !== base[0]?.song.id) {
+            return;
+          }
+          // Played songs may come back once the library is used up; only
+          // what is still to come must not be queued twice.
+          const next = appendRadioPicks(
+            current,
+            radioPickItems(result.items),
+            index.current + 1,
+          );
+          if (next.length === current.length) {
+            topUp.exhaustedKey = key;
+            const notice = radioPicksExhaustedNotice(result);
+            if (notice) setError(notice);
+            return;
+          }
+          if (!radioSeedRef.current && result.seed) {
+            setRadioSeed(result.seed);
+          }
+          replaceQueueLocally(next);
+        })
+        .catch(() => {})
+        .finally(() => {
+          topUp.inFlight = false;
+        });
+    },
+    [replaceQueueLocally, setError, setRadioSeed],
+  );
+
+  // Keep a few Radio picks visible at the end of the queue while Radio is on.
+  useEffect(() => {
+    if (
+      !radioSettings.enabled ||
+      looping ||
+      !song.id ||
+      manualQueuePending.current ||
+      !queue.length
+    ) {
+      return;
+    }
+    const origins = queue.map((item) => item.origin);
+    const radioUpcoming = upcomingRadioPicks(origins, activeIndex);
+    const manualUpcoming = queue.length - activeIndex - 1 - radioUpcoming;
+    if (radioUpcoming >= radioMinimumUpcomingPicks || manualUpcoming > 2) {
+      return;
+    }
+    requestRadioPicks(radioMinimumUpcomingPicks * 2);
+  }, [
+    activeIndex,
+    looping,
+    queue,
+    radioSettings.enabled,
+    requestRadioPicks,
+    song.id,
+  ]);
+
+  const saveRadioSettings = useCallback(
+    (update: Partial<RadioSettings>) => {
+      const previous =
+        queryClient.getQueryData<RadioSettings>(radioSettingsKey) ??
+        defaultRadioSettings;
+      const optimistic = { ...previous, ...update };
+      queryClient.setQueryData(radioSettingsKey, optimistic);
+      radioEnabledRef.current = optimistic.enabled;
+      void updateRadioSettings(update)
+        .then((saved) => {
+          queryClient.setQueryData(radioSettingsKey, saved);
+          radioEnabledRef.current = saved.enabled;
+        })
+        .catch(() => {
+          queryClient.setQueryData(radioSettingsKey, previous);
+          radioEnabledRef.current = previous.enabled;
+          setError("Radio settings could not be saved.");
+        });
+    },
+    [queryClient, setError],
+  );
+
+  const setRadioEnabled = useCallback(
+    (enabled: boolean) => {
+      saveRadioSettings({ enabled });
+      if (enabled) {
+        radioTopUp.current.exhaustedKey = "";
+        return;
+      }
+      const start = radioSectionStart(
+        queueRef.current.map((item) => item.origin),
+        index.current,
+      );
+      if (start >= 0) {
+        replaceQueueLocally(withoutRadioSection(queueRef.current, start));
+      }
+    },
+    [replaceQueueLocally, saveRadioSettings],
+  );
+
+  const setRadioComingUpNotice = useCallback(
+    (visible: boolean) => saveRadioSettings({ coming_up_notice: visible }),
+    [saveRadioSettings],
+  );
+
+  /** Starts a Radio station: Roon-style, it turns repeat off. */
+  const startRadio = useCallback(
+    async (seed: RadioSeed) => {
+      const generation = ++playbackGeneration.current;
+      let created: Awaited<ReturnType<typeof createPlaybackQueue>>;
+      try {
+        created = await createPlaybackQueue({
+          ...radioSeedParams(seed),
+          explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
+          exclude_song_ids: radioQueueHistory(
+            queueRef.current.map((item) => item.song.id),
+            100,
+          ),
+          reject_song_ids: [...rejectedSongs.current],
+          generated_items: radioContinuationItems,
+          source: "radio",
+        });
+      } catch (error) {
+        const notice = radioExhaustedNotice(error);
+        if (!notice) throw error;
+        setError(notice);
+        return null;
+      }
+      if (generation !== playbackGeneration.current) {
+        return null;
+      }
+      const items = persistedQueueItems(created.items);
+      if (!items.length) {
+        return null;
+      }
+      loopingRef.current = false;
+      setLooping(false);
+      if (!radioEnabledRef.current) {
+        saveRadioSettings({ enabled: true });
+      }
+      radioTopUp.current.exhaustedKey = "";
+      persistedQueue.current = { id: created.id, revision: created.revision };
+      storeQueue(created.id);
+      queueRef.current = items;
+      setRadioSeed(created.seed ?? null);
+      storeQueueSnapshot(session?.sub, items, 0);
+      setQueueState(items);
+      playItem(0);
+      return created.seed?.name ?? items[0]?.song.name ?? "";
+    },
+    [playItem, saveRadioSettings, session?.sub, setRadioSeed],
+  );
+
+  const thumbsUp = useCallback(
+    (itemIndex: number) => {
+      const item = queueRef.current[itemIndex];
+      if (!item?.song.id || item.liked) {
+        return;
+      }
+      rejectedSongs.current.delete(item.song.id);
+      void sendSongEvent(item.song.id, "thumbs_up");
+      const next = markRadioPickLiked(queueRef.current, itemIndex);
+      queueRef.current = next;
+      storeQueueSnapshot(session?.sub, next, index.current);
+      setQueueState(next);
+    },
+    [sendSongEvent, session?.sub],
+  );
+
+  /**
+   * Thumbs down: the current track is skipped now; an upcoming Radio pick is
+   * replaced by another. Either way the song stays out of Radio.
+   */
+  const thumbsDown = useCallback(
+    (itemIndex: number) => {
+      const item = queueRef.current[itemIndex];
+      if (!item?.song.id) {
+        return;
+      }
+      rejectedSongs.current.add(item.song.id);
+      void sendSongEvent(item.song.id, "disliked");
+      if (itemIndex === index.current) {
+        setPendingRadioSkip(null);
+        if (index.current + 1 < queueRef.current.length) {
+          playItem(index.current + 1);
+        } else {
+          audio.current?.pause();
+          setIsPlaying(false);
+          continueWithRadio();
+        }
+        return;
+      }
+      const removed = removeUpcomingItem(
+        queueRef.current,
+        index.current,
+        itemIndex,
+      );
+      if (!removed) {
+        return;
+      }
+      replaceQueueLocally(removed.items, removed.activeIndex);
+      if (item.origin === "generated" && radioEnabledRef.current) {
+        radioTopUp.current.exhaustedKey = "";
+        requestRadioPicks(1);
+      }
+    },
+    [
+      continueWithRadio,
+      playItem,
+      replaceQueueLocally,
+      requestRadioPicks,
+      sendSongEvent,
+      setIsPlaying,
+    ],
+  );
+
+  // Bans apply at once: banned Radio picks leave the queue, and a banned
+  // Radio pick that is playing is skipped (explicit plays are left alone).
+  const { index: banIndex, query: banQuery } = useRadioBanIndex();
+  const bansLoaded = Boolean(banQuery.data);
+  const appliedBanIndex = useRef<typeof banIndex | null>(null);
+  useEffect(() => {
+    if (!bansLoaded) {
+      return;
+    }
+    const previous = appliedBanIndex.current;
+    appliedBanIndex.current = banIndex;
+    if (previous === banIndex || !queueRef.current.length) {
+      return;
+    }
+    const result = withoutBannedRadioPicks(
+      queueRef.current,
+      index.current,
+      banIndex,
+    );
+    if (result.removed > 0) {
+      replaceQueueLocally(result.items, index.current);
+      if (radioEnabledRef.current) {
+        radioTopUp.current.exhaustedKey = "";
+      }
+    }
+    // Only skip for a ban made while listening, not for one loaded at start.
+    if (result.currentBanned && previous !== null) {
+      setPendingRadioSkip(null);
+      if (index.current + 1 < queueRef.current.length) {
+        playItem(index.current + 1);
+      } else {
+        audio.current?.pause();
+        setIsPlaying(false);
+        continueWithRadio();
+      }
+    }
+  }, [
+    audio,
+    banIndex,
+    bansLoaded,
+    continueWithRadio,
+    playItem,
+    replaceQueueLocally,
+    setIsPlaying,
+  ]);
+
+  const answerRadioSkip = useCallback(
+    (reason: RadioSkipReasonId) => {
+      const skipped = pendingRadioSkip?.song.id;
+      setPendingRadioSkip(null);
+      if (!skipped) {
+        return;
+      }
+      if (reason === "dislike") {
+        rejectedSongs.current.add(skipped);
+      }
+      void sendSongEvent(skipped, radioSkipReasonEvent(reason));
+    },
+    [pendingRadioSkip?.song.id, sendSongEvent],
+  );
+  const dismissRadioSkip = useCallback(() => setPendingRadioSkip(null), []);
+
   useTransientPlayerError(error, setError);
   useAudioEvents({
     audio,
@@ -496,9 +919,9 @@ export function usePlayerController() {
   });
 
   useQueueRestore({
+    commitIndex,
     currentOrigin,
     generation: playbackGeneration,
-    index,
     persistedQueue,
     queue: queueRef,
     setError,
@@ -528,6 +951,20 @@ export function usePlayerController() {
       audioPreset,
       audioPresets,
       looping,
+      currentIndex: activeIndex,
+      radio: {
+        enabled: radioSettings.enabled,
+        comingUpNotice: radioSettings.coming_up_notice,
+        seed: radioSeed,
+        pendingSkip: pendingRadioSkip,
+        answerSkip: answerRadioSkip,
+        dismissSkip: dismissRadioSkip,
+        setEnabled: setRadioEnabled,
+        setComingUpNotice: setRadioComingUpNotice,
+        start: startRadio,
+        thumbsDown,
+        thumbsUp,
+      },
       setSongCallback,
       setQueue,
       addNextToQueue,
@@ -540,7 +977,7 @@ export function usePlayerController() {
           Math.max(Math.trunc(next), 0),
           Math.max(queueRef.current.length - 1, 0),
         );
-        index.current = bounded;
+        commitIndex(bounded);
         const item = queueRef.current[bounded];
         if (item) {
           currentOrigin.current = item.origin;
@@ -565,6 +1002,19 @@ export function usePlayerController() {
       toggleLoop,
     }),
     [
+      activeIndex,
+      answerRadioSkip,
+      dismissRadioSkip,
+      pendingRadioSkip,
+      radioSeed,
+      radioSettings.coming_up_notice,
+      radioSettings.enabled,
+      setRadioComingUpNotice,
+      setRadioEnabled,
+      startRadio,
+      thumbsDown,
+      thumbsUp,
+      commitIndex,
       album,
       artist,
       duration,

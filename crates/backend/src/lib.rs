@@ -14,6 +14,7 @@ pub mod library;
 pub mod persistence;
 mod playlist_rules;
 pub mod product;
+pub mod radio_bans;
 pub mod recommendation;
 #[cfg(feature = "server")]
 pub mod server;
