@@ -22,6 +22,16 @@ describe("personInitials", () => {
     expect(personInitials("Karajan (conductor)")).toBe("K");
     expect(personInitials("  ")).toBe("?");
     expect(personInitials("!!!")).toBe("?");
+    expect(personInitials("Anne (née Smith) Mutter (violin)")).toBe("AM");
+    // An unclosed bracket is kept as written.
+    expect(personInitials("Anne (Sophie Mutter")).toBe("AM");
+  });
+
+  test("long adversarial names finish in linear time", () => {
+    const started = performance.now();
+    expect(personInitials(`${"(".repeat(100_000)}x`)).toBe("X");
+    expect(personInitials(`a${" (b".repeat(50_000)}`)).toBe("AB");
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   test("gives each person a stable hue", () => {

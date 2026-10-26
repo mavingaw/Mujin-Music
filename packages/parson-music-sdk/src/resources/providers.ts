@@ -772,7 +772,9 @@ export const TIDAL_CALLBACK_PATH = "/settings/services/tidal-callback";
 
 /** The redirect URI to register with TIDAL for a Parson server address. */
 export function tidalRedirectUri(origin: string): string {
-  return `${origin.replace(/\/+$/, "")}${TIDAL_CALLBACK_PATH}`;
+  let end = origin.length;
+  while (end > 0 && origin[end - 1] === "/") end -= 1;
+  return `${origin.slice(0, end)}${TIDAL_CALLBACK_PATH}`;
 }
 
 /**

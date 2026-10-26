@@ -24,8 +24,7 @@ export function personInitials(name: string) {
     "and",
     "&",
   ]);
-  const words = name
-    .replace(/\([^)]*\)/g, " ")
+  const words = withoutParentheses(name)
     .split(/[\s\-–,./]+/)
     .filter(Boolean);
   const meaningful = words.filter(
@@ -121,4 +120,22 @@ export function enrichmentStageLine(stage: EnrichmentStageStatus) {
     detail: parts.join(" · "),
     busy: stage.paused_seconds > 0,
   };
+}
+
+/**
+ * Replaces each "(…)" aside with a space, like `/\([^)]*\)/g`, in one pass:
+ * an unclosed "(" and everything after it stay as written.
+ */
+function withoutParentheses(name: string) {
+  let out = "";
+  let at = 0;
+  while (at < name.length) {
+    const open = name.indexOf("(", at);
+    if (open < 0) break;
+    const close = name.indexOf(")", open + 1);
+    if (close < 0) break;
+    out += `${name.slice(at, open)} `;
+    at = close + 1;
+  }
+  return out + name.slice(at);
 }

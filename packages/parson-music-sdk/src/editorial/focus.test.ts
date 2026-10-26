@@ -190,5 +190,25 @@ describe("discography sections", () => {
       "MP3",
     );
     expect(qualityBadge({ format: null, quality: null })).toBeNull();
+    expect(
+      qualityBadge({ format: "DSD 1-bit / 2822.4 kHz", quality: "hires" }),
+    ).toBe("1/2822.4");
+    expect(
+      qualityBadge({ format: "FLAC -bit / 96 kHz", quality: "lossless" }),
+    ).toBe("FLAC");
+  });
+
+  test("long adversarial formats are read in linear time", () => {
+    const started = performance.now();
+    expect(
+      qualityBadge({ format: "9".repeat(100_000), quality: "hires" }),
+    ).toBe("9".repeat(100_000));
+    expect(
+      qualityBadge({
+        format: `${"9-bit / ".repeat(20_000)}x`,
+        quality: "hires",
+      }),
+    ).toBe("9-bit");
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

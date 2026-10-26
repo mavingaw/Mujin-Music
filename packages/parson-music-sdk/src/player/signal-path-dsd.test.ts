@@ -201,6 +201,31 @@ describe("DSD in the signal path", () => {
         "ALSA hw, exclusive, DoP: DSD64 in 176.4kHz 24bit 2ch",
       ),
     ).toBe("DoP: DSD64 in 176.4kHz 24bit 2ch");
+    expect(
+      outputFormatFromDetail("ALSA hw, exclusive, native DSD128 2ch"),
+    ).toBe("native DSD128 2ch");
+    // "native DSD" needs a rate; the earliest DSD description wins.
+    expect(outputFormatFromDetail("native DSD, 44.1kHz 16bit 2ch")).toBe(
+      "44.1kHz 16bit 2ch",
+    );
+    expect(outputFormatFromDetail("DoP: DSD64, native DSD64")).toBe(
+      "DoP: DSD64, native DSD64",
+    );
+  });
+
+  test("long adversarial output details are read in linear time", () => {
+    const started = performance.now();
+    expect(outputFormatFromDetail(`${"native DSD9".repeat(50_000)}x`)).toBe(
+      `${"native DSD9".repeat(50_000)}x`,
+    );
+    // A DSD description must run to the end of the last line.
+    expect(outputFormatFromDetail(`${"DoP: ".repeat(50_000)}\n`)).toBe(
+      `${"DoP: ".repeat(50_000)}\n`,
+    );
+    expect(outputFormatFromDetail("native DSD".repeat(50_000))).toBe(
+      "native DSD".repeat(50_000),
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   test("every DSD strategy is offered with an explanation", () => {
