@@ -123,9 +123,10 @@ async fn token_request(
     accounts_base: &str,
     body: String,
 ) -> Result<TokenResponse, ProviderError> {
+    let url = super::http::secure_url(&format!("{accounts_base}/api/token"))?;
     let (status, bytes) = send_bytes(
         client
-            .post(format!("{accounts_base}/api/token"))
+            .post(url)
             .header(
                 reqwest::header::CONTENT_TYPE,
                 "application/x-www-form-urlencoded",
