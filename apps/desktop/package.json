@@ -41,6 +41,13 @@
       "electron/backend-trust.cjs",
       "electron/failure-state.cjs",
       "electron/navigation.cjs",
+      "electron/mdns.cjs",
+      "electron/server-config.cjs",
+      "electron/server-monitor.cjs",
+      "electron/server-service.cjs",
+      "electron/server-host.cjs",
+      "electron/session-vault.cjs",
+      "electron/servers.html",
       "electron/preload.cjs",
       "electron/startup.html",
       "electron/startup-error.html",
@@ -61,7 +68,8 @@
         "to": ".",
         "filter": [
           "parson-music-server",
-          "parson-music-server.exe"
+          "parson-music-server.exe",
+          "ParsonMusicServer.exe"
         ]
       },
       {

@@ -418,6 +418,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/suggestions", web::get().to(setup_suggestions));
     cfg.route("/filesystem", web::get().to(setup_filesystem));
     cfg.route("/library", web::post().to(setup_library));
+    crate::api::migration::configure_setup(cfg);
 }
 
 #[cfg(test)]

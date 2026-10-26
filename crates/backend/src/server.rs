@@ -18,7 +18,7 @@ use crate::api::library::{
 use crate::api::{
     album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
     genres, home, imports, key_service, lyrics, metadata, outputs, playback, playlist, providers,
-    search, setup, song, user, works, zones,
+    remote_access, search, setup, song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -27,6 +27,53 @@ use crate::{assets, http, settings};
 const MAX_JSON_BODY_BYTES: usize = 1024 * 1024;
 const MAX_STREAMING_PAYLOAD_BYTES: usize = 6 * 1024 * 1024;
 const DESKTOP_CHALLENGE_HEADER: &str = "x-parson-desktop-challenge";
+
+static RESTART_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RESTART_SIGNAL: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+
+fn restart_signal() -> &'static tokio::sync::Notify {
+    RESTART_SIGNAL.get_or_init(tokio::sync::Notify::new)
+}
+
+/// Asks the running server to stop gracefully and start again, for example
+/// to apply a restored backup. The request is answered first: the restart
+/// begins a moment later.
+pub fn request_restart() {
+    RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        restart_signal().notify_one();
+    });
+}
+
+/// Resolves once [`request_restart`] has been called.
+pub async fn restart_requested() {
+    restart_signal().notified().await;
+}
+
+/// True (once) after a restart was requested; hosts that run the server
+/// in-process start it again when this is set.
+pub fn take_restart_request() -> bool {
+    RESTART_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Starts this program again with the same arguments and environment.
+/// On Unix the process image is replaced, so the PID (and with it systemd,
+/// launchd, Docker or the desktop's supervisor) stays the same.
+fn relaunch_current_process() -> std::io::Result<()> {
+    let executable = std::env::current_exe()?;
+    let mut command = std::process::Command::new(executable);
+    command.args(std::env::args_os().skip(1));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec())
+    }
+    #[cfg(not(unix))]
+    {
+        command.spawn().map(|_| ())
+    }
+}
 
 fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
     web::scope(path)
@@ -54,6 +101,7 @@ fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .service(library_refresh)
                 .service(library_roots)
                 .service(library_classification_diagnostics)
+                .service(crate::api::relocate::relocate_library_root)
                 .service(remove_library_root),
         )
 }
@@ -243,6 +291,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
+        "bootId": crate::discovery::boot_id(),
+        "startedAt": crate::discovery::started_at(),
         "capabilities": [
             "streaming",
             "downloads",
@@ -268,7 +318,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
-        std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
+        settings::host_setting("PARSON_DESKTOP_INSTANCE_TOKEN").ok_or(()),
         request
             .headers()
             .get(DESKTOP_CHALLENGE_HEADER)
@@ -278,6 +328,25 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         manifest["desktopProof"] = serde_json::Value::String(proof);
     }
     HttpResponse::Ok().json(manifest)
+}
+
+async fn host_details() -> HttpResponse {
+    let port = match settings::port() {
+        Ok(port) => port,
+        Err(error) => {
+            tracing::error!(%error, "could not read the server port");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    match crate::discovery::host_info(port) {
+        Ok(info) => HttpResponse::Ok()
+            .insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"))
+            .json(info),
+        Err(error) => {
+            tracing::error!(%error, "could not describe this Parson host");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }
 
 async fn nearby_servers() -> HttpResponse {
@@ -373,6 +442,7 @@ pub async fn build_server_with_shutdown_timeout(
         });
     }
     let bind_port = settings::port().map_err(std::io::Error::other)?;
+    crate::remote_access::start(bind_port);
     let zone_service = web::Data::new(build_zone_service(database.get_ref().clone(), bind_port));
     zone_service.set_library(library.clone().into_inner());
     tokio::spawn(zone_service.clone().into_inner().run());
@@ -412,6 +482,16 @@ pub async fn build_server_with_shutdown_timeout(
             )
             .service(web::scope("/api/v1/setup").configure(setup::configure))
             .route("/api/v1/discovery/nearby", web::get().to(nearby_servers))
+            .service(
+                web::resource("/api/v1/host")
+                    .wrap(HttpAuthentication::with_fn(validator))
+                    .route(web::get().to(host_details)),
+            )
+            .service(
+                web::scope("/api/v1/remote-access")
+                    .wrap(HttpAuthentication::with_fn(admin_guard))
+                    .configure(remote_access::configure),
+            )
             .route(
                 "/api/v1/cast/media/{song}/stream",
                 web::get().to(cast::cast_media),
@@ -439,9 +519,19 @@ pub async fn build_server_with_shutdown_timeout(
                     .service(web::scope("/setup").configure(setup::configure))
                     .route("/discovery/nearby", web::get().to(nearby_servers))
                     .service(
+                        web::resource("/host")
+                            .wrap(HttpAuthentication::with_fn(validator))
+                            .route(web::get().to(host_details)),
+                    )
+                    .service(
                         web::resource("/libraries")
                             .wrap(HttpAuthentication::with_fn(admin_guard))
                             .route(web::get().to(core_libraries)),
+                    )
+                    .service(
+                        web::scope("/remote-access")
+                            .wrap(HttpAuthentication::with_fn(admin_guard))
+                            .configure(remote_access::configure),
                     ),
             )
             .service(library_routes_at("/api/music/v1/library"))
@@ -476,6 +566,8 @@ pub async fn build_server_with_shutdown_timeout(
 }
 
 pub async fn run() -> std::io::Result<()> {
+    // Fix the process start time before the (possibly slow) startup work.
+    let _ = crate::discovery::boot_id();
     let (server, port) = build_server().await?;
     let _advertisement = match crate::discovery::advertise(port) {
         Ok(advertisement) => Some(advertisement),
@@ -488,8 +580,23 @@ pub async fn run() -> std::io::Result<()> {
             None
         }
     };
-    let result = server.await;
+    let handle = server.handle();
+    tokio::pin!(server);
+    let result = tokio::select! {
+        result = &mut server => result,
+        () = restart_requested() => {
+            tracing::info!("restarting the Parson server");
+            let graceful = tokio::spawn(handle.stop(true));
+            let result = server.await;
+            let _ = graceful.await;
+            result
+        }
+    };
     crate::persistence::connection::mark_clean_shutdown();
+    drop(_advertisement);
+    if result.is_ok() && take_restart_request() {
+        return relaunch_current_process();
+    }
     result
 }
 
@@ -524,6 +631,12 @@ mod tests {
         );
         assert!(value.get("libraryPath").is_none());
         assert!(value.get("desktopProof").is_none());
+        assert_eq!(value["bootId"], crate::discovery::boot_id());
+        assert!(
+            value["startedAt"]
+                .as_u64()
+                .is_some_and(|started| started > 0)
+        );
     }
 
     #[actix_web::test]

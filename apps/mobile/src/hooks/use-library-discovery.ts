@@ -27,12 +27,18 @@ async function inspectLibrary(origin: string) {
   }
 }
 
-export function useLibraryDiscovery() {
+/**
+ * Libraries announcing `_parson._tcp` on this network, each confirmed by its
+ * manifest. Searches while the app is choosing a library, or whenever
+ * `enabled` is true (the library switcher in Settings).
+ */
+export function useLibraryDiscovery(enabled?: boolean) {
   const { phase } = useSession();
   const [libraries, setLibraries] = useState<NearbyLibrary[]>([]);
   const inspected = useRef(new Set<string>());
+  const searching = enabled ?? phase === "discovering";
   useEffect(() => {
-    if (phase !== "discovering") return;
+    if (!searching) return;
     let active = true;
     const subscription = ParsonDiscovery.addListener(
       "onService",
@@ -84,6 +90,6 @@ export function useLibraryDiscovery() {
       subscription.remove();
       ParsonDiscovery.stop();
     };
-  }, [phase]);
+  }, [searching]);
   return libraries;
 }

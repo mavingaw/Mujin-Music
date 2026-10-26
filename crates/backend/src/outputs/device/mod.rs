@@ -330,9 +330,9 @@ impl DeviceManager {
     /// the system's audio API (ALSA on Linux, WASAPI exclusive mode on
     /// Windows, CoreAudio hog mode on macOS).
     pub fn from_env() -> Option<Self> {
-        let value = std::env::var("PARSON_LOCAL_AUDIO")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
+        // The environment wins; a background service the desktop app
+        // installed reads it from <data>/server.env instead.
+        let value = crate::settings::host_setting("PARSON_LOCAL_AUDIO")
             .or_else(|| {
                 std::env::var("PARSON_NATIVE_OUTPUT_SIMULATE")
                     .is_ok_and(|value| value == "1")
