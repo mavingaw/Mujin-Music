@@ -1,6 +1,8 @@
 import {
+  createDspChain,
   createPlaybackQueue,
   defaultRadioSettings,
+  defaultDspSettings,
   fillReverbImpulseChannel,
   getRadioPicks,
   getRadioSettings,
@@ -19,9 +21,13 @@ import {
   playerAudioPresets,
   recordPlaybackEvent,
   reverbImpulseLength,
+  type DspAudioContext,
+  type DspChain,
+  type DspSettings,
   type LibrarySong,
   type PlaybackEventType,
   type PlayerAudioPresetId,
+  type VolumeLevelingMode,
 } from "@parson/music-sdk";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
@@ -89,6 +95,16 @@ import {
 } from "@/lib/radio-queue";
 import { useCastOutput } from "@/hooks/use-cast-output";
 import { useRadioBans } from "@/components/radio-bans";
+import {
+  nativeLeveling,
+  parseVolumeLevelingMode,
+  playsInAlbumContext,
+  signalPlatform,
+  VOLUME_LEVELING_STORAGE_KEY,
+  DSP_STORAGE_KEY,
+  parseStoredDsp,
+  type MobileSignalState,
+} from "@/lib/signal-path";
 
 type RepeatMode = "none" | "one" | "all";
 export type AudioPreset = PlayerAudioPresetId;
@@ -102,6 +118,8 @@ type PlaybackSource = {
 };
 
 type NativeAudioGraph = {
+  /** Headroom and EQ between the source and the preset mix. */
+  chain: DspChain;
   convolver: ConvolverNode;
   dryGain: GainNode;
   source: MediaElementAudioSourceNode | null;
@@ -170,6 +188,12 @@ type PlayerContextValue = {
   cycleRepeat: () => void;
   toggleShuffle: () => void;
   setAudioPreset: (preset: AudioPreset) => void;
+  /** What this device does to the stream, for the signal path. */
+  signal: MobileSignalState;
+  volumeLevelingMode: VolumeLevelingMode;
+  setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
+  dsp: DspSettings;
+  setDsp: (settings: DspSettings) => void;
 };
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -189,6 +213,11 @@ function disconnectSource(graph: NativeAudioGraph) {
   try {
     graph.source.disconnect();
   } catch {}
+  if (graph.wetConnected) {
+    try {
+      (graph.chain.output as unknown as GainNode).disconnect(graph.convolver);
+    } catch {}
+  }
   graph.source = null;
   graph.wetConnected = false;
 }
@@ -624,6 +653,10 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   const [shuffle, setShuffle] = useState(false);
   const originalQueue = useRef<LibrarySong[]>([]);
   const [audioPreset, setAudioPresetState] = useState<AudioPreset>("original");
+  const [volumeLevelingMode, setVolumeLevelingModeState] =
+    useState<VolumeLevelingMode>("off");
+  // Linear volume-leveling gain applied by the graph or the Android player.
+  const levelGainRef = useRef(1);
   const [playbackSource, setPlaybackSource] = useState<PlaybackSource | null>(
     null,
   );
@@ -632,6 +665,49 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     session.instanceId && session.claims?.sub
       ? `parson.player-state.${session.instanceId}.${session.claims.sub}`
       : null;
+
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem(VOLUME_LEVELING_STORAGE_KEY)
+      .then((value) => {
+        if (active) setVolumeLevelingModeState(parseVolumeLevelingMode(value));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const [dsp, setDspState] = useState<DspSettings>(defaultDspSettings);
+  const dspRef = useRef(dsp);
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem(DSP_STORAGE_KEY)
+      .then((value) => {
+        if (active) setDspState(parseStoredDsp(value));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    dspRef.current = dsp;
+    graphRef.current?.chain.update(dsp);
+  }, [dsp]);
+  const setDsp = useCallback((settings: DspSettings) => {
+    setDspState(settings);
+    void AsyncStorage.setItem(DSP_STORAGE_KEY, JSON.stringify(settings)).catch(
+      () => {},
+    );
+  }, []);
+
+  const setVolumeLevelingMode = useCallback((mode: VolumeLevelingMode) => {
+    setVolumeLevelingModeState(mode);
+    void AsyncStorage.setItem(VOLUME_LEVELING_STORAGE_KEY, mode).catch(
+      () => {},
+    );
+  }, []);
 
   useEffect(() => {
     if (!queueStorageKey) {
@@ -822,10 +898,16 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     convolver.buffer = buildReverbImpulse(audioContext);
     dryGain.gain.value = 1;
     wetGain.gain.value = 0;
+    const chain = createDspChain(
+      audioContext as unknown as DspAudioContext,
+      dspRef.current,
+    );
+    (chain.output as unknown as GainNode).connect(dryGain);
     dryGain.connect(audioContext.destination);
     convolver.connect(wetGain);
     wetGain.connect(audioContext.destination);
     graphRef.current = {
+      chain,
       convolver,
       dryGain,
       source: null,
@@ -842,14 +924,16 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       const graph = graphRef.current;
       if (!graph || !audioContext) return;
       const now = audioContext.currentTime;
-      graph.dryGain.gain.setTargetAtTime(next.dry, now, 0.025);
-      graph.wetGain.gain.setTargetAtTime(next.wet, now, 0.025);
+      const level = levelGainRef.current;
+      graph.dryGain.gain.setTargetAtTime(next.dry * level, now, 0.025);
+      graph.wetGain.gain.setTargetAtTime(next.wet * level, now, 0.025);
+      const chainOutput = graph.chain.output as unknown as GainNode;
       if (next.wet > 0 && graph.source && !graph.wetConnected) {
-        graph.source.connect(graph.convolver);
+        chainOutput.connect(graph.convolver);
         graph.wetConnected = true;
       } else if (next.wet === 0 && graph.source && graph.wetConnected) {
         try {
-          graph.source.disconnect(graph.convolver);
+          chainOutput.disconnect(graph.convolver);
         } catch {}
         graph.wetConnected = false;
       }
@@ -877,7 +961,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       if (!graph) return;
       disconnectSource(graph);
       const source = audioContext.createMediaElementSource(audio);
-      source.connect(graph.dryGain);
+      source.connect(graph.chain.input as unknown as GainNode);
       graph.source = source;
       applyPreset(audioPreset);
       playWhenRequested();
@@ -1141,6 +1225,57 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     if (!cast.casting || Platform.OS !== "android") return;
     androidPlayerRef.current?.clearLockScreenControls();
   }, [cast.casting]);
+
+  const platform = signalPlatform(Platform.OS);
+  const currentId = current?.id;
+  const currentLoudness = current?.loudness;
+  const albumIds = useMemo(
+    () => queue.map((song) => song.album_object?.id),
+    [queue],
+  );
+  const leveling = useMemo(
+    () =>
+      nativeLeveling(
+        currentLoudness,
+        volumeLevelingMode,
+        platform,
+        playsInAlbumContext(albumIds, currentIndex),
+      ),
+    [albumIds, currentIndex, currentLoudness, platform, volumeLevelingMode],
+  );
+  useEffect(() => {
+    levelGainRef.current = leveling.gain;
+    const androidPlayer = androidPlayerRef.current;
+    if (androidPlayer) androidPlayer.volume = Math.min(1, leveling.gain);
+    else applyPreset(audioPreset);
+  }, [applyPreset, audioPreset, leveling.gain, playbackSource]);
+  const streamBitrate = session.claims?.bitrate ?? 0;
+  const signal = useMemo<MobileSignalState>(
+    () => ({
+      platform,
+      localFile: Boolean(
+        playbackSource && currentId && downloadedSongUri(currentId),
+      ),
+      streamBitrate,
+      contextSampleRate: audioContext?.sampleRate ?? null,
+      leveling: leveling.result,
+      levelingUnavailable: leveling.unavailable,
+      casting: cast.casting,
+      castDeviceName: cast.deviceName,
+      dsp,
+    }),
+    [
+      audioContext,
+      cast.casting,
+      cast.deviceName,
+      currentId,
+      dsp,
+      leveling,
+      platform,
+      streamBitrate,
+      playbackSource,
+    ],
+  );
 
   const next = useCallback(() => {
     if (!queue.length) return;
@@ -1732,6 +1867,11 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       cycleRepeat,
       toggleShuffle,
       setAudioPreset,
+      signal,
+      volumeLevelingMode,
+      setVolumeLevelingMode,
+      dsp,
+      setDsp,
     };
   }, [
     answerSkip,
@@ -1747,6 +1887,8 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     startRadio,
     thumbsDown,
     thumbsUp,
+    dsp,
+    setDsp,
     addNext,
     addToQueue,
     clearUpcoming,
@@ -1776,8 +1918,11 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     shuffle,
     seek,
     setAudioPreset,
+    setVolumeLevelingMode,
+    signal,
     toggleShuffle,
     toggle,
+    volumeLevelingMode,
   ]);
   const position = useMemo(
     () => ({

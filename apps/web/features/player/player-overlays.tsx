@@ -52,7 +52,6 @@ export function FullscreenPlayer({
   cover,
   currentTime,
   duration,
-  formatBadge,
   readPosition,
   isPlaying,
   looping,
@@ -82,6 +81,7 @@ export function FullscreenPlayer({
   playbackRate,
   queue,
   queueOpen,
+  signalBadge,
   slowedReverb,
   songId,
   title,
@@ -99,8 +99,6 @@ export function FullscreenPlayer({
   cover: string;
   currentTime: number;
   duration: number;
-  /** Format chip and signal path for the playing track. */
-  formatBadge?: ReactNode;
   readPosition?: () => number;
   isPlaying: boolean;
   looping: boolean;
@@ -138,6 +136,8 @@ export function FullscreenPlayer({
   feedback?: ReactNode;
   /** "Radio · Playing X radio" when the current track is a Radio pick. */
   radioLabel?: string | null;
+  /** Signal path pill shown under the artist. */
+  signalBadge?: ReactNode;
   timedLyrics: TimedLyric[];
   volume: number;
 }) {
@@ -326,8 +326,8 @@ export function FullscreenPlayer({
                         onNavigate={onClose}
                       />
                     </p>
-                    {formatBadge ? (
-                      <div className="mt-3 flex">{formatBadge}</div>
+                    {signalBadge ? (
+                      <div className="mt-4 flex min-w-0">{signalBadge}</div>
                     ) : null}
                     {feedback && <div className="mt-4 flex">{feedback}</div>}
                   </div>

@@ -363,6 +363,7 @@ mod tests {
             credits: Vec::new(),
             isrc: None,
             label: None,
+            loudness: None,
         }
     }
 

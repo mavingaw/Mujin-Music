@@ -1,0 +1,41 @@
+[package]
+name = "parson-output"
+description = "Native bit-perfect audio output for Parson: exclusive device access (ALSA hw, WASAPI Exclusive, CoreAudio hog mode), format probing and playback"
+version = "1.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+
+[features]
+# Protocol-level fake UPnP renderer and AirPlay receiver, for demos and
+# integration tests without network audio hardware.
+network-fakes = []
+
+[[example]]
+name = "network_fakes"
+required-features = ["network-fakes"]
+
+[dependencies]
+mdns-sd = "0.21.5"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.151"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }

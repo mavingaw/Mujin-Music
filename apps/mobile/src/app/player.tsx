@@ -58,7 +58,6 @@ import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { SongRow } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
-import { FormatChip } from "@/components/format-chip";
 import {
   playerAudioPresets,
   usePlayer,
@@ -82,6 +81,11 @@ import {
   RadioThumbs,
   StartRadioAction,
 } from "@/components/radio-ui";
+import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
+import { ServerOutputs } from "@/components/server-outputs";
+import { dspAvailable } from "@/lib/signal-path";
+import { useSignalPath } from "@/hooks/use-signal-path";
+import type { SignalPath } from "@parson/music-sdk";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -163,6 +167,8 @@ function NowPlayingPanel({
   onQueue,
   onLyrics,
   onSound,
+  onSignalPath,
+  signalPath,
   notice,
   online,
 }: {
@@ -176,6 +182,8 @@ function NowPlayingPanel({
   onQueue: () => void;
   onLyrics: () => void;
   onSound: () => void;
+  onSignalPath: () => void;
+  signalPath: SignalPath | null;
   notice?: string | null;
   online: boolean;
 }) {
@@ -223,7 +231,7 @@ function NowPlayingPanel({
           >
             {song.artist}
           </Text>
-          <FormatChip audio={song.audio} path={song.path} />
+          <SignalPathBadge onPress={onSignalPath} path={signalPath} />
         </View>
         <Pressable
           {...immediateBorderlessPressFeedback}
@@ -787,6 +795,8 @@ export default function PlayerScreen() {
   const [panel, setPanel] = useState<Panel>("player");
   const [actions, setActions] = useState(false);
   const [soundOptions, setSoundOptions] = useState(false);
+  const [signalPathOpen, setSignalPathOpen] = useState(false);
+  const signalPath = useSignalPath(player.current);
   const [favoriteErrorSong, setFavoriteErrorSong] = useState<string | null>(
     null,
   );
@@ -921,6 +931,8 @@ export default function PlayerScreen() {
               onQueue={() => setPanel("queue")}
               onLyrics={() => setPanel("lyrics")}
               onSound={() => setSoundOptions(true)}
+              onSignalPath={() => setSignalPathOpen(true)}
+              signalPath={signalPath.path}
               notice={
                 player.error ??
                 (favoriteErrorSong === song.id
@@ -954,9 +966,41 @@ export default function PlayerScreen() {
             onSoundClose={() => setSoundOptions(false)}
             online={session.phase === "ready"}
           />
+          <ActionDrawer
+            open={signalPathOpen}
+            onClose={() => setSignalPathOpen(false)}
+          >
+            <SignalPathContent
+              casting={player.signal.casting}
+              levelingMode={player.volumeLevelingMode}
+              loading={signalPath.loading}
+              onLevelingModeChange={player.setVolumeLevelingMode}
+              path={signalPath.path}
+              dsp={dspAvailable(player.signal.platform) ? player.dsp : null}
+              onDspChange={player.setDsp}
+            />
+            {session.phase === "ready" && !player.signal.casting ? (
+              <PlayerServerOutputs />
+            ) : null}
+          </ActionDrawer>
         </SafeAreaView>
       </AnimatedLinearGradient>
     </GestureDetector>
+  );
+}
+
+/** Hands the playing track to one of the server's bit-perfect outputs. */
+function PlayerServerOutputs() {
+  const player = usePlayer();
+  const { currentTime } = usePlayerPosition();
+  return (
+    <ServerOutputs
+      onHandOff={() => {
+        if (player.isPlaying) player.toggle();
+      }}
+      positionSeconds={currentTime}
+      songId={player.current?.id ?? null}
+    />
   );
 }
 

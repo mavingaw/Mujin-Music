@@ -14,6 +14,52 @@ import {
   type AudioPresetId,
 } from "./audio-presets";
 import { canPromotePreloadedMedia } from "./gapless-playback";
+import {
+  activeConvolutionFilter,
+  createDspChain,
+  defaultDspSettings,
+  dspNeedsGraph,
+  getConvolutionFilterFile,
+  requestedContextSampleRate,
+  type DspAudioContext,
+  type DspSettings,
+  type NativeOutputLeveling,
+  type NativeOutputSession,
+} from "@parson/music-sdk";
+import { NativeOutputElement } from "./native-output-element";
+
+type SinkTarget = { setSinkId?: (sinkId: string) => Promise<void> };
+
+function audioContextConstructor() {
+  if (typeof window === "undefined") return null;
+  return (
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext ||
+    null
+  );
+}
+
+/**
+ * The output device's own rate: a context created without a rate runs at
+ * it. `sinkId` targets a chosen device where the browser supports it.
+ */
+export async function probeDeviceSampleRate(
+  sinkId: string,
+): Promise<number | null> {
+  const Constructor = audioContextConstructor();
+  if (!Constructor) return null;
+  try {
+    const context = new Constructor(
+      sinkId ? ({ sinkId } as AudioContextOptions) : undefined,
+    );
+    const rate = context.sampleRate;
+    await context.close().catch(() => {});
+    return Number.isFinite(rate) && rate > 0 ? rate : null;
+  } catch {
+    return null;
+  }
+}
 
 const PLAYBACK_START_TIMEOUT_MS = 12_000;
 
@@ -29,6 +75,8 @@ export function useAudioEngine() {
   const resumeOnReconnect = useRef(false);
   const backgroundWasPlaying = useRef(false);
   const volumeRef = useRef(1);
+  // Linear volume-leveling gain, folded into the element volume.
+  const levelingGainRef = useRef(1);
   const mutedRef = useRef(false);
   const recovered = useRef(false);
   const presetRef = useRef<AudioPreset>(audioPresets[0]!);
@@ -39,6 +87,37 @@ export function useAudioEngine() {
   const [error, setError] = useState<string | null>(null);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  const [graphSampleRate, setGraphSampleRate] = useState<number | null>(null);
+  // Convolution filters decoded for the graph, keyed `id@rate` (a
+  // ConvolverNode needs a buffer at its context's rate).
+  const impulses = useRef(new Map<string, AudioBuffer>());
+  const impulseLoading = useRef(new Set<string>());
+  const [loadedImpulse, setLoadedImpulse] = useState<string | null>(null);
+  const dspRef = useRef<DspSettings>(defaultDspSettings());
+  const sourceRateRef = useRef<number | null>(null);
+  const sinkIdRef = useRef("");
+  const [activeSinkId, setActiveSinkId] = useState("");
+  const [deviceSampleRate, setDeviceSampleRate] = useState<number | null>(null);
+  // Set while a server output plays: `audio.current` is then a
+  // NativeOutputElement and nothing is decoded in the browser.
+  const nativeRef = useRef<NativeOutputElement | null>(null);
+  const nativeLevelingRef = useRef<NativeOutputLeveling | null>(null);
+  const [nativeSession, setNativeSession] =
+    useState<NativeOutputSession | null>(null);
+  const needsGraph = useCallback(
+    () =>
+      presetRef.current.wet > 0 ||
+      dspNeedsGraph(dspRef.current, sourceRateRef.current),
+    [],
+  );
+  const wantedRate = useCallback(
+    () => requestedContextSampleRate(dspRef.current, sourceRateRef.current),
+    [],
+  );
+  const elementVolume = useCallback(
+    () => Math.min(1, Math.max(0, volumeRef.current * levelingGainRef.current)),
+    [],
+  );
 
   const discardPreloadedAudio = useCallback(() => {
     const element = preloadedAudio.current;
@@ -49,18 +128,21 @@ export function useAudioEngine() {
     preloadedSource.current = "";
   }, []);
 
-  const configureAudioElement = useCallback((element: HTMLAudioElement) => {
-    element.crossOrigin = "anonymous";
-    element.volume = volumeRef.current;
-    element.muted = mutedRef.current;
-    setPitchPreservation(element, presetRef.current.preservePitch);
-    element.defaultPlaybackRate = presetRef.current.rate;
-    element.playbackRate = presetRef.current.rate;
-  }, []);
+  const configureAudioElement = useCallback(
+    (element: HTMLAudioElement) => {
+      element.crossOrigin = "anonymous";
+      element.volume = elementVolume();
+      element.muted = mutedRef.current;
+      setPitchPreservation(element, presetRef.current.preservePitch);
+      element.defaultPlaybackRate = presetRef.current.rate;
+      element.playbackRate = presetRef.current.rate;
+    },
+    [elementVolume],
+  );
 
   const preloadAudioSource = useCallback(
     (next: string | null) => {
-      if (!next || typeof window === "undefined") {
+      if (!next || typeof window === "undefined" || nativeRef.current) {
         discardPreloadedAudio();
         return;
       }
@@ -68,6 +150,9 @@ export function useAudioEngine() {
       discardPreloadedAudio();
       const element = createAudioElement();
       configureAudioElement(element);
+      const sinkTarget = element as HTMLAudioElement & SinkTarget;
+      if (sinkIdRef.current && sinkTarget.setSinkId)
+        void sinkTarget.setSinkId(sinkIdRef.current).catch(() => {});
       element.preload = "auto";
       element.src = next;
       element.load();
@@ -96,43 +181,139 @@ export function useAudioEngine() {
     setAudioVersion((version) => version + 1);
   }, [configureAudioElement]);
 
+  /**
+   * Fetches and decodes the chosen convolution filter for the graph's
+   * rate, then rewires the chain with it.
+   */
+  const loadImpulse = useCallback((settings: DspSettings) => {
+    const id = activeConvolutionFilter(settings);
+    const current = graph.current;
+    if (!id || !current) return;
+    const key = `${id}@${current.context.sampleRate}`;
+    if (impulses.current.has(key)) {
+      setLoadedImpulse(id);
+      return;
+    }
+    if (impulseLoading.current.has(key)) return;
+    impulseLoading.current.add(key);
+    void getConvolutionFilterFile(id)
+      .then((data) => current.context.decodeAudioData(data))
+      .then((buffer) => {
+        impulses.current.set(key, buffer);
+        if (graph.current === current) {
+          current.chain.update(dspRef.current);
+          setLoadedImpulse(id);
+        }
+      })
+      .catch((cause) => {
+        console.error("Unable to load the convolution filter", cause);
+      })
+      .finally(() => impulseLoading.current.delete(key));
+  }, []);
+
   const ensureAudioGraph = useCallback(() => {
+    if (nativeRef.current) return null;
     recoverAudioElement();
     const element = audio.current;
     if (!element || graph.current || typeof window === "undefined")
       return graph.current;
-    const Constructor =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
+    const Constructor = audioContextConstructor();
     if (!Constructor) return null;
     try {
-      const context = new Constructor();
+      const rate = wantedRate();
+      let context: AudioContext;
+      try {
+        context = rate
+          ? new Constructor({ sampleRate: rate })
+          : new Constructor();
+      } catch {
+        // Rates outside the browser's range fall back to the device rate.
+        context = new Constructor();
+      }
+      const sinkId = sinkIdRef.current;
+      const sinkContext = context as AudioContext & SinkTarget;
+      if (sinkId && sinkContext.setSinkId)
+        void sinkContext.setSinkId(sinkId).catch(() => {});
       const mediaSource = context.createMediaElementSource(element);
+      const chain = createDspChain(
+        context as unknown as DspAudioContext,
+        dspRef.current,
+        {
+          impulse: (id) =>
+            impulses.current.get(`${id}@${context.sampleRate}`) ?? null,
+        },
+      );
+      const chainOutput = chain.output as unknown as AudioNode;
       const dryGain = context.createGain();
       const wetGain = context.createGain();
       const convolver = context.createConvolver();
       convolver.buffer = buildReverbImpulse(context);
-      mediaSource.connect(dryGain);
+      mediaSource.connect(chain.input as unknown as AudioNode);
+      chainOutput.connect(dryGain);
       convolver.connect(wetGain);
       dryGain.connect(context.destination);
       wetGain.connect(context.destination);
       dryGain.gain.value = 1;
       wetGain.gain.value = 0;
       graph.current = {
+        chain,
         convolver,
         context,
         dryGain,
+        requestedRate: rate,
         source: mediaSource,
         wetConnected: false,
         wetGain,
       };
+      setGraphSampleRate(context.sampleRate);
+      loadImpulse(dspRef.current);
     } catch (cause) {
-      console.error("Unable to initialize slowed reverb audio graph", cause);
+      console.error("Unable to initialize the audio processing graph", cause);
       return null;
     }
     return graph.current;
-  }, [recoverAudioElement]);
+  }, [loadImpulse, recoverAudioElement, wantedRate]);
+
+  /** Closes the graph; the element cannot be reused, so it is replaced. */
+  const dropAudioGraph = useCallback(
+    (keepPosition = true) => {
+      const current = graph.current;
+      if (!current) return false;
+      current.chain.dispose();
+      void current.context.close().catch(() => {});
+      graph.current = null;
+      setGraphSampleRate(null);
+      const element = audio.current;
+      const replacement = createAudioElement();
+      configureAudioElement(replacement);
+      const sinkTarget = replacement as HTMLAudioElement & SinkTarget;
+      if (sinkIdRef.current && sinkTarget.setSinkId)
+        void sinkTarget.setSinkId(sinkIdRef.current).catch(() => {});
+      const resumeAt = keepPosition ? (element?.currentTime ?? 0) : 0;
+      if (element) {
+        element.pause();
+        element.removeAttribute("src");
+        element.load();
+      }
+      if (source.current) {
+        replacement.addEventListener(
+          "loadedmetadata",
+          () => {
+            try {
+              if (resumeAt > 0) replacement.currentTime = resumeAt;
+            } catch {}
+          },
+          { once: true },
+        );
+        replacement.src = source.current;
+      }
+      audio.current = replacement;
+      recovered.current = true;
+      setAudioVersion((version) => version + 1);
+      return true;
+    },
+    [configureAudioElement],
+  );
 
   const applyPreset = useCallback(
     (preset: AudioPreset) => {
@@ -142,14 +323,15 @@ export function useAudioEngine() {
       element.defaultPlaybackRate = preset.rate;
       element.playbackRate = preset.rate;
       const audioGraph =
-        graph.current ?? (preset.wet > 0 ? ensureAudioGraph() : null);
+        graph.current ?? (needsGraph() ? ensureAudioGraph() : null);
       if (!audioGraph) return;
+      const chainOutput = audioGraph.chain.output as unknown as AudioNode;
       if (preset.wet > 0 && !audioGraph.wetConnected) {
-        audioGraph.source.connect(audioGraph.convolver);
+        chainOutput.connect(audioGraph.convolver);
         audioGraph.wetConnected = true;
       } else if (preset.wet <= 0 && audioGraph.wetConnected) {
         try {
-          audioGraph.source.disconnect(audioGraph.convolver);
+          chainOutput.disconnect(audioGraph.convolver);
         } catch {}
         audioGraph.wetConnected = false;
       }
@@ -157,16 +339,20 @@ export function useAudioEngine() {
       audioGraph.wetGain.gain.setTargetAtTime(preset.wet, now, 0.025);
       audioGraph.dryGain.gain.setTargetAtTime(preset.dry, now, 0.025);
     },
-    [ensureAudioGraph],
+    [ensureAudioGraph, needsGraph],
   );
 
   const setAudioSource = useCallback(
-    (next: string) => {
+    (next: string, sourceSampleRate?: number | null) => {
       playbackAttempt.current += 1;
       setIsPlaying(false);
       setError(null);
       source.current = next;
+      sourceRateRef.current = sourceSampleRate ?? null;
       if (!audio.current) return;
+      // "Match source" needs a context at this track's rate.
+      if (graph.current && graph.current.requestedRate !== wantedRate())
+        dropAudioGraph(false);
 
       const prepared = preloadedAudio.current;
       if (
@@ -184,6 +370,7 @@ export function useAudioEngine() {
         if (graph.current) {
           void graph.current.context.close().catch(() => {});
           graph.current = null;
+          setGraphSampleRate(null);
         }
         setAudioVersion((version) => version + 1);
         return;
@@ -193,7 +380,7 @@ export function useAudioEngine() {
       configureAudioElement(audio.current);
       audio.current.src = next;
     },
-    [configureAudioElement, discardPreloadedAudio],
+    [configureAudioElement, discardPreloadedAudio, dropAudioGraph, wantedRate],
   );
 
   const playAudioSource = useCallback(() => {
@@ -260,20 +447,178 @@ export function useAudioEngine() {
       .finally(() => window.clearTimeout(startTimeout));
   }, [applyPreset, recoverAudioElement]);
 
-  const setAudioVolume = useCallback((value: number | string) => {
-    const next = boundedVolume(value);
-    if (next === null) return;
-    if (audio.current) audio.current.volume = next;
-    if (preloadedAudio.current) preloadedAudio.current.volume = next;
-    volumeRef.current = next;
-    setVolume(next);
-    if (next > 0) {
-      mutedRef.current = false;
-      if (audio.current) audio.current.muted = false;
-      if (preloadedAudio.current) preloadedAudio.current.muted = false;
-      setMuted(false);
+  /**
+   * Plays through a server output (`deviceId`) or back through this
+   * browser (`null`), keeping the track, position and play state.
+   */
+  const setNativeOutput = useCallback(
+    (deviceId: string | null) => {
+      const current = nativeRef.current;
+      if ((current?.deviceId ?? null) === deviceId) return;
+      if (typeof window === "undefined") return;
+      const element = audio.current;
+      const wasPlaying = Boolean(element && !element.paused);
+      const position = element?.currentTime ?? 0;
+      discardPreloadedAudio();
+      if (graph.current) {
+        graph.current.chain.dispose();
+        void graph.current.context.close().catch(() => {});
+        graph.current = null;
+        setGraphSampleRate(null);
+      }
+      if (current) {
+        current.dispose();
+      } else if (element) {
+        element.pause();
+        element.removeAttribute("src");
+        element.load();
+      }
+      playbackAttempt.current += 1;
+      let next: HTMLAudioElement;
+      if (deviceId) {
+        const native = new NativeOutputElement(deviceId, {
+          onSession: setNativeSession,
+        });
+        native.leveling = nativeLevelingRef.current;
+        nativeRef.current = native;
+        if (source.current) native.src = source.current;
+        native.currentTime = position;
+        next = native as unknown as HTMLAudioElement;
+      } else {
+        nativeRef.current = null;
+        setNativeSession(null);
+        next = createAudioElement();
+        configureAudioElement(next);
+        const sinkTarget = next as HTMLAudioElement & SinkTarget;
+        if (sinkIdRef.current && sinkTarget.setSinkId)
+          void sinkTarget.setSinkId(sinkIdRef.current).catch(() => {});
+        if (source.current) {
+          next.addEventListener(
+            "loadedmetadata",
+            () => {
+              try {
+                if (position > 0) next.currentTime = position;
+              } catch {}
+            },
+            { once: true },
+          );
+          next.src = source.current;
+        }
+      }
+      audio.current = next;
+      recovered.current = true;
+      setIsPlaying(false);
+      setAudioVersion((version) => version + 1);
+      if (wasPlaying) window.setTimeout(() => playAudioSource(), 0);
+    },
+    [configureAudioElement, discardPreloadedAudio, playAudioSource],
+  );
+
+  useEffect(() => () => nativeRef.current?.dispose(), []);
+
+  /** Leveling the server applies while a server output plays. */
+  const setNativeLeveling = useCallback(
+    (leveling: NativeOutputLeveling | null) => {
+      nativeLevelingRef.current = leveling;
+      if (nativeRef.current) nativeRef.current.leveling = leveling;
+    },
+    [],
+  );
+
+  /** Rebuilds the playback path after a graph change, keeping position. */
+  const resetAudioGraph = useCallback(() => {
+    const wasPlaying = Boolean(audio.current && !audio.current.paused);
+    if (!dropAudioGraph()) return;
+    if (wasPlaying) playAudioSource();
+    else if (needsGraph()) applyPreset(presetRef.current);
+  }, [applyPreset, dropAudioGraph, needsGraph, playAudioSource]);
+
+  /** Applies DSP settings: rewires the chain or rebuilds the graph. */
+  const setDspSettings = useCallback(
+    (settings: DspSettings) => {
+      dspRef.current = settings;
+      const current = graph.current;
+      if (current) {
+        if (!needsGraph() || current.requestedRate !== wantedRate()) {
+          resetAudioGraph();
+          return;
+        }
+        current.chain.update(settings);
+        loadImpulse(settings);
+        return;
+      }
+      if (needsGraph() && audio.current && !audio.current.paused) {
+        const created = ensureAudioGraph();
+        if (created?.context.state === "suspended")
+          void created.context.resume().catch(() => {});
+        applyPreset(presetRef.current);
+      }
+    },
+    [
+      applyPreset,
+      ensureAudioGraph,
+      loadImpulse,
+      needsGraph,
+      resetAudioGraph,
+      wantedRate,
+    ],
+  );
+
+  /** Routes playback to an output device; `""` is the system default. */
+  const setOutputDevice = useCallback(async (sinkId: string) => {
+    sinkIdRef.current = sinkId;
+    const targets: SinkTarget[] = [
+      audio.current,
+      preloadedAudio.current,
+      graph.current?.context,
+    ].filter(Boolean) as SinkTarget[];
+    let applied = sinkId;
+    for (const target of targets) {
+      if (!target.setSinkId) continue;
+      try {
+        await target.setSinkId(sinkId);
+      } catch {
+        // The device went away or is not allowed: use the default.
+        applied = "";
+        await target.setSinkId("").catch(() => {});
+      }
     }
+    if (!targets.some((target) => target.setSinkId)) applied = "";
+    setActiveSinkId(applied);
+    setDeviceSampleRate(await probeDeviceSampleRate(applied));
   }, []);
+
+  const reapplyOutputDevice = useCallback(
+    () => setOutputDevice(sinkIdRef.current),
+    [setOutputDevice],
+  );
+
+  const setAudioVolume = useCallback(
+    (value: number | string) => {
+      const next = boundedVolume(value);
+      if (next === null) return;
+      volumeRef.current = next;
+      if (audio.current) audio.current.volume = elementVolume();
+      if (preloadedAudio.current)
+        preloadedAudio.current.volume = elementVolume();
+      setVolume(next);
+      if (next > 0) {
+        mutedRef.current = false;
+        if (audio.current) audio.current.muted = false;
+        if (preloadedAudio.current) preloadedAudio.current.muted = false;
+        setMuted(false);
+      }
+    },
+    [elementVolume],
+  );
+  /** Applies a linear volume-leveling gain to the playing element. */
+  const setLevelingGain = useCallback(
+    (gain: number) => {
+      levelingGainRef.current = Number.isFinite(gain) && gain > 0 ? gain : 1;
+      if (audio.current) audio.current.volume = elementVolume();
+    },
+    [elementVolume],
+  );
   const toggleMute = useCallback(() => {
     if (!audio.current) return;
     audio.current.muted = !audio.current.muted;
@@ -286,12 +631,17 @@ export function useAudioEngine() {
       const preset = getAudioPreset(id);
       presetRef.current = preset;
       setAudioPresetState(preset.id);
+      if (graph.current && !needsGraph()) {
+        // Nothing needs the graph: go back to the element's direct path.
+        resetAudioGraph();
+        return;
+      }
       applyPreset(preset);
       if (preloadedAudio.current) configureAudioElement(preloadedAudio.current);
       if (graph.current?.context.state === "suspended")
         void graph.current.context.resume().catch(() => {});
     },
-    [applyPreset, configureAudioElement],
+    [applyPreset, configureAudioElement, needsGraph, resetAudioGraph],
   );
   const toggleSlowedReverb = useCallback(
     () =>
@@ -311,22 +661,33 @@ export function useAudioEngine() {
   useEffect(() => discardPreloadedAudio, [discardPreloadedAudio]);
 
   return {
+    activeSinkId,
     audio,
     audioPreset,
     audioVersion,
     backgroundWasPlaying,
     error,
     graph,
+    deviceSampleRate,
+    graphSampleRate,
     isPlaying,
+    loadedImpulse,
     muted,
+    nativeSession,
     playAudioSource,
     preloadAudioSource,
+    reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
+    setDspSettings,
+    setNativeLeveling,
+    setNativeOutput,
+    setOutputDevice,
     setAudioSource,
     setError,
     setIsPlaying,
     setAudioVolume,
+    setLevelingGain,
     slowedReverb: audioPreset !== "original",
     source,
     toggleMute,

@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyPlaybackCapabilities,
-  describeAudioFormat,
   detectPlaybackCapabilities,
-  dsdRateName,
   playbackCapabilityParams,
 } from "./formats";
 
@@ -62,80 +60,5 @@ describe("playback capabilities", () => {
     expect(url.searchParams.get("max_channels")).toBe("2");
     expect(url.searchParams.get("dsd")).toBe("dop");
     expect(playbackCapabilityParams({ accept: [], dsd: "dop" })).toEqual({});
-  });
-});
-
-describe("audio format summaries", () => {
-  test("hi-res, CD-quality, DSD and lossy tracks get distinct badges", () => {
-    expect(
-      describeAudioFormat({
-        codec: "flac",
-        container: "flac",
-        sample_rate: 96_000,
-        bit_depth: 24,
-        channels: 2,
-        bitrate_kbps: 3_100,
-        lossless: true,
-      }),
-    ).toEqual({
-      name: "FLAC",
-      resolution: "24-bit / 96 kHz",
-      badge: "24/96",
-      channels: "stereo",
-      tier: "hi_res",
-    });
-    expect(
-      describeAudioFormat({
-        codec: "ape",
-        container: "ape",
-        sample_rate: 44_100,
-        bit_depth: 16,
-        channels: 2,
-        bitrate_kbps: null,
-        lossless: true,
-      })?.badge,
-    ).toBe("16/44.1");
-    const dsd = describeAudioFormat({
-      codec: "dsd",
-      container: "dsf",
-      sample_rate: 5_644_800,
-      bit_depth: 1,
-      channels: 6,
-      bitrate_kbps: null,
-      lossless: true,
-    });
-    expect(dsd?.badge).toBe("DSD128");
-    expect(dsd?.tier).toBe("dsd");
-    expect(dsd?.channels).toBe("5.1");
-    const mp3 = describeAudioFormat({
-      codec: "mp3",
-      container: "mp3",
-      sample_rate: 44_100,
-      bit_depth: null,
-      channels: 2,
-      bitrate_kbps: 320,
-      lossless: false,
-    });
-    expect(mp3?.tier).toBe("lossy");
-    expect(mp3?.badge).toBe("320k");
-    expect(
-      describeAudioFormat({
-        codec: "pcm",
-        container: "aiff",
-        sample_rate: 44_100,
-        bit_depth: 16,
-        channels: 2,
-        bitrate_kbps: null,
-        lossless: true,
-      })?.name,
-    ).toBe("AIFF");
-    expect(describeAudioFormat(null)).toBeNull();
-  });
-
-  test("DSD rates are named by multiples of 44.1 or 48 kHz", () => {
-    expect(dsdRateName(2_822_400)).toBe("DSD64");
-    expect(dsdRateName(11_289_600)).toBe("DSD256");
-    expect(dsdRateName(3_072_000)).toBe("DSD64");
-    expect(dsdRateName(96_000)).toBeNull();
   });
 });

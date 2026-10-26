@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  activeConvolutionFilter,
   createPlaybackQueue,
+  defaultDspSettings,
   defaultRadioSettings,
   getRadioPicks,
   getRadioSettings,
@@ -13,8 +15,9 @@ import {
   radioSeedParams,
   radioSkipReasonEvent,
   shouldContinueWithRadio,
-  updateRadioSettings,
   upcomingRadioPicks,
+  updateRadioSettings,
+  volumeLevelingGain,
   type RadioSeed,
   type RadioSettings,
   type RadioSkipReasonId,
@@ -28,7 +31,10 @@ import { useRadioBanIndex } from "@/features/library/radio-bans";
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
 import streamUrl from "@/lib/api/stream-url";
-import { browserPlaybackCapabilities } from "./playback-capabilities";
+import {
+  browserPlaybackCapabilities,
+  expectedStreamSampleRate,
+} from "./playback-capabilities";
 import { isCurrentTrackGeneration, setMediaPosition } from "./player-state";
 import { audioPresets } from "./audio-presets";
 import {
@@ -50,8 +56,23 @@ import {
   useTransientPlayerError,
 } from "./player-effects";
 import { useAudioEngine } from "./use-audio-engine";
+import {
+  elementLeveling,
+  playsInAlbumContext,
+  useVolumeLevelingMode,
+} from "./volume-leveling";
 import type { Player } from "./player-api";
+import {
+  outputDeviceLabel,
+  supportsOutputSelection,
+  useAudioOutputs,
+  useDspSettings,
+  useOutputDeviceChoice,
+} from "./dsp-store";
 import { usePlaybackTelemetry } from "./player-telemetry";
+import { serverOutputId, useNativeOutputs } from "./use-native-outputs";
+import { useServerDsp } from "./use-server-dsp";
+import { useConvolutionFilters } from "./convolution-section";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
 import { useQueueRestore } from "./use-queue-restore";
 import {
@@ -82,22 +103,33 @@ const cover = (path?: string) =>
 
 export function usePlayerController() {
   const {
+    activeSinkId,
     audio,
     audioPreset,
     audioVersion,
     backgroundWasPlaying,
     error,
     graph,
+    deviceSampleRate,
+    graphSampleRate,
     isPlaying,
+    loadedImpulse,
     muted,
+    nativeSession,
     playAudioSource,
     preloadAudioSource,
+    reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
+    setDspSettings,
+    setNativeLeveling,
+    setNativeOutput,
+    setOutputDevice,
     setAudioSource,
     setAudioVolume,
     setError,
     setIsPlaying,
+    setLevelingGain,
     slowedReverb,
     source,
     toggleMute,
@@ -118,6 +150,51 @@ export function usePlayerController() {
   const playbackGeneration = useRef(0);
   const radioRequest = useRef(0);
   const compatibilityRetry = useRef(false);
+  // Bitrate of the stream actually loaded (0 = original file).
+  const [streamBitrate, setStreamBitrate] = useState(0);
+  const [volumeLevelingMode, setVolumeLevelingMode] = useVolumeLevelingMode();
+  const [outputDeviceId, setOutputDeviceId] = useOutputDeviceChoice();
+  const outputs = useAudioOutputs();
+  const nativeDeviceId = serverOutputId(outputDeviceId);
+  const nativeOutputs = useNativeOutputs({ live: Boolean(nativeDeviceId) });
+  const nativeDevice =
+    nativeOutputs.data?.devices.find(
+      (device) => device.id === nativeDeviceId,
+    ) ?? null;
+  const [localDsp, setLocalDsp] = useDspSettings(outputDeviceId);
+  // A server output runs the chain itself; the server keeps its settings.
+  const serverDsp = useServerDsp(
+    nativeDeviceId,
+    nativeDevice,
+    localDsp,
+    setLocalDsp,
+  );
+  const dsp = nativeDeviceId ? serverDsp.settings : localDsp;
+  // The browser chain names (and loads) its convolution filter; a server
+  // output describes its own.
+  const convolutionFilterId =
+    !nativeDeviceId && dsp ? activeConvolutionFilter(dsp) : null;
+  const convolutionFilters = useConvolutionFilters(
+    Boolean(convolutionFilterId),
+  );
+  const setDsp = nativeDeviceId ? serverDsp.setSettings : setLocalDsp;
+  useEffect(() => {
+    setNativeOutput(nativeDeviceId);
+    void setOutputDevice(nativeDeviceId ? "" : outputDeviceId);
+  }, [
+    nativeDeviceId,
+    outputDeviceId,
+    outputs.devices,
+    setNativeOutput,
+    setOutputDevice,
+  ]);
+  useEffect(() => {
+    // The browser graph only runs the chain for this browser's outputs.
+    setDspSettings(nativeDeviceId ? defaultDspSettings() : dsp);
+  }, [dsp, nativeDeviceId, setDspSettings]);
+  const outputName = nativeDeviceId
+    ? (nativeSession?.device_name ?? nativeDevice?.name ?? "Server output")
+    : outputDeviceLabel(outputs.devices, activeSinkId);
   const queuePositionSync = useRef<Promise<void>>(Promise.resolve());
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -189,6 +266,7 @@ export function usePlayerController() {
       setArtistState(normalized.artist_object);
       setAlbumState(normalized.album_object);
       setImageSrc(cover(normalized.album_object.cover_url));
+      setStreamBitrate(session?.bitrate ?? 0);
       setAudioSource(
         streamUrl(
           normalized.id,
@@ -196,6 +274,7 @@ export function usePlayerController() {
           false,
           browserPlaybackCapabilities(),
         ),
+        session?.bitrate ? null : expectedStreamSampleRate(normalized.audio),
       );
       if (
         currentOrigin.current === "manual" &&
@@ -390,6 +469,7 @@ export function usePlayerController() {
       ) {
         compatibilityRetry.current = true;
         setError("Direct playback failed; retrying a compatible audio stream.");
+        setStreamBitrate(192);
         setAudioSource(streamUrl(activeSongId, 192));
         playAudioSource();
         return true;
@@ -893,6 +973,38 @@ export function usePlayerController() {
     [pendingRadioSkip?.song.id, sendSongEvent],
   );
   const dismissRadioSkip = useCallback(() => setPendingRadioSkip(null), []);
+  const leveling = useMemo(
+    () =>
+      elementLeveling(
+        song.loudness,
+        volumeLevelingMode,
+        volume,
+        playsInAlbumContext(
+          queue.map((item) => item.album.id || item.song.album_object.id),
+          queue[index.current]?.song.id === song.id ? index.current : -1,
+        ),
+      ),
+    [queue, song.id, song.loudness, volume, volumeLevelingMode],
+  );
+  useEffect(() => {
+    setLevelingGain(leveling.gain);
+  }, [leveling.gain, setLevelingGain]);
+  // A server output levels on the server, in float, limited only by the
+  // track's peak (its volume is fixed, so there is no slider headroom).
+  const nativeLeveling = useMemo(() => {
+    const result = volumeLevelingGain(song.loudness, volumeLevelingMode, {
+      albumContext: playsInAlbumContext(
+        queue.map((item) => item.album.id || item.song.album_object.id),
+        queue[index.current]?.song.id === song.id ? index.current : -1,
+      ),
+    });
+    return result && Math.abs(result.appliedDb) >= 0.05
+      ? { gain_db: result.appliedDb, source: result.source }
+      : null;
+  }, [queue, song.id, song.loudness, volumeLevelingMode]);
+  useEffect(() => {
+    setNativeLeveling(nativeLeveling);
+  }, [nativeLeveling, setNativeLeveling]);
 
   useTransientPlayerError(error, setError);
   useAudioEvents({
@@ -914,6 +1026,7 @@ export function usePlayerController() {
     backgroundWasPlaying,
     graph,
     play: playAudioSource,
+    reapplyOutputDevice,
     resumeOnReconnect,
     source,
   });
@@ -964,6 +1077,53 @@ export function usePlayerController() {
         start: startRadio,
         thumbsDown,
         thumbsUp,
+      },
+      signal: {
+        streamBitrate,
+        engine: graphSampleRate ? "web-audio" : "media-element",
+        contextSampleRate: graphSampleRate,
+        leveling: leveling.result,
+        levelingUnavailable: leveling.unavailable,
+        dsp,
+        convolution: convolutionFilterId
+          ? {
+              name:
+                convolutionFilters.data?.find(
+                  (filter) => filter.id === convolutionFilterId,
+                )?.name ?? "Filter",
+              loaded: loadedImpulse === convolutionFilterId,
+            }
+          : null,
+        deviceSampleRate,
+        outputName,
+        outputChosen: Boolean(activeSinkId),
+        native: nativeDeviceId
+          ? {
+              deviceId: nativeDeviceId,
+              name: outputName,
+              signalPath:
+                nativeSession && nativeSession.song_id === song.id
+                  ? nativeSession.signal_path
+                  : null,
+            }
+          : null,
+      },
+      volumeLevelingMode,
+      setVolumeLevelingMode,
+      dsp,
+      setDsp,
+      output: {
+        devices: outputs.devices,
+        selectedId: outputDeviceId,
+        activeId: activeSinkId,
+        label: outputName,
+        labelsHidden: outputs.labelsHidden,
+        selectable: supportsOutputSelection(),
+        select: setOutputDeviceId,
+        requestLabels: outputs.requestLabels,
+        serverDevices: nativeOutputs.data?.devices ?? [],
+        serverOutputId: nativeDeviceId,
+        serverDspError: nativeDeviceId ? serverDsp.error : null,
       },
       setSongCallback,
       setQueue,
@@ -1023,7 +1183,26 @@ export function usePlayerController() {
       imageSrc,
       isPlaying,
       error,
+      graphSampleRate,
+      convolutionFilterId,
+      convolutionFilters.data,
+      loadedImpulse,
+      leveling,
       looping,
+      activeSinkId,
+      deviceSampleRate,
+      dsp,
+      outputDeviceId,
+      outputName,
+      nativeDeviceId,
+      nativeOutputs.data,
+      nativeSession,
+      serverDsp.error,
+      outputs.devices,
+      outputs.labelsHidden,
+      outputs.requestLabels,
+      setDsp,
+      setOutputDeviceId,
       muted,
       audioPreset,
       slowedReverb,
@@ -1038,10 +1217,13 @@ export function usePlayerController() {
       setAudioVolume,
       setAudioPreset,
       setQueue,
+      setVolumeLevelingMode,
       addNextToQueue,
       addToQueue,
       setSongCallback,
       song,
+      streamBitrate,
+      volumeLevelingMode,
       toggleMute,
       toggleLoop,
       toggleSlowedReverb,

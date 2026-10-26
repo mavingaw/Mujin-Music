@@ -1,5 +1,10 @@
 import api, { isApiError } from "../core/http";
-import type { AlbumInfo, ArtistInfo, AudioProperties } from "../domain/types";
+import type {
+  AlbumInfo,
+  ArtistInfo,
+  AudioProperties,
+  Loudness,
+} from "../domain/types";
 
 export interface PlaybackQueueSong {
   id: string;
@@ -15,6 +20,8 @@ export interface PlaybackQueueSong {
   queue_position: number;
   /** Omitted when the server has not read the file's stream headers. */
   audio?: AudioProperties;
+  /** ReplayGain tags; omitted when the file has none. */
+  loudness?: Loudness;
 }
 
 /** What a Radio station is built around. */

@@ -115,8 +115,11 @@ pub fn parse_dsf<R: Read + Seek>(reader: &mut R) -> Result<DsdStream, String> {
         return Err("DSF data chunk not found".into());
     }
     let data_size = u64::from_le_bytes(data[4..12].try_into().expect("size"));
-    let id3 = (metadata_offset > 0 && file_size > metadata_offset)
-        .then(|| (metadata_offset, file_size - metadata_offset))
+    // Some taggers append the ID3 chunk without updating the header's file
+    // size, so the tag runs to the real end of the file.
+    let file_end = reader.seek(SeekFrom::End(0)).map_err(io)?.max(file_size);
+    let id3 = (metadata_offset > 0 && file_end > metadata_offset)
+        .then(|| (metadata_offset, file_end - metadata_offset))
         .filter(|(_, length)| *length >= 10);
     Ok(DsdStream {
         container: DsdContainer::Dsf,

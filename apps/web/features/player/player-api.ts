@@ -1,10 +1,16 @@
 "use client";
 
 import type {
+  DspSettings,
+  NativeOutputDevice,
   RadioSeed,
   RadioSkipReasonId,
   ResolvedRadioSeed,
+  ServerSignalPath,
+  VolumeLevelingMode,
+  VolumeLevelingResult,
 } from "@parson/music-sdk";
+import type { OutputDevice } from "./dsp-store";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
 import { createContext, useContext } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
@@ -54,6 +60,14 @@ export type Player = {
   /** Index of the active item in `queue`. */
   currentIndex: number;
   radio: PlayerRadio;
+  /** What this client does to the stream, for the signal path. */
+  signal: PlayerSignalState;
+  volumeLevelingMode: VolumeLevelingMode;
+  setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
+  /** DSP chain for the current output device. */
+  dsp: DspSettings;
+  setDsp: (settings: DspSettings) => void;
+  output: PlayerOutputState;
   setSongCallback: (
     song: PlayerInput,
     artist?: Partial<Artist>,
@@ -76,6 +90,54 @@ export type Player = {
   toggleSlowedReverb: () => void;
   setAudioPreset: (preset: AudioPresetId) => void;
   toggleLoop: () => void;
+};
+
+export type PlayerSignalState = {
+  /** Bitrate of the loaded stream in kbps, 0 for the original file. */
+  streamBitrate: number;
+  engine: "media-element" | "web-audio";
+  /** `AudioContext.sampleRate` while the Web Audio graph is active. */
+  contextSampleRate: number | null;
+  leveling: VolumeLevelingResult | null;
+  levelingUnavailable: boolean;
+  dsp: DspSettings | null;
+  /** The convolution filter the browser chain runs, once known. */
+  convolution?: { name: string; loaded: boolean } | null;
+  /** The output device's own rate, probed with an AudioContext. */
+  deviceSampleRate: number | null;
+  /** Label of the device audio goes to, when the browser reveals it. */
+  outputName: string | null;
+  outputChosen: boolean;
+  /**
+   * A server output is playing instead of this browser; its path comes
+   * from the server, including the device and driver.
+   */
+  native: {
+    deviceId: string;
+    name: string | null;
+    /** The playing session's path, once the server has started. */
+    signalPath: ServerSignalPath | null;
+  } | null;
+};
+
+export type PlayerOutputState = {
+  devices: OutputDevice[];
+  /** The device the user picked, `""` for the system default. */
+  selectedId: string;
+  /** The device audio actually goes to. */
+  activeId: string;
+  label: string | null;
+  labelsHidden: boolean;
+  /** The browser can route audio to a chosen device (`setSinkId`). */
+  selectable: boolean;
+  select: (id: string) => void;
+  requestLabels: () => Promise<void>;
+  /** The server's own devices; choosing one stores `server:<id>`. */
+  serverDevices: NativeOutputDevice[];
+  /** The server is playing (or will play) instead of this browser. */
+  serverOutputId: string | null;
+  /** Saving the server output's DSP chain failed. */
+  serverDspError: string | null;
 };
 
 export const PlayerContext = createContext<Omit<Player, "currentTime"> | null>(
