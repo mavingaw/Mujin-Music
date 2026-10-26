@@ -10,6 +10,11 @@ import type {
 import {
   albumTextPanels,
   albumWorkSections,
+  catalogueHeadline,
+  catalogueStatusText,
+  composedLine,
+  libraryLine,
+  notableWorks,
   composerWorkFacets,
   filterComposerWorks,
   groupRecordings,
@@ -276,4 +281,73 @@ test("album text panels put the review first and add the pieces' articles", () =
     "About",
     "Symphony No. 8",
   ]);
+});
+
+test("a composer's catalogue lists notable works first and filters by library", () => {
+  const entry = (
+    title: string,
+    tracks: number,
+    recordings: number,
+    rank: number | null,
+    composed: string | null = null,
+  ): ComposerWork => ({
+    work: work({ mbid: title, title, composed }),
+    track_count: tracks,
+    recording_count: recordings,
+    notable_rank: rank,
+    in_catalogue: true,
+  });
+  const works = [
+    entry("Für Elise", 0, 0, 3, "1810"),
+    entry("Symphony No. 5", 8, 2, 1, "1804–1808"),
+    entry("Cantata", 0, 0, null),
+    entry("Symphony No. 7", 4, 1, null),
+    entry("Missa solemnis", 0, 0, 2),
+  ];
+  expect(notableWorks(works).map((item) => item.work.title)).toEqual([
+    "Symphony No. 5",
+    "Missa solemnis",
+    "Für Elise",
+    "Symphony No. 7",
+  ]);
+  expect(notableWorks(works, 2)).toHaveLength(2);
+  expect(
+    filterComposerWorks(works, { scope: "library" }).map(
+      (item) => item.work.title,
+    ),
+  ).toEqual(["Symphony No. 5", "Symphony No. 7"]);
+  expect(filterComposerWorks(works, { scope: "notable" })).toHaveLength(3);
+  expect(composedLine(works[1].work)).toBe("Composed 1804–1808");
+  expect(composedLine(works[2].work)).toBeNull();
+  expect(libraryLine(works[1])).toBe("In your library · 2 recordings");
+  expect(libraryLine(works[0])).toBe("Not in your library");
+  expect(
+    catalogueHeadline(works, {
+      state: "ready",
+      composer_mbid: null,
+      musicbrainz_total: 3034,
+      pieces: 5,
+      in_library: 2,
+      notable: 3,
+      complete: true,
+      musicbrainz_url: null,
+      wikidata_url: null,
+      updated_at: null,
+    }),
+  ).toBe("5 works · 2 in your library · 3 notable");
+  expect(
+    catalogueStatusText({
+      state: "ready",
+      composer_mbid: null,
+      musicbrainz_total: 6200,
+      pieces: 1200,
+      in_library: 2,
+      notable: 3,
+      complete: false,
+      musicbrainz_url: null,
+      wikidata_url: null,
+      updated_at: null,
+    }),
+  ).toContain("6,200 works");
+  expect(catalogueStatusText(undefined)).toBeNull();
 });

@@ -28,7 +28,9 @@ import { useFocusSelection } from "@/features/library/focus/use-focus-selection"
 import {
   FOCUS_GROUPS,
   focusSelectionCount,
+  type CatalogueScope,
   type FocusSelection,
+  type WorkFilter,
 } from "@parson/music-sdk";
 import { ArtistCreditsPanel } from "./artist-credits";
 import { ArtistCompositionsPanel } from "./artist-compositions";
@@ -116,10 +118,11 @@ export default function ArtistDetails({
   const worksQuery = useArtistWorks(devArtist ? null : id, isComposer);
   const relatedQuery = useArtistRelated(devArtist ? null : id);
   const hasCompositions = Boolean(worksQuery.data?.works.length);
-  const workFilter = {
+  const workFilter: WorkFilter = {
     form: searchParams?.get("form"),
     period: searchParams?.get("period"),
     key: searchParams?.get("key"),
+    scope: searchParams?.get("scope") as CatalogueScope | null,
   };
   usePageTitle(artist?.name ?? about?.name ?? creditsQuery.data?.name);
   const albums = devAlbums ?? artist?.albums ?? [];
@@ -206,7 +209,7 @@ export default function ArtistDetails({
     params.set("tab", tab);
     if (role) params.set("role", role);
     else params.delete("role");
-    for (const facet of ["form", "period", "key", ...FOCUS_GROUPS]) {
+    for (const facet of ["form", "period", "key", "scope", ...FOCUS_GROUPS]) {
       params.delete(facet);
     }
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
@@ -380,7 +383,9 @@ export default function ArtistDetails({
           <ArtistOverview
             about={about}
             isAdmin={session?.role === "admin"}
+            onShowCompositions={() => navigate("compositions")}
             onShowCredits={(role) => navigate("credits", role)}
+            works={worksQuery.data}
           />
         )}
 
@@ -398,7 +403,7 @@ export default function ArtistDetails({
                 searchParams?.toString() ?? "",
               );
               params.set("tab", "compositions");
-              for (const facet of ["form", "period", "key"] as const) {
+              for (const facet of ["form", "period", "key", "scope"] as const) {
                 const value = filter[facet];
                 if (value) params.set(facet, value);
                 else params.delete(facet);

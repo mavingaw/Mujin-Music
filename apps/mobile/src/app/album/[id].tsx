@@ -4,6 +4,8 @@ import {
   resolvedFact,
   albumTextPanels,
   albumWorkSections,
+  chooseTextSource,
+  pageTextSources,
   getAlbumAbout,
   getAlbumInfo,
   type AboutCredit,
@@ -39,6 +41,7 @@ import { joinMeta } from "@/lib/credit-links";
 import { WorkHeading } from "@/components/works";
 import { GenreChips } from "@/components/genres";
 import { UnverifiedMatchNotice } from "@/components/release-match";
+import { ReviewScoresBlock, TextSourceChips } from "@/components/text-sources";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { formatCollectionDuration } from "@/lib/format";
@@ -64,6 +67,7 @@ export default function AlbumScreen() {
   });
   const [actionsOpen, setActionsOpen] = useState(false);
   const [textKind, setTextKind] = useState<string | null>(null);
+  const [pickedSource, setPickedSource] = useState<string | null>(null);
   if (album.isPending)
     return (
       <Screen>
@@ -110,7 +114,11 @@ export default function AlbumScreen() {
     ? (resolvedFact(about.data, "label")?.value ?? undefined)
     : (data.label ?? (facts?.exact ? facts.labels?.[0]?.name : undefined));
   // Review / About / the pieces' own articles, as on the web.
-  const texts = albumTextPanels(about.data);
+  const textSources = pageTextSources(about.data).filter(
+    (source) => source.background || source.review,
+  );
+  const textSource = chooseTextSource(textSources, pickedSource);
+  const texts = albumTextPanels(about.data, textSource?.id);
   const shownPanel =
     texts.find((entry) => entry.key === textKind) ?? texts[0] ?? null;
   const shownText = shownPanel?.text ?? null;
@@ -277,7 +285,21 @@ export default function AlbumScreen() {
                   </Pressable>
                 ))}
               </View>
-              <EditorialBlock text={shownText} />
+              {!shownPanel?.workMbid ? (
+                <TextSourceChips
+                  active={textSource?.id}
+                  onPick={setPickedSource}
+                  sources={textSources}
+                />
+              ) : null}
+              <EditorialBlock key={shownText.url} text={shownText} />
+              {about.data?.review_scores ? (
+                <ReviewScoresBlock scores={about.data.review_scores} />
+              ) : null}
+            </View>
+          ) : about.data?.review_scores ? (
+            <View style={styles.section}>
+              <ReviewScoresBlock scores={about.data.review_scores} />
             </View>
           ) : null}
           {sources ? (

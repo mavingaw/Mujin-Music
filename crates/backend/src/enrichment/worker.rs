@@ -167,12 +167,31 @@ pub const WIKIPEDIA_KEY: &str = "wikipedia_link";
 /// its page image. Internal.
 pub const PAGE_IMAGE_KEY: &str = "page_image";
 /// Profile keys that are bookkeeping for later stages, never facts.
-pub const INTERNAL_KEYS: [&str; 4] = [
+/// Profile key of an album article's review scores table.
+pub const REVIEW_SCORES_KEY: &str = "review_scores";
+
+pub const INTERNAL_KEYS: [&str; 5] = [
     WIKIDATA_KEY,
     COMMONS_IMAGE_KEY,
     WIKIPEDIA_KEY,
     PAGE_IMAGE_KEY,
+    REVIEW_SCORES_KEY,
 ];
+
+/// The review scores an article lists, with what the attribution needs.
+fn review_scores_json(language: &str, page: &wiki::ArticlePage) -> Value {
+    if page.review_scores.is_empty() {
+        return Value::Null;
+    }
+    json!({
+        "scores": page.review_scores,
+        "title": page.summary.title,
+        "url": page.summary.url,
+        "language": language,
+        "license": wiki::WIKIPEDIA_LICENSE,
+        "license_url": wiki::WIKIPEDIA_LICENSE_URL,
+    })
+}
 
 fn profile_value(profile: &ProfileRow) -> Value {
     serde_json::from_str::<Value>(&profile.profile_json)
@@ -777,6 +796,14 @@ impl<F: Fetch> Enricher<F> {
             .collect::<Vec<_>>();
         let people = credited_people(&release, &links);
         let aliases = release_aliases(&release);
+        // Each composer of a piece on the album gets their whole catalogue.
+        let mut composers = works
+            .iter()
+            .filter_map(|work| work.composer_mbid.clone())
+            .filter(|mbid| mb::is_mbid(mbid))
+            .collect::<Vec<_>>();
+        composers.sort();
+        composers.dedup();
         let profile = ProfileRow {
             musicbrainz_id: Some(release.mbid.clone()),
             release_group_mbid: release.release_group_mbid.clone(),
@@ -817,6 +844,9 @@ impl<F: Fetch> Enricher<F> {
             }
             for person in &people {
                 store::queue_stage_once(connection, Stage::Musicbrainz, "artist", person)?;
+            }
+            for composer in &composers {
+                store::queue_stage_once(connection, Stage::Catalogue, "composer", composer)?;
             }
             // The matched release's front cover, for an album without art.
             store::queue_stage(connection, Stage::CoverArt, "album", &album_id)?;
@@ -1140,11 +1170,20 @@ impl<F: Fetch> Enricher<F> {
                 facts["end"] = json!(end);
             }
         }
+        let sitelinks = entity
+            .sitelinks
+            .iter()
+            .filter(|(language, _)| wiki::SOURCE_LANGUAGES.contains(&language.as_str()))
+            .map(|(language, title)| (language.clone(), json!(title)))
+            .collect::<serde_json::Map<_, _>>();
         facts[WIKIDATA_KEY] = json!({
             "article_language": article.as_ref().map(|(language, _)| language),
             "article_title": article.as_ref().map(|(_, title)| title),
             "image": image,
+            "sitelinks": sitelinks,
         });
+        let more_sources =
+            matches!(entity_type, "album" | "artist") && !settings.extra_languages(None).is_empty();
         profile.profile_json = facts.to_string();
         let entity_type = entity_type.to_string();
         let entity_id = entity_id.to_string();
@@ -1165,6 +1204,9 @@ impl<F: Fetch> Enricher<F> {
                 if stored.is_none_or(|stored| stored.page_url != wiki::commons_page_url(file)) {
                     store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
                 }
+            }
+            if more_sources {
+                store::queue_stage(connection, Stage::Sources, &entity_type, &entity_id)?;
             }
             Ok(())
         })
@@ -1275,6 +1317,11 @@ impl<F: Fetch> Enricher<F> {
                 "no Wikipedia article found".into()
             }));
         };
+        let page_for_scores = wiki::ArticlePage {
+            summary: page.summary.clone(),
+            review_scores: page.review_scores.clone(),
+            ..Default::default()
+        };
         let summary = page.summary;
         let article = wiki::WikipediaArticle {
             title: summary.title.clone(),
@@ -1305,6 +1352,16 @@ impl<F: Fetch> Enricher<F> {
         let mut row = profile.clone();
         let mut value = profile_value(&row);
         value[PAGE_IMAGE_KEY] = json!(summary.commons_image);
+        if entity_type == "album" {
+            let scores = review_scores_json(&language, &page_for_scores);
+            if !scores.is_null()
+                || value.get(REVIEW_SCORES_KEY).is_some_and(|stored| {
+                    stored.get("language").and_then(Value::as_str) == Some(language.as_str())
+                })
+            {
+                value[REVIEW_SCORES_KEY] = scores;
+            }
+        }
         row.profile_json = value.to_string();
         let learned_item = row.wikidata_id.is_none() && summary.wikibase_item.is_some();
         if learned_item {
@@ -1315,11 +1372,18 @@ impl<F: Fetch> Enricher<F> {
         let wants_wikidata =
             learned_item && (entity_type != "genre" || language != settings.language);
         let photo = entity_type == "artist" && settings.artist_images;
+        // The same article in the other sources turned on.
+        let more_sources = matches!(entity_type, "album" | "artist")
+            && row.wikidata_id.is_some()
+            && !settings.extra_languages(Some(&language)).is_empty();
         let entity_type = entity_type.to_string();
         let entity_id = entity_id.to_string();
         db(&self.pool, move |connection| {
             store::save_profile(connection, &entity_type, &entity_id, &row)?;
             store::replace_texts(connection, &entity_type, &entity_id, &texts)?;
+            if more_sources {
+                store::queue_stage_once(connection, Stage::Sources, &entity_type, &entity_id)?;
+            }
             if wants_wikidata {
                 store::queue_stage(connection, Stage::Wikidata, &entity_type, &entity_id)?;
             }
@@ -1590,6 +1654,409 @@ impl<F: Fetch> Enricher<F> {
         ))
     }
 
+    /// The catalogue stage for a composer: every work MusicBrainz lists for
+    /// them (at most [`MAX_CATALOGUE_PAGES`] pages of 100), then from
+    /// Wikidata the notable works (P800 on the composer's item) and the
+    /// year, key and form of works MusicBrainz described less fully. The
+    /// MusicBrainz part is kept when Wikidata is busy and is not read
+    /// again on the retry.
+    pub async fn catalogue_stage(
+        &self,
+        composer_mbid: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if !mb::is_mbid(composer_mbid) {
+            return Ok(Outcome::Skipped("not a MusicBrainz artist".into()));
+        }
+        let composer = composer_mbid.to_string();
+        let fresh = db(&self.pool, move |connection| {
+            store::catalogue_read_recently(connection, &composer, CATALOGUE_REFRESH_DAYS)
+        })
+        .await?;
+        if !fresh {
+            let mut entries: Vec<store::CatalogueEntry> = Vec::new();
+            let mut name = String::new();
+            let mut total = 0;
+            let mut complete = false;
+            for page in 0..MAX_CATALOGUE_PAGES {
+                let url = mb::work_browse_url(composer_mbid, page * mb::WORK_PAGE_SIZE);
+                let body = match self.get_json(&url).await? {
+                    Ok(Some(body)) => body,
+                    Ok(None) if page == 0 => {
+                        return Ok(Outcome::Skipped(
+                            "MusicBrainz does not know this composer".into(),
+                        ));
+                    }
+                    Ok(None) => break,
+                    Err(outcome) => return Ok(outcome),
+                };
+                let (count, works) = mb::parse_work_browse(&body);
+                total = count;
+                for work in works {
+                    let Some(found) = super::works::catalogue_work(work, composer_mbid) else {
+                        continue;
+                    };
+                    if entries
+                        .iter()
+                        .any(|known| known.work.mbid == found.info.mbid)
+                    {
+                        continue;
+                    }
+                    if name.is_empty() {
+                        name = found.composer.name.clone();
+                    }
+                    let mut row = work_row(&found.info, found.info.parent.as_deref());
+                    row.composer_name = Some(found.composer.name.clone());
+                    row.composer_normalized = Some(normalize_artist_identity(&found.composer.name));
+                    row.composer_mbid = Some(composer_mbid.to_string());
+                    entries.push(store::CatalogueEntry {
+                        work: row,
+                        wikidata_id: found.wikidata_id,
+                    });
+                }
+                if works.is_empty() || (page + 1) * mb::WORK_PAGE_SIZE >= count {
+                    complete = true;
+                    break;
+                }
+            }
+            if entries.is_empty() {
+                return Ok(Outcome::Skipped(
+                    "MusicBrainz lists no compositions for this person".into(),
+                ));
+            }
+            let composer = composer_mbid.to_string();
+            db(&self.pool, move |connection| {
+                store::save_catalogue(
+                    connection,
+                    &composer,
+                    &name,
+                    total as i64,
+                    complete,
+                    &entries,
+                )
+            })
+            .await?;
+        }
+        self.catalogue_wikidata(composer_mbid, settings).await
+    }
+
+    /// The Wikidata half of the catalogue stage.
+    async fn catalogue_wikidata(
+        &self,
+        composer_mbid: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let composer = composer_mbid.to_string();
+        let (known_item, items, ids) = db(&self.pool, move |connection| {
+            Ok((
+                store::wikidata_for_musicbrainz_artist(connection, &composer)?,
+                store::catalogue_wikidata_items(connection, &composer)?,
+                store::catalogue_work_ids(connection, &composer)?,
+            ))
+        })
+        .await?;
+        let item = match known_item {
+            Some(item) => Some(item),
+            None => match self.get_json(&mb::artist_lookup_url(composer_mbid)).await? {
+                Ok(Some(body)) => mb::wikidata_relation(&body),
+                Ok(None) => None,
+                Err(outcome) => return Ok(outcome),
+            },
+        };
+        let mut notable_items = Vec::new();
+        if let Some(item) = &item {
+            match self.get_json(&wiki::wikidata_entity_url(item)).await? {
+                Ok(Some(body)) => notable_items = wiki::parse_notable_works(&body),
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        // The notable works first, then the rest of the catalogue's items.
+        let mut wanted = notable_items.clone();
+        for (_, item) in &items {
+            if !wanted.contains(item) {
+                wanted.push(item.clone());
+            }
+        }
+        wanted.truncate(MAX_WIKIDATA_WORK_BATCHES * 50);
+        let language = settings
+            .source_languages()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "en".to_string());
+        let languages = [language.as_str(), "en"];
+        let mut described = Vec::new();
+        for batch in wanted.chunks(50) {
+            let url = wiki::wikidata_entities_url(batch, "claims|labels", &languages);
+            match self.get_json(&url).await? {
+                Ok(Some(body)) => described.extend(wiki::parse_wikidata_works(&body, &language)),
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        // Labels of the keys and forms the works point to.
+        let mut referenced = Vec::new();
+        for work in &described {
+            for id in work
+                .tonality
+                .iter()
+                .chain(&work.genres)
+                .chain(&work.instances)
+            {
+                if !referenced.contains(id) {
+                    referenced.push(id.clone());
+                }
+            }
+        }
+        referenced.sort();
+        referenced.truncate(150);
+        let mut labels = HashMap::new();
+        for batch in referenced.chunks(50) {
+            let url = wiki::wikidata_entities_url(batch, "labels", &["en"]);
+            match self.get_json(&url).await? {
+                Ok(Some(body)) => labels.extend(wiki::parse_labels(&body, "en")),
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        let by_item = items
+            .iter()
+            .map(|(work, item)| (item.clone(), work.clone()))
+            .collect::<HashMap<_, _>>();
+        let ids = ids.into_iter().collect::<std::collections::HashSet<_>>();
+        let work_for = |described: &wiki::WikidataWork| {
+            by_item.get(&described.item).cloned().or_else(|| {
+                described
+                    .musicbrainz_works
+                    .iter()
+                    .find(|mbid| ids.contains(*mbid))
+                    .cloned()
+            })
+        };
+        let mut notable = Vec::new();
+        for (rank, item) in notable_items.iter().enumerate() {
+            if let Some(work) = described
+                .iter()
+                .find(|described| described.item == *item)
+                .and_then(work_for)
+                .or_else(|| by_item.get(item).cloned())
+                && !notable.iter().any(|(known, _)| *known == work)
+            {
+                notable.push((work, rank as i64 + 1));
+            }
+        }
+        let facts = described
+            .iter()
+            .filter_map(|work| {
+                let mbid = work_for(work)?;
+                Some(store::WorkFactsUpdate {
+                    work_mbid: mbid,
+                    composed: work.inception.clone(),
+                    musical_key: work
+                        .tonality
+                        .as_ref()
+                        .and_then(|id| labels.get(id))
+                        .and_then(|label| super::works::key_from_title(&format!("in {label}"))),
+                    form: work
+                        .genres
+                        .iter()
+                        .chain(&work.instances)
+                        .filter_map(|id| labels.get(id))
+                        .find_map(|label| super::works::form_from_title(label)),
+                })
+            })
+            .collect::<Vec<_>>();
+        let composer = composer_mbid.to_string();
+        let notable_works = notable
+            .iter()
+            .map(|(work, _)| work.clone())
+            .collect::<Vec<_>>();
+        db(&self.pool, move |connection| {
+            store::save_catalogue_wikidata(
+                connection,
+                &composer,
+                item.as_deref(),
+                &notable,
+                &facts,
+            )?;
+            // Notable works get their own About text.
+            for work in &notable_works {
+                if store::load_profile(connection, "work", work)?.is_some() {
+                    continue;
+                }
+                let wikidata_id = by_item
+                    .iter()
+                    .find(|(_, mbid)| *mbid == work)
+                    .map(|(item, _)| item.clone());
+                if wikidata_id.is_none() {
+                    store::queue_stage_once(connection, Stage::Musicbrainz, "work", work)?;
+                    continue;
+                }
+                let title = store::load_work(connection, work)?
+                    .map(|row| row.title)
+                    .unwrap_or_default();
+                store::save_profile(
+                    connection,
+                    "work",
+                    work,
+                    &ProfileRow {
+                        musicbrainz_id: Some(work.clone()),
+                        release_group_mbid: None,
+                        wikidata_id,
+                        profile_json: json!({"title": title}).to_string(),
+                    },
+                )?;
+                store::queue_stage_once(connection, Stage::Wikipedia, "work", work)?;
+                store::queue_stage_once(connection, Stage::Wikidata, "work", work)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The sources stage: the article in each other editorial source turned
+    /// on (Wikipedia languages after the main one), from the item's
+    /// Wikidata sitelinks, so an album or artist page can switch source.
+    pub async fn sources_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if !matches!(entity_type, "album" | "artist") {
+            return Ok(Outcome::Skipped(
+                "only albums and artists switch sources".into(),
+            ));
+        }
+        let Some(mut profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(wikidata_id) = profile.wikidata_id.clone() else {
+            return Ok(Outcome::Skipped("no Wikidata item".into()));
+        };
+        let (kind_type, kind_id) = (entity_type.to_string(), entity_id.to_string());
+        let main = db(&self.pool, move |connection| {
+            store::load_texts(connection, &kind_type, &kind_id)
+        })
+        .await?
+        .first()
+        .map(|text| text.language.clone());
+        let wanted = settings.extra_languages(main.as_deref());
+        let mut value = profile_value(&profile);
+        let mut sitelinks = value
+            .get(WIKIDATA_KEY)
+            .and_then(|wikidata| wikidata.get("sitelinks"))
+            .and_then(Value::as_object)
+            .map(|links| {
+                links
+                    .iter()
+                    .filter_map(|(language, title)| {
+                        Some((language.clone(), title.as_str()?.to_string()))
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
+        if sitelinks.is_none() && !wanted.is_empty() {
+            match self
+                .get_json(&wiki::wikidata_entity_url(&wikidata_id))
+                .await?
+            {
+                Ok(Some(body)) => {
+                    sitelinks = wiki::parse_wikidata_entity(&body)
+                        .map(|entity| entity.sitelinks.into_iter().collect());
+                }
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        let sitelinks = sitelinks.unwrap_or_default();
+        let mut texts = Vec::new();
+        let mut scores = Value::Null;
+        for language in &wanted {
+            let Some(title) = sitelinks.get(language) else {
+                continue;
+            };
+            let candidate = ArticleCandidate {
+                language: language.clone(),
+                title: title.clone(),
+                linked: true,
+            };
+            let read = match self.read_article(&candidate).await? {
+                Ok(Some(read)) => read,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            if let Some(busy) = read.busy {
+                return Ok(busy);
+            }
+            let page = read.page;
+            if page.summary.disambiguation
+                || page
+                    .summary
+                    .wikibase_item
+                    .as_deref()
+                    .is_some_and(|item| item != wikidata_id)
+            {
+                continue;
+            }
+            if scores.is_null() && entity_type == "album" {
+                scores = review_scores_json(language, &page);
+            }
+            let article = wiki::WikipediaArticle {
+                title: page.summary.title.clone(),
+                url: page.summary.url.clone(),
+                lead: if page.lead.trim().is_empty() {
+                    wiki::tidy_text(&[page.summary.extract.as_str()])
+                } else {
+                    page.lead.clone()
+                },
+                reception: page.reception.clone(),
+            };
+            if article.lead.trim().is_empty() {
+                continue;
+            }
+            texts.push(wikipedia_text(
+                if entity_type == "artist" {
+                    "biography"
+                } else {
+                    "background"
+                },
+                language,
+                &article,
+                &article.lead,
+            ));
+            if entity_type == "album"
+                && let Some(reception) = &article.reception
+            {
+                texts.push(wikipedia_text("reception", language, &article, reception));
+            }
+        }
+        // Review scores from another source when the main article has none.
+        let store_scores = !scores.is_null()
+            && value
+                .get(REVIEW_SCORES_KEY)
+                .is_none_or(|stored| stored.is_null());
+        if store_scores {
+            value[REVIEW_SCORES_KEY] = scores;
+            profile.profile_json = value.to_string();
+        }
+        let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+        let found = texts.len();
+        db(&self.pool, move |connection| {
+            store::replace_source_texts(connection, &entity_type, &entity_id, &texts)?;
+            if store_scores {
+                store::save_profile(connection, &entity_type, &entity_id, &profile)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(if found > 0 || wanted.is_empty() {
+            Outcome::Done
+        } else {
+            Outcome::Skipped("no article in the other sources".into())
+        })
+    }
+
     async fn profile(
         &self,
         entity_type: &str,
@@ -1676,6 +2143,12 @@ impl<F: Fetch> Enricher<F> {
                 self.cover_art_stage(cache, &task.entity_id).await
             }
             (Stage::CoverArt, _) => Ok(Outcome::Skipped("only albums have covers".into())),
+            (Stage::Catalogue, "composer") => self.catalogue_stage(&task.entity_id, settings).await,
+            (Stage::Catalogue, _) => Ok(Outcome::Skipped("only composers have catalogues".into())),
+            (Stage::Sources, entity_type) => {
+                self.sources_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
         }
     }
 
@@ -1850,6 +2323,7 @@ impl<F: Fetch> Enricher<F> {
                         lead: wiki::tidy_text(&[summary.extract.as_str()]),
                         summary,
                         reception: None,
+                        review_scores: Vec::new(),
                     },
                     busy: Some(Outcome::Retry(format!(
                         "kept the summary; the full article answered {}",
@@ -1924,6 +2398,17 @@ struct ReadArticle {
     /// Set when only the summary could be read.
     busy: Option<Outcome>,
 }
+
+/// At most this many pages of 100 works are read for one composer: 4,000
+/// works, enough for every composer except a handful (Bach, Mozart,
+/// Schubert), whose catalogue page then says it is capped.
+pub const MAX_CATALOGUE_PAGES: usize = 40;
+
+/// A catalogue read from MusicBrainz is reused this long by a retry.
+const CATALOGUE_REFRESH_DAYS: i64 = 30;
+
+/// Wikidata items described per catalogue, 50 per request.
+const MAX_WIKIDATA_WORK_BATCHES: usize = 8;
 
 /// At most this many pieces per album are looked up for their own text.
 const MAX_WORKS_PER_ALBUM: usize = 6;
@@ -4963,5 +5448,305 @@ mod tests {
             Some("caa-___x_y.jpg")
         );
         assert_eq!(cover_file_name("a", "image/gif"), None);
+    }
+
+    const BEETHOVEN_MBID: &str = "1f9df192-a621-4f54-8850-2c5373b7eac9";
+    const FIFTH: &str = "22222222-2222-4222-8222-222222222222";
+    const FIFTH_FIRST: &str = "11111111-1111-4111-8111-111111111111";
+    const ELISE: &str = "44444444-4444-4444-8444-444444444444";
+    const ODE: &str = "33333333-3333-4333-8333-333333333333";
+    const MISSA: &str = "55555555-5555-4555-8555-555555555555";
+
+    fn composer_relation(begin: Option<&str>, end: Option<&str>) -> Value {
+        serde_json::json!({"type": "composer", "target-type": "artist", "direction": "backward",
+            "begin": begin, "end": end,
+            "artist": {"id": BEETHOVEN_MBID, "name": "Ludwig van Beethoven"}})
+    }
+
+    fn wikidata_url(item: &str) -> Value {
+        serde_json::json!({"type": "wikidata", "target-type": "url", "direction": "backward",
+            "url": {"resource": format!("https://www.wikidata.org/wiki/{item}")}})
+    }
+
+    fn claim(value: Value) -> Value {
+        serde_json::json!([{"mainsnak": {"datavalue": {"value": value}}, "rank": "normal"}])
+    }
+
+    fn catalogue_mock() -> MockFetch {
+        let works = serde_json::json!({"work-count": 5, "work-offset": 0, "works": [
+            {"id": FIFTH, "title": "Symphony no. 5 in C minor, op. 67", "type": "Symphony",
+             "attributes": [{"type": "Key", "value": "C minor"}],
+             "relations": [composer_relation(Some("1804"), Some("1808")), wikidata_url("Q193778")]},
+            {"id": FIFTH_FIRST, "title": "Symphony no. 5 in C minor, op. 67: I. Allegro con brio",
+             "relations": [composer_relation(None, None), {"type": "parts", "target-type": "work",
+                "direction": "backward", "ordering-key": 1,
+                "work": {"id": FIFTH, "title": "Symphony no. 5 in C minor, op. 67"}}]},
+            {"id": ELISE, "title": "Für Elise", "type": null,
+             "relations": [composer_relation(None, None), wikidata_url("Q201234")]},
+            {"id": ODE, "title": "Ode to Joy (arr. for brass)",
+             "relations": [composer_relation(None, None), {"type": "arrangement", "target-type": "work",
+                "direction": "backward", "work": {"id": FIFTH, "title": "x"}}]},
+            {"id": MISSA, "title": "Lyrics only",
+             "relations": [{"type": "lyricist", "target-type": "artist", "direction": "backward",
+                "artist": {"id": BEETHOVEN_MBID, "name": "Ludwig van Beethoven"}}]}
+        ]});
+        let described = vec![
+            "Q193778".to_string(),
+            "Q999".to_string(),
+            "Q201234".to_string(),
+        ];
+        MockFetch::default()
+            .json(&mb::work_browse_url(BEETHOVEN_MBID, 0), works)
+            .json(
+                &mb::artist_lookup_url(BEETHOVEN_MBID),
+                serde_json::json!({"id": BEETHOVEN_MBID, "relations": [wikidata_url("Q255")]}),
+            )
+            .json(
+                &wiki::wikidata_entity_url("Q255"),
+                serde_json::json!({"entities": {"Q255": {"claims": {
+                    "P800": [
+                        {"mainsnak": {"datavalue": {"value": {"id": "Q193778"}}}, "rank": "normal"},
+                        {"mainsnak": {"datavalue": {"value": {"id": "Q999"}}}, "rank": "normal"},
+                        {"mainsnak": {"datavalue": {"value": {"id": "Q201234"}}}, "rank": "normal"}
+                    ]
+                }}}}),
+            )
+            .json(
+                &wiki::wikidata_entities_url(&described, "claims|labels", &["en", "en"]),
+                serde_json::json!({"entities": {
+                    "Q193778": {"claims": {
+                        "P571": claim(serde_json::json!({"time": "+1808-00-00T00:00:00Z", "precision": 9})),
+                        "P826": claim(serde_json::json!({"id": "Q1"}))
+                    }},
+                    // A notable work this catalogue does not list.
+                    "Q999": {"claims": {"P435": claim(serde_json::json!(MISSA))}},
+                    "Q201234": {"claims": {
+                        "P571": claim(serde_json::json!({"time": "+1810-04-27T00:00:00Z", "precision": 11})),
+                        "P826": claim(serde_json::json!({"id": "Q3"})),
+                        "P136": claim(serde_json::json!({"id": "Q4"}))
+                    }}
+                }}),
+            )
+            .json(
+                &wiki::wikidata_entities_url(
+                    &["Q1".to_string(), "Q3".to_string(), "Q4".to_string()],
+                    "labels",
+                    &["en"],
+                ),
+                serde_json::json!({"entities": {
+                    "Q1": {"labels": {"en": {"value": "C minor"}}},
+                    "Q3": {"labels": {"en": {"value": "A minor"}}},
+                    "Q4": {"labels": {"en": {"value": "bagatelle"}}}
+                }}),
+            )
+    }
+
+    #[tokio::test]
+    async fn a_composers_whole_catalogue_comes_with_notable_works_and_wikidata_facts() {
+        let pool = migrated_memory_pool();
+        let enricher = Enricher {
+            fetch: catalogue_mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let outcome = enricher
+            .catalogue_stage(BEETHOVEN_MBID, &settings)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+
+        let mut connection = pool.get().unwrap();
+        let catalogue = store::load_catalogue(&mut connection, BEETHOVEN_MBID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalogue.musicbrainz_total, 5);
+        assert!(catalogue.complete);
+        assert_eq!(catalogue.wikidata_id.as_deref(), Some("Q255"));
+        assert_eq!(catalogue.composer_name, "Ludwig van Beethoven");
+        // Pieces only (the movement sits under its symphony); the
+        // arrangement and the words he did not set are left out.
+        let works = store::catalogue_works(&mut connection, &[BEETHOVEN_MBID.to_string()]).unwrap();
+        let titles = works
+            .iter()
+            .map(|listing| {
+                (
+                    listing.work.title.as_str(),
+                    listing.notable_rank,
+                    listing.track_count,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            [
+                ("Für Elise", Some(3), 0),
+                ("Symphony No. 5 in C minor, Op. 67", Some(1), 0)
+            ]
+        );
+        let elise = &works[0].work;
+        // Wikidata fills what MusicBrainz left out...
+        assert_eq!(elise.composed.as_deref(), Some("1810"));
+        assert_eq!(elise.musical_key.as_deref(), Some("A minor"));
+        assert_eq!(elise.form.as_deref(), Some("Bagatelle"));
+        // ...and never replaces what MusicBrainz says.
+        let fifth = &works[1].work;
+        assert_eq!(fifth.composed.as_deref(), Some("1804–1808"));
+        assert_eq!(fifth.musical_key.as_deref(), Some("C minor"));
+        assert_eq!(
+            store::work_parts(&mut connection, FIFTH).unwrap()[0].mbid,
+            FIFTH_FIRST
+        );
+        // The notable works get their own About text.
+        assert_eq!(
+            store::task_status(&mut connection, Stage::Wikipedia, "work", FIFTH)
+                .unwrap()
+                .as_deref(),
+            Some("pending")
+        );
+        drop(connection);
+
+        // A busy Wikidata on the next run keeps the MusicBrainz catalogue
+        // and does not page through MusicBrainz again.
+        let busy = Enricher {
+            fetch: MockFetch::default().status(&wiki::wikidata_entity_url("Q255"), 429),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = busy
+            .catalogue_stage(BEETHOVEN_MBID, &settings)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Retry("HTTP 429".into()));
+        assert!(
+            !busy
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains("/ws/2/work?"))
+        );
+        let mut connection = pool.get().unwrap();
+        assert_eq!(
+            store::catalogue_works(&mut connection, &[BEETHOVEN_MBID.to_string()])
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn albums_get_their_text_from_every_editorial_source_turned_on() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "album",
+                "album-1",
+                &ProfileRow {
+                    musicbrainz_id: Some(RELEASE.into()),
+                    release_group_mbid: Some(GROUP.into()),
+                    wikidata_id: Some("Q731473".into()),
+                    profile_json: serde_json::json!({
+                        "title": "Kind of Blue",
+                        WIKIDATA_KEY: {"sitelinks": {"en": "Kind of Blue", "de": "Kind of Blue", "fr": "Kind of Blue (album)", "it": "Kind of Blue"}}
+                    })
+                    .to_string(),
+                },
+            )
+            .unwrap();
+            store::replace_texts(
+                &mut connection,
+                "album",
+                "album-1",
+                &[EditorialText {
+                    kind: "background".into(),
+                    source: "wikipedia".into(),
+                    language: "en".into(),
+                    title: "Kind of Blue".into(),
+                    body: "Kind of Blue is a 1959 album.".into(),
+                    url: "https://en.wikipedia.org/wiki/Kind_of_Blue".into(),
+                    license: wiki::WIKIPEDIA_LICENSE.into(),
+                    license_url: wiki::WIKIPEDIA_LICENSE_URL.into(),
+                }],
+            )
+            .unwrap();
+        }
+        let german = String::from_utf8(page(
+            "Kind of Blue",
+            Some("Q731473"),
+            "Album von Miles Davis",
+            "Kind of Blue ist ein Jazzalbum von Miles Davis aus dem Jahr 1959.",
+            &[(
+                "Rezeption",
+                "Das Album gilt als eines der einflussreichsten des Jazz.",
+            )],
+            None,
+        ))
+        .unwrap()
+        .replace("https://en.wikipedia.org", "https://de.wikipedia.org");
+        // The French article belongs to another item (a namesake).
+        let french = String::from_utf8(page(
+            "Kind of Blue (album)",
+            Some("Q1"),
+            "",
+            "Autre chose.",
+            &[],
+            None,
+        ))
+        .unwrap();
+        let enricher = Enricher {
+            fetch: MockFetch::default()
+                .bytes(
+                    &wiki::wikipedia_page_url("de", "Kind of Blue"),
+                    "text/html",
+                    german.as_bytes(),
+                )
+                .bytes(
+                    &wiki::wikipedia_page_url("fr", "Kind of Blue (album)"),
+                    "text/html",
+                    french.as_bytes(),
+                ),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            editorial_sources: ["en", "de", "fr"]
+                .iter()
+                .map(|language| store::EditorialSource {
+                    id: format!("wikipedia:{language}"),
+                    enabled: true,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let outcome = enricher
+            .sources_stage("album", "album-1", &settings)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        // English is the main text already; Italian is not turned on.
+        let requested = enricher.fetch.requested();
+        assert_eq!(requested.len(), 2, "{requested:?}");
+        assert!(!requested.iter().any(|url| url.contains("it.wikipedia")));
+
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_source_texts(&mut connection, "album", "album-1").unwrap();
+        assert_eq!(
+            texts
+                .iter()
+                .map(|text| (text.language.as_str(), text.kind.as_str()))
+                .collect::<Vec<_>>(),
+            [("de", "background"), ("de", "reception")]
+        );
+        assert_eq!(
+            texts[1].body,
+            "Das Album gilt als eines der einflussreichsten des Jazz."
+        );
+        assert_eq!(texts[0].url, "https://de.wikipedia.org/wiki/Kind_of_Blue");
     }
 }

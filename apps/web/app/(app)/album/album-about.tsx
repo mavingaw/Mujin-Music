@@ -3,6 +3,8 @@
 import type { LibraryAlbum } from "@parson/music-sdk";
 import {
   albumTextPanels,
+  chooseTextSource,
+  pageTextSources,
   resolvedFact,
   enrichmentWaitingLabel,
   releaseMatchFact,
@@ -30,6 +32,11 @@ import { FactSourceBadge } from "@/features/library/credits/fact-source-badge";
 import Link from "next/link";
 import { useState } from "react";
 import { EditorialText } from "@/features/library/credits/editorial-text";
+import {
+  ReviewScores,
+  TextSourceSwitcher,
+  usePickedTextSource,
+} from "@/features/library/credits/text-sources";
 import { NoteEditor } from "@/features/library/credits/note-editor";
 import {
   albumFormat,
@@ -270,7 +277,10 @@ export function AlbumAboutSection({
   /** Opens the album's metadata preference (administrators). */
   onEditSources?: () => void;
 }) {
-  const textPanels = albumTextPanels(about);
+  const sources = pageTextSources(about);
+  const [pickedSource, pickSource] = usePickedTextSource(`album:${album.id}`);
+  const source = chooseTextSource(sources, pickedSource);
+  const textPanels = albumTextPanels(about, source?.id);
   const panels: { key: string; label: string }[] = [
     ...textPanels.map(({ key, label }) => ({ key, label })),
     { key: "note", label: about?.note ? "Your note" : "Add a note" },
@@ -323,6 +333,18 @@ export function AlbumAboutSection({
           ))}
         </div>
         <div role="tabpanel">
+          {activeText && !activeText.workMbid && (
+            <div className="mb-3">
+              <TextSourceSwitcher
+                active={source?.id}
+                has={(candidate) =>
+                  Boolean(candidate.background || candidate.review)
+                }
+                onPick={pickSource}
+                sources={sources}
+              />
+            </div>
+          )}
           {activeText && (
             <div className="space-y-3">
               {activeText.workMbid && (
@@ -392,14 +414,15 @@ export function AlbumAboutSection({
             </div>
           )}
         </div>
+        {about?.review_scores && <ReviewScores scores={about.review_scores} />}
       </div>
       {facts.length > 0 && (
         <dl className="mt-8 grid h-fit grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 text-sm md:mt-0 md:border-l md:border-white/8 md:pl-6">
           {facts.map((fact) => (
             <div className="contents" key={fact.label}>
               <dt className="font-medium text-zinc-500">{fact.label}</dt>
-              <dd className="flex min-w-0 items-center gap-1.5 text-zinc-200">
-                <span className="min-w-0 truncate" title={fact.value}>
+              <dd className="flex min-w-0 items-start gap-1.5 text-zinc-200">
+                <span className="min-w-0 wrap-break-word" title={fact.value}>
                   {fact.value}
                 </span>
                 {fact.source && <FactSourceBadge compact fact={fact.source} />}

@@ -1,15 +1,14 @@
 "use client";
 
+import { editorialSourceName } from "@parson/music-sdk";
 import type { EditorialText as EditorialTextValue } from "@parson/music-sdk/types";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { paragraphs } from "./credit-roles";
 
-const SOURCE_NAMES: Record<string, string> = { wikipedia: "Wikipedia" };
-
 /** Attribution required by CC BY-SA: title, link, license and its link. */
 export function EditorialAttribution({ text }: { text: EditorialTextValue }) {
-  const source = SOURCE_NAMES[text.source] ?? text.source;
+  const source = editorialSourceName(`${text.source}:${text.language}`);
   return (
     <p className="text-xs leading-5 text-zinc-500">
       From the {source} article{" "}
@@ -21,7 +20,7 @@ export function EditorialAttribution({ text }: { text: EditorialTextValue }) {
       >
         “{text.title}”
       </a>
-      {text.language !== "en" && ` (${text.language})`}, licensed under{" "}
+      , licensed under{" "}
       <a
         className="text-zinc-400 underline-offset-2 hover:text-white hover:underline"
         href={text.license_url}
@@ -49,6 +48,7 @@ export function EditorialText({
   return (
     <div className="space-y-3">
       <div
+        lang={text.language}
         className={`space-y-3 text-[15px] leading-7 text-zinc-300 ${
           expanded || !long ? "" : "overflow-hidden"
         }`}

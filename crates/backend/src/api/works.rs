@@ -102,15 +102,100 @@ pub struct WorkPage {
 #[derive(Debug, Clone, Serialize)]
 pub struct ComposerWork {
     pub work: WorkSummary,
+    /// Library tracks performing the work (0 for a catalogue work you do
+    /// not have).
     pub track_count: i64,
+    /// Library albums with a recording of the work.
     pub recording_count: i64,
+    /// Position in the composer's notable works (Wikidata P800), when the
+    /// work is one of them.
+    pub notable_rank: Option<i64>,
+    /// Whether the work came from the composer's MusicBrainz catalogue.
+    pub in_catalogue: bool,
+    pub wikidata_id: Option<String>,
+}
+
+/// Where a composer's full catalogue stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CatalogueSummary {
+    /// `ready`, `pending` (being read), `failed`, `none` (MusicBrainz
+    /// lists nothing) or `off` (online metadata is off).
+    pub state: String,
+    pub composer_mbid: Option<String>,
+    /// Works MusicBrainz lists, movements included.
+    pub musicbrainz_total: i64,
+    /// Pieces in the catalogue (movements are listed under their piece).
+    pub pieces: i64,
+    pub in_library: i64,
+    pub notable: i64,
+    /// False when the composer has more works than Parson reads.
+    pub complete: bool,
+    pub musicbrainz_url: Option<String>,
+    pub wikidata_url: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ComposerWorks {
     pub artist_id: String,
     pub name: Option<String>,
+    /// The library's works and the composer's whole catalogue, one entry
+    /// per piece.
     pub works: Vec<ComposerWork>,
+    pub catalogue: CatalogueSummary,
+}
+
+/// One entry per piece: works in the library and the catalogue merged, the
+/// library's counts kept and the catalogue's rank and item added.
+pub fn merge_catalogue(
+    library: Vec<(WorkRow, i64, i64)>,
+    catalogue: Vec<store::CatalogueListing>,
+    people: &HashMap<String, String>,
+) -> Vec<ComposerWork> {
+    let mut works: Vec<ComposerWork> = library
+        .into_iter()
+        .filter(|(_, tracks, _)| *tracks > 0)
+        .map(|(work, tracks, albums)| ComposerWork {
+            work: summary(&work, people),
+            track_count: tracks,
+            recording_count: albums,
+            notable_rank: None,
+            in_catalogue: false,
+            wikidata_id: None,
+        })
+        .collect();
+    for store::CatalogueListing {
+        work,
+        wikidata_id,
+        notable_rank,
+        track_count: tracks,
+        album_count: albums,
+    } in catalogue
+    {
+        match works.iter_mut().find(|known| known.work.mbid == work.mbid) {
+            Some(known) => {
+                known.in_catalogue = true;
+                known.notable_rank = notable_rank;
+                known.wikidata_id = wikidata_id;
+                // Wikidata may have added a year, key or form.
+                let fuller = summary(&work, people);
+                known.work.composed = known.work.composed.take().or(fuller.composed);
+                known.work.key = known.work.key.take().or(fuller.key);
+                known.work.form = known.work.form.take().or(fuller.form);
+                known.work.period = known.work.period.take().or(fuller.period);
+            }
+            None => works.push(ComposerWork {
+                work: summary(&work, people),
+                track_count: tracks,
+                recording_count: albums,
+                notable_rank,
+                in_catalogue: true,
+                wikidata_id,
+            }),
+        }
+    }
+    works.sort_by(|left, right| left.work.title.cmp(&right.work.title));
+    works
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -695,6 +780,56 @@ pub async fn get_work(
     })
 }
 
+/// The catalogue's state for the composer page.
+pub fn catalogue_summary(
+    state: Option<(store::CatalogueRow, Option<String>)>,
+    enabled: bool,
+    works: &[ComposerWork],
+) -> CatalogueSummary {
+    let pieces = works.iter().filter(|work| work.in_catalogue).count() as i64;
+    let in_library = works.iter().filter(|work| work.track_count > 0).count() as i64;
+    let notable = works
+        .iter()
+        .filter(|work| work.notable_rank.is_some())
+        .count() as i64;
+    let (row, status) = match state {
+        Some((row, status)) => (Some(row), status),
+        None => (None, None),
+    };
+    let read = row
+        .as_ref()
+        .is_some_and(|row| row.musicbrainz_fetched_at.is_some());
+    let state = if read {
+        "ready"
+    } else if !enabled {
+        "off"
+    } else {
+        match status.as_deref() {
+            Some("pending") => "pending",
+            Some("failed") => "failed",
+            Some("skipped" | "done") => "none",
+            _ => "none",
+        }
+    };
+    CatalogueSummary {
+        state: state.to_string(),
+        composer_mbid: row.as_ref().map(|row| row.composer_mbid.clone()),
+        musicbrainz_total: row.as_ref().map_or(0, |row| row.musicbrainz_total),
+        pieces,
+        in_library,
+        notable,
+        complete: row.as_ref().is_some_and(|row| row.complete),
+        musicbrainz_url: row
+            .as_ref()
+            .map(|row| mb::artist_works_page_url(&row.composer_mbid)),
+        wikidata_url: row
+            .as_ref()
+            .and_then(|row| row.wikidata_id.as_ref())
+            .map(|item| format!("https://www.wikidata.org/wiki/{item}")),
+        updated_at: row.and_then(|row| row.musicbrainz_fetched_at),
+    }
+}
+
 #[get("/{id}/works")]
 pub async fn get_artist_works(
     id: web::Path<String>,
@@ -741,9 +876,44 @@ pub async fn get_artist_works(
             }
         }
         found.sort_by(|left, right| left.0.title.cmp(&right.0.title));
-        Ok(found)
+        // The composer's whole catalogue, under whichever of their
+        // MusicBrainz ids it was read for.
+        let catalogue = store::catalogue_works(connection, &mbids)?;
+        let mut state = None;
+        for mbid in &mbids {
+            if let Some(row) = store::load_catalogue(connection, mbid)? {
+                state = Some((row, None));
+                break;
+            }
+        }
+        if state.is_none() {
+            for mbid in &mbids {
+                if let Some(status) =
+                    store::task_status(connection, store::Stage::Catalogue, "composer", mbid)?
+                {
+                    state = Some((
+                        store::CatalogueRow {
+                            composer_mbid: mbid.clone(),
+                            ..Default::default()
+                        },
+                        Some(status),
+                    ));
+                    break;
+                }
+            }
+        }
+        let enabled = store::load_settings(connection)?.enabled;
+        Ok((found, catalogue, state, enabled))
     })
     .await;
+    let (rows, catalogue, catalogue_state, enabled) = match rows {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::error!(%error, "could not load compositions");
+            return internal_server_error("Could not load compositions.", "works_failed");
+        }
+    };
+    let rows: Result<Vec<(WorkRow, i64, i64)>, String> = Ok(rows);
     let mut rows = match rows {
         Ok(rows) => rows,
         Err(error) => {
@@ -763,18 +933,13 @@ pub async fn get_artist_works(
         rows.first()
             .and_then(|(work, _, _)| work.composer_name.clone())
     });
+    let works = merge_catalogue(rows, catalogue, &people);
+    let catalogue = catalogue_summary(catalogue_state, enabled, &works);
     HttpResponse::Ok().json(ComposerWorks {
         artist_id,
         name,
-        works: rows
-            .iter()
-            .filter(|(_, tracks, _)| *tracks > 0)
-            .map(|(work, tracks, albums)| ComposerWork {
-                work: summary(work, &people),
-                track_count: *tracks,
-                recording_count: *albums,
-            })
-            .collect(),
+        works,
+        catalogue,
     })
 }
 
@@ -1719,5 +1884,138 @@ mod tests {
         assert!(!ranked[1].credits_tagged_composer);
         let failing = MockFetch::default().status(&release_query_url(query), 503);
         assert!(search_releases(&failing, query).await.is_err());
+    }
+
+    #[test]
+    fn a_composers_catalogue_joins_the_works_in_the_library() {
+        let people = HashMap::new();
+        let library = vec![
+            (
+                WorkRow {
+                    form: Some("Symphony".into()),
+                    composed: None,
+                    ..work(SYMPHONY, "Symphony No. 9", None, None)
+                },
+                9,
+                2,
+            ),
+            // A work seen only by name with no library track is dropped.
+            (
+                work(
+                    "66666666-6666-4666-8666-666666666666",
+                    "Elsewhere",
+                    None,
+                    None,
+                ),
+                0,
+                0,
+            ),
+        ];
+        let listing = |work: WorkRow, wikidata_id: Option<&str>, rank: Option<i64>, tracks: i64| {
+            store::CatalogueListing {
+                work,
+                wikidata_id: wikidata_id.map(str::to_string),
+                notable_rank: rank,
+                track_count: tracks,
+                album_count: if tracks > 0 { 2 } else { 0 },
+            }
+        };
+        let catalogue = vec![
+            listing(
+                WorkRow {
+                    composed: Some("1822–1824".into()),
+                    ..work(SYMPHONY, "Symphony No. 9", None, None)
+                },
+                Some("Q1"),
+                Some(1),
+                9,
+            ),
+            listing(
+                WorkRow {
+                    form: Some("Bagatelle".into()),
+                    composed: Some("1810".into()),
+                    ..work(
+                        "44444444-4444-4444-8444-444444444444",
+                        "Für Elise",
+                        None,
+                        None,
+                    )
+                },
+                None,
+                Some(2),
+                0,
+            ),
+            listing(
+                work(
+                    "77777777-7777-4777-8777-777777777777",
+                    "Cantata",
+                    None,
+                    None,
+                ),
+                None,
+                None,
+                0,
+            ),
+        ];
+        let works = merge_catalogue(library, catalogue, &people);
+        assert_eq!(
+            works
+                .iter()
+                .map(|entry| (
+                    entry.work.title.as_str(),
+                    entry.track_count,
+                    entry.notable_rank,
+                    entry.in_catalogue
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("Cantata", 0, None, true),
+                ("Für Elise", 0, Some(2), true),
+                ("Symphony No. 9", 9, Some(1), true),
+            ]
+        );
+        // The year Wikidata or MusicBrainz knows reaches the library's work.
+        assert_eq!(works[2].work.composed.as_deref(), Some("1822–1824"));
+        assert_eq!(works[2].work.period.as_deref(), Some("Classical"));
+        assert_eq!(works[2].work.form.as_deref(), Some("Symphony"));
+
+        let summary = catalogue_summary(
+            Some((
+                store::CatalogueRow {
+                    composer_mbid: BEETHOVEN.into(),
+                    composer_name: "Ludwig van Beethoven".into(),
+                    wikidata_id: Some("Q255".into()),
+                    musicbrainz_total: 3034,
+                    stored_works: 3001,
+                    complete: true,
+                    musicbrainz_fetched_at: Some("2026-10-26 12:00:00".into()),
+                    wikidata_fetched_at: None,
+                },
+                None,
+            )),
+            true,
+            &works,
+        );
+        assert_eq!(summary.state, "ready");
+        assert_eq!(
+            (summary.pieces, summary.in_library, summary.notable),
+            (3, 1, 2)
+        );
+        assert_eq!(
+            summary.musicbrainz_url.as_deref(),
+            Some("https://musicbrainz.org/artist/1f9df192-a621-4f54-8850-2c5373b7eac9/works")
+        );
+        assert_eq!(
+            summary.wikidata_url.as_deref(),
+            Some("https://www.wikidata.org/wiki/Q255")
+        );
+        // Not read yet: queued, or online metadata off.
+        let pending = catalogue_summary(
+            Some((store::CatalogueRow::default(), Some("pending".into()))),
+            true,
+            &[],
+        );
+        assert_eq!(pending.state, "pending");
+        assert_eq!(catalogue_summary(None, false, &[]).state, "off");
     }
 }

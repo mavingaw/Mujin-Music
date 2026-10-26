@@ -438,6 +438,9 @@ pub struct ArticlePage {
     pub summary: WikipediaSummary,
     pub lead: String,
     pub reception: Option<String>,
+    /// The article's "Review scores" table (the Album ratings template):
+    /// the publications that reviewed the album and their ratings.
+    pub review_scores: Vec<ReviewScore>,
 }
 
 fn after<'a>(html: &'a str, marker: &str) -> Option<&'a str> {
@@ -480,6 +483,7 @@ pub fn parse_article_page(html: &str) -> Option<ArticlePage> {
         .as_deref()
         .and_then(commons_file_from_upload_url);
     let (lead, reception) = parse_article_html(html);
+    let review_scores = parse_review_scores(content_region(html));
     if lead.is_empty() && !disambiguation {
         return None;
     }
@@ -496,6 +500,7 @@ pub fn parse_article_page(html: &str) -> Option<ArticlePage> {
         },
         lead,
         reception,
+        review_scores,
     })
 }
 
@@ -758,9 +763,273 @@ fn heading(line: &str) -> Option<(usize, &str)> {
     (!title.is_empty()).then_some((level, title))
 }
 
+/// Reception section headings in the Wikipedia languages Parson offers as
+/// editorial sources ("Rezeption", "Accueil critique", "Recepción", ...).
 fn is_reception_heading(title: &str) -> bool {
     let title = title.to_lowercase();
-    title.contains("reception") || title.contains("critical response") || title == "reviews"
+    const WORDS: [&str; 17] = [
+        "reception",
+        "critical response",
+        "rezeption",
+        "kritiken",
+        "accueil",
+        "réception",
+        "recepción",
+        "crítica",
+        "accoglienza",
+        "ricezione",
+        "ontvangst",
+        "mottagande",
+        "modtagelse",
+        "recepção",
+        "odbiór",
+        "評価",
+        "反響",
+    ];
+    title == "reviews" || title == "kritik" || WORDS.iter().any(|word| title.contains(word))
+}
+
+/// One row of an article's "Review scores" table.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReviewScore {
+    /// The publication, e.g. "AllMusic" or "The Penguin Guide to Jazz".
+    pub publication: String,
+    /// The rating as printed: "5/5", "A+", "10/10", "4/4".
+    pub rating: String,
+    /// The rating as a number out of `max`, when it is one.
+    pub score: Option<f64>,
+    pub max: Option<f64>,
+}
+
+impl Eq for ReviewScore {}
+
+/// At most this many publications are kept from one table.
+pub const MAX_REVIEW_SCORES: usize = 14;
+
+fn without_footnotes(cell: &str) -> String {
+    let mut text = String::new();
+    let mut rest = cell;
+    while let Some(start) = rest.find("<sup") {
+        text.push_str(&rest[..start]);
+        rest = match rest[start..].find("</sup>") {
+            Some(end) => &rest[start + end + "</sup>".len()..],
+            None => "",
+        };
+    }
+    text.push_str(rest);
+    collapse_whitespace(&decode_entities(&strip_tags(&text)))
+        .trim_matches(|character: char| character == '"' || character.is_whitespace())
+        .to_string()
+}
+
+/// "4.5/5" or "10/10" as (score, max).
+fn fraction(value: &str) -> Option<(f64, f64)> {
+    let (score, max) = value.split_once('/')?;
+    let score = score.trim().replace(',', ".").parse::<f64>().ok()?;
+    let max = max
+        .trim()
+        .split(|character: char| !character.is_ascii_digit() && character != '.')
+        .next()?
+        .parse::<f64>()
+        .ok()?;
+    (max > 0.0 && score >= 0.0 && score <= max).then_some((score, max))
+}
+
+/// The "Review scores" table of an album article (Wikipedia's Album
+/// ratings template): each publication with its rating. Star ratings are
+/// images whose title reads "4.5/5 stars"; letter grades and scores are
+/// text. Footnote markers are dropped.
+pub fn parse_review_scores(html: &str) -> Vec<ReviewScore> {
+    let mut scores = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("<table") {
+        let table = &rest[start..];
+        let end = table.find("</table>").map_or(table.len(), |end| end + 8);
+        let block = &table[..end];
+        rest = &table[end..];
+        let lower = block.to_lowercase();
+        if !(lower.contains(">review scores<")
+            || lower.contains("professional ratings")
+            || lower.contains("template:album_ratings"))
+        {
+            continue;
+        }
+        for row in block.split("<tr").skip(1) {
+            let cells = row.split("<td").skip(1).collect::<Vec<_>>();
+            if cells.len() < 2 {
+                continue;
+            }
+            let cell = |raw: &str| {
+                let body = raw.split_once('>').map_or("", |(_, body)| body);
+                body.split("</td>").next().unwrap_or(body).to_string()
+            };
+            let publication = without_footnotes(&cell(cells[0]));
+            let rating_html = cell(cells[1]);
+            let stars = rating_html
+                .split("title=\"")
+                .skip(1)
+                .filter_map(|value| value.split('"').next())
+                .find(|value| value.contains(" star"))
+                .and_then(|value| value.split_whitespace().next())
+                .map(str::to_string);
+            let rating = stars
+                .clone()
+                .unwrap_or_else(|| without_footnotes(&rating_html));
+            if publication.is_empty()
+                || rating.is_empty()
+                || publication.chars().count() > 80
+                || rating.chars().count() > 40
+            {
+                continue;
+            }
+            let parsed = fraction(&rating);
+            let entry = ReviewScore {
+                publication,
+                rating,
+                score: parsed.map(|(score, _)| score),
+                max: parsed.map(|(_, max)| max),
+            };
+            if !scores
+                .iter()
+                .any(|known: &ReviewScore| known.publication == entry.publication)
+            {
+                scores.push(entry);
+            }
+            if scores.len() >= MAX_REVIEW_SCORES {
+                return scores;
+            }
+        }
+    }
+    scores
+}
+
+/// Wikipedia languages offered as editorial sources, in the default
+/// order. Each is a separate source a page can switch to.
+pub const SOURCE_LANGUAGES: [&str; 11] = [
+    "en", "de", "fr", "es", "it", "nl", "sv", "da", "pt", "pl", "ja",
+];
+
+/// A source's display name: "English Wikipedia", "German Wikipedia".
+pub fn source_name(source: &str, language: &str) -> String {
+    let language_name = match language {
+        "en" => "English",
+        "de" => "German",
+        "fr" => "French",
+        "es" => "Spanish",
+        "it" => "Italian",
+        "nl" => "Dutch",
+        "sv" => "Swedish",
+        "da" => "Danish",
+        "pt" => "Portuguese",
+        "ja" => "Japanese",
+        "pl" => "Polish",
+        other => other,
+    };
+    let source = match source {
+        "wikipedia" => "Wikipedia",
+        other => other,
+    };
+    format!("{language_name} {source}")
+}
+
+/// `wbgetentities` for several items at once (at most 50).
+pub fn wikidata_entities_url(ids: &[String], props: &str, languages: &[&str]) -> String {
+    let ids = ids
+        .iter()
+        .filter(|id| is_item_id(id))
+        .take(50)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("%7C");
+    format!(
+        "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids={ids}&props={}&languages={}",
+        props.replace('|', "%7C"),
+        languages.join("%7C")
+    )
+}
+
+fn entities(body: &Value) -> impl Iterator<Item = (&String, &Value)> {
+    body.get("entities")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, entity)| entity.get("missing").is_none())
+}
+
+fn item_ids(entity: &Value, property: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for value in claim_values(entity, property) {
+        if let Some(id) = value.get("id").and_then(Value::as_str)
+            && is_item_id(id)
+            && !ids.iter().any(|known| known == id)
+        {
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+/// The works Wikidata lists as an artist's notable works (P800), in the
+/// item's order.
+pub fn parse_notable_works(body: &Value) -> Vec<String> {
+    entities(body)
+        .next()
+        .map(|(_, entity)| item_ids(entity, "P800"))
+        .unwrap_or_default()
+}
+
+/// What Wikidata says about a work.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WikidataWork {
+    pub item: String,
+    pub label: Option<String>,
+    /// MusicBrainz work ids (P435).
+    pub musicbrainz_works: Vec<String>,
+    /// Year of composition (P571 inception).
+    pub inception: Option<String>,
+    /// Tonality item (P826), e.g. Q1049064 for C minor.
+    pub tonality: Option<String>,
+    /// Genre or form items (P136), e.g. symphony.
+    pub genres: Vec<String>,
+    /// Instance-of items (P31).
+    pub instances: Vec<String>,
+}
+
+pub fn parse_wikidata_works(body: &Value, language: &str) -> Vec<WikidataWork> {
+    entities(body)
+        .map(|(item, entity)| WikidataWork {
+            item: item.clone(),
+            label: entity_label(entity, language),
+            musicbrainz_works: claim_values(entity, "P435")
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+            inception: wikidata_date(entity, "P571")
+                .and_then(|date| date.split('-').next().map(str::to_string))
+                .filter(|year| year.len() == 4),
+            tonality: item_ids(entity, "P826").into_iter().next(),
+            genres: item_ids(entity, "P136"),
+            instances: item_ids(entity, "P31"),
+        })
+        .collect()
+}
+
+fn entity_label(entity: &Value, language: &str) -> Option<String> {
+    let labels = entity.get("labels")?;
+    [language, "en"].iter().find_map(|wanted| {
+        labels
+            .get(*wanted)?
+            .get("value")?
+            .as_str()
+            .map(str::to_string)
+    })
+}
+
+/// Item labels from a `wbgetentities` answer with `props=labels`.
+pub fn parse_labels(body: &Value, language: &str) -> std::collections::HashMap<String, String> {
+    entities(body)
+        .filter_map(|(item, entity)| Some((item.clone(), entity_label(entity, language)?)))
+        .collect()
 }
 
 /// Joins paragraphs, drops sub-headings and empty lines, and cuts at a
@@ -1072,6 +1341,91 @@ pub fn parse_influences(body: &Value) -> Vec<InfluenceItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_scores_come_from_the_album_ratings_table() {
+        let html = r#"<p>Lead.</p><table class="wikitable floatright" data-mw='{"parts":[{"template":{"target":{"wt":"Album ratings","href":"./Template:Album_ratings"}}}]}'>
+<caption>Retrospective professional reviews</caption><tbody>
+<tr><th colspan="2">Review scores</th></tr><tr><th>Source</th><th>Rating</th></tr>
+<tr><td><a href="https://en.wikipedia.org/wiki/AllMusic" title="AllMusic">AllMusic</a></td><td><span title="5/5 stars"><span title="5/5 stars"><img alt="Star"/></span></span><sup class="reference"><a>[29]</a></sup></td></tr>
+<tr><td><i><a title="The Penguin Guide to Jazz">The Penguin Guide to Jazz Recordings</a></i></td><td><span title="4.5/5 stars"><img alt="Star"/></span></td></tr>
+<tr><td><i>Entertainment Weekly</i></td><td>A+<sup class="reference"><a>[30]</a></sup></td></tr>
+<tr><td><i>Pitchfork</i></td><td>10/10<sup>[31]</sup></td></tr>
+<tr><td><i>Pitchfork</i></td><td>9/10</td></tr>
+</tbody></table><table class="wikitable"><tr><td>Chart</td><td>Peak</td></tr></table>"#;
+        let scores = parse_review_scores(html);
+        assert_eq!(
+            scores
+                .iter()
+                .map(|score| (score.publication.as_str(), score.rating.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("AllMusic", "5/5"),
+                ("The Penguin Guide to Jazz Recordings", "4.5/5"),
+                ("Entertainment Weekly", "A+"),
+                ("Pitchfork", "10/10"),
+            ]
+        );
+        assert_eq!((scores[1].score, scores[1].max), (Some(4.5), Some(5.0)));
+        assert_eq!((scores[2].score, scores[2].max), (None, None));
+        // A chart table is not a review table.
+        assert!(
+            parse_review_scores(
+                "<table class=\"wikitable\"><tr><td>Chart</td><td>1</td></tr></table>"
+            )
+            .is_empty()
+        );
+        // Other languages' reception headings are found.
+        let (_, reception) = parse_article_html(
+            "<div class=\"mw-parser-output\"><p>Kind of Blue ist ein Album.</p><h2 id=\"r\">Rezeption</h2><p>Gilt als Meisterwerk.</p></div>",
+        );
+        assert_eq!(reception.as_deref(), Some("Gilt als Meisterwerk."));
+        assert_eq!(source_name("wikipedia", "de"), "German Wikipedia");
+    }
+
+    #[test]
+    fn notable_works_years_keys_and_forms_come_from_wikidata() {
+        let composer = serde_json::json!({"entities": {"Q255": {"claims": {"P800": [
+            {"mainsnak": {"datavalue": {"value": {"id": "Q193778"}}}, "rank": "normal"},
+            {"mainsnak": {"datavalue": {"value": {"id": "Q1"}}}, "rank": "deprecated"},
+            {"mainsnak": {"datavalue": {"value": {"id": "Q42"}}}, "rank": "normal"}
+        ]}}}});
+        assert_eq!(parse_notable_works(&composer), ["Q193778", "Q42"]);
+        let works = serde_json::json!({"entities": {
+            "Q193778": {"labels": {"en": {"value": "Symphony No. 5"}}, "claims": {
+                "P435": [{"mainsnak": {"datavalue": {"value": "22222222-2222-4222-8222-222222222222"}}}],
+                "P571": [{"mainsnak": {"datavalue": {"value": {"time": "+1808-00-00T00:00:00Z", "precision": 9}}}}],
+                "P826": [{"mainsnak": {"datavalue": {"value": {"id": "Q1049064"}}}}],
+                "P136": [{"mainsnak": {"datavalue": {"value": {"id": "Q9734"}}}}]
+            }},
+            "Q404": {"missing": ""}
+        }});
+        let described = parse_wikidata_works(&works, "de");
+        assert_eq!(described.len(), 1);
+        let symphony = &described[0];
+        assert_eq!(symphony.label.as_deref(), Some("Symphony No. 5"));
+        assert_eq!(symphony.inception.as_deref(), Some("1808"));
+        assert_eq!(symphony.tonality.as_deref(), Some("Q1049064"));
+        assert_eq!(symphony.genres, ["Q9734"]);
+        assert_eq!(
+            symphony.musicbrainz_works,
+            ["22222222-2222-4222-8222-222222222222"]
+        );
+        let labels = parse_labels(
+            &serde_json::json!({"entities": {"Q1049064": {"labels": {"en": {"value": "C minor"}}}}}),
+            "de",
+        );
+        assert_eq!(labels.get("Q1049064").map(String::as_str), Some("C minor"));
+        assert_eq!(
+            wikidata_entities_url(
+                &["Q1".into(), "bad".into(), "Q2".into()],
+                "claims|labels",
+                &["de", "en"]
+            ),
+            "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=Q1%7CQ2&props=claims%7Clabels&languages=de%7Cen"
+        );
+    }
+
     use serde_json::json;
 
     #[test]

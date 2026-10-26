@@ -98,6 +98,8 @@ export const ENRICHMENT_STAGE_LABELS: Record<string, string> = {
   commons: "Wikimedia Commons (artist photos)",
   relations: "Wikidata Query Service (influences and followers)",
   coverart: "Cover Art Archive (album covers)",
+  catalogue: "MusicBrainz and Wikidata (composers' full catalogues)",
+  sources: "Wikipedia (other editorial sources)",
 };
 
 /** One line per stage queue for the settings page. */
