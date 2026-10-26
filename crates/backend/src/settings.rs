@@ -345,6 +345,56 @@ fn load_or_create_instance_id_at(path: &Path) -> std::io::Result<String> {
     Ok(value)
 }
 
+/// Hex-encoded 256-bit key that seals streaming-service tokens at rest.
+///
+/// It lives in `Secrets/streaming.key`, outside the database, so a copied
+/// database or backup alone cannot reveal TIDAL or Qobuz credentials.
+pub fn streaming_token_key() -> std::io::Result<[u8; 32]> {
+    #[cfg(test)]
+    return Ok([7_u8; 32]);
+
+    #[cfg(not(test))]
+    {
+        let path = data_path(&["Secrets", "streaming.key"]);
+        load_or_create_key_at(&path)
+    }
+}
+
+fn decode_hex_key(value: &str) -> Option<[u8; 32]> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut key = [0_u8; 32];
+    for (index, slot) in key.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(key)
+}
+
+fn load_or_create_key_at(path: &Path) -> std::io::Result<[u8; 32]> {
+    if let Ok(value) = fs::read_to_string(path) {
+        return match decode_hex_key(&value) {
+            Some(key) => {
+                restrict_secret_permissions(path);
+                Ok(key)
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "streaming.key is invalid; remove it to sign in to streaming services again",
+            )),
+        };
+    }
+    let mut key = [0_u8; 32];
+    rand::fill(&mut key);
+    let encoded = key
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    persist_secret(path, &encoded)?;
+    Ok(key)
+}
+
 pub fn initialize_session_secret() -> Result<(), String> {
     if SESSION_SECRET.get().is_some() {
         return Ok(());
@@ -452,10 +502,24 @@ fn restrict_secret_permissions(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        allowed_origins_for, apply_reset_at, load_or_create_instance_id_at,
+        allowed_origins_for, apply_reset_at, load_or_create_instance_id_at, load_or_create_key_at,
         load_or_create_session_secret_at, parse_bind_address, parse_port, parse_public_url,
         persist_secret, secure_cookies_for,
     };
+
+    #[test]
+    fn streaming_token_keys_are_created_once_and_reject_corruption() {
+        let directory =
+            std::env::temp_dir().join(format!("parson-streaming-key-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("streaming.key");
+        let first = load_or_create_key_at(&path).expect("create key");
+        let second = load_or_create_key_at(&path).expect("reload key");
+        assert_eq!(first, second);
+        assert_ne!(first, [0_u8; 32]);
+        std::fs::write(&path, "not-a-key").expect("corrupt key");
+        assert!(load_or_create_key_at(&path).is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn invalid_ports_are_rejected_instead_of_silently_defaulting() {

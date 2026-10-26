@@ -28,12 +28,15 @@ import {
   decodeFocus,
   emptyFocus,
   encodeFocus,
+  getCatalogAlbums,
   getFocusPage,
   getLibraryCatalog,
   getLibraryCatalogArtists,
   getPlaylists,
   isFocused,
   withEntity,
+  type CatalogFilter,
+  type CatalogSort,
   type FocusComposer,
   type FocusEntity,
   type FocusQuery,
@@ -85,6 +88,26 @@ import {
   LibraryMessage,
   formatDuration,
 } from "./library-view-primitives";
+import {
+  SourceFilterChips,
+  StreamingLibraryEmpty,
+  StreamingTrackList,
+  useLibrarySources,
+} from "@/features/streaming/library-sources";
+import { SavedPlaylistCopyCards } from "@/features/streaming/streaming-playlists";
+import type { LibraryAlbumEntry } from "@/features/streaming/streaming-model";
+import {
+  activeFocusCount,
+  catalogAlbumEntry,
+  emptyFocus as emptyCatalogFocus,
+  parseCatalogSort,
+  parseLibraryFocus,
+  toCatalogFilter,
+  writeCatalogSort,
+  writeLibraryFocus,
+  type LibraryFocus as CatalogFocus,
+} from "@/features/streaming/library-focus";
+import { LibraryFocusBar as CatalogFocusBar } from "@/features/streaming/library-focus-bar";
 
 const PAGE_SIZE = 100;
 const views = [
@@ -104,6 +127,21 @@ function isBrowseView(view: LibraryView): view is BrowseView {
 }
 
 type FocusedAlbum = LibraryCatalogAlbum & { quality?: string | null };
+
+/** A local album the Focus matched, as a library grid entry. */
+function focusedAlbumEntry(album: FocusedAlbum): LibraryAlbumEntry {
+  return {
+    key: `local:${album.id}`,
+    id: album.id,
+    name: album.name,
+    artistId: album.artistId,
+    artistName: album.artistName,
+    cover: album.coverPath,
+    year: album.releaseYear,
+    source: null,
+    formatLabel: album.quality === "hires" ? qualityBadgeLabel("hires") : null,
+  };
+}
 type FocusedSong = LibraryCatalogSong & { badge?: string | null };
 
 function entityForView(view: LibraryView): FocusEntity {
@@ -153,21 +191,50 @@ export default function LibraryOverview() {
   const playFocusQuery = usePlayFocus();
   const browsing = isBrowseView(view);
   const focusActive = browsing && usesFocusEndpoint(focus);
-  const catalogEnabled =
-    !focusActive && (view === "albums" || view === "songs");
+  const catalogEnabled = !focusActive && view === "songs";
+  // The storage-location focus (local files, TIDAL or Qobuz library), with
+  // genre, decade and order, over the albums catalog that also holds
+  // streaming library albums. The full Focus above narrows the local
+  // library; while it is active, it decides what is shown.
+  const [catalogFocus, setCatalogFocusState] = useState<CatalogFocus>(() =>
+    typeof window === "undefined"
+      ? emptyCatalogFocus
+      : parseLibraryFocus(new URLSearchParams(window.location.search)),
+  );
+  const [sort, setSortState] = useState<CatalogSort>(() =>
+    typeof window === "undefined"
+      ? "artist"
+      : parseCatalogSort(new URLSearchParams(window.location.search)),
+  );
+  const catalogFilter: CatalogFilter = {
+    ...toCatalogFilter(catalogFocus),
+    ...(sort === "artist" ? {} : { sort }),
+  };
 
   const catalog = useInfiniteQuery({
-    queryKey: ["library", "catalog", view],
+    queryKey: ["library", "catalog", "songs"],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      getLibraryCatalog(pageParam, PAGE_SIZE, view as "albums" | "songs"),
+      getLibraryCatalog(pageParam, PAGE_SIZE, "songs"),
     getNextPageParam: (lastPage, pages) => {
       const next = pages.length * PAGE_SIZE;
-      const total =
-        view === "albums" ? lastPage.totalAlbums : lastPage.totalSongs;
-      return next < total ? next : undefined;
+      return next < lastPage.totalSongs ? next : undefined;
     },
     enabled: catalogEnabled,
+  });
+  // Local files and streaming library albums in one catalog, with the
+  // storage-location filters applied on the server.
+  const albumCatalog = useInfiniteQuery({
+    queryKey: ["library", "catalog-albums", catalogFilter],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      getCatalogAlbums(catalogFilter, { offset: pageParam, limit: PAGE_SIZE }),
+    getNextPageParam: (lastPage, pages) => {
+      const next = pages.length * PAGE_SIZE;
+      return next < lastPage.total ? next : undefined;
+    },
+    placeholderData: keepPreviousData,
+    enabled: !focusActive && view === "albums",
   });
   const artists = useInfiniteQuery({
     queryKey: ["library", "catalog", "artists"],
@@ -196,9 +263,19 @@ export default function LibraryOverview() {
 
   const catalogPages = catalog.data?.pages ?? [];
   const focusPages = focused.data?.pages ?? [];
-  const allAlbums: FocusedAlbum[] = focusActive
-    ? uniqueById(focusPages.flatMap((page) => page.albums))
-    : uniqueById(catalogPages.flatMap((page) => page.albums));
+  const sources = useLibrarySources("track");
+  const streamingFilter =
+    sources.source === "tidal" || sources.source === "qobuz"
+      ? sources.source
+      : null;
+  const albumPages = albumCatalog.data?.pages ?? [];
+  const albumFacets = albumPages[0]?.facets;
+  const albumTotal = albumPages[0]?.total;
+  const allAlbums: LibraryAlbumEntry[] = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.albums)).map(
+        focusedAlbumEntry,
+      )
+    : albumPages.flatMap((page) => page.albums).map(catalogAlbumEntry);
   const allSongs: FocusedSong[] = focusActive
     ? uniqueById(focusPages.flatMap((page) => page.songs)).map((song) => ({
         ...song,
@@ -216,22 +293,50 @@ export default function LibraryOverview() {
   const countLabel = focusActive
     ? focusCountLabel(focus, lastFocusPage?.total, lastFocusPage?.libraryTotal)
     : view === "albums"
-      ? focusCountLabel(focus, lastCatalogPage?.totalAlbums, undefined)
+      ? focusCountLabel(focus, albumTotal, undefined)
       : view === "songs"
         ? focusCountLabel(focus, lastCatalogPage?.totalSongs, undefined)
         : null;
 
-  const active = focusActive ? focused : view === "artists" ? artists : catalog;
+  const active = focusActive
+    ? focused
+    : view === "artists"
+      ? artists
+      : view === "albums"
+        ? albumCatalog
+        : catalog;
   const initialLoading = focusActive
     ? focused.isPending && !focused.data
     : (catalogEnabled && catalog.isPending && !catalog.data) ||
+      (view === "albums" && albumCatalog.isPending && !albumCatalog.data) ||
       (view === "artists" && artists.isPending && !artists.data) ||
       (view === "playlists" && playlists.isPending);
   const activeError = focusActive
     ? focused.error
     : ((catalogEnabled ? catalog.error : null) ??
+      (view === "albums" ? albumCatalog.error : null) ??
       (view === "artists" ? artists.error : null) ??
       (view === "playlists" ? playlists.error : null));
+
+  const writeCatalogParams = (
+    write: (params: URLSearchParams) => URLSearchParams,
+  ) => {
+    const params = write(new URLSearchParams(window.location.search));
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `/library${params.size ? `?${params}` : ""}`,
+    );
+  };
+  const setCatalogFocus = (next: CatalogFocus) => {
+    setCatalogFocusState(next);
+    sources.setSource(next.source);
+    writeCatalogParams((params) => writeLibraryFocus(params, next));
+  };
+  const setSort = (next: CatalogSort) => {
+    setSortState(next);
+    writeCatalogParams((params) => writeCatalogSort(params, next));
+  };
 
   const selectView = (nextView: LibraryView) => {
     const nextFocus = isBrowseView(nextView)
@@ -375,28 +480,85 @@ export default function LibraryOverview() {
         </p>
       )}
 
-      {view === "albums" && (
-        <AlbumsView
-          albums={allAlbums}
-          focused={focusActive}
-          hasMore={active.hasNextPage}
-          loading={initialLoading}
-          loadingMore={active.isFetchingNextPage}
-          onClearFocus={clearFocus}
-          onLoadMore={() => void active.fetchNextPage()}
+      {view === "songs" && !focusActive && sources.showFilters && (
+        <SourceFilterChips
+          available={sources.available}
+          onChange={(next) =>
+            setCatalogFocus({ ...catalogFocus, source: next })
+          }
+          source={sources.source}
         />
       )}
-      {view === "songs" && (
-        <SongsView
-          focused={focusActive}
-          hasMore={active.hasNextPage}
-          loading={initialLoading}
-          loadingMore={active.isFetchingNextPage}
-          onClearFocus={clearFocus}
-          onLoadMore={() => void active.fetchNextPage()}
-          songs={allSongs}
-        />
-      )}
+      {view === "albums" &&
+        !focusActive &&
+        (albumTotal !== undefined || albumFacets) && (
+          <CatalogFocusBar
+            available={sources.available}
+            facets={albumFacets}
+            focus={catalogFocus}
+            onChange={setCatalogFocus}
+            onSortChange={setSort}
+            sort={sort}
+            total={albumTotal}
+          />
+        )}
+
+      {view === "albums" &&
+        (!focusActive &&
+        !initialLoading &&
+        !allAlbums.length &&
+        streamingFilter &&
+        activeFocusCount(catalogFocus) === 1 ? (
+          <StreamingLibraryEmpty kind="albums" provider={streamingFilter} />
+        ) : !focusActive &&
+          !initialLoading &&
+          !allAlbums.length &&
+          activeFocusCount(catalogFocus) > 0 ? (
+          <LibraryMessage
+            title="No albums match this focus"
+            body="Turn off a filter, or choose Clear focus to see every album again."
+          />
+        ) : (
+          <AlbumsView
+            albums={allAlbums}
+            focused={focusActive}
+            hasMore={active.hasNextPage}
+            loading={initialLoading}
+            loadingMore={active.isFetchingNextPage}
+            onClearFocus={clearFocus}
+            onLoadMore={() => void active.fetchNextPage()}
+          />
+        ))}
+      {view === "songs" &&
+        (!focusActive && streamingFilter ? (
+          sources.loading ? (
+            <LibraryLoading compact />
+          ) : sources.tracks.length ? (
+            <StreamingTrackList tracks={sources.tracks} />
+          ) : (
+            <StreamingLibraryEmpty kind="tracks" provider={streamingFilter} />
+          )
+        ) : (
+          <>
+            <SongsView
+              focused={focusActive}
+              hasMore={active.hasNextPage}
+              loading={initialLoading}
+              loadingMore={active.isFetchingNextPage}
+              onClearFocus={clearFocus}
+              onLoadMore={() => void active.fetchNextPage()}
+              songs={allSongs}
+            />
+            {!focusActive &&
+              sources.source === "all" &&
+              !catalog.hasNextPage && (
+                <StreamingTrackList
+                  title="Streaming tracks in your library"
+                  tracks={sources.tracks}
+                />
+              )}
+          </>
+        ))}
       {view === "artists" && (
         <ArtistsView
           artists={allArtists}
@@ -487,7 +649,7 @@ function AlbumsView({
   onClearFocus,
   onLoadMore,
 }: {
-  albums: FocusedAlbum[];
+  albums: LibraryAlbumEntry[];
   focused: boolean;
   hasMore: boolean;
   loading: boolean;
@@ -514,27 +676,19 @@ function AlbumsView({
   return (
     <>
       <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {albums.map((album) => {
-          const badge =
-            album.quality === "hires" ? qualityBadgeLabel("hires") : null;
-          return (
-            <div className="relative min-w-0" key={album.id}>
-              <AlbumCard
-                album_id={album.id}
-                album_name={album.name}
-                album_cover={album.coverPath}
-                artist_id={album.artistId}
-                artist_name={album.artistName}
-                first_release_date={album.releaseYear}
-              />
-              {badge && (
-                <span className="pointer-events-none absolute left-2 top-2 z-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200 backdrop-blur">
-                  {badge}
-                </span>
-              )}
-            </div>
-          );
-        })}
+        {albums.map((album) => (
+          <AlbumCard
+            key={album.key}
+            album_id={album.id}
+            album_name={album.name}
+            album_cover={album.cover}
+            artist_id={album.artistId}
+            artist_name={album.artistName}
+            first_release_date={album.year}
+            formatLabel={album.formatLabel}
+            source={album.source ?? undefined}
+          />
+        ))}
       </div>
       <InfiniteLoad
         hasMore={hasMore}
@@ -844,6 +998,7 @@ function PlaylistsView({
                 {playlists?.map((playlist) => (
                   <PlaylistCard key={playlist.id} playlist={playlist} />
                 ))}
+                <SavedPlaylistCopyCards />
               </div>
             )}
           </div>

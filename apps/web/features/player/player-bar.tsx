@@ -22,7 +22,11 @@ import {
   isExplicitSongTitle,
 } from "@/features/library/song-presentation";
 import { trackArtistCreditParts } from "@/features/library/track-artist-credit";
-import { radioSectionStart, radioStationLabel } from "@parson/music-sdk";
+import {
+  isStreamingId,
+  radioSectionStart,
+  radioStationLabel,
+} from "@parson/music-sdk";
 import { RadioThumbs } from "./radio/radio-controls";
 import { RadioNotices } from "./radio/radio-notices";
 import { useSignalPath } from "./signal-path";
@@ -298,6 +302,8 @@ export default function PlayerBar() {
     Boolean(remote) || casting,
   );
   const signalSongId = castItem?.song_id || song.id;
+  // TIDAL and Qobuz tracks show the format their stream delivered instead.
+  const hideSignalPath = Boolean(remote) || isStreamingId(signalSongId);
   const { path: signalPath, loading: signalLoading } = useSignalPath({
     audio: effectiveSong.audio,
     castDeviceName: cast.session?.receiver_name,
@@ -522,7 +528,9 @@ export default function PlayerBar() {
           queue={playerQueue}
           queueOpen={queueOpen}
           signalBadge={
-            remote ? null : <SignalPathLight variant="pill" {...signalProps} />
+            hideSignalPath ? null : (
+              <SignalPathLight variant="pill" {...signalProps} />
+            )
           }
           slowedReverb={slowedReverb}
           songId={remote ? queueSongId : castItem?.song_id || song.id}
@@ -628,7 +636,9 @@ export default function PlayerBar() {
         onVolumeChange={changeVolume}
         playbackRate={playbackRate}
         queueOpen={queueOpen}
-        signalLight={remote ? null : <SignalPathLight {...signalProps} />}
+        signalLight={
+          hideSignalPath ? null : <SignalPathLight {...signalProps} />
+        }
         slowedReverb={slowedReverb}
         songId={remote ? queueSongId : castItem?.song_id || song.id}
         title={displayTitle}

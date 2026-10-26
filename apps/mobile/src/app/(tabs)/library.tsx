@@ -2,6 +2,7 @@ import {
   composerFacts,
   emptyFocus,
   focusCountLabel,
+  getCatalogAlbums,
   getFocusPage,
   getLibraryCatalog,
   getLibraryCatalogArtists,
@@ -16,6 +17,7 @@ import {
   type LibraryCatalogAlbum,
   type LibraryCatalogArtist,
   type PlaylistSummary,
+  type StreamingProviderId,
 } from "@parson/music-sdk";
 import {
   keepPreviousData,
@@ -64,6 +66,25 @@ import {
   focusEntityForSection,
   type LibrarySection,
 } from "@/lib/library-focus";
+import { FormatTag, SourceTag } from "@/components/streaming-ui";
+import {
+  focusChips,
+  focusFilter,
+  noFocus,
+  type MobileFocus,
+} from "@/lib/catalog-focus";
+
+/** One row of the Albums list: a local album or a streaming library album. */
+type AlbumListItem = {
+  key: string;
+  id: string;
+  artistId: string;
+  name: string;
+  meta: string;
+  cover: string;
+  source: StreamingProviderId | null;
+  formatLabel: string | null;
+};
 
 const PAGE_SIZE = 100;
 
@@ -92,8 +113,17 @@ export default function LibraryScreen() {
     setFocusQuery(next);
     setSelectedSection(next.entity);
   };
-  const [selectedAlbum, setSelectedAlbum] =
-    useState<LibraryCatalogAlbum | null>(null);
+  const [selectedAlbum, setSelectedAlbum] = useState<{
+    id: string;
+    artistId: string;
+    name: string;
+  } | null>(null);
+  // The storage-location focus (local files, TIDAL or Qobuz library), with
+  // genre and decade, over the albums catalog that also holds streaming
+  // library albums. The full Focus narrows the local library and, while it
+  // is active, decides what is shown.
+  const [catalogFocus, setCatalogFocus] = useState<MobileFocus>(noFocus);
+  const catalogFilter = focusFilter(catalogFocus);
   const [selectedArtist, setSelectedArtist] =
     useState<LibraryCatalogArtist | null>(null);
   const [selectedDownloadedAlbum, setSelectedDownloadedAlbum] =
@@ -107,17 +137,29 @@ export default function LibraryScreen() {
   const playlistCardSize = Math.floor((windowWidth - 56) / 2);
 
   const catalog = useInfiniteQuery({
-    queryKey: ["library", "catalog", section],
+    queryKey: ["library", "catalog", "songs"],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      getLibraryCatalog(pageParam, PAGE_SIZE, section as "albums" | "songs"),
+      getLibraryCatalog(pageParam, PAGE_SIZE, "songs"),
     getNextPageParam: (lastPage, pages) => {
       const next = pages.length * PAGE_SIZE;
-      const total =
-        section === "albums" ? lastPage.totalAlbums : lastPage.totalSongs;
-      return next < total ? next : undefined;
+      return next < lastPage.totalSongs ? next : undefined;
     },
-    enabled: !focusActive && (section === "albums" || section === "songs"),
+    enabled: !focusActive && section === "songs",
+  });
+  // Local and streaming library albums in one list, focused by source,
+  // genre and decade on the server.
+  const albumCatalog = useInfiniteQuery({
+    queryKey: ["library", "catalog-albums", catalogFilter],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      getCatalogAlbums(catalogFilter, { offset: pageParam, limit: PAGE_SIZE }),
+    getNextPageParam: (lastPage, pages) => {
+      const next = pages.length * PAGE_SIZE;
+      return next < lastPage.total ? next : undefined;
+    },
+    placeholderData: keepPreviousData,
+    enabled: !focusActive && section === "albums",
   });
   const focused = useInfiniteQuery({
     queryKey: ["library", "focus", "page", "mobile", focusQuery],
@@ -181,9 +223,37 @@ export default function LibraryScreen() {
   });
   const catalogPages = catalog.data?.pages ?? [];
   const focusPages = focused.data?.pages ?? [];
-  const albumItems: LibraryCatalogAlbum[] = focusActive
-    ? focusPages.flatMap((page) => page.albums)
-    : catalogPages.flatMap((page) => page.albums);
+  const albumPages = albumCatalog.data?.pages ?? [];
+  const chips = focusActive
+    ? []
+    : focusChips(albumPages[0]?.facets, catalogFocus);
+  const albumItems: AlbumListItem[] = focusActive
+    ? focusPages
+        .flatMap((page) => page.albums)
+        .map((album: LibraryCatalogAlbum) => ({
+          key: `local:${album.id}`,
+          id: album.id,
+          artistId: album.artistId,
+          name: album.name,
+          meta: `Album • ${album.artistName} • ${album.songCount} songs`,
+          cover: album.coverPath,
+          source: null,
+          formatLabel: null,
+        }))
+    : albumPages
+        .flatMap((page) => page.albums)
+        .map((album) => ({
+          key: album.key,
+          id: album.id,
+          artistId: album.artist_id,
+          name: album.name,
+          meta: [album.artist_name, album.year, album.genres[0]]
+            .filter(Boolean)
+            .join(" • "),
+          cover: album.cover,
+          source: album.source === "local" ? null : album.source,
+          formatLabel: album.format_label,
+        }));
   const songItems = focusActive
     ? focusPages.flatMap((page) => page.songs)
     : catalogPages.flatMap((page) => page.songs);
@@ -204,7 +274,7 @@ export default function LibraryScreen() {
         lastFocusPage?.libraryTotal,
       )
     : section === "albums"
-      ? focusCountLabel(focusQuery, lastCatalogPage?.totalAlbums, undefined)
+      ? focusCountLabel(focusQuery, albumPages[0]?.total, undefined)
       : section === "songs"
         ? focusCountLabel(focusQuery, lastCatalogPage?.totalSongs, undefined)
         : null;
@@ -213,18 +283,16 @@ export default function LibraryScreen() {
   const downloadedItems = groupDownloadedLibrary(downloads.data ?? []);
   const loading =
     (focusActive && focused.isPending && !focused.data) ||
-    (!focusActive &&
-      (section === "albums" || section === "songs") &&
-      catalog.isPending) ||
+    (!focusActive && section === "songs" && catalog.isPending) ||
+    (!focusActive && section === "albums" && albumCatalog.isPending) ||
     (!focusActive && section === "artists" && artists.isPending) ||
     (section === "liked" && liked.isPending) ||
     (section === "downloads" && downloads.isPending) ||
     (section === "playlists" && playlists.isPending);
   const failed =
     (focusActive && focused.isError) ||
-    (!focusActive &&
-      (section === "albums" || section === "songs") &&
-      catalog.isError) ||
+    (!focusActive && section === "songs" && catalog.isError) ||
+    (!focusActive && section === "albums" && albumCatalog.isError) ||
     (!focusActive && section === "artists" && artists.isError) ||
     (section === "liked" && liked.isError) ||
     (section === "downloads" && downloads.isError) ||
@@ -238,8 +306,8 @@ export default function LibraryScreen() {
     (section === "liked" && likedSongs.length === 0);
   const retry = () => {
     if (focusActive) void focused.refetch();
-    else if (section === "albums" || section === "songs")
-      void catalog.refetch();
+    else if (section === "albums") void albumCatalog.refetch();
+    else if (section === "songs") void catalog.refetch();
     else if (section === "artists") void artists.refetch();
     else if (section === "liked") void liked.refetch();
     else if (section === "downloads") void downloads.refetch();
@@ -327,6 +395,35 @@ export default function LibraryScreen() {
             setQuery={applyFocus}
           />
         ) : null}
+        {section === "albums" && chips.length ? (
+          <ScrollView
+            accessibilityLabel="Focus"
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.focusChips}
+          >
+            {chips.map((chip) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: chip.active }}
+                accessibilityLabel={`${chip.label}, ${chip.count} albums`}
+                key={chip.key}
+                onPress={() => setCatalogFocus(chip.next)}
+                style={[styles.focusChip, chip.active && styles.activePill]}
+              >
+                <Text
+                  style={[
+                    styles.focusChipText,
+                    chip.active && styles.activePillText,
+                  ]}
+                >
+                  {chip.label}{" "}
+                  <Text style={styles.focusChipCount}>{chip.count}</Text>
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        ) : null}
         {loading ? (
           <ActivityIndicator color="white" style={{ marginTop: 60 }} />
         ) : failed ? (
@@ -380,30 +477,56 @@ export default function LibraryScreen() {
                     ? "Songs you like will appear here."
                     : focusActive
                       ? "Nothing matches this focus. Remove a filter or switch to Match any."
-                      : "Refresh or index your library from Settings."}
+                      : section === "albums" &&
+                          (catalogFocus.source ||
+                            catalogFocus.genre ||
+                            catalogFocus.decade)
+                        ? "Tap an active chip to turn that filter off."
+                        : "Refresh or index your library from Settings."}
                 </Text>
               </View>
             ) : null}
             {section === "albums" &&
               albumItems.map((album) => (
                 <Pressable
-                  accessibilityLabel={`${album.name} by ${album.artistName}`}
+                  accessibilityLabel={`${album.name}, ${album.meta}${
+                    album.source ? `, ${album.source} album` : ""
+                  }`}
                   accessibilityRole="button"
-                  key={album.id}
+                  key={album.key}
                   style={styles.row}
                   onPress={() => {
-                    if (!selectedAlbum) router.push(`/album/${album.id}`);
+                    if (!selectedAlbum)
+                      router.push(`/album/${encodeURIComponent(album.id)}`);
                   }}
-                  onLongPress={() => setSelectedAlbum(album)}
+                  onLongPress={() => {
+                    if (!album.source) {
+                      setSelectedAlbum({
+                        id: album.id,
+                        artistId: album.artistId,
+                        name: album.name,
+                      });
+                    }
+                  }}
                 >
-                  <Artwork path={album.coverPath} size={58} />
+                  <Artwork path={album.cover} size={58} />
                   <View style={styles.labels}>
                     <Text numberOfLines={1} style={styles.name}>
                       {album.name}
                     </Text>
-                    <Text numberOfLines={1} style={styles.meta}>
-                      Album • {album.artistName} • {album.songCount} songs
-                    </Text>
+                    <View style={styles.albumMeta}>
+                      {album.source ? (
+                        <SourceTag provider={album.source} />
+                      ) : null}
+                      <Text numberOfLines={1} style={styles.metaInline}>
+                        {album.meta}
+                      </Text>
+                    </View>
+                    {album.formatLabel ? (
+                      <View style={{ marginTop: 5, flexDirection: "row" }}>
+                        <FormatTag label={album.formatLabel} />
+                      </View>
+                    ) : null}
                   </View>
                 </Pressable>
               ))}
@@ -525,12 +648,18 @@ export default function LibraryScreen() {
                 onPress={() => void focused.fetchNextPage()}
               />
             ) : null}
-            {!focusActive &&
-            (section === "albums" || section === "songs") &&
-            catalog.hasNextPage ? (
+            {!focusActive && section === "songs" && catalog.hasNextPage ? (
               <LoadMore
                 loading={catalog.isFetchingNextPage}
                 onPress={() => void catalog.fetchNextPage()}
+              />
+            ) : null}
+            {!focusActive &&
+            section === "albums" &&
+            albumCatalog.hasNextPage ? (
+              <LoadMore
+                loading={albumCatalog.isFetchingNextPage}
+                onPress={() => void albumCatalog.fetchNextPage()}
               />
             ) : null}
             {!focusActive && section === "artists" && artists.hasNextPage ? (
@@ -803,4 +932,27 @@ const styles = StyleSheet.create({
   errorState: { alignItems: "center", padding: 36, marginTop: 28 },
   errorTitle: { color: "white", fontSize: 16, fontWeight: "800" },
   errorText: { color: palette.secondary, marginTop: 6 },
+  albumMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 4,
+  },
+  metaInline: { color: palette.secondary, fontSize: 13, flexShrink: 1 },
+  focusChips: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+  },
+  focusChip: {
+    borderWidth: 1,
+    borderColor: palette.borderStrong,
+    paddingHorizontal: 13,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+  },
+  focusChipText: { color: "white", fontSize: 13, fontWeight: "600" },
+  focusChipCount: { color: palette.muted, fontSize: 12, fontWeight: "500" },
 });

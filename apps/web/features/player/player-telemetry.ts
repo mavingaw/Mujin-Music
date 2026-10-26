@@ -1,6 +1,10 @@
 "use client";
 
-import { recordPlaybackEvent, type PlaybackEventType } from "@parson/music-sdk";
+import {
+  isStreamingId,
+  recordPlaybackEvent,
+  type PlaybackEventType,
+} from "@parson/music-sdk";
 import type { LibrarySong } from "@parson/music-sdk/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, type MutableRefObject } from "react";
@@ -49,7 +53,8 @@ export function usePlaybackTelemetry({
   const send = useCallback(
     (eventType: PlaybackEventType, position?: number, duration?: number) => {
       const song = activeSong.current;
-      if (!song.id || !userId) return;
+      // Listening history and recommendations cover the local library.
+      if (!song.id || !userId || isStreamingId(song.id)) return;
       void recordPlaybackEvent({
         event_key: `${sessionId.current}:${song.id}:${eventType}:${Date.now()}`,
         song_id: song.id,

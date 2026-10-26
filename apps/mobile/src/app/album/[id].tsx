@@ -11,6 +11,8 @@ import {
   type ReleaseMatchCheck,
   type LibraryAlbum,
   unverifiedMatch,
+  isStreamingId,
+  localAlbumFormat,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -41,8 +43,12 @@ import { joinMeta } from "@/lib/credit-links";
 import { GenreChips } from "@/components/genres";
 import { UnverifiedMatchNotice } from "@/components/release-match";
 import { ReviewScoresBlock, TextSourceChips } from "@/components/text-sources";
+import {
+  PreferredPlayCaption,
+  usePreferredAlbumPlay,
+} from "@/components/preferred-album-play";
+import { StreamingAlbumScreen } from "@/components/streaming-album-screen";
 import { palette } from "@/constants/colors";
-import { usePlayer } from "@/providers/player-provider";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { formatCollectionDuration } from "@/lib/format";
 import {
@@ -52,8 +58,12 @@ import {
 
 export default function AlbumScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  if (isStreamingId(id)) return <StreamingAlbumScreen id={id} />;
+  return <LibraryAlbumScreen id={id} />;
+}
+
+function LibraryAlbumScreen({ id }: { id: string }) {
   const router = useRouter();
-  const player = usePlayer();
   const playback = useZonePlayback();
   const album = useQuery({
     queryKey: ["album", id],
@@ -69,6 +79,22 @@ export default function AlbumScreen() {
   const [actionsOpen, setActionsOpen] = useState(false);
   const [textKind, setTextKind] = useState<string | null>(null);
   const [pickedSource, setPickedSource] = useState<string | null>(null);
+  const loaded = album.data;
+  const preferred = usePreferredAlbumPlay(
+    loaded
+      ? {
+          id: String(loaded.id),
+          title: loaded.name,
+          artistName:
+            loaded.artist_object?.name ??
+            loaded.contributing_artists?.[0] ??
+            "",
+          source: "local",
+          format: localAlbumFormat(loaded.songs ?? []),
+        }
+      : null,
+    loaded?.songs ?? [],
+  );
   if (album.isPending)
     return (
       <Screen>
@@ -123,8 +149,7 @@ export default function AlbumScreen() {
   const shownPanel =
     texts.find((entry) => entry.key === textKind) ?? texts[0] ?? null;
   const shownText = shownPanel?.text ?? null;
-  const albumPlaying =
-    player.isPlaying && player.current?.album_object?.id === data.id;
+  const albumPlaying = preferred.playing;
   return (
     <Screen>
       <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
@@ -191,14 +216,9 @@ export default function AlbumScreen() {
                 {...immediatePressFeedback}
                 accessibilityLabel={albumPlaying ? "Pause album" : "Play album"}
                 accessibilityRole="button"
-                disabled={!data.songs.length}
+                disabled={!data.songs.length || preferred.starting}
                 style={styles.circle}
-                onPress={() =>
-                  albumPlaying
-                    ? player.toggle()
-                    : data.songs[0] &&
-                      playback.playSong(data.songs[0], data.songs)
-                }
+                onPress={() => void preferred.play()}
               >
                 {albumPlaying ? (
                   <PauseGlyph color="black" size={25} />
@@ -217,6 +237,7 @@ export default function AlbumScreen() {
                 <Shuffle color={palette.secondary} size={21} />
               </Pressable>
             </View>
+            <PreferredPlayCaption play={preferred} />
           </View>
           <AlbumFocusTracks
             album={data}

@@ -1,6 +1,9 @@
 "use client";
 
 import FavoriteButton from "@/features/library/favorite-button";
+import { DeliveredFormat } from "@/features/streaming/delivered-format";
+import { NowPlayingStreamingSource } from "@/features/streaming/now-playing-source";
+import { isStreamingId } from "@parson/music-sdk";
 import { ExplicitBadge } from "@/features/library/song-title";
 import { ArtistCreditLinks } from "@/features/library/artist-credit-links";
 import type { TrackArtistCreditPart } from "@/features/library/track-artist-credit";
@@ -301,7 +304,7 @@ function TrackInfo({
   return (
     <section className="flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden md:justify-self-start">
       <Link
-        href={`/album?id=${albumId}`}
+        href={`/album?id=${encodeURIComponent(albumId)}`}
         aria-label={`View ${title} album`}
         className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg md:h-14 md:w-14"
       >
@@ -314,10 +317,21 @@ function TrackInfo({
         />
       </Link>
       <div className="min-w-0 flex-[0_1_auto] sm:ml-1">
-        <MarqueeTitle href={`/album?id=${albumId}`} title={title} />
-        <span className="block truncate text-xs text-zinc-400">
-          {explicit && <ExplicitBadge />}
-          <ArtistCreditLinks credits={artistCredits} />
+        <MarqueeTitle
+          href={`/album?id=${encodeURIComponent(albumId)}`}
+          title={title}
+        />
+        <span className="flex min-w-0 items-center gap-2 text-xs text-zinc-400">
+          <span className="block min-w-0 truncate">
+            {explicit && <ExplicitBadge />}
+            <ArtistCreditLinks credits={artistCredits} />
+          </span>
+          {isStreamingId(songId) && (
+            <DeliveredFormat
+              className="hidden sm:inline-flex"
+              songId={songId}
+            />
+          )}
         </span>
         {zoneLabel && (
           <span className="flex min-w-0 items-center gap-1.5">
@@ -328,7 +342,12 @@ function TrackInfo({
           </span>
         )}
       </div>
-      {songId && <FavoriteButton songId={songId} songName={title} />}
+      {songId &&
+        (isStreamingId(songId) ? (
+          <NowPlayingStreamingSource songId={songId} title={title} />
+        ) : (
+          <FavoriteButton songId={songId} songName={title} />
+        ))}
       {feedback && (
         <span className="relative z-30 hidden md:flex">{feedback}</span>
       )}

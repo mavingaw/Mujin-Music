@@ -17,8 +17,8 @@ use crate::api::library::{
 };
 use crate::api::{
     album, album_sources, artist, cast, data, editorial, filesystem, focus, genre_pages, genres,
-    home, imports, lyrics, metadata, outputs, playback, playlist, search, setup, song, user, works,
-    zones,
+    home, imports, key_service, lyrics, metadata, outputs, playback, playlist, providers, search,
+    setup, song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -113,6 +113,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(lyrics::configure)
         .configure(works::configure)
         .configure(imports::configure)
+        .configure(providers::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -258,7 +259,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "chromecast",
             "credits",
             "works",
-            "imports"
+            "imports",
+            "streaming_services"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
@@ -334,6 +336,16 @@ pub async fn build_server_with_shutdown_timeout(
         database.get_ref().clone(),
         local_app.library.clone(),
     ));
+    let streaming_services = web::Data::new(
+        crate::providers::hub::StreamingHub::from_env(database.get_ref().clone())
+            .map_err(std::io::Error::other)?,
+    );
+    // A server that holds TIDAL or Qobuz keys can serve them to other
+    // Parson servers as a key service.
+    let key_service_app = crate::providers::key_service::ServiceKeys::from_env().map(|keys| {
+        tracing::info!(url = %keys.public_url, "serving the Parson key service");
+        web::Data::new(key_service::KeyServiceApp::new(keys))
+    });
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
@@ -375,6 +387,7 @@ pub async fn build_server_with_shutdown_timeout(
             .app_data(lyrics_service.clone())
             .app_data(native_outputs.clone())
             .app_data(zone_service.clone())
+            .app_data(streaming_services.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())
@@ -439,6 +452,11 @@ pub async fn build_server_with_shutdown_timeout(
             )
             .route("/health/ready", web::get().to(readiness))
             .route("/.well-known/parson", web::get().to(discovery_manifest))
+            .configure(|config| {
+                if let Some(app) = key_service_app.clone() {
+                    key_service::configure(config, app);
+                }
+            })
             .route(
                 "/{filename:.*}",
                 web::head().to(assets::serve_embedded_file),

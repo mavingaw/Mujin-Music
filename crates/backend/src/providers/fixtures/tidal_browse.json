@@ -1,0 +1,398 @@
+[
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/genres",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "name": "Pop",
+            "path": "Pop",
+            "hasPlaylists": true,
+            "hasArtists": false,
+            "hasAlbums": true,
+            "hasTracks": true,
+            "hasVideos": true,
+            "image": "0b6f3d2a-6c41-4a8e-9a7e-2f1d6c9b8a01"
+          },
+          {
+            "name": "Jazz",
+            "path": "Jazz",
+            "hasPlaylists": true,
+            "hasArtists": false,
+            "hasAlbums": true,
+            "hasTracks": true,
+            "hasVideos": false,
+            "image": "1c7a4e3b-7d52-4b9f-8b8f-3a2e7dac9b02"
+          },
+          {
+            "name": "Classical",
+            "path": "Classical",
+            "hasPlaylists": true,
+            "hasArtists": false,
+            "hasAlbums": true,
+            "hasTracks": true,
+            "hasVideos": false,
+            "image": "2d8b5f4c-8e63-4caf-9c9a-4b3f8ebdac03"
+          },
+          {
+            "name": "Electronic",
+            "path": "Electronic",
+            "hasPlaylists": true,
+            "hasArtists": false,
+            "hasAlbums": true,
+            "hasTracks": true,
+            "hasVideos": false,
+            "image": "3e9c6a5d-9f74-4dba-8dab-5c4a9fcebd04"
+          },
+          {
+            "name": "Kids",
+            "path": "Kids",
+            "hasPlaylists": true,
+            "hasArtists": false,
+            "hasAlbums": false,
+            "hasTracks": false,
+            "hasVideos": false,
+            "image": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/genres/Pop/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "id": 300100,
+              "title": "Harbor Lights",
+              "duration": 1014,
+              "numberOfTracks": 4,
+              "releaseDate": "2024-03-08",
+              "copyright": "(P) 2024 Mara Vell",
+              "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300100"
+            },
+            {
+              "id": 300200,
+              "title": "Paper Moons",
+              "duration": 675,
+              "numberOfTracks": 3,
+              "releaseDate": "2021-09-17",
+              "copyright": "(P) 2021 Mara Vell",
+              "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300200"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/genres/Jazz/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 1,
+          "items": [
+            {
+              "id": 300400,
+              "title": "Night Shift Standards",
+              "duration": 1175,
+              "numberOfTracks": 4,
+              "releaseDate": "2022-05-20",
+              "copyright": "(P) 2022 Okonkwo Quartet",
+              "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300400"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/genres/Classical/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 1,
+          "items": [
+            {
+              "id": 300300,
+              "title": "Low Tide Hymns",
+              "duration": 821,
+              "numberOfTracks": 3,
+              "releaseDate": "2023-11-03",
+              "copyright": "(P) 2023 The Lantern Choir",
+              "cover": "9081faae-4cbe-6b51-b401-8718ed213f85",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300300"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/genres/Electronic/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 0,
+          "items": []
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/featured/top/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "id": 300400,
+              "title": "Night Shift Standards",
+              "duration": 1175,
+              "numberOfTracks": 4,
+              "releaseDate": "2022-05-20",
+              "copyright": "(P) 2022 Okonkwo Quartet",
+              "cover": "984b27db-e60f-8005-4fac-234600f0e1ee",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400300,
+                "name": "Okonkwo Quartet",
+                "type": "MAIN",
+                "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+              },
+              "artists": [
+                {
+                  "id": 400300,
+                  "name": "Okonkwo Quartet",
+                  "type": "MAIN",
+                  "picture": "1260878b-ac1c-142e-1a45-4c161491c208"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300400"
+            },
+            {
+              "id": 300100,
+              "title": "Harbor Lights",
+              "duration": 1014,
+              "numberOfTracks": 4,
+              "releaseDate": "2024-03-08",
+              "copyright": "(P) 2024 Mara Vell",
+              "cover": "1c35170d-599e-01e4-c363-6ba8b40c0afb",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300100"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.tidal.com/v1/featured/recommended/albums",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "limit": 50,
+          "offset": 0,
+          "totalNumberOfItems": 2,
+          "items": [
+            {
+              "id": 300300,
+              "title": "Low Tide Hymns",
+              "duration": 821,
+              "numberOfTracks": 3,
+              "releaseDate": "2023-11-03",
+              "copyright": "(P) 2023 The Lantern Choir",
+              "cover": "9081faae-4cbe-6b51-b401-8718ed213f85",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS", "HIRES_LOSSLESS"]
+              },
+              "artist": {
+                "id": 400200,
+                "name": "The Lantern Choir",
+                "type": "MAIN",
+                "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+              },
+              "artists": [
+                {
+                  "id": 400200,
+                  "name": "The Lantern Choir",
+                  "type": "MAIN",
+                  "picture": "57154386-5d85-c811-3b9b-affbbb8680a8"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300300"
+            },
+            {
+              "id": 300200,
+              "title": "Paper Moons",
+              "duration": 675,
+              "numberOfTracks": 3,
+              "releaseDate": "2021-09-17",
+              "copyright": "(P) 2021 Mara Vell",
+              "cover": "dfc0edb6-6b22-b5ca-7579-85819695d0b8",
+              "explicit": false,
+              "audioQuality": "LOSSLESS",
+              "mediaMetadata": {
+                "tags": ["LOSSLESS"]
+              },
+              "artist": {
+                "id": 400100,
+                "name": "Mara Vell",
+                "type": "MAIN",
+                "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+              },
+              "artists": [
+                {
+                  "id": 400100,
+                  "name": "Mara Vell",
+                  "type": "MAIN",
+                  "picture": "2335d06c-deac-720f-c506-0327a82b2708"
+                }
+              ],
+              "version": null,
+              "url": "http://www.tidal.com/album/300200"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

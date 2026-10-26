@@ -3,6 +3,7 @@
 import {
   buildSignalPath,
   getSongSignalPath,
+  isStreamingId,
   type PlayerAudioPreset,
   type AudioProperties,
   type ClientSignalLeg,
@@ -91,7 +92,9 @@ export function useSignalPath({
         // The capabilities the stream URL carries (see player-controller).
         capabilities: browserPlaybackCapabilities(),
       }),
-    enabled: Boolean(songId),
+    // The server describes library tracks; TIDAL and Qobuz streams report
+    // their delivered format themselves.
+    enabled: Boolean(songId) && !isStreamingId(songId),
     retry: 1,
     staleTime: 60_000,
   });

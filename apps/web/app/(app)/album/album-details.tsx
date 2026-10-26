@@ -7,8 +7,20 @@ import {
   albumHeroYear,
   getPlaylists,
   refreshEnrichment,
+  isStreamingId,
+  localAlbumFormat,
+  type AlbumVersionSubject,
   type LibraryAlbum,
 } from "@parson/music-sdk";
+import StreamingAlbumDetails from "@/features/streaming/streaming-album";
+import {
+  AlbumVersions,
+  BetterVersionNotice,
+} from "@/features/streaming/album-versions";
+import {
+  PreferredPlayCaption,
+  usePreferredAlbumPlay,
+} from "@/features/streaming/preferred-play";
 import type { Artist } from "@parson/music-sdk/types";
 import Image from "next/image";
 import Link from "next/link";
@@ -112,7 +124,15 @@ type AlbumDetailsProps = {
   devAlbum?: LibraryAlbum;
 };
 
-export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
+export default function AlbumDetails(props: AlbumDetailsProps = {}) {
+  const id = useSearchParams()?.get("id");
+  if (!props.devAlbum && isStreamingId(id)) {
+    return <StreamingAlbumDetails id={id ?? ""} />;
+  }
+  return <LibraryAlbumDetails {...props} />;
+}
+
+function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const searchParams = useSearchParams();
   const id = searchParams?.get("id");
   const { session } = useSession();
@@ -267,13 +287,31 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     );
   };
 
-  const playAlbum = () => {
+  const playThisCopy = () => {
     const firstSong = album?.songs?.[0];
     if (!artist || !firstSong) {
       return;
     }
     playTrack(firstSong);
   };
+
+  // The same album may also be on TIDAL or Qobuz; album-level Play starts
+  // whichever copy the source preference picks.
+  const subject = useMemo<AlbumVersionSubject | null>(
+    () =>
+      album && artist
+        ? {
+            id: String(album.id),
+            title: album.name,
+            artistName: artist.name,
+            source: "local",
+            format: localAlbumFormat(album.songs ?? []),
+          }
+        : null,
+    [album, artist],
+  );
+  const preferred = usePreferredAlbumPlay(subject, playThisCopy);
+  const playAlbum = () => void preferred.play();
 
   if (!id && !devAlbum) {
     return <EntityPageState kind="album" />;
@@ -287,7 +325,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     );
   }
 
-  const isAlbumPlaying = isPlaying && currentAlbumId === album.id;
+  const isAlbumPlaying = preferred.playing;
   const titleParts = titleWrapped ? splitQualifiedTitle(album.name) : null;
 
   return (
@@ -373,7 +411,8 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           <button
             aria-label={`${isAlbumPlaying ? "Pause" : "Play"} ${album.name}`}
             onClick={playAlbum}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100"
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100 disabled:opacity-70"
+            disabled={preferred.starting}
             type="button"
           >
             {isAlbumPlaying ? (
@@ -388,6 +427,10 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           />
           <BanToggleButton
             target={{ kind: "album", id: album.id, name: album.name }}
+          />
+          <PreferredPlayCaption
+            onPlayThisCopy={playThisCopy}
+            play={preferred}
           />
           <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
             <DropdownMenuTrigger asChild>
@@ -548,6 +591,8 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           )}
         </div>
 
+        {subject && <BetterVersionNotice subject={subject} />}
+
         <AlbumAboutSection
           about={aboutQuery.data}
           album={album}
@@ -666,6 +711,8 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               )}
           </div>
         )}
+
+        {subject && <AlbumVersions subject={subject} />}
       </div>
     </div>
   );

@@ -5,3 +5,9 @@ export function formatCollectionDuration(seconds: number) {
   const remainder = minutes % 60;
   return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
 }
+
+/** `253` -> `4:13`. */
+export function formatDuration(seconds: number) {
+  const total = Math.max(0, Math.round(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}

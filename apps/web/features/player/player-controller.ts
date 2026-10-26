@@ -7,6 +7,7 @@ import {
   defaultRadioSettings,
   getRadioPicks,
   getRadioSettings,
+  isStreamingId,
   nextRepeatMode,
   radioExhaustedNotice,
   radioMinimumUpcomingPicks,
@@ -107,9 +108,11 @@ const radioContinuationItems = 25;
 
 export type PendingRadioSkip = { song: LibrarySong; cover: string };
 const cover = (path?: string) =>
-  path
-    ? `${getBaseURL()}/media/images/${encodeURIComponent(path)}`
-    : defaultCover;
+  !path
+    ? defaultCover
+    : /^(https:\/\/|data:image\/)/i.test(path)
+      ? path
+      : `${getBaseURL()}/media/images/${encodeURIComponent(path)}`;
 
 export function usePlayerController() {
   const {
@@ -145,6 +148,7 @@ export function usePlayerController() {
     setLevelingGain,
     slowedReverb,
     source,
+    stream,
     toggleMute,
     toggleSlowedReverb,
     volume,
@@ -297,7 +301,9 @@ export function usePlayerController() {
         currentOrigin.current === "manual" &&
         !persistedQueue.current &&
         queueRef.current.length &&
-        radioEnabledRef.current
+        radioEnabledRef.current &&
+        // Server queues and radio cover the local library only.
+        !isStreamingId(normalized.id)
       ) {
         manualQueuePending.current = true;
         const explicitSongIds = queueRef.current
@@ -663,6 +669,8 @@ export function usePlayerController() {
     const endingSongId = activeSong.current.id;
     if (
       !endingSongId ||
+      // Server queues and radio cover the local library only.
+      isStreamingId(endingSongId) ||
       !shouldContinueWithRadio({
         enabled: radioEnabledRef.current,
         repeating: repeatRef.current !== "off",
@@ -853,6 +861,7 @@ export function usePlayerController() {
       !radioSettings.enabled ||
       looping ||
       !song.id ||
+      isStreamingId(song.id) ||
       manualQueuePending.current ||
       !queue.length
     ) {
@@ -1222,6 +1231,7 @@ export function usePlayerController() {
       slowedReverb,
       audioPreset,
       audioPresets,
+      stream,
       looping,
       currentIndex: activeIndex,
       radio: {
@@ -1371,6 +1381,7 @@ export function usePlayerController() {
       setOutputDeviceId,
       muted,
       audioPreset,
+      stream,
       slowedReverb,
       playAudioSource,
       playNextSong,

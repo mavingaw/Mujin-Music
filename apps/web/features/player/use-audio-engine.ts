@@ -75,6 +75,7 @@ export async function probeDeviceSampleRate(
     return null;
   }
 }
+import { startedStream } from "@/lib/api/stream-url";
 
 const PLAYBACK_START_TIMEOUT_MS = 12_000;
 
@@ -109,6 +110,9 @@ export function useAudioEngine() {
   const recovered = useRef(false);
   const presetRef = useRef<AudioPreset>(audioPresets[0]!);
   const [audioVersion, setAudioVersion] = useState(0);
+  // The stream now playing and how many times its first frame has been
+  // decoded, so the signal path re-reads what this stream delivered.
+  const [stream, setStream] = useState({ url: "", frames: 0 });
   const [audioPreset, setAudioPresetState] =
     useState<AudioPresetId>("original");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -408,6 +412,8 @@ export function useAudioEngine() {
       crossfadeArmed.current = false;
       // Any running fade ends before the source changes again.
       finishCrossfade();
+      startedStream(next);
+      setStream({ url: next, frames: 0 });
       if (!audio.current) return;
       // "Match source" needs a context at this track's rate.
       if (graph.current && graph.current.requestedRate !== wantedRate())
@@ -823,6 +829,19 @@ export function useAudioEngine() {
   useEffect(() => discardPreloadedAudio, [discardPreloadedAudio]);
   useEffect(() => finishCrossfade, [finishCrossfade]);
 
+  useEffect(() => {
+    const element = audio.current;
+    if (!element) return;
+    const firstFrame = () =>
+      setStream((current) =>
+        current.url === source.current
+          ? { ...current, frames: current.frames + 1 }
+          : { url: source.current, frames: 1 },
+      );
+    element.addEventListener("loadeddata", firstFrame);
+    return () => element.removeEventListener("loadeddata", firstFrame);
+  }, [audioVersion]);
+
   return {
     activeSinkId,
     armCrossfade,
@@ -856,6 +875,7 @@ export function useAudioEngine() {
     setLevelingGain,
     slowedReverb: audioPreset !== "original",
     source,
+    stream,
     toggleMute,
     toggleSlowedReverb,
     volume,

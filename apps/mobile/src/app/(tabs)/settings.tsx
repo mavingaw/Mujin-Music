@@ -30,14 +30,17 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { PageTitle, Screen } from "@/components/music-ui";
+import { StreamingServicesSettings } from "@/components/streaming-services";
 import { layout, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
 import { RadioSettingsRows } from "@/components/radio-ui";
 
-type Tab = "account" | "playback" | "devices" | "library" | "users";
+type Tab =
+  "account" | "playback" | "services" | "devices" | "library" | "users";
 const labels: Record<Tab, string> = {
   account: "Account",
   playback: "Playback",
+  services: "Services",
   devices: "Devices",
   library: "Library",
   users: "Users",
@@ -51,8 +54,8 @@ export default function SettingsScreen() {
     session.phase === "offline"
       ? ["account", "devices"]
       : admin
-        ? ["account", "playback", "devices", "library", "users"]
-        : ["account", "playback", "devices"];
+        ? ["account", "playback", "services", "devices", "library", "users"]
+        : ["account", "playback", "services", "devices"];
   const [tab, setTab] = useState<Tab>("account");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -345,6 +348,8 @@ export default function SettingsScreen() {
                 onSave={saveQuality}
                 quality={quality}
               />
+            ) : tab === "services" ? (
+              <StreamingServicesSettings />
             ) : tab === "devices" ? (
               <ServerSettings
                 busy={busy}

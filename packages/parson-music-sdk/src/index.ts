@@ -33,6 +33,7 @@ export * from "./resources/outputs";
 export * from "./resources/playlists";
 export * from "./resources/playback";
 export * from "./resources/radio-bans";
+export * from "./resources/providers";
 export * from "./resources/search";
 export * from "./resources/songs";
 export * from "./resources/sources";

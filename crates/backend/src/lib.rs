@@ -22,6 +22,8 @@ pub mod outputs;
 pub mod persistence;
 mod playlist_rules;
 pub mod product;
+#[cfg(feature = "server")]
+pub mod providers;
 pub mod radio_bans;
 pub mod recommendation;
 #[cfg(feature = "server")]
