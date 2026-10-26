@@ -919,8 +919,28 @@ function listTitles(stages: SignalStage[]) {
  * from `ALSA hw, exclusive, 96kHz 24bit 2ch`, or the DSD description.
  */
 export function outputFormatFromDetail(detail: string) {
-  const dsd = detail.match(/(native DSD\d+.*|DoP: .*)$/);
-  return dsd ? dsd[1] : (detail.split(", ").at(-1) ?? detail);
+  const dsd = dsdFormatStart(detail);
+  return dsd >= 0 ? detail.slice(dsd) : (detail.split(", ").at(-1) ?? detail);
+}
+
+/**
+ * Where the DSD description in an output detail starts ("native DSD64…" or
+ * "DoP: …", running to the end of the last line), or -1. A plain scan, so
+ * a long detail costs linear time.
+ */
+function dsdFormatStart(detail: string) {
+  const lineStart = detail.lastIndexOf("\n") + 1;
+  let best = detail.indexOf("DoP: ", lineStart);
+  const marker = "native DSD";
+  for (
+    let at = detail.indexOf(marker, lineStart);
+    at >= 0 && (best < 0 || at < best);
+    at = detail.indexOf(marker, at + 1)
+  ) {
+    const next = detail.charCodeAt(at + marker.length);
+    if (next >= 48 && next <= 57) return at;
+  }
+  return best;
 }
 
 /**

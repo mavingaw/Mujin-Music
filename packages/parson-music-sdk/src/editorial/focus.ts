@@ -268,7 +268,37 @@ export function qualityBadge(
   album: Pick<DiscographyFocusAlbum, "format" | "quality">,
 ) {
   if (!album.format) return null;
-  const match = album.format.match(/(\d+)-bit \/ ([\d.]+) kHz/);
-  if (match && album.quality !== "lossy") return `${match[1]}/${match[2]}`;
+  const resolution = parseResolution(album.format);
+  if (resolution && album.quality !== "lossy")
+    return `${resolution.bits}/${resolution.rate}`;
   return album.format.split(" ")[0] ?? album.format;
+}
+
+const isDigit = (char: string | undefined) =>
+  char !== undefined && char >= "0" && char <= "9";
+
+/**
+ * The first "<bits>-bit / <rate> kHz" in a format line, scanned in linear
+ * time.
+ */
+function parseResolution(format: string) {
+  const separator = "-bit / ";
+  for (
+    let at = format.indexOf(separator);
+    at >= 0;
+    at = format.indexOf(separator, at + 1)
+  ) {
+    let bitsStart = at;
+    while (isDigit(format[bitsStart - 1])) bitsStart -= 1;
+    if (bitsStart === at) continue;
+    const rateStart = at + separator.length;
+    let rateEnd = rateStart;
+    while (isDigit(format[rateEnd]) || format[rateEnd] === ".") rateEnd += 1;
+    if (rateEnd === rateStart || !format.startsWith(" kHz", rateEnd)) continue;
+    return {
+      bits: format.slice(bitsStart, at),
+      rate: format.slice(rateStart, rateEnd),
+    };
+  }
+  return null;
 }

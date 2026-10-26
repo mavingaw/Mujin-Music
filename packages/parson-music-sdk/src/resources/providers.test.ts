@@ -652,6 +652,23 @@ describe("TIDAL browser sign-in", () => {
     ]);
   });
 
+  test("trims every trailing slash from the server address in linear time", () => {
+    expect(tidalRedirectUri("https://music.example.test")).toBe(
+      "https://music.example.test/settings/services/tidal-callback",
+    );
+    expect(tidalRedirectUri("https://music.example.test///")).toBe(
+      "https://music.example.test/settings/services/tidal-callback",
+    );
+    const started = performance.now();
+    expect(tidalRedirectUri(`a${"/".repeat(100_000)}b`)).toBe(
+      `a${"/".repeat(100_000)}b/settings/services/tidal-callback`,
+    );
+    expect(tidalRedirectUri("/".repeat(100_000))).toBe(
+      "/settings/services/tidal-callback",
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   test("reads approvals, refusals and empty callbacks", () => {
     expect(readTidalCallback("?code=abc&state=xyz")).toEqual({
       ok: true,
