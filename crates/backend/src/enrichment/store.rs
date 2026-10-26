@@ -829,15 +829,18 @@ pub fn replace_album_credits(
 const CREDIT_COLUMNS: &str =
     "album_id, track_id, name, normalized_name, role, instrument, source, source_artist_id";
 
+/// External credits for an album, without those its sources hide (an
+/// edited credits list, or tag credits preferred over MusicBrainz).
 pub fn album_credits(
     connection: &mut SqliteConnection,
     album_id: &str,
 ) -> QueryResult<Vec<CreditRow>> {
-    diesel::sql_query(format!(
+    let rows = diesel::sql_query(format!(
         "SELECT {CREDIT_COLUMNS} FROM enriched_credit WHERE album_id = ? ORDER BY rowid"
     ))
     .bind::<Text, _>(album_id)
-    .load::<CreditRow>(connection)
+    .load::<CreditRow>(connection)?;
+    crate::enrichment::preferences::filter_external_credits(connection, rows)
 }
 
 /// External credits for a person, by normalized name or source artist id.
@@ -1014,7 +1017,7 @@ pub fn people_credits(
             }
         }
     }
-    Ok(rows)
+    crate::enrichment::preferences::filter_external_credits(connection, rows)
 }
 
 pub fn artist_name(

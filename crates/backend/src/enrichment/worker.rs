@@ -1511,7 +1511,23 @@ impl<F: Fetch> Enricher<F> {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with(COVER_FILE_PREFIX));
         if own_art {
-            return Ok(Outcome::Skipped("the album has its own artwork".into()));
+            // A person can prefer the online cover over the album's own.
+            let lookup = album_id.to_string();
+            let prefers_online = db(&self.pool, move |connection| {
+                use crate::enrichment::preferences as prefs;
+                let library = prefs::load_library_sources(connection)?.cover;
+                let album = prefs::load_album_preferences(connection, &lookup)?;
+                Ok(album
+                    .sources
+                    .get(&prefs::AlbumField::Cover)
+                    .copied()
+                    .unwrap_or(library)
+                    == prefs::FactSource::Online)
+            })
+            .await?;
+            if !prefers_online {
+                return Ok(Outcome::Skipped("the album has its own artwork".into()));
+            }
         }
         let Some(profile) = self.profile("album", album_id).await? else {
             return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
@@ -2796,6 +2812,102 @@ mod tests {
         assert_eq!(
             store::linked_artist_mbids(&mut connection, "artist-miles").unwrap(),
             [MILES.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn frozen_edits_and_source_choices_survive_a_new_lookup() {
+        use crate::enrichment::preferences as prefs;
+        let pool = migrated_memory_pool();
+        let enricher = Enricher {
+            fetch: mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.enrich_album(&album(), &settings).await.unwrap(),
+            Outcome::Done
+        );
+        {
+            let mut connection = pool.get().unwrap();
+            prefs::save_field_edit(
+                &mut connection,
+                "album-1",
+                prefs::AlbumField::CatalogNumber,
+                Some("CL 1355 (my pressing)"),
+                Some(1),
+            )
+            .unwrap();
+            prefs::save_field_source(
+                &mut connection,
+                "album-1",
+                prefs::AlbumField::Label,
+                Some(prefs::FactSource::Online),
+                Some(1),
+            )
+            .unwrap();
+            let edited = vec![prefs::EditedCredit {
+                name: "Bill Evans".into(),
+                role: "performer".into(),
+                instrument: Some("piano".into()),
+                track_ids: vec!["t1".into()],
+                artist_id: None,
+            }];
+            prefs::save_credit_edit(&mut connection, "album-1", Some(&edited), Some(1)).unwrap();
+            // The edited list hides MusicBrainz credits for the album.
+            assert!(
+                store::album_credits(&mut connection, "album-1")
+                    .unwrap()
+                    .is_empty()
+            );
+            // "Look up online metadata again".
+            store::refresh_entity(&mut connection, "album", "album-1").unwrap();
+        }
+        assert_eq!(
+            enricher.enrich_album(&album(), &settings).await.unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let kept = prefs::load_album_preferences(&mut connection, "album-1").unwrap();
+        assert_eq!(
+            kept.edits
+                .get(&prefs::AlbumField::CatalogNumber)
+                .map(String::as_str),
+            Some("CL 1355 (my pressing)")
+        );
+        assert_eq!(
+            kept.sources.get(&prefs::AlbumField::Label),
+            Some(&prefs::FactSource::Online)
+        );
+        let credits = prefs::load_credit_edit(&mut connection, "album-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(credits[0].track_ids, ["t1"]);
+        // The lookup stored MusicBrainz credits again, but they stay hidden.
+        assert!(
+            store::album_credits(&mut connection, "album-1")
+                .unwrap()
+                .is_empty()
+        );
+        let (_, online) = prefs::credit_counts(&mut connection, "album-1").unwrap();
+        assert!(
+            online
+                .get(&prefs::AlbumField::Credits)
+                .copied()
+                .unwrap_or(0)
+                > 0
+        );
+        // Reverting the list brings them back.
+        prefs::save_credit_edit(&mut connection, "album-1", None, None).unwrap();
+        assert_eq!(
+            store::album_credits(&mut connection, "album-1")
+                .unwrap()
+                .len(),
+            2
         );
     }
 

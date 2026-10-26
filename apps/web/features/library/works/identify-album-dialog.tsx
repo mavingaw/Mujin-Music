@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { ReleaseMatch, ReleaseSearchTerms } from "@parson/music-sdk";
-import { trackCountWarning } from "@parson/music-sdk";
+import { filterIdentifyReleases, trackCountWarning } from "@parson/music-sdk";
 import {
   AlertTriangle,
   Check,
@@ -60,6 +60,16 @@ export function IdentifyAlbumDialog({
   const [confirming, setConfirming] = useState<string | null>(null);
   const localTrackCount = search.data?.local_track_count ?? 0;
   const artist = artistDraft ?? search.data?.artist ?? "";
+  // Narrow results to releases crediting the tagged composer/conductor.
+  const [only, setOnly] = useState<{ composer?: boolean; conductor?: boolean }>(
+    {},
+  );
+  const composers = search.data?.tagged_composers ?? [];
+  const conductors = search.data?.tagged_conductors ?? [];
+  const releases = search.data
+    ? filterIdentifyReleases(search.data.releases, only)
+    : [];
+  const hidden = (search.data?.releases.length ?? 0) - releases.length;
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -70,7 +80,8 @@ export function IdentifyAlbumDialog({
           <DialogTitle>Identify album</DialogTitle>
           <DialogDescription>
             Choose the MusicBrainz release that {albumName} is. Credits, works,
-            background and reviews then come from that release.
+            background and reviews then come from that release. Fields you froze
+            and credits you edited are kept.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -105,6 +116,46 @@ export function IdentifyAlbumDialog({
             Search
           </button>
         </form>
+        {(composers.length > 0 || conductors.length > 0) && (
+          <div
+            aria-label="Tagged people"
+            className="flex flex-wrap items-center gap-1.5 text-xs"
+          >
+            <span className="mr-1 text-zinc-500">
+              Releases crediting your tags come first. Show only:
+            </span>
+            {(
+              [
+                ["composer", composers],
+                ["conductor", conductors],
+              ] as const
+            )
+              .filter(([, names]) => names.length > 0)
+              .map(([key, names]) => (
+                <button
+                  aria-pressed={Boolean(only[key])}
+                  className={`rounded-full border px-2.5 py-1 font-semibold transition-colors ${
+                    only[key]
+                      ? "border-emerald-300/40 bg-emerald-300/15 text-emerald-200"
+                      : "border-white/12 text-zinc-300 hover:border-white/25 hover:text-white"
+                  }`}
+                  key={key}
+                  onClick={() =>
+                    setOnly((current) => ({ ...current, [key]: !current[key] }))
+                  }
+                  type="button"
+                >
+                  {key === "composer" ? "Composer" : "Conductor"}{" "}
+                  {names.slice(0, 2).join(", ")}
+                </button>
+              ))}
+            {hidden > 0 && (
+              <span className="text-zinc-500">
+                {hidden} {hidden === 1 ? "release" : "releases"} hidden
+              </span>
+            )}
+          </div>
+        )}
         {search.data?.identification && (
           <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-white/10 bg-white/4 px-3 py-2 text-sm">
             <span className="min-w-0 truncate text-zinc-300">
@@ -145,6 +196,14 @@ export function IdentifyAlbumDialog({
               MusicBrainz…
             </p>
           )}
+          {search.data &&
+            search.data.releases.length > 0 &&
+            releases.length === 0 && (
+              <p className="py-6 text-sm text-zinc-500">
+                No release here credits them. Turn the filter off to see all
+                results.
+              </p>
+            )}
           {search.data && search.data.releases.length === 0 && (
             <p className="py-6 text-sm text-zinc-500">
               No releases found. Parson already searches by each word of the
@@ -153,7 +212,7 @@ export function IdentifyAlbumDialog({
             </p>
           )}
           <ul aria-label="MusicBrainz releases" className="space-y-1">
-            {search.data?.releases.map((release) => {
+            {releases.map((release) => {
               const chosen = current === release.mbid;
               const differs =
                 release.track_count_differs ??
@@ -208,6 +267,21 @@ export function IdentifyAlbumDialog({
                           </span>
                         )}
                       </div>
+                      {(release.credits_tagged_composer ||
+                        release.credits_tagged_conductor) && (
+                        <p className="mt-0.5 flex flex-wrap gap-1">
+                          {release.credits_tagged_composer && (
+                            <span className="rounded bg-emerald-300/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-200">
+                              Credits {composers[0] ?? "your composer"}
+                            </span>
+                          )}
+                          {release.credits_tagged_conductor && (
+                            <span className="rounded bg-emerald-300/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-200">
+                              Credits {conductors[0] ?? "your conductor"}
+                            </span>
+                          )}
+                        </p>
+                      )}
                       <p className="truncate text-sm text-zinc-400">
                         {release.artist}
                         {release.disambiguation &&

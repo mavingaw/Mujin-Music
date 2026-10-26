@@ -90,6 +90,9 @@ pub struct AlbumAbout {
     /// whether it passed, and the evidence. An unverified match is a
     /// suggestion only; nothing from it is shown as fact.
     pub release_match: Option<ReleaseMatchView>,
+    /// Each fact with its source (tags, online or a frozen edit), the
+    /// album's own choices and the library defaults.
+    pub sources: crate::api::album_sources::AlbumSources,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -920,6 +923,26 @@ pub async fn album_about(
         stored.credits.clear();
     }
     let work_texts = if untrusted { Vec::new() } else { work_texts };
+    let source_pool = image_pool.clone();
+    let source_id = album_id.clone();
+    let has_profile = stored.profile.is_some();
+    let source_inputs = web::block(move || {
+        let mut connection = source_pool.get().map_err(|error| error.to_string())?;
+        crate::api::album_sources::load_inputs(&mut connection, &source_id, has_profile)
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    let source_inputs = match source_inputs {
+        Ok(Ok(inputs)) => inputs,
+        Ok(Err(error)) => {
+            tracing::error!(%error, "could not load album sources");
+            return internal_server_error("Could not load album details.", "editorial_failed");
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not load album sources");
+            return internal_server_error("Could not load album details.", "editorial_failed");
+        }
+    };
     let mut texts = stored.texts;
     let identity = load_identity(image_pool.clone(), cache.clone()).await;
     let mut credits = merge_album_credits_with(album, &known, &stored.credits, &identity);
@@ -939,7 +962,12 @@ pub async fn album_about(
             (Vec::new(), false)
         }
     };
+    let facts = parse_facts(stored.profile.as_ref());
+    let sources = crate::api::album_sources::album_sources(album, facts.as_ref(), source_inputs);
     for credit in &mut credits {
+        if sources.credits_edited {
+            credit.sources = vec!["edited".into()];
+        }
         credit.image_url = credit
             .artist_id
             .as_deref()
@@ -962,7 +990,8 @@ pub async fn album_about(
         credits,
         background: texts.remove("background"),
         review: texts.remove("reception"),
-        facts: parse_facts(stored.profile.as_ref()),
+        facts,
+        sources,
         links: stored
             .profile
             .as_ref()

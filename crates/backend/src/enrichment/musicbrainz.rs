@@ -499,6 +499,37 @@ pub fn identify_query(title: &str, artist: Option<&str>) -> String {
     }
 }
 
+/// [`identify_query`] that also ranks releases crediting the tagged
+/// composers and conductors higher. The extra clause can always match (it
+/// repeats the title), so it only reorders results and never hides one.
+pub fn identify_query_with_people(title: &str, artist: Option<&str>, people: &[String]) -> String {
+    let base = identify_query(title, artist);
+    let artist = artist.map(normalize_artist_identity).unwrap_or_default();
+    let mut boosts = Vec::new();
+    for person in people {
+        let person = person.trim();
+        if person.is_empty()
+            || normalize_artist_identity(person) == artist
+            || boosts.len() >= 4
+            || is_placeholder_artist(person)
+        {
+            continue;
+        }
+        let clause = format!("artist:{}^2", phrase(person));
+        if !boosts.contains(&clause) {
+            boosts.push(clause);
+        }
+    }
+    if boosts.is_empty() {
+        return base;
+    }
+    format!(
+        "{base} AND ({} OR {})",
+        title_clause(title),
+        boosts.join(" OR ")
+    )
+}
+
 /// Names that stand for "no artist" in tags. They are never matched to a
 /// MusicBrainz artist (MusicBrainz has real artists with these names).
 pub fn is_placeholder_artist(name: &str) -> bool {

@@ -16,8 +16,8 @@ use crate::api::library::{
     remove_library_root, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, editorial, filesystem, genre_pages, genres, home, lyrics, metadata,
-    playback, playlist, search, setup, song, user, works,
+    album, album_sources, artist, cast, data, editorial, filesystem, genre_pages, genres, home,
+    lyrics, metadata, playback, playlist, search, setup, song, user, works,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -72,7 +72,12 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .service(works::identify_album)
                 .service(works::clear_identification)
                 .service(genre_pages::put_album_genres)
-                .service(genre_pages::delete_album_genres),
+                .service(genre_pages::delete_album_genres)
+                .service(album_sources::put_album_sources)
+                .service(album_sources::put_album_credits)
+                .service(album_sources::delete_album_credits)
+                .service(album_sources::get_library_sources)
+                .service(album_sources::put_library_sources),
         )
         .service(
             web::scope("/data/admin")

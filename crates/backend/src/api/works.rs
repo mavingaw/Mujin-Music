@@ -847,6 +847,12 @@ pub struct ReleaseMatch {
     /// Whether this is the release automatic matching found and rejected.
     pub suggested: bool,
     pub url: String,
+    /// Every name in the release's artist credit.
+    pub artist_names: Vec<String>,
+    /// The release credits a composer tagged on the files.
+    pub credits_tagged_composer: bool,
+    /// The release credits a conductor tagged on the files.
+    pub credits_tagged_conductor: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -858,6 +864,10 @@ pub struct IdentifySearch {
     pub local_track_count: usize,
     pub identification: Option<Identification>,
     pub releases: Vec<ReleaseMatch>,
+    /// Composers and conductors tagged on the files: results crediting
+    /// them come first, and a person can show only those.
+    pub tagged_composers: Vec<String>,
+    pub tagged_conductors: Vec<String>,
 }
 
 /// Orders candidates for a person to choose from: by how well they fit
@@ -874,6 +884,21 @@ pub fn rank_releases(
         .map(|candidate| {
             let points =
                 confidence::identify_fit(&album.title, &album.artist_name, &local, &candidate);
+            let credits = |people: &[String]| {
+                people.iter().any(|person| {
+                    candidate
+                        .artist_names
+                        .iter()
+                        .chain(std::iter::once(&candidate.artist))
+                        .any(|name| confidence::same_person(person, name))
+                })
+            };
+            let credits_tagged_composer = credits(&album.composers);
+            let credits_tagged_conductor = credits(&album.conductors);
+            // The tagged composer and conductor order results (other
+            // composers' works go below) without changing the fit label.
+            let people_points =
+                i32::from(credits_tagged_composer) * 3 + i32::from(credits_tagged_conductor) * 2;
             let fit = if points >= 5 {
                 "likely"
             } else if points >= 2 {
@@ -882,8 +907,11 @@ pub fn rank_releases(
                 "unlikely"
             };
             (
-                points,
+                points + people_points,
                 ReleaseMatch {
+                    artist_names: candidate.artist_names.clone(),
+                    credits_tagged_composer,
+                    credits_tagged_conductor,
                     same_track_count: candidate.track_count == Some(track_count as i64),
                     track_count_differs: candidate
                         .track_count
@@ -983,14 +1011,26 @@ pub async fn identify_search(
         None if is_placeholder_artist(&owner.name) => String::new(),
         None => owner.name.clone(),
     };
-    let query = trimmed(query).unwrap_or_else(|| default_identify_query(&title, &artist));
-    if query.chars().count() > MAX_QUERY_CHARS {
-        return bad_request("The search is too long.", "query_too_long");
-    }
     let local_track_count = album.songs.len();
     let Some(input) = album_input(&cache, &album_id) else {
         return not_found("Album not found.", "album_not_found");
     };
+    let query = trimmed(query).unwrap_or_else(|| {
+        let people = input
+            .composers
+            .iter()
+            .chain(&input.conductors)
+            .cloned()
+            .collect::<Vec<_>>();
+        mb::identify_query_with_people(
+            &title,
+            Some(artist.as_str()).filter(|artist| !is_placeholder_artist(artist)),
+            &people,
+        )
+    });
+    if query.chars().count() > MAX_QUERY_CHARS {
+        return bad_request("The search is too long.", "query_too_long");
+    }
     let lookup = album_id.clone();
     let (settings, identification, suggested) = match blocking(pool.get_ref(), move |connection| {
         Ok((
@@ -1031,6 +1071,8 @@ pub async fn identify_search(
             local_track_count,
             identification,
             releases: rank_releases(candidates, &input, suggested.as_deref()),
+            tagged_composers: input.composers.clone(),
+            tagged_conductors: input.conductors.clone(),
         }),
         Err(error) => {
             tracing::warn!(%error, "MusicBrainz release search failed");
@@ -1596,6 +1638,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn identify_queries_rank_the_tagged_composer_and_conductor_first() {
+        let query = mb::identify_query_with_people(
+            "Symphonien Nr. 5 & 7",
+            Some("Carlos Kleiber"),
+            &[
+                "Ludwig van Beethoven".into(),
+                "Carlos Kleiber".into(),
+                "Unknown Artist".into(),
+            ],
+        );
+        assert!(query.starts_with(&default_identify_query(
+            "Symphonien Nr. 5 & 7",
+            "Carlos Kleiber"
+        )));
+        // The boost repeats the title so it never filters results out.
+        assert!(query.ends_with("OR artist:\"Ludwig van Beethoven\"^2)"));
+        assert!(!query.contains("artist:\"Carlos Kleiber\"^2"));
+        assert!(!query.contains("Unknown"));
+        assert_eq!(
+            mb::identify_query_with_people("Kind of Blue", Some("Miles Davis"), &[]),
+            default_identify_query("Kind of Blue", "Miles Davis")
+        );
+    }
+
     #[tokio::test]
     async fn release_search_ranks_matching_track_counts_first() {
         let query = "beethoven 9 karajan 1963";
@@ -1634,6 +1701,22 @@ mod tests {
             vinyl.url,
             "https://musicbrainz.org/release/55555555-5555-4555-8555-555555555555"
         );
+        assert!(!vinyl.credits_tagged_composer);
+
+        // With Beethoven and Karajan tagged, the release crediting them
+        // ranks above a better-fitting one that credits neither.
+        let tagged = AlbumInput {
+            composers: vec!["Ludwig van Beethoven".into()],
+            conductors: vec!["Herbert von Karajan".into()],
+            ..album.clone()
+        };
+        let found = search_releases(&fetch, query).await.unwrap();
+        let ranked = rank_releases(found, &tagged, None);
+        assert_eq!(ranked[0].mbid, "55555555-5555-4555-8555-555555555555");
+        assert!(ranked[0].credits_tagged_composer);
+        assert!(ranked[0].credits_tagged_conductor);
+        assert_eq!(ranked[0].artist_names, ["Beethoven", "Karajan"]);
+        assert!(!ranked[1].credits_tagged_composer);
         let failing = MockFetch::default().status(&release_query_url(query), 503);
         assert!(search_releases(&failing, query).await.is_err());
     }

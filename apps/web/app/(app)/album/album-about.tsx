@@ -3,6 +3,7 @@
 import type { LibraryAlbum } from "@parson/music-sdk";
 import {
   albumTextPanels,
+  resolvedFact,
   enrichmentWaitingLabel,
   releaseMatchFact,
   releaseMatchSignals,
@@ -12,8 +13,20 @@ import {
   unverifiedMatch,
   workHref,
 } from "@parson/music-sdk";
-import type { AlbumAbout, ReleaseMatchCheck } from "@parson/music-sdk/types";
-import { Check, CircleHelp, ExternalLink, ShieldAlert, X } from "lucide-react";
+import type {
+  AlbumAbout,
+  ReleaseMatchCheck,
+  ResolvedFact,
+} from "@parson/music-sdk/types";
+import {
+  Check,
+  CircleHelp,
+  ExternalLink,
+  ShieldAlert,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
+import { FactSourceBadge } from "@/features/library/credits/fact-source-badge";
 import Link from "next/link";
 import { useState } from "react";
 import { EditorialText } from "@/features/library/credits/editorial-text";
@@ -40,7 +53,54 @@ function countryName(code: string) {
   }
 }
 
-export function albumFacts(album: LibraryAlbum, about: AlbumAbout | undefined) {
+type Fact = { label: string; value: string; source?: ResolvedFact };
+
+/** Facts with their sources (tags, MusicBrainz or a frozen edit). */
+function resolvedFacts(album: LibraryAlbum, about: AlbumAbout): Fact[] {
+  const fact = (field: ResolvedFact["field"]) => resolvedFact(about, field);
+  const original = fact("original_date");
+  const edition = fact("release_date");
+  const shown = (
+    label: string,
+    source: ResolvedFact | null,
+    format: (value: string) => string | null | undefined = (value) => value,
+  ): Fact | null => {
+    const value = source?.value ? format(source.value) : null;
+    return value ? { label, value, source: source ?? undefined } : null;
+  };
+  const length = album.songs.reduce(
+    (total, song) => total + (song.duration || 0),
+    0,
+  );
+  return [
+    shown("Released", original, formatPartialDate),
+    // This edition only when it differs from the original release.
+    edition?.value && edition.value !== original?.value
+      ? shown(
+          original?.value ? "This edition" : "Released",
+          edition,
+          formatPartialDate,
+        )
+      : null,
+    shown("Label", fact("label")),
+    shown("Catalog no.", fact("catalog_number")),
+    shown("Country", fact("country"), countryName),
+    shown("Barcode", fact("barcode")),
+    length > 0 ? { label: "Length", value: formatLength(length) } : null,
+    albumFormat(album.songs)
+      ? { label: "Format", value: albumFormat(album.songs) as string }
+      : null,
+    releaseMatchFact(about)
+      ? { label: "Matched", value: releaseMatchFact(about) as string }
+      : null,
+  ].filter(Boolean) as Fact[];
+}
+
+export function albumFacts(
+  album: LibraryAlbum,
+  about: AlbumAbout | undefined,
+): Fact[] {
+  if (about?.sources) return resolvedFacts(album, about);
   const facts = about?.facts;
   // Edition facts only describe this album when the release matched exactly.
   const exact = facts?.exact === true;
@@ -200,12 +260,15 @@ export function AlbumAboutSection({
   about,
   isAdmin,
   onIdentify,
+  onEditSources,
 }: {
   album: LibraryAlbum;
   about: AlbumAbout | undefined;
   isAdmin: boolean;
   /** Opens "Identify album" (administrators). */
   onIdentify?: () => void;
+  /** Opens the album's metadata preference (administrators). */
+  onEditSources?: () => void;
 }) {
   const textPanels = albumTextPanels(about);
   const panels: { key: string; label: string }[] = [
@@ -335,9 +398,26 @@ export function AlbumAboutSection({
           {facts.map((fact) => (
             <div className="contents" key={fact.label}>
               <dt className="font-medium text-zinc-500">{fact.label}</dt>
-              <dd className="min-w-0 text-zinc-200">{fact.value}</dd>
+              <dd className="flex min-w-0 items-center gap-1.5 text-zinc-200">
+                <span className="min-w-0 truncate" title={fact.value}>
+                  {fact.value}
+                </span>
+                {fact.source && <FactSourceBadge compact fact={fact.source} />}
+              </dd>
             </div>
           ))}
+          {onEditSources && (
+            <div className="col-span-2 mt-2">
+              <button
+                className="flex items-center gap-1.5 text-xs font-semibold text-zinc-400 transition-colors hover:text-white"
+                onClick={onEditSources}
+                type="button"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Tags or MusicBrainz, field by field…
+              </button>
+            </div>
+          )}
           {about?.links.map((link) => (
             <div className="contents" key={link.url}>
               <dt className="font-medium text-zinc-500">
