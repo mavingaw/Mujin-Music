@@ -116,6 +116,9 @@ pub(crate) fn error_response(error: ZoneError) -> HttpResponse {
         ZoneError::NotFound => {
             HttpResponse::NotFound().json(serde_json::json!({"error": "zone_not_found"}))
         }
+        ZoneError::Missing(code) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": code,
+        })),
         ZoneError::Invalid(code) => HttpResponse::BadRequest().json(serde_json::json!({
             "error": code,
         })),
@@ -213,6 +216,7 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
             group: false,
             transfer_target: false,
             sleep_timer: false,
+            standby: false,
         },
         sleep_timer: None,
         settings: ZoneSettingsView::unsupported(&snapshot.receiver_name),
@@ -280,6 +284,9 @@ fn cast_command(
         ZoneCommand::SetMute { muted, .. } => ("set_mute", None, None, Some(*muted), None),
         ZoneCommand::Load { .. } => {
             return Err(ZoneError::Unsupported("zone_cannot_receive_transfer"));
+        }
+        ZoneCommand::Standby | ZoneCommand::Wake => {
+            return Err(ZoneError::Unsupported("zone_has_no_standby"));
         }
         ZoneCommand::MoveQueueItem { .. }
         | ZoneCommand::RemoveQueueItem { .. }
@@ -395,6 +402,17 @@ async fn zone_events(
                             "seq": seq,
                             "command": command,
                         }).to_string())
+                    }
+                    Ok(ZoneEvent::VolumeRequest { user_id: target, request }) if target.is_none_or(|target| target == user_id) => {
+                        // Home Assistant carries these out (an amplifier on
+                        // an IR blaster, for example).
+                        let mut event = serde_json::json!({"type": "volume_request"});
+                        if let (Some(event), serde_json::Value::Object(fields)) =
+                            (event.as_object_mut(), serde_json::json!(request))
+                        {
+                            event.extend(fields);
+                        }
+                        Some(event.to_string())
                     }
                     Ok(_) => None,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {

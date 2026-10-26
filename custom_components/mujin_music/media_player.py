@@ -33,7 +33,6 @@ from homeassistant.helpers import (
     entity_platform,
     entity_registry as er,
 )
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -56,6 +55,7 @@ from .const import (
     SERVICE_TRANSFER,
 )
 from .coordinator import MujinMusicConfigEntry, MujinMusicCoordinator
+from .device import KIND_LABEL, zone_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ SEARCH_KIND_BY_TYPE: dict[str, str] = {
 }
 
 STATE_BY_STATUS = {
+    "standby": MediaPlayerState.OFF,
     "playing": MediaPlayerState.PLAYING,
     "paused": MediaPlayerState.PAUSED,
     "buffering": MediaPlayerState.BUFFERING,
@@ -122,18 +123,11 @@ ENQUEUE_ACTION = {
     MediaPlayerEnqueue.NEXT: "next",
     MediaPlayerEnqueue.ADD: "add",
 }
-KIND_LABEL = {
-    "web": "Web player",
-    "desktop": "Desktop app",
-    "mobile": "Phone",
-    "chromecast": "Chromecast",
-    "sonos": "Sonos",
-    "upnp": "UPnP renderer",
-    "device": "Audio device",
-    "bridge": "Mujin Music Bridge",
-    "airplay": "AirPlay",
-    "linked": "Linked zones",
-}
+
+
+# Server codes for a request that names nothing in the library (the zone is
+# fine): a mistake in the request, not a failure.
+MISSING_MEDIA_CODES = ("no_library_match", "item_not_found")
 
 
 def _is_transient(zone_id: str) -> bool:
@@ -257,7 +251,24 @@ def _command[**P, R](
     async def wrapper(self: MujinMusicZone, *args: P.args, **kwargs: P.kwargs) -> R:
         try:
             result = await func(self, *args, **kwargs)
+        except HomeAssistantError:
+            raise
         except MujinMusicCommandError as error:
+            if error.code == "zone_not_found":
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="zone_unavailable",
+                ) from error
+            if error.status == 404 and error.code in MISSING_MEDIA_CODES:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="nothing_matches",
+                ) from error
+            if error.code == "zone_has_no_standby":
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="standby_unsupported",
+                ) from error
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_refused",
@@ -289,25 +300,9 @@ class MujinMusicZone(CoordinatorEntity[MujinMusicCoordinator], MediaPlayerEntity
         self.zone_id = zone_id
         self._instance_id = instance_id
         self._attr_unique_id = f"{instance_id}-{zone_id}"
-        zone, _ = self._resolve()
-        name = (zone or {}).get("name") or self._member_name() or zone_id
-        kind = (zone or {}).get("kind", "")
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._attr_unique_id)},
-            name=name,
-            manufacturer="Sonos" if kind == "sonos" else MANUFACTURER,
-            model=(zone or {}).get("device") or KIND_LABEL.get(kind, "Zone"),
-            via_device=(DOMAIN, instance_id),
-        )
+        self._attr_device_info = zone_device_info(coordinator.data, instance_id, zone_id)
 
     # State -----------------------------------------------------------------
-
-    def _member_name(self) -> str | None:
-        group = self.coordinator.data.group_containing(self.zone_id)
-        for member in (group or {}).get("group", {}).get("members", []):
-            if member.get("id") == self.zone_id:
-                return member.get("name")
-        return None
 
     def _resolve(self) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """(zone to read and control, this zone's member entry when it is a
@@ -391,6 +386,8 @@ class MujinMusicZone(CoordinatorEntity[MujinMusicCoordinator], MediaPlayerEntity
             features |= MediaPlayerEntityFeature.GROUPING
         if capabilities.get("queue_edit"):
             features |= MediaPlayerEntityFeature.CLEAR_PLAYLIST
+        if capabilities.get("standby") and member is None:
+            features |= MediaPlayerEntityFeature.TURN_ON | MediaPlayerEntityFeature.TURN_OFF
         if capabilities.get("transfer_target") and self._transfer_sources():
             features |= MediaPlayerEntityFeature.SELECT_SOURCE
         return features
@@ -606,6 +603,16 @@ class MujinMusicZone(CoordinatorEntity[MujinMusicCoordinator], MediaPlayerEntity
         await self.coordinator.client.command(self._target, command, **arguments)
 
     @_command
+    async def async_turn_on(self) -> None:
+        """Wakes the zone from standby (nothing starts playing)."""
+        await self._send("wake")
+
+    @_command
+    async def async_turn_off(self) -> None:
+        """Stops the zone and releases its device; the queue stays."""
+        await self._send("standby")
+
+    @_command
     async def async_media_play(self) -> None:
         await self._send("play")
 
@@ -762,18 +769,35 @@ class MujinMusicZone(CoordinatorEntity[MujinMusicCoordinator], MediaPlayerEntity
             )
         action = ENQUEUE_ACTION.get(kwargs.get(ATTR_MEDIA_ENQUEUE), "play")
         client = self.coordinator.client
-        if media_id.startswith(ITEM_PREFIXES) or media_id in ITEM_IDS:
-            await client.play(self._target, item=media_id, action=action)
-            return
-        if media_type in (MediaType.CHANNEL, "radio"):
-            await client.radio(self._target, query=media_id)
-            return
-        await client.play(
-            self._target,
-            query=media_id,
-            kind=SEARCH_KIND_BY_TYPE.get(str(media_type)),
-            action=action,
-        )
+        try:
+            if media_id.startswith(ITEM_PREFIXES) or media_id in ITEM_IDS:
+                await client.play(self._target, item=media_id, action=action)
+                return
+            if media_type in (MediaType.CHANNEL, "radio"):
+                await client.radio(self._target, query=media_id)
+                return
+            await client.play(
+                self._target,
+                query=media_id,
+                kind=SEARCH_KIND_BY_TYPE.get(str(media_type)),
+                action=action,
+            )
+        except MujinMusicCommandError as error:
+            if error.status != 404 or error.code not in MISSING_MEDIA_CODES:
+                raise
+            # A request that matches nothing: tell the caller what, rather
+            # than reporting a failure.
+            if error.code == "item_not_found":
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="item_not_found",
+                    translation_placeholders={"item": media_id},
+                ) from error
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="media_not_found",
+                translation_placeholders={"query": media_id},
+            ) from error
 
     def _browse_item(self, item: dict[str, Any], parent_kind: str) -> BrowseMedia:
         kind = item.get("kind", "directory")

@@ -230,8 +230,17 @@ fn registration(song_ids: Option<Vec<String>>) -> ClientRegistration {
 /// Commands the client zone has been sent since it last checked in; the
 /// heartbeat acknowledges them so the next call sees only new ones.
 fn pending(service: &ZoneService) -> Vec<ZoneCommand> {
+    pending_at(service, 0)
+}
+
+/// [`pending`] from a client playing queue position `current_position`.
+fn pending_at(service: &ZoneService, current_position: usize) -> Vec<ZoneCommand> {
+    let heartbeat = || ClientRegistration {
+        current_position,
+        ..registration(None)
+    };
     let commands = service
-        .register_client(USER, DEVICE, registration(None))
+        .register_client(USER, DEVICE, heartbeat())
         .expect("heartbeat")
         .commands;
     if let Some(last) = commands.iter().map(|pending| pending.seq).max() {
@@ -241,7 +250,7 @@ fn pending(service: &ZoneService) -> Vec<ZoneCommand> {
                 DEVICE,
                 ClientRegistration {
                     acknowledged_seq: last,
-                    ..registration(None)
+                    ..heartbeat()
                 },
             )
             .expect("acknowledge");
@@ -670,20 +679,51 @@ async fn play_resolves_items_and_searches_into_zone_commands() {
     assert_eq!(genre["item_id"], "genre:Synthwave");
     pending(&service);
 
-    for (zone, body, status) in [
-        (ZONE, serde_json::json!({}), 400),
-        (ZONE, serde_json::json!({"item": "albums"}), 400),
-        (ZONE, serde_json::json!({"item": "album:nope"}), 404),
-        (ZONE, serde_json::json!({"query": "zzzzqqq"}), 404),
+    // A request that names nothing in the library is a clean "not
+    // found" for that item; only a missing zone says zone_not_found.
+    for (zone, body, status, code) in [
+        (ZONE, serde_json::json!({}), 400, "item_or_query_required"),
+        (
+            ZONE,
+            serde_json::json!({"item": "albums"}),
+            400,
+            "item_is_not_playable",
+        ),
+        (
+            ZONE,
+            serde_json::json!({"item": "album:nope"}),
+            404,
+            "item_not_found",
+        ),
+        (
+            ZONE,
+            serde_json::json!({"query": "zzzzqqq"}),
+            404,
+            "no_library_match",
+        ),
+        (
+            ZONE,
+            serde_json::json!({"query": "zzzzqqq", "kind": "playlist"}),
+            404,
+            "no_library_match",
+        ),
+        (
+            ZONE,
+            serde_json::json!({"query": "zzzzqqq", "kind": "genre"}),
+            404,
+            "no_library_match",
+        ),
         (
             ZONE,
             serde_json::json!({"query": "x", "kind": "podcast"}),
             400,
+            "invalid_search_kind",
         ),
         (
             "client:nobody-000000",
             serde_json::json!({"item": "song:neo-1"}),
             404,
+            "zone_not_found",
         ),
     ] {
         let response = actix_test::call_service(
@@ -695,8 +735,55 @@ async fn play_resolves_items_and_searches_into_zone_commands() {
         )
         .await;
         assert_eq!(response.status(), status, "{zone} {body}");
+        let error: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(error["error"], code, "{zone} {body}");
     }
     assert!(pending(&service).is_empty(), "failed requests send nothing");
+}
+
+#[actix_web::test]
+async fn play_next_inserts_after_the_current_track_and_keeps_the_queue() {
+    let (service, lifecycle, pool) = setup().await;
+    let app = app!(service, lifecycle, pool);
+    let queue: Vec<String> = ["noc-1", "noc-2", "noc-3", "neo-1", "neo-2"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    service
+        .register_client(
+            USER,
+            DEVICE,
+            ClientRegistration {
+                current_position: 1,
+                ..registration(Some(queue))
+            },
+        )
+        .expect("five queued, the second playing");
+    pending_at(&service, 1);
+
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/zones/{ZONE}/play"))
+            .set_json(serde_json::json!({"item": "song:etu-1", "action": "next"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    let zone = service.zone(USER, ZONE, None).expect("zone");
+    assert_eq!(
+        zone.queue.song_ids,
+        vec!["noc-1", "noc-2", "etu-1", "noc-3", "neo-1", "neo-2"],
+        "inserted after the playing track, nothing dropped"
+    );
+    assert_eq!(zone.queue.current_position, 1);
+    assert_eq!(
+        pending_at(&service, 1),
+        vec![ZoneCommand::AddToQueue {
+            song_ids: vec!["etu-1".into()],
+            next: true,
+        }]
+    );
 }
 
 #[actix_web::test]

@@ -2343,3 +2343,137 @@ fn zone_settings_persist_across_restarts() {
         assert_eq!((volume.min, volume.max, volume.comfort), (10, 70, Some(45)));
     });
 }
+
+#[actix_web::test]
+async fn home_assistant_volume_control_sends_requests_as_events_instead_of_changing_volume() {
+    let service = web::Data::new(ZoneService::new(None, None));
+    let lifecycle = web::Data::new(LibraryLifecycle::new());
+    let pool = web::Data::new(test_pool());
+    let app = actix_test::init_service(
+        App::new()
+            .app_data(service.clone())
+            .app_data(lifecycle.clone())
+            .app_data(pool.clone())
+            .wrap_fn(|request, next| {
+                request.extensions_mut().insert(claims());
+                next.call(request)
+            })
+            .configure(crate::api::zones::configure),
+    )
+    .await;
+    let zone_id = "client:desktop-amp00001";
+    let heartbeat = |acknowledged: u64| {
+        actix_test::TestRequest::put()
+            .uri("/zones/clients/desktop-amp00001")
+            .set_json(serde_json::json!({
+                "kind": "desktop", "name": "Living room PC", "status": "playing",
+                "song_ids": ["song-1"], "volume": 70, "acknowledged_seq": acknowledged
+            }))
+            .to_request()
+    };
+    let registered: serde_json::Value =
+        actix_test::call_and_read_body_json(&app, heartbeat(0)).await;
+    assert_eq!(registered["commands"], serde_json::json!([]));
+
+    let settings: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        actix_test::TestRequest::patch()
+            .uri(&format!("/zones/{zone_id}/settings"))
+            .set_json(serde_json::json!({"volume_control": "home_assistant"}))
+            .to_request(),
+    )
+    .await;
+    let zone = &settings["zone"];
+    assert_eq!(zone["settings"]["volume_control"], "home_assistant");
+    assert_eq!(zone["settings"]["supports"]["volume_control"], true);
+    assert_eq!(zone["volume"]["control"], "home_assistant");
+    assert_eq!(
+        zone["volume"]["level"], 70,
+        "the estimate starts at the zone's own level"
+    );
+
+    let mut events = service.subscribe();
+    let send = async |command: serde_json::Value| {
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::post()
+                .uri(&format!("/zones/{zone_id}/commands"))
+                .set_json(command)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), 202);
+    };
+    send(serde_json::json!({"command": "adjust_volume", "delta": 4})).await;
+    send(serde_json::json!({"command": "adjust_volume", "delta": -2})).await;
+    send(serde_json::json!({"command": "set_volume", "volume": 30})).await;
+    send(serde_json::json!({"command": "set_mute", "muted": true})).await;
+    let mut requests = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let ZoneEvent::VolumeRequest { user_id, request } = event {
+            assert_eq!(
+                user_id,
+                Some(USER),
+                "an app zone's requests stay with its owner"
+            );
+            requests.push((request.action, request.step, request.level, request.muted));
+        }
+    }
+    assert_eq!(
+        requests,
+        vec![
+            ("volume_up", 4, 74, false),
+            ("volume_down", 2, 72, false),
+            ("volume_set", 0, 30, false),
+            ("mute_on", 0, 30, true),
+        ]
+    );
+    // The app itself never got a volume command: its output stays as set.
+    let after: serde_json::Value = actix_test::call_and_read_body_json(&app, heartbeat(0)).await;
+    assert_eq!(after["commands"], serde_json::json!([]));
+    let listed: serde_json::Value = actix_test::call_and_read_body_json(
+        &app,
+        actix_test::TestRequest::get().uri("/zones").to_request(),
+    )
+    .await;
+    let zone = listed["zones"]
+        .as_array()
+        .and_then(|zones| zones.iter().find(|zone| zone["id"] == zone_id))
+        .expect("zone listed");
+    assert_eq!(zone["volume"]["level"], 30);
+    assert_eq!(zone["volume"]["muted"], true);
+
+    // Back to Parson: volume commands reach the app again.
+    actix_test::call_service(
+        &app,
+        actix_test::TestRequest::patch()
+            .uri(&format!("/zones/{zone_id}/settings"))
+            .set_json(serde_json::json!({"volume_control": "parson"}))
+            .to_request(),
+    )
+    .await;
+    send(serde_json::json!({"command": "set_volume", "volume": 40})).await;
+    let after: serde_json::Value = actix_test::call_and_read_body_json(&app, heartbeat(0)).await;
+    assert_eq!(after["commands"][0]["command"]["command"], "set_volume");
+    assert_eq!(after["commands"][0]["command"]["volume"], 40);
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, ZoneEvent::VolumeRequest { .. }),
+            "no event once Parson controls the volume again"
+        );
+    }
+
+    // Standby is for zones that hold a device; an app zone refuses it.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/zones/{zone_id}/commands"))
+            .set_json(serde_json::json!({"command": "standby"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 409);
+    let refused: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(refused["error"], "zone_has_no_standby");
+    assert_eq!(zone["capabilities"]["standby"], false);
+}

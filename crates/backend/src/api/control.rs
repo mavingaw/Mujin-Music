@@ -667,7 +667,9 @@ pub async fn browse(
             )
         }
         ItemId::Album(id) => {
-            let album = cache.album(id).ok_or(ZoneError::NotFound)?;
+            let album = cache
+                .album(id)
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             (
                 album_item(cache, album),
                 album_songs(album)
@@ -677,7 +679,9 @@ pub async fn browse(
             )
         }
         ItemId::Artist(id) => {
-            let artist = cache.artist(id).ok_or(ZoneError::NotFound)?;
+            let artist = cache
+                .artist(id)
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             let mut albums: Vec<&Album> = artist.albums.iter().collect();
             albums.sort_by(|left, right| {
                 right
@@ -702,7 +706,9 @@ pub async fn browse(
             let mut playlists = blocking(move || load_playlists(&pool, user_id, Some(playlist_id)))
                 .await
                 .map_err(ZoneError::Device)?;
-            let (id, name, songs) = playlists.pop().ok_or(ZoneError::NotFound)?;
+            let (id, name, songs) = playlists
+                .pop()
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             let children: Vec<BrowseItem> = songs
                 .iter()
                 .filter_map(|song_id| cache.song(song_id))
@@ -726,7 +732,7 @@ pub async fn browse(
         ItemId::Genre(genre) => {
             let songs = genre_song_ids(cache, genre);
             if songs.is_empty() {
-                return Err(ZoneError::NotFound);
+                return Err(ZoneError::Missing("item_not_found"));
             }
             let mut children: Vec<BrowseItem> = genre_albums(cache, genre)
                 .into_iter()
@@ -743,7 +749,7 @@ pub async fn browse(
             (genre_item(genre, songs.len()), children)
         }
         ItemId::Song(id) => {
-            let song = cache.song(id).ok_or(ZoneError::NotFound)?;
+            let song = cache.song(id).ok_or(ZoneError::Missing("item_not_found"))?;
             (song_item(cache, song), Vec::new())
         }
         ItemId::LibraryRadio | ItemId::GenreRadio(_) => {
@@ -862,7 +868,7 @@ async fn resolve_query(
             return exact
                 .or_else(partial)
                 .map(|(id, _, _)| ItemId::Playlist(*id))
-                .ok_or(ZoneError::NotFound);
+                .ok_or(ZoneError::Missing("no_library_match"));
         }
         Some("genre") => {
             let genres = genre_counts(cache);
@@ -875,7 +881,7 @@ async fn resolve_query(
             return exact
                 .or_else(partial)
                 .map(|(genre, _)| ItemId::Genre(genre.clone()))
-                .ok_or(ZoneError::NotFound);
+                .ok_or(ZoneError::Missing("no_library_match"));
         }
         Some("artist" | "album" | "song") | None => {}
         Some(_) => return Err(ZoneError::Invalid("invalid_search_kind")),
@@ -895,7 +901,7 @@ async fn resolve_query(
                 .map(|song| ItemId::Song(song.id.clone())),
             _ => None,
         })
-        .ok_or(ZoneError::NotFound)
+        .ok_or(ZoneError::Missing("no_library_match"))
 }
 
 /// The songs an item stands for, in play order, and its title.
@@ -907,18 +913,22 @@ async fn songs_for(
 ) -> Result<(Vec<String>, String), ZoneError> {
     let (songs, title) = match item {
         ItemId::Album(id) => {
-            let album = cache.album(id).ok_or(ZoneError::NotFound)?;
+            let album = cache
+                .album(id)
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             (
                 album_songs(album).into_iter().map(|song| song.id).collect(),
                 album.name.clone(),
             )
         }
         ItemId::Artist(id) => {
-            let artist = cache.artist(id).ok_or(ZoneError::NotFound)?;
+            let artist = cache
+                .artist(id)
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             (artist_song_ids(cache, id), artist.name.clone())
         }
         ItemId::Song(id) => {
-            let song = cache.song(id).ok_or(ZoneError::NotFound)?;
+            let song = cache.song(id).ok_or(ZoneError::Missing("item_not_found"))?;
             (vec![song.id.clone()], song.name.clone())
         }
         ItemId::Genre(genre) => (genre_song_ids(cache, genre), genre.clone()),
@@ -928,7 +938,9 @@ async fn songs_for(
             let mut playlists = blocking(move || load_playlists(&pool, user_id, Some(playlist_id)))
                 .await
                 .map_err(ZoneError::Device)?;
-            let (_, name, songs) = playlists.pop().ok_or(ZoneError::NotFound)?;
+            let (_, name, songs) = playlists
+                .pop()
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             (songs, name)
         }
         ItemId::Liked => {
@@ -970,14 +982,16 @@ async fn radio_queue(
         ItemId::GenreRadio(genre) | ItemId::Genre(genre) => {
             let mut songs = genre_song_ids(cache, genre);
             if songs.is_empty() {
-                return Err(ZoneError::NotFound);
+                return Err(ZoneError::Missing("item_not_found"));
             }
             songs.shuffle(&mut rand::rng());
             let seed = songs.first().cloned();
             (seed, songs, format!("{genre} radio"))
         }
         ItemId::Artist(id) => {
-            let artist = cache.artist(id).ok_or(ZoneError::NotFound)?;
+            let artist = cache
+                .artist(id)
+                .ok_or(ZoneError::Missing("item_not_found"))?;
             let mut songs = artist_song_ids(cache, id);
             songs.shuffle(&mut rand::rng());
             (

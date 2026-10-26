@@ -1,12 +1,36 @@
 import { describe, expect, test } from "bun:test";
 import {
   clearUpcomingItems,
+  insertAfterCurrent,
   removeUpcomingItem,
   shuffleUpcomingItems,
   unshuffleUpcomingItems,
 } from "./player-queue-edit";
 
 describe("local queue edits", () => {
+  test("play next inserts after the current track and keeps the rest", () => {
+    const queue = ["a", "b", "c", "d", "e"];
+    expect(insertAfterCurrent(queue, 1, ["x", "y"])).toEqual([
+      "a",
+      "b",
+      "x",
+      "y",
+      "c",
+      "d",
+      "e",
+    ]);
+    expect(insertAfterCurrent(queue, 4, ["x"])).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "x",
+    ]);
+    expect(insertAfterCurrent([], 0, ["x"])).toEqual(["x"]);
+    expect(queue).toHaveLength(5);
+  });
+
   test("removes only upcoming items", () => {
     expect(removeUpcomingItem(["a", "b", "c", "d"], 1, 2)).toEqual([
       "a",

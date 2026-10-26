@@ -29,7 +29,7 @@
       },
       "pair": {
         "title": "Approve Home Assistant",
-        "description": "In the Mujin Music app open **Settings → Devices → Pair a device** and enter this code:\n\n## {code}\n\nThe code works for {minutes} minutes. Select **Submit** once you have approved it."
+        "description": "In the Mujin Music app open **Settings → Home Assistant**, type this code under **Approve Home Assistant** and select **Approve**:\n\n## {code}\n\nThe code works for {minutes} minutes. Select **Submit** here once you have approved it."
       },
       "login": {
         "title": "Sign in to {name}",
@@ -82,6 +82,18 @@
     },
     "no_servers": {
       "message": "No Mujin Music server is set up."
+    },
+    "media_not_found": {
+      "message": "Nothing in the Mujin Music library matches \"{query}\"."
+    },
+    "item_not_found": {
+      "message": "{item} is no longer in the Mujin Music library."
+    },
+    "standby_unsupported": {
+      "message": "This zone cannot be switched off; pause it instead."
+    },
+    "nothing_matches": {
+      "message": "Nothing in the Mujin Music library matches that request."
     }
   },
   "services": {
@@ -150,6 +162,33 @@
         "song": "Song",
         "playlist": "Playlist",
         "genre": "Genre"
+      }
+    }
+  },
+  "entity": {
+    "event": {
+      "volume_request": {
+        "name": "Volume request",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "volume_up": "Volume up",
+              "volume_down": "Volume down",
+              "volume_set": "Volume set",
+              "mute_on": "Mute",
+              "mute_off": "Unmute"
+            }
+          },
+          "level": {
+            "name": "Level"
+          },
+          "step": {
+            "name": "Step"
+          },
+          "muted": {
+            "name": "Muted"
+          }
+        }
       }
     }
   }

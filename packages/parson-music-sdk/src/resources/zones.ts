@@ -80,7 +80,20 @@ export interface ZoneOutputInfo {
 }
 
 export type ZoneStatus =
-  "playing" | "paused" | "buffering" | "stopped" | "idle" | "unavailable";
+  | "playing"
+  | "paused"
+  | "buffering"
+  | "stopped"
+  | "idle"
+  | "unavailable"
+  /** Switched off (Home Assistant's turn_off): stopped, device released. */
+  | "standby";
+
+/**
+ * Who carries out a zone's volume changes: Parson, or Home Assistant (each
+ * request goes out as an event for an automation, e.g. an IR amplifier).
+ */
+export type ZoneVolumeControl = "parson" | "home_assistant";
 
 export type ZoneSource = "none" | "parson" | "external";
 
@@ -102,6 +115,11 @@ export interface ZoneVolume {
   step: number;
   /** The device's own scale, when it reports one. */
   device_range?: DeviceVolumeRange;
+  /**
+   * `home_assistant`: `level` is Parson's running estimate and every change
+   * goes out as a request. Missing from older servers (Parson).
+   */
+  control?: ZoneVolumeControl;
 }
 
 /** Roon's volume leveling: `auto` levels by album while an album plays in order. */
@@ -123,6 +141,7 @@ export interface ZoneSettingsView {
   /** Audio devices: exclusive (bit-perfect) access. */
   exclusive?: boolean;
   volume_mode?: ZoneVolumeMode;
+  volume_control?: ZoneVolumeControl;
   max_sample_rate?: number | null;
   max_bit_depth?: number | null;
   supports: {
@@ -134,6 +153,8 @@ export interface ZoneSettingsView {
     exclusive?: boolean;
     volume_modes?: ZoneVolumeMode[];
     max_format?: boolean;
+    /** The volume can be handed to Home Assistant. */
+    volume_control?: boolean;
   };
   notes: string[];
 }
@@ -157,6 +178,7 @@ export interface ZoneSettingsPatch {
   dsp?: ZoneDsp;
   exclusive?: boolean;
   volume_mode?: ZoneVolumeMode;
+  volume_control?: ZoneVolumeControl;
   max_sample_rate?: number | null;
   max_bit_depth?: number | null;
 }
@@ -190,6 +212,8 @@ export interface ZoneCapabilities {
   group: boolean;
   transfer_target: boolean;
   sleep_timer: boolean;
+  /** Takes `standby` and `wake` (missing from older servers). */
+  standby?: boolean;
 }
 
 export interface ZoneNowPlaying {
@@ -340,7 +364,11 @@ export type ZoneCommand =
    */
   | { command: "add_to_queue"; song_ids: string[]; next?: boolean }
   | { command: "set_repeat"; mode: ZoneRepeatMode }
-  | { command: "set_shuffle"; enabled: boolean };
+  | { command: "set_shuffle"; enabled: boolean }
+  /** Stops and releases the device; the queue stays. */
+  | { command: "standby" }
+  /** Leaves standby without playing. */
+  | { command: "wake" };
 
 export interface ClientZoneReport {
   kind: "web" | "desktop" | "mobile";
@@ -865,6 +893,7 @@ export function zoneQualityLabel(zone: Zone): string | null {
 }
 
 export function zoneStatusLabel(zone: Zone): string {
+  if (zone.status === "standby") return "Standby";
   if (zone.source === "external") return "Playing from another app";
   switch (zone.status) {
     case "playing":
@@ -1160,6 +1189,7 @@ export interface ZoneSettingsDraft {
   dsp: ZoneDsp;
   exclusive: boolean;
   volume_mode: ZoneVolumeMode;
+  volume_control: ZoneVolumeControl;
   max_sample_rate: number | null;
   max_bit_depth: number | null;
 }
@@ -1183,6 +1213,7 @@ export function zoneSettingsDraft(zone: Zone): ZoneSettingsDraft {
     dsp: { ...DEFAULT_ZONE_DSP, ...settings?.dsp },
     exclusive: settings?.exclusive ?? true,
     volume_mode: settings?.volume_mode ?? "hardware",
+    volume_control: settings?.volume_control ?? "parson",
     max_sample_rate: settings?.max_sample_rate ?? null,
     max_bit_depth: settings?.max_bit_depth ?? null,
   };
@@ -1220,6 +1251,7 @@ export function zoneSettingsPatch(
     "private",
     "exclusive",
     "volume_mode",
+    "volume_control",
     "max_sample_rate",
     "max_bit_depth",
   ] as const;

@@ -189,6 +189,31 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       moveQueueItem: (from, to) => playerRef.current.reorderQueue(from, to),
       removeQueueItem: (index) => playerRef.current.removeQueueItem(index),
       clearUpcoming: () => playerRef.current.clearUpcoming(),
+      addSongs: async (songIds, next) => {
+        const infos = await getSongInfos(songIds, false);
+        const items = songIds
+          .map((id) => infos[id] as LibrarySong | undefined)
+          .filter((song): song is LibrarySong => Boolean(song?.id))
+          .map((song) => ({
+            song,
+            album: song.album_object,
+            artist: song.artist_object,
+          }));
+        if (!items.length) return;
+        const current = playerRef.current;
+        if (!current.song.id || !current.queue.length) {
+          // Nothing queued here: the songs start, as on every zone.
+          current.setQueue(items);
+          current.setCurrentSongIndex(0);
+          const first = items[0]!;
+          current.setSongCallback(first.song, first.artist, first.album);
+          current.playAudioSource();
+        } else if (next) {
+          current.addNextToQueue(items);
+        } else {
+          current.addToQueue(items);
+        }
+      },
       setRepeat: (mode) => playerRef.current.setRepeatMode(mode),
       setShuffle: (enabled) => playerRef.current.setShuffle(enabled),
     }),

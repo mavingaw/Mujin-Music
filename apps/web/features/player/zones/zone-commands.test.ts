@@ -32,6 +32,9 @@ function fakeControls(playing = false, muted = false) {
     moveQueueItem: (from, to) => calls.push(`move:${from}->${to}`),
     removeQueueItem: (index) => calls.push(`remove:${index}`),
     clearUpcoming: () => calls.push("clear"),
+    addSongs: async (ids, next) => {
+      calls.push(`add:${ids.join(",")}${next ? ":next" : ""}`);
+    },
     setRepeat: (mode) => calls.push(`repeat:${mode}`),
     setShuffle: (enabled) => calls.push(`shuffle:${enabled}`),
   };
@@ -67,6 +70,23 @@ describe("remote zone commands on this device", () => {
       "repeat:all",
       "shuffle:true",
     ]);
+  });
+
+  test("play next and add to queue reach the local queue", async () => {
+    const { calls, controls } = fakeControls(true);
+    await applyZoneCommand(
+      { command: "add_to_queue", song_ids: ["x", "y"], next: true },
+      controls,
+    );
+    await applyZoneCommand(
+      { command: "add_to_queue", song_ids: ["z"] },
+      controls,
+    );
+    await applyZoneCommand(
+      { command: "add_to_queue", song_ids: [], next: true },
+      controls,
+    );
+    expect(calls).toEqual(["add:x,y:next", "add:z"]);
   });
 
   test("play and pause are idempotent", async () => {
