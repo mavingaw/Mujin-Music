@@ -3,8 +3,8 @@
 import {
   anyZonePlaying,
   deviceVolumeLabel,
+  dspProcesses,
   dspSummary,
-  isDspActive,
   sleepTimerLabel,
   groupingPlan,
   streamQuality,
@@ -417,7 +417,7 @@ function ZoneRow({
       : zone.device || zoneKindLabel(zone.kind);
   const groupable = zone.capabilities.group && zone.kind !== "linked";
   const quality = zoneQualityLabel(zone);
-  const dspOn = isDspActive(zone.settings?.dsp);
+  const dspOn = dspProcesses(zone.settings?.dsp);
   const deviceVolume = deviceVolumeLabel(zone.volume);
   return (
     <li
@@ -825,7 +825,11 @@ function ZoneMenu({
           <Settings2 className="h-4 w-4" /> Zone settings
         </DropdownMenuItem>
         {zone.settings?.supports.dsp && (
-          <DropdownMenuItem onSelect={() => onEdit("dsp")}>
+          <DropdownMenuItem
+            onSelect={() =>
+              zones.openDsp(zone.id === zones.localZoneId ? null : zone.id)
+            }
+          >
             <SlidersHorizontal className="h-4 w-4" /> DSP
             <span className="ml-auto max-w-24 truncate text-[11px] text-zinc-500">
               {dspSummary(zone.settings.dsp)}

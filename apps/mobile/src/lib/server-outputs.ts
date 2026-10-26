@@ -9,87 +9,105 @@ import {
   formatRealtimeFactor,
   formatSampleRate,
   headroomActive,
-  nativeFormatLabel,
   networkCapsSourceLabels,
   networkOutputIdentity,
   normalizeDspSettings,
-  type NativeOutputDevice,
-  type NativeOutputSession,
+  type DsdStrategy,
+  type DspSettings,
   type ServerDspStatus,
+  type SignalPath,
+  type Zone,
+  type ZoneEndpoint,
 } from "@parson/music-sdk";
+
+/**
+ * A zone the server plays itself (a device, a bridge's device, a network
+ * player) and the physical endpoint behind it.
+ */
+export interface ServerOutput {
+  zone: Zone;
+  endpoint: ZoneEndpoint;
+}
+
+/** Zones that play through an endpoint of their own; groups are skipped. */
+export function serverOutputs(zones: readonly Zone[]): ServerOutput[] {
+  const outputs: ServerOutput[] = [];
+  for (const zone of zones) {
+    if (zone.kind === "linked" || zone.group) continue;
+    const endpoint = zone.endpoints?.find((item) => item.id === zone.id);
+    if (endpoint) outputs.push({ zone, endpoint });
+  }
+  return outputs;
+}
 
 /**
  * e.g. `Bit-perfect 44.1kHz–192kHz, 16/24 bit`; for a network player
  * `Up to 192kHz, 16/24 bit (assumed)` or `44.1kHz, 16 bit (AirPlay)`.
  */
-export function serverOutputSummary(device: NativeOutputDevice) {
-  if (!device.formats) return device.probe_error ?? "Formats unknown";
-  if (device.network) {
-    const rates = device.formats.sample_rates.filter(
-      (entry) => entry.supported,
-    );
-    const depths = device.formats.bit_depths
-      .filter((entry) => entry.supported)
-      .map((entry) => entry.value);
+export function serverOutputSummary(endpoint: ZoneEndpoint) {
+  if (!endpoint.formats) return endpoint.probe_error ?? "Formats unknown";
+  const rates = endpoint.formats.sample_rates.filter(
+    (entry) => entry.supported,
+  );
+  const depths = endpoint.formats.bit_depths
+    .filter((entry) => entry.supported)
+    .map((entry) => entry.value);
+  if (endpoint.network) {
     if (!rates.length || !depths.length) return "No PCM formats";
-    const first = nativeFormatLabel(rates[0]!.value);
-    const last = nativeFormatLabel(rates.at(-1)!.value);
+    const first = formatSampleRate(rates[0]!.value);
+    const last = formatSampleRate(rates.at(-1)!.value);
     const span = first === last ? first : `${first}–${last}`;
     const source =
-      device.network.caps_source === "protocol"
+      endpoint.network.caps_source === "protocol"
         ? "AirPlay"
-        : device.network.caps_source === "assumed"
+        : endpoint.network.caps_source === "assumed"
           ? "assumed"
-          : device.network.caps_source === "known_model"
+          : endpoint.network.caps_source === "known_model"
             ? "maker's limits"
             : "declared";
     return `${span}, ${depths.join("/")} bit (${source})`;
   }
-  const rates = device.formats.sample_rates.filter((entry) => entry.supported);
-  const depths = device.formats.bit_depths
-    .filter((entry) => entry.supported)
-    .map((entry) => entry.value);
   if (!rates.length || !depths.length) return "No bit-perfect PCM formats";
-  const first = nativeFormatLabel(rates[0]!.value);
-  const last = nativeFormatLabel(rates.at(-1)!.value);
+  const first = formatSampleRate(rates[0]!.value);
+  const last = formatSampleRate(rates.at(-1)!.value);
   return `Bit-perfect ${first === last ? first : `${first}–${last}`}, ${depths.join("/")} bit`;
 }
 
 /** Rates the device cannot play bit-perfectly, e.g. `352.8kHz, 384kHz`. */
-export function unsupportedRates(device: NativeOutputDevice) {
-  return (device.formats?.sample_rates ?? [])
+export function unsupportedRates(endpoint: ZoneEndpoint) {
+  return (endpoint.formats?.sample_rates ?? [])
     .filter((entry) => !entry.supported)
-    .map((entry) => nativeFormatLabel(entry.value))
+    .map((entry) => formatSampleRate(entry.value))
     .join(", ");
 }
 
-/** `m:ss` position line for the server session. */
-export function serverSessionLine(session: NativeOutputSession) {
+/** `Playing · m:ss / m:ss` for what a server zone plays. */
+export function serverSessionLine(
+  zone: Pick<Zone, "status" | "position_ms" | "duration_ms">,
+) {
   const clock = (ms: number) => {
     const seconds = Math.max(0, Math.floor(ms / 1000));
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   };
   const state =
-    session.state === "playing" || session.state === "starting"
+    zone.status === "playing" || zone.status === "buffering"
       ? "Playing"
-      : session.state === "paused"
+      : zone.status === "paused"
         ? "Paused"
-        : session.state === "ended"
-          ? "Finished"
-          : session.state === "failed"
-            ? (session.error ?? "Failed")
-            : "Stopped";
-  return `${state} · ${clock(session.position_ms)} / ${clock(session.duration_ms)}`;
+        : "Stopped";
+  return `${state} · ${clock(zone.position_ms)} / ${clock(zone.duration_ms)}`;
 }
 
 /**
- * What the server's DSP chain does on a device, e.g.
+ * What a zone's DSP chain does, e.g.
  * `Headroom −3.0 dB · EQ 2 bands · Crossfeed Medium · 96kHz`, or `null`
  * when it passes the samples through untouched.
  */
-export function serverDspSummary(device: NativeOutputDevice): string | null {
-  if (!device.dsp) return null;
-  const dsp = normalizeDspSettings(device.dsp);
+export function serverDspSummary(
+  settings: DspSettings | null | undefined,
+): string | null {
+  if (!settings) return null;
+  const dsp = normalizeDspSettings(settings);
   if (!dsp.enabled) return null;
   const parts: string[] = [];
   if (headroomActive(dsp))
@@ -105,15 +123,15 @@ export function serverDspSummary(device: NativeOutputDevice): string | null {
 }
 
 /** e.g. `Linn Klimax DSM · OpenHome · 192.168.1.40`, or `null` off-network. */
-export function networkPlayerLine(device: NativeOutputDevice) {
-  const network = device.network;
+export function networkPlayerLine(endpoint: ZoneEndpoint) {
+  const network = endpoint.network;
   if (!network) return null;
   return `${networkOutputIdentity(network)} · ${network.host}`;
 }
 
 /** Where a network player's limits come from and what it was tested on. */
-export function networkPlayerNote(device: NativeOutputDevice) {
-  const network = device.network;
+export function networkPlayerNote(endpoint: ZoneEndpoint) {
+  const network = endpoint.network;
   if (!network) return null;
   return `${networkCapsSourceLabels[network.caps_source]}. ${
     network.protocol === "air_play"
@@ -137,11 +155,14 @@ export function serverDspStatusLine(status: ServerDspStatus | null) {
 }
 
 /** e.g. `DSD: native DSD64–DSD256 · Automatic`, or `null` without DSD info. */
-export function serverDsdLine(device: NativeOutputDevice) {
-  const entries = device.formats?.dsd_rates;
+export function serverDsdLine(
+  endpoint: ZoneEndpoint,
+  strategy: DsdStrategy | undefined,
+) {
+  const entries = endpoint.formats?.dsd_rates;
   if (!entries) return null;
   const native = entries.filter((entry) => entry.supported).map((e) => e.value);
-  const dop = device.formats?.dop_rates ?? [];
+  const dop = endpoint.formats?.dop_rates ?? [];
   const span = (rates: number[]) =>
     rates.length === 1
       ? dsdRateLabel(rates[0]!)
@@ -151,16 +172,15 @@ export function serverDsdLine(device: NativeOutputDevice) {
     : dop.length
       ? `DoP up to ${dsdRateLabel(dop.at(-1)!)}`
       : "converted to PCM";
-  const strategy =
-    DSD_STRATEGIES.find(
-      (item) => item.value === (device.settings.dsd_strategy ?? "auto"),
-    )?.label ?? "Automatic";
-  return `DSD: ${support} · ${strategy}`;
+  const label =
+    DSD_STRATEGIES.find((item) => item.value === (strategy ?? "auto"))?.label ??
+    "Automatic";
+  return `DSD: ${support} · ${label}`;
 }
 
-/** e.g. `USB 21b4:0082 · AudioQuest DragonFly Red v1.0`. */
-export function serverHardwareLine(device: NativeOutputDevice) {
-  const hardware = device.hardware;
+/** e.g. `USB 21b4:0082 · high speed`. */
+export function serverHardwareLine(endpoint: ZoneEndpoint) {
+  const hardware = endpoint.hardware;
   if (!hardware) return null;
   return [
     `${hardware.bus.toUpperCase()}${hardware.usb_id ? ` ${hardware.usb_id}` : ""}`,
@@ -175,39 +195,30 @@ export function serverHardwareLine(device: NativeOutputDevice) {
 }
 
 /**
- * The driver's report while the server plays, e.g. `Confirmed by the
- * driver: hardware running at S24_3LE 96kHz 2ch`, or `null` when there is
- * none.
+ * The driver's (or renderer's) report while the server plays, e.g.
+ * `Confirmed by the driver: S24_3LE 96kHz 2ch`, or `null` without one.
  */
-export function serverDriverLine(session: NativeOutputSession) {
-  const hardware = session.hardware;
-  if (!hardware) return null;
-  const params = hardware.params;
-  const running = `${params.format} ${formatSampleRate(params.rate)} ${params.channels}ch`;
-  if (hardware.reporter === "renderer") {
-    const decoding = `${params.format} at ${formatSampleRate(params.rate)}`;
-    return hardware.matches_stream
-      ? `Confirmed by the renderer: decoding ${decoding}`
-      : `Renderer: decoding ${decoding}, converted by the renderer`;
-  }
-  const chain = hardware.chain?.plugins.length
-    ? ` via ${hardware.chain.plugins.join(" → ")}`
-    : "";
-  if (hardware.matches_stream) {
-    return `Confirmed by the driver: ${hardware.reporter === "library" ? "running" : "hardware running"} at ${running}${chain}`;
-  }
-  const converting = hardware.chain?.converting.length
-    ? ` by ${hardware.chain.converting.join(", ")}`
-    : "";
-  return `Driver: ${running}, converted after Parson${converting}`;
+export function serverDriverLine(
+  path: Pick<
+    SignalPath,
+    "hardwareReport" | "hardwareVerified" | "hardwareReporter"
+  >,
+) {
+  if (!path.hardwareReport) return null;
+  const reporter = path.hardwareReporter ?? "driver";
+  if (path.hardwareVerified)
+    return `Confirmed by the ${reporter}: ${path.hardwareReport}`;
+  return reporter === "renderer"
+    ? `Renderer: ${path.hardwareReport}, converted by the renderer`
+    : `Driver: ${path.hardwareReport}, converted after Parson`;
 }
 
 /**
  * The server output as the kernel and driver name it, e.g.
  * `USB 152a:8750 · high speed · ALSA hw:1,0 exclusive on studio-pc`.
  */
-export function serverTransportLine(session: NativeOutputSession) {
-  const device = session.signal_path?.output_device;
+export function serverTransportLine(path: Pick<SignalPath, "outputDevice">) {
+  const device = path.outputDevice;
   if (!device) return null;
   if (device.network)
     return `${device.network.protocol_label} to ${device.network.endpoint} · ${device.network.stream_format} from ${device.host}`;

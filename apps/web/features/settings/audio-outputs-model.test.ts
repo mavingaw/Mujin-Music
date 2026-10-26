@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { NativeOutputDevice } from "@parson/music-sdk";
+import type { ZoneEndpoint } from "@parson/music-sdk";
 import {
   deviceCapabilitySummary,
   formatTone,
@@ -10,16 +10,15 @@ import {
 
 const rates = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800];
 
-const device: NativeOutputDevice = {
-  id: "alsa:USB:0",
+const device: ZoneEndpoint = {
+  id: "device:alsa:USB:0",
   name: "USB DAC",
   detail: "hw:CARD=USB,DEV=0",
-  driver: "alsa",
+  driver: "ALSA",
   mode_label: "ALSA hw, exclusive",
+  address: "hw:CARD=USB,DEV=0",
   exclusive_capable: true,
-  is_default: false,
   probe_error: null,
-  settings: { exclusive: true, max_sample_rate: 96_000, max_bit_depth: null },
   formats: {
     sample_rates: rates.map((value) => ({
       value,
@@ -34,7 +33,12 @@ const device: NativeOutputDevice = {
   },
   sample_formats: ["16-bit", "24-bit packed"],
   channels: [2, 2],
-  in_use: false,
+  dsd_formats: [],
+  hardware: null,
+  network: null,
+  dsp_support: null,
+  volume: null,
+  has_icon: false,
 };
 
 test("unsupported rates are red even when above the limit", () => {

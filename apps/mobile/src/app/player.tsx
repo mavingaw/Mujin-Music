@@ -1000,17 +1000,14 @@ export default function PlayerScreen() {
   );
 }
 
-/** Hands the playing track to one of the server's bit-perfect outputs. */
+/** Moves the queue to one of the zones the server plays itself. */
 function PlayerServerOutputs() {
   const player = usePlayer();
-  const { currentTime } = usePlayerPosition();
   return (
     <ServerOutputs
       onHandOff={() => {
         if (player.isPlaying) player.toggle();
       }}
-      positionSeconds={currentTime}
-      songId={player.current?.id ?? null}
     />
   );
 }

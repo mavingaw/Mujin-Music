@@ -238,12 +238,11 @@ export type SongSignalPathOptions = {
   /** Server DSP, as accepted by the stream endpoint. */
   audioEffect?: string | null;
   /**
-   * `cast` describes what a Cast receiver is sent; `native` describes the
-   * server playing to one of its own devices (`device`).
+   * `cast` describes what a Cast receiver is sent. What the server plays
+   * itself (devices, bridges, network players) is a zone's
+   * `output.stream.signal_path`.
    */
-  target?: SignalStreamTarget;
-  /** Server output device id, for `target: "native"`. */
-  device?: string | null;
+  target?: Exclude<SignalStreamTarget, "native">;
   /**
    * What the player decodes, exactly as sent with its stream request, so
    * the server describes the delivery it will actually make.
@@ -270,7 +269,7 @@ export function getSongSignalPath(
   const target = options.target ?? "direct";
   const capabilityParams =
     target === "direct" ? playbackCapabilityParams(options.capabilities) : {};
-  const key = `${songId}:${bitrate}:${options.audioEffect ?? ""}:${target}:${options.device ?? ""}:${new URLSearchParams(capabilityParams).toString()}`;
+  const key = `${songId}:${bitrate}:${options.audioEffect ?? ""}:${target}:${new URLSearchParams(capabilityParams).toString()}`;
   const cached = signalPathCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   const params: Record<string, string | number> = {
@@ -279,7 +278,6 @@ export function getSongSignalPath(
     target,
   };
   if (options.audioEffect) params.audio_effect = options.audioEffect;
-  if (target === "native" && options.device) params.device = options.device;
   const value = api
     .get<ServerSignalPath>(
       `/media/songs/${encodeURIComponent(songId)}/signal-path`,

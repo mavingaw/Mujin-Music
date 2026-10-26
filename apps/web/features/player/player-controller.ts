@@ -3,12 +3,12 @@
 import {
   activeConvolutionFilter,
   createPlaybackQueue,
-  defaultDspSettings,
   defaultRadioSettings,
   getRadioPicks,
   getRadioSettings,
   isStreamingId,
   nextRepeatMode,
+  normalizeDspSettings,
   radioExhaustedNotice,
   radioMinimumUpcomingPicks,
   radioPicksExhaustedNotice,
@@ -19,12 +19,11 @@ import {
   shouldContinueWithRadio,
   upcomingRadioPicks,
   updateRadioSettings,
-  volumeLevelingGain,
   type RadioSeed,
   type RadioSettings,
   type RadioSkipReasonId,
   type ResolvedRadioSeed,
-  type ZoneDsp,
+  type DspSettings,
   type ZoneRepeatMode,
 } from "@parson/music-sdk";
 import type { Album, Artist, LibrarySong } from "@parson/music-sdk/types";
@@ -74,8 +73,6 @@ import {
   useOutputDeviceChoice,
 } from "./dsp-store";
 import { usePlaybackTelemetry } from "./player-telemetry";
-import { serverOutputId, useNativeOutputs } from "./use-native-outputs";
-import { useServerDsp } from "./use-server-dsp";
 import { useConvolutionFilters } from "./convolution-section";
 import { storeQueue, storeQueueSnapshot } from "./player-queue-storage";
 import { useQueueRestore } from "./use-queue-restore";
@@ -132,15 +129,12 @@ export function usePlayerController() {
     isPlaying,
     loadedImpulse,
     muted,
-    nativeSession,
     playAudioSource,
     preloadAudioSource,
     reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
     setDspSettings,
-    setNativeLeveling,
-    setNativeOutput,
     setOutputDevice,
     setAudioSource,
     setAudioVolume,
@@ -173,46 +167,28 @@ export function usePlayerController() {
   const [volumeLevelingMode, setVolumeLevelingMode] = useVolumeLevelingMode();
   const [outputDeviceId, setOutputDeviceId] = useOutputDeviceChoice();
   const outputs = useAudioOutputs();
-  const nativeDeviceId = serverOutputId(outputDeviceId);
-  const nativeOutputs = useNativeOutputs({ live: Boolean(nativeDeviceId) });
-  const nativeDevice =
-    nativeOutputs.data?.devices.find(
-      (device) => device.id === nativeDeviceId,
-    ) ?? null;
   const [localDsp, setLocalDsp] = useDspSettings(outputDeviceId);
-  // A server output runs the chain itself; the server keeps its settings.
-  const serverDsp = useServerDsp(
-    nativeDeviceId,
-    nativeDevice,
-    localDsp,
-    setLocalDsp,
+  // This device's zone keeps its chain on the server (ZonesProvider hands
+  // it over); the browser's own chain applies until the zone list arrives.
+  const [zoneDsp, setZoneDspState] = useState<DspSettings | null>(null);
+  const setZoneDsp = useCallback(
+    (settings: DspSettings | null) =>
+      setZoneDspState(settings ? normalizeDspSettings(settings) : null),
+    [],
   );
-  const dsp = nativeDeviceId ? serverDsp.settings : localDsp;
-  // The browser chain names (and loads) its convolution filter; a server
-  // output describes its own.
-  const convolutionFilterId =
-    !nativeDeviceId && dsp ? activeConvolutionFilter(dsp) : null;
+  const dsp = zoneDsp ?? localDsp;
+  const convolutionFilterId = activeConvolutionFilter(dsp);
   const convolutionFilters = useConvolutionFilters(
     Boolean(convolutionFilterId),
   );
-  const setDsp = nativeDeviceId ? serverDsp.setSettings : setLocalDsp;
+  const setDsp = setLocalDsp;
   useEffect(() => {
-    setNativeOutput(nativeDeviceId);
-    void setOutputDevice(nativeDeviceId ? "" : outputDeviceId);
-  }, [
-    nativeDeviceId,
-    outputDeviceId,
-    outputs.devices,
-    setNativeOutput,
-    setOutputDevice,
-  ]);
+    void setOutputDevice(outputDeviceId);
+  }, [outputDeviceId, outputs.devices, setOutputDevice]);
   useEffect(() => {
-    // The browser graph only runs the chain for this browser's outputs.
-    setDspSettings(nativeDeviceId ? defaultDspSettings() : dsp);
-  }, [dsp, nativeDeviceId, setDspSettings]);
-  const outputName = nativeDeviceId
-    ? (nativeSession?.device_name ?? nativeDevice?.name ?? "Server output")
-    : outputDeviceLabel(outputs.devices, activeSinkId);
+    setDspSettings(dsp);
+  }, [dsp, setDspSettings]);
+  const outputName = outputDeviceLabel(outputs.devices, activeSinkId);
   const queuePositionSync = useRef<Promise<void>>(Promise.resolve());
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -1112,32 +1088,11 @@ export function usePlayerController() {
   useEffect(() => {
     setLevelingGain(leveling.gain);
   }, [leveling.gain, setLevelingGain]);
-  // A server output levels on the server, in float, limited only by the
-  // track's peak (its volume is fixed, so there is no slider headroom).
-  const nativeLeveling = useMemo(() => {
-    const result = volumeLevelingGain(song.loudness, volumeLevelingMode, {
-      albumContext: playsInAlbumContext(
-        queue.map((item) => item.album.id || item.song.album_object.id),
-        queue[index.current]?.song.id === song.id ? index.current : -1,
-      ),
-    });
-    return result && Math.abs(result.appliedDb) >= 0.05
-      ? { gain_db: result.appliedDb, source: result.source }
-      : null;
-  }, [queue, song.id, song.loudness, volumeLevelingMode]);
-  useEffect(() => {
-    setNativeLeveling(nativeLeveling);
-  }, [nativeLeveling, setNativeLeveling]);
-
   // Crossfade (zone setting): start the next track a few seconds early.
   const crossfadeStartedFor = useRef("");
   const crossfadeSettings = useRef(0);
   const setZoneOutput = useCallback(
-    (settings: {
-      crossfadeSeconds: number;
-      levelingFactor: number | null;
-      dsp?: ZoneDsp | null;
-    }) => {
+    (settings: { crossfadeSeconds: number; levelingFactor: number | null }) => {
       crossfadeSettings.current = settings.crossfadeSeconds;
       setOutputSettings(settings);
     },
@@ -1263,21 +1218,13 @@ export function usePlayerController() {
         deviceSampleRate,
         outputName,
         outputChosen: Boolean(activeSinkId),
-        native: nativeDeviceId
-          ? {
-              deviceId: nativeDeviceId,
-              name: outputName,
-              signalPath:
-                nativeSession && nativeSession.song_id === song.id
-                  ? nativeSession.signal_path
-                  : null,
-            }
-          : null,
       },
       volumeLevelingMode,
       setVolumeLevelingMode,
       dsp,
+      browserDsp: localDsp,
       setDsp,
+      setZoneDsp,
       output: {
         devices: outputs.devices,
         selectedId: outputDeviceId,
@@ -1287,9 +1234,6 @@ export function usePlayerController() {
         selectable: supportsOutputSelection(),
         select: setOutputDeviceId,
         requestLabels: outputs.requestLabels,
-        serverDevices: nativeOutputs.data?.devices ?? [],
-        serverOutputId: nativeDeviceId,
-        serverDspError: nativeDeviceId ? serverDsp.error : null,
       },
       repeatMode,
       shuffle,
@@ -1367,14 +1311,12 @@ export function usePlayerController() {
       dsp,
       outputDeviceId,
       outputName,
-      nativeDeviceId,
-      nativeOutputs.data,
-      nativeSession,
-      serverDsp.error,
       outputs.devices,
       outputs.labelsHidden,
       outputs.requestLabels,
+      localDsp,
       setDsp,
+      setZoneDsp,
       setOutputDeviceId,
       muted,
       audioPreset,

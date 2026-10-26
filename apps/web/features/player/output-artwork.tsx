@@ -1,8 +1,7 @@
 "use client";
 
 import {
-  nativeOutputIconUrl,
-  type NativeOutputDriver,
+  zoneIconUrl,
   type NetworkEndpointKind,
   type NetworkProtocol,
 } from "@parson/music-sdk";
@@ -41,7 +40,7 @@ const PROTOCOL_TINT: Record<NetworkProtocol, string> = {
  */
 export function OutputArtwork({
   className,
-  deviceId,
+  zoneId,
   driver,
   hasIcon,
   kind,
@@ -49,8 +48,10 @@ export function OutputArtwork({
   size = 44,
 }: {
   className?: string;
-  deviceId?: string | null;
-  driver?: NativeOutputDriver | null;
+  /** The zone whose picture this is (UPnP players carry their own). */
+  zoneId?: string | null;
+  /** The device driver, e.g. `alsa`, `wasapi` or `simulated`. */
+  driver?: string | null;
   hasIcon?: boolean;
   kind?: NetworkEndpointKind | null;
   protocol?: NetworkProtocol | null;
@@ -77,12 +78,12 @@ export function OutputArtwork({
       data-output-artwork={hasIcon && !failed ? "icon" : (kind ?? "local")}
       style={{ height: size, width: size }}
     >
-      {hasIcon && deviceId && !failed ? (
+      {hasIcon && zoneId && !failed ? (
         <img
           alt=""
           className="h-full w-full object-contain p-1"
           onError={() => setFailed(true)}
-          src={nativeOutputIconUrl(deviceId)}
+          src={zoneIconUrl(zoneId)}
         />
       ) : (
         <Icon style={{ height: glyph, width: glyph }} />

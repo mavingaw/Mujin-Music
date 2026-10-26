@@ -3,102 +3,157 @@
 import {
   defaultDspSettings,
   normalizeDspSettings,
-  updateNativeOutputDsp,
+  updateZoneSettings,
   type DspSettings,
-  type NativeOutputDevice,
-  type NativeOutputs,
+  type OutputDspSupport,
+  type Zone,
 } from "@parson/music-sdk";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { nativeOutputsKey } from "./use-native-outputs";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { errorText } from "./zone-settings-errors";
 
-/** Saves are batched while a slider moves: each save restarts the track. */
-export const SERVER_DSP_SAVE_DELAY_MS = 350;
+/** Saves are batched while a slider moves: each save replans the stream. */
+export const ZONE_DSP_SAVE_DELAY_MS = 350;
 
-/**
- * The chain a server output should start with: what the server saved
- * for it, or (for a device the server has no chain for yet) what this
- * browser kept for it locally, so settings made before the server ran
- * the chain itself are not lost.
- */
-export function initialServerDsp(
-  device: Pick<NativeOutputDevice, "dsp" | "dsp_customized"> | null,
-  local: DspSettings,
-): { settings: DspSettings; push: boolean } {
-  if (device?.dsp && device.dsp_customized)
-    return { settings: normalizeDspSettings(device.dsp), push: false };
-  const localChanged =
-    JSON.stringify(normalizeDspSettings(local)) !==
-    JSON.stringify(defaultDspSettings());
-  if (localChanged) return { settings: local, push: Boolean(device?.dsp) };
-  return {
-    settings: device?.dsp ? normalizeDspSettings(device.dsp) : local,
-    push: false,
-  };
+/** This browser's chains were copied to its zone (one key per zone). */
+const MIGRATED_KEY = "parson.dsp-migrated";
+
+function isDefault(settings: DspSettings) {
+  return (
+    JSON.stringify(normalizeDspSettings(settings)) ===
+    JSON.stringify(defaultDspSettings())
+  );
 }
 
 /**
- * DSP settings for a server output. The server keeps the chain (it runs
- * it, and every client controlling that output sees the same one); this
- * browser mirrors it locally. Changes show at once and are saved shortly
- * after, which restarts a playing track at its position with the chain.
+ * The chain a zone should start with: what the server keeps for it, or
+ * (for a zone that has none yet) the chain this browser kept before zones
+ * carried their own, so settings made then are not lost.
  */
-export function useServerDsp(
-  deviceId: string | null,
-  device: NativeOutputDevice | null,
+export function initialZoneDsp(
+  zone: DspSettings | null | undefined,
   local: DspSettings,
-  setLocal: (settings: DspSettings) => void,
+): { settings: DspSettings; push: boolean } {
+  const saved = zone ? normalizeDspSettings(zone) : null;
+  if (saved && !isDefault(saved)) return { settings: saved, push: false };
+  if (!isDefault(local))
+    return { settings: normalizeDspSettings(local), push: Boolean(zone) };
+  return { settings: saved ?? normalizeDspSettings(local), push: false };
+}
+
+/**
+ * What the server's DSP engine can do for a zone: its output's own
+ * support, or (for a stream the zone fetches, which the server renders at
+ * the track's rate) the engine without fixed rates.
+ */
+export function zoneDspSupport(zone: Zone): OutputDspSupport | null {
+  const endpoint = zone.endpoints?.find((item) => item.dsp_support);
+  if (endpoint?.dsp_support) return endpoint.dsp_support;
+  if (!zone.settings?.supports.dsp) return null;
+  return {
+    available: true,
+    reason: null,
+    engine: "Parson DSP, 64-bit float",
+    crossfeed: true,
+    sample_rates: [],
+    output_bits: null,
+  };
+}
+
+function readMigrated(): string[] {
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(MIGRATED_KEY) ?? "[]",
+    ) as unknown;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function markMigrated(zoneId: string) {
+  try {
+    const ids = readMigrated().filter((id) => id !== zoneId);
+    window.localStorage.setItem(
+      MIGRATED_KEY,
+      JSON.stringify([...ids, zoneId].slice(-16)),
+    );
+  } catch {}
+}
+
+/**
+ * A zone's DSP chain. The server keeps it (it runs it for server-played
+ * zones, and every client controlling the zone sees the same one). Changes
+ * show at once and are saved shortly after. `migrateFrom` is the chain
+ * this browser kept for its own output, copied once into a zone that has
+ * none.
+ */
+export function useZoneDsp(
+  zone: Zone | null,
+  migrateFrom: DspSettings | null = null,
 ) {
   const queryClient = useQueryClient();
-  const [settings, setSettingsState] = useState<DspSettings>(local);
+  const zoneId = zone?.id ?? null;
+  const saved = zone?.settings?.dsp ?? null;
+  const savedKey = saved ? JSON.stringify(normalizeDspSettings(saved)) : "";
+  const [pending, setPending] = useState<{
+    zoneId: string;
+    settings: DspSettings;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const seeded = useRef<string | null>(null);
 
   const save = useCallback(
     (id: string, next: DspSettings) => {
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => {
         timer.current = null;
-        updateNativeOutputDsp(id, next)
-          .then((saved) => {
+        updateZoneSettings(id, { dsp: next })
+          .then(() => {
             setError(null);
-            queryClient.setQueryData<NativeOutputs>(nativeOutputsKey, (old) =>
-              old
-                ? {
-                    ...old,
-                    devices: old.devices.map((item) =>
-                      item.id === saved.id ? saved : item,
-                    ),
-                  }
-                : old,
-            );
+            void queryClient.invalidateQueries({ queryKey: ["zones"] });
             void queryClient.invalidateQueries({ queryKey: ["signal-path"] });
           })
-          .catch((cause: unknown) =>
+          .catch((cause: unknown) => {
+            setPending(null);
             setError(
-              cause instanceof Error
-                ? cause.message
-                : "The server did not save the DSP settings.",
-            ),
-          );
-      }, SERVER_DSP_SAVE_DELAY_MS);
+              errorText(cause, "The server did not save the DSP chain."),
+            );
+          });
+      }, ZONE_DSP_SAVE_DELAY_MS);
     },
     [queryClient],
   );
 
-  // Adopt the server's chain when the device (or its saved chain) changes.
+  // A saved chain that matches the pending one ends the optimistic state.
   useEffect(() => {
-    if (!deviceId || !device) return;
-    const key = `${deviceId}:${JSON.stringify(device.dsp ?? null)}`;
-    if (seeded.current === key) return;
-    const first = !seeded.current?.startsWith(`${deviceId}:`);
-    seeded.current = key;
-    if (!first && timer.current) return;
-    const initial = initialServerDsp(device, local);
-    setSettingsState(initial.settings);
-    if (initial.push) save(deviceId, initial.settings);
-  }, [device, deviceId, local, save]);
+    if (
+      pending &&
+      pending.zoneId === zoneId &&
+      !timer.current &&
+      JSON.stringify(pending.settings) === savedKey
+    )
+      setPending(null);
+  }, [pending, savedKey, zoneId]);
+
+  // Copies this browser's old chain into its zone once.
+  const migrateKey = migrateFrom ? JSON.stringify(migrateFrom) : "";
+  useEffect(() => {
+    if (!zoneId || !migrateKey || !zone?.settings?.supports.dsp) return;
+    if (readMigrated().includes(zoneId)) return;
+    markMigrated(zoneId);
+    const initial = initialZoneDsp(
+      saved,
+      JSON.parse(migrateKey) as DspSettings,
+    );
+    if (!initial.push) return;
+    setPending({ zoneId, settings: initial.settings });
+    save(zoneId, initial.settings);
+    // `saved` is read once, when the zone first appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [migrateKey, save, zone?.settings?.supports.dsp, zoneId]);
 
   useEffect(
     () => () => {
@@ -107,15 +162,28 @@ export function useServerDsp(
     [],
   );
 
-  const setSettings = useCallback(
-    (next: DspSettings) => {
-      const normalized = normalizeDspSettings(next);
-      setSettingsState(normalized);
-      setLocal(normalized);
-      if (deviceId) save(deviceId, normalized);
-    },
-    [deviceId, save, setLocal],
+  const settings = useMemo(
+    () =>
+      pending && pending.zoneId === zoneId
+        ? pending.settings
+        : savedKey
+          ? (JSON.parse(savedKey) as DspSettings)
+          : defaultDspSettings(),
+    [pending, savedKey, zoneId],
   );
 
-  return { settings, setSettings, error };
+  const setSettings = useCallback(
+    (next: DspSettings) => {
+      if (!zoneId) return;
+      const normalized = normalizeDspSettings(next);
+      setPending({ zoneId, settings: normalized });
+      save(zoneId, normalized);
+    },
+    [save, zoneId],
+  );
+
+  return useMemo(
+    () => ({ settings, setSettings, error }),
+    [error, setSettings, settings],
+  );
 }

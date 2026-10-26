@@ -3,6 +3,7 @@
 import {
   addBridge,
   type BridgeStatus,
+  type DspSettings,
   discoverOutputs,
   removeBridge,
   discoverSonos,
@@ -45,6 +46,7 @@ import { useSession } from "@/features/account/session-provider";
 import { hasDesktopBridge } from "@/lib/desktop/bridge";
 import { levelingFactor } from "../crossfade";
 import { usePlayer } from "../player-api";
+import { useZoneDsp } from "./use-zone-dsp";
 import {
   applyZoneCommand,
   heartbeatInterval,
@@ -96,6 +98,19 @@ type ZonesContextValue = {
   removeBridge: (address: string) => Promise<void>;
   /** Pauses every playing zone; returns how many. */
   pauseAll: () => Promise<number>;
+  /**
+   * This device's DSP chain: its zone's (kept on the server, run by this
+   * browser), or the browser's own before the zone list arrives.
+   */
+  localDsp: {
+    settings: DspSettings;
+    setSettings: (settings: DspSettings) => void;
+    error: string | null;
+  };
+  /** The zone whose DSP engine is open (`null`: this device's zone). */
+  dspPanel: { open: boolean; zoneId: string | null };
+  openDsp: (zoneId: string | null) => void;
+  closeDsp: () => void;
   busy: boolean;
   error: unknown;
 };
@@ -523,19 +538,41 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
     player.song.id,
     queueSongIds,
   ]);
-  // Per-zone DSP for this device's own playback.
-  const dsp = localSettings?.supports.dsp ? (localSettings.dsp ?? null) : null;
-  const dspKey = dsp ? JSON.stringify(dsp) : "";
-  const { setOutputSettings } = player;
+  const { setOutputSettings, setZoneDsp, browserDsp, setDsp } = player;
   useEffect(() => {
     setOutputSettings({
       crossfadeSeconds,
       // Without a zone measurement the track's ReplayGain leveling applies.
       levelingFactor:
         levelingGain === null ? null : levelingFactor(levelingGain),
-      dsp: dspKey ? (JSON.parse(dspKey) as NonNullable<typeof dsp>) : null,
     });
-  }, [crossfadeSeconds, dspKey, levelingGain, setOutputSettings]);
+  }, [crossfadeSeconds, levelingGain, setOutputSettings]);
+  // This device's zone keeps its DSP chain on the server; the browser runs
+  // it. The chain this browser kept before is copied into the zone once.
+  const zoneDspOn = Boolean(localZone && localSettings?.supports.dsp);
+  const zoneDsp = useZoneDsp(zoneDspOn ? localZone : null, browserDsp);
+  useEffect(() => {
+    setZoneDsp(zoneDspOn ? zoneDsp.settings : null);
+  }, [setZoneDsp, zoneDsp.settings, zoneDspOn]);
+  const localDsp = useMemo(
+    () =>
+      zoneDspOn
+        ? zoneDsp
+        : { settings: browserDsp, setSettings: setDsp, error: null },
+    [browserDsp, setDsp, zoneDsp, zoneDspOn],
+  );
+  const [dspPanel, setDspPanel] = useState<{
+    open: boolean;
+    zoneId: string | null;
+  }>({ open: false, zoneId: null });
+  const openDsp = useCallback(
+    (zoneId: string | null) => setDspPanel({ open: true, zoneId }),
+    [],
+  );
+  const closeDsp = useCallback(
+    () => setDspPanel((current) => ({ ...current, open: false })),
+    [],
+  );
 
   const value = useMemo<ZonesContextValue>(
     () => ({
@@ -592,10 +629,18 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
         >;
         return result.paused;
       },
+      localDsp,
+      dspPanel,
+      openDsp,
+      closeDsp,
       busy: action.isPending,
       error: action.error ?? query.error,
     }),
     [
+      closeDsp,
+      dspPanel,
+      localDsp,
+      openDsp,
       action.error,
       action.isPending,
       localZone,

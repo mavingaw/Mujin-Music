@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import type { NativeOutputDevice } from "@parson/music-sdk";
+import type { ZoneEndpoint } from "@parson/music-sdk";
 import {
   descriptorLines,
+  type OutputSetup,
   dsdStrategyNote,
   dsdSupportSummary,
   hardwareSummary,
@@ -10,27 +11,26 @@ import {
 
 const dsdRates = [2_822_400, 5_644_800, 11_289_600, 22_579_200];
 
-function dac(
-  native: boolean,
-  settings: Partial<NativeOutputDevice["settings"]> = {},
-) {
-  const device: NativeOutputDevice = {
-    id: "alsa:D10s:0",
+function setup(settings: Partial<OutputSetup> = {}): OutputSetup {
+  return {
+    exclusive: true,
+    max_sample_rate: null,
+    max_bit_depth: null,
+    dsd_strategy: "auto",
+    ...settings,
+  };
+}
+
+function dac(native: boolean) {
+  const device: ZoneEndpoint = {
+    id: "device:alsa:D10s:0",
     name: "Topping D10s",
     detail: "hw:CARD=D10s,DEV=0",
-    driver: "alsa",
+    driver: "ALSA",
     mode_label: "ALSA hw, exclusive",
+    address: "hw:CARD=D10s,DEV=0",
     exclusive_capable: true,
-    is_default: false,
     probe_error: null,
-    settings: {
-      exclusive: true,
-      max_sample_rate: null,
-      max_bit_depth: null,
-      dsd_strategy: "auto",
-      max_dsd_rate: null,
-      ...settings,
-    },
     formats: {
       sample_rates: [],
       bit_depths: [],
@@ -43,7 +43,10 @@ function dac(
     },
     sample_formats: ["24-bit packed", "32-bit"],
     channels: [2, 2],
-    in_use: false,
+    network: null,
+    dsp_support: null,
+    volume: null,
+    has_icon: false,
     dsd_formats: native ? ["DSD_U32_BE"] : [],
     hardware: {
       bus: "usb",
@@ -79,14 +82,16 @@ test("DSD support names native rates, the container and the DoP fallback", () =>
 });
 
 test("the strategy note says what will actually happen", () => {
-  expect(dsdStrategyNote(dac(false))).toContain("choose DoP");
-  expect(dsdStrategyNote(dac(false, { dsd_strategy: "dop" }))).toContain(
+  expect(dsdStrategyNote(dac(false), setup())).toContain("choose DoP");
+  expect(dsdStrategyNote(dac(false), setup({ dsd_strategy: "dop" }))).toContain(
     "does not decode DoP",
   );
-  expect(dsdStrategyNote(dac(true, { exclusive: false }))).toContain(
+  expect(dsdStrategyNote(dac(true), setup({ exclusive: false }))).toContain(
     "needs Exclusive Mode",
   );
-  expect(dsdStrategyNote(dac(true))).toContain("Native DSD when the driver");
+  expect(dsdStrategyNote(dac(true), setup())).toContain(
+    "Native DSD when the driver",
+  );
 });
 
 test("hardware details come from the kernel's USB report", () => {

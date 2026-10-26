@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import api from "../core/http";
 import { clearCachedSignalPaths, getSongSignalPath } from "../resources/songs";
+import { zoneSignalPath, type Zone } from "../resources/zones";
 import {
   buildSignalPath,
   describeAudioFormat,
@@ -211,6 +212,34 @@ describe("signal path classification", () => {
     expect(quiet.stages.find((stage) => stage.id === "client-volume")).toEqual(
       expect.objectContaining({ detail: "−6.0 dB", quality: "high_quality" }),
     );
+  });
+
+  test("a zone the server plays carries its whole planned path", () => {
+    const server: ServerSignalPath = {
+      ...originalServer(),
+      target: "native",
+      mode: "native",
+      stages: [
+        originalServer().stages[0]!,
+        {
+          id: "native-output",
+          kind: "output",
+          title: "USB DAC",
+          detail: "ALSA hw exclusive, 96kHz 24bit 2ch",
+          quality: "lossless",
+          explanation: "",
+        },
+      ],
+    };
+    const zone = {
+      name: "USB DAC",
+      output: { stream: { signal_path: server } },
+    } as unknown as Zone;
+    const path = zoneSignalPath(zone);
+    expect(ids(path!.stages)).toEqual(["source", "native-output"]);
+    expect(path!.bitPerfect).toBeTrue();
+    // Nothing from Parson plays there: no path to show.
+    expect(zoneSignalPath({ name: "Den", output: null } as Zone)).toBeNull();
   });
 
   test("a server output in exclusive mode is bit-perfect and the client adds nothing", () => {

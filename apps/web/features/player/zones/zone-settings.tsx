@@ -8,7 +8,9 @@ import {
   SAMPLE_RATE_CHOICES,
   ZONE_ICONS,
   deviceVolumeLabel,
-  dspEffectivePreamp,
+  DSD_RATES,
+  DSD_STRATEGIES,
+  dsdRateLabel,
   dspSummary,
   formatSampleRate,
   levelingModeLabel,
@@ -19,7 +21,7 @@ import {
   zoneSettingsPatch,
   zoneSettingsProblem,
   type Zone,
-  type ZoneDsp,
+  type DsdStrategy,
   type ZoneLevelingMode,
   type ZoneSettingsDraft,
   type ZoneVolumeControl,
@@ -47,6 +49,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { ZONE_ICON_LABELS, ZoneIconGlyph } from "./zone-icons";
 import { SignalPathPanel } from "./zone-signal-path";
+import { errorText } from "./zone-settings-errors";
 import { useZones } from "./zones-provider";
 
 const LEVELING_MODES: ZoneLevelingMode[] = ["off", "auto", "track", "album"];
@@ -59,36 +62,6 @@ const LEVELING_HELP: Record<ZoneLevelingMode, string> = {
 
 const sliderClass =
   "h-6 flex-1 **:data-[slot=slider-range]:bg-white **:data-[slot=slider-thumb]:h-3.5 **:data-[slot=slider-thumb]:w-3.5 **:data-[slot=slider-thumb]:border-0 **:data-[slot=slider-thumb]:bg-white **:data-[slot=slider-track]:h-1 **:data-[slot=slider-track]:bg-white/15";
-
-export function errorText(error: unknown, fallback: string): string {
-  const code = (
-    error as { response?: { data?: { error?: string; message?: string } } }
-  )?.response?.data?.error;
-  const known: Record<string, string> = {
-    set_private_on_the_device_itself:
-      "A zone can only be made private from the device it runs on.",
-    only_parson_apps_can_be_private:
-      "Only Parson apps can be private; speakers are shared by everyone.",
-    crossfade_not_supported_here: "This zone cannot crossfade.",
-    leveling_not_supported_here: "This zone cannot level volume.",
-    comfort_outside_safety_limits:
-      "The comfort limit must sit inside the safety limits.",
-    invalid_safety_limits: "The safety minimum must be below the maximum.",
-    zone_name_required: "Give the zone a name.",
-    dsp_not_supported_here: "DSP is not available on this zone.",
-    exclusive_mode_is_for_audio_devices:
-      "Exclusive mode is for audio devices of this computer.",
-    volume_mode_not_supported_here: "This zone cannot use that volume mode.",
-    max_format_not_supported_here:
-      "This zone does not take a maximum sample rate.",
-    volume_control_not_supported_here:
-      "This zone's volume cannot be handed to Home Assistant.",
-    zone_has_no_standby: "This zone has no standby.",
-    fixed_volume:
-      "This zone has fixed volume. Change it on the amplifier, or pick another volume mode in Device setup.",
-  };
-  return (code && known[code]) || (code ? code.replaceAll("_", " ") : fallback);
-}
 
 /** Roon-style Zone settings: name, icon, crossfade, leveling, volume limits and privacy. */
 export function ZoneSettingsDialog({
@@ -159,13 +132,13 @@ function ZoneSettingsForm({
   const hasDeviceSetup =
     Boolean(supports.exclusive) ||
     Boolean(supports.max_format) ||
+    Boolean(supports.dsd) ||
     volumeModes.length > 1;
-  const updateDsp = (change: Partial<ZoneDsp>) =>
-    update({ dsp: { ...draft.dsp, ...change } });
   // Audio devices are made private from the computer they are attached to;
   // the server checks.
   const canMakePrivate = isThisDeviceZone(zone, zones.localZoneId);
-  const patch = zoneSettingsPatch(initial, draft);
+  // The DSP chain is edited live in the DSP engine, never by this form.
+  const patch = zoneSettingsPatch(initial, { ...draft, dsp: initial.dsp });
   const changed = Object.keys(patch).length > 0;
   const problem = zoneSettingsProblem(draft);
   const isThisDevice = zone.id === zones.localZoneId;
@@ -471,62 +444,27 @@ function ZoneSettingsForm({
         {supports.dsp && (
           <div ref={dspRef}>
             <Section title="DSP">
-              <label className="flex items-center gap-2 text-sm text-zinc-200">
-                <Checkbox
-                  aria-label="DSP enabled"
-                  checked={draft.dsp.enabled}
-                  onCheckedChange={(value) =>
-                    updateDsp({ enabled: value === true })
-                  }
-                />
-                Use DSP on this zone
-              </label>
-              <div
-                className={`space-y-3 rounded-lg border border-white/[0.06] p-3 ${draft.dsp.enabled ? "" : "opacity-50"}`}
-              >
-                <SliderRow
-                  label="Bass"
-                  max={12}
-                  min={-12}
-                  onChange={(value) => updateDsp({ bass_db: value })}
-                  signed
-                  unit="dB"
-                  value={draft.dsp.bass_db}
-                />
-                <SliderRow
-                  label="Treble"
-                  max={12}
-                  min={-12}
-                  onChange={(value) => updateDsp({ treble_db: value })}
-                  signed
-                  unit="dB"
-                  value={draft.dsp.treble_db}
-                />
-                <SliderRow
-                  label="Preamp"
-                  max={0}
-                  min={-24}
-                  onChange={(value) => updateDsp({ preamp_db: value })}
-                  unit="dB"
-                  value={draft.dsp.preamp_db}
-                />
-                <label className="flex items-center gap-2 text-sm text-zinc-200">
-                  <Checkbox
-                    aria-label="Headphone crossfeed"
-                    checked={draft.dsp.crossfeed}
-                    onCheckedChange={(value) =>
-                      updateDsp({ crossfeed: value === true })
-                    }
-                  />
-                  Headphone crossfeed
-                </label>
-                <p className="text-[11px] leading-4 text-zinc-500">
-                  Bass is a shelf at 100 Hz, treble at 10 kHz. Headroom: the
-                  level drops by the largest boost (
-                  {dspEffectivePreamp(draft.dsp)} dB now) so EQ never clips.
-                  Now: {dspSummary(draft.dsp)}.
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 text-[13px] text-zinc-300">
+                  {dspSummary(initial.dsp)}
                 </p>
+                <button
+                  className="shrink-0 rounded-full border border-white/15 px-3 py-1 text-xs text-zinc-200 hover:bg-white/10"
+                  data-open-dsp
+                  onClick={() => {
+                    zones.openDsp(isThisDevice ? null : zone.id);
+                    onDone();
+                  }}
+                  type="button"
+                >
+                  Open DSP engine
+                </button>
               </div>
+              <p className="text-[11px] leading-4 text-zinc-500">
+                {isThisDevice
+                  ? "This browser runs the zone's chain: headroom, parametric EQ, sample rate conversion, crossfeed and convolution."
+                  : "The server runs the zone's chain in 64-bit float before its output: headroom, parametric EQ, sample rate conversion, crossfeed and convolution."}
+              </p>
             </Section>
           </div>
         )}
@@ -640,6 +578,74 @@ function ZoneSettingsForm({
                       </SelectContent>
                     </Select>
                   </Row>
+                </>
+              )}
+              {supports.dsd && (
+                <>
+                  <Row label="DSD playback">
+                    <Select
+                      onValueChange={(value) =>
+                        update({ dsd_strategy: value as DsdStrategy })
+                      }
+                      value={draft.dsd_strategy}
+                    >
+                      <SelectTrigger
+                        aria-label="DSD playback strategy"
+                        className="h-9 w-56"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DSD_STRATEGIES.map((strategy) => (
+                          <SelectItem
+                            key={strategy.value}
+                            value={strategy.value}
+                          >
+                            {strategy.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Row>
+                  <p className="text-[11px] leading-4 text-zinc-500">
+                    {
+                      DSD_STRATEGIES.find(
+                        (strategy) => strategy.value === draft.dsd_strategy,
+                      )?.description
+                    }
+                  </p>
+                  {draft.dsd_strategy !== "pcm" && (
+                    <Row label="Max DSD rate">
+                      <Select
+                        onValueChange={(value) =>
+                          update({
+                            max_dsd_rate:
+                              value === "none" ? null : Number(value),
+                          })
+                        }
+                        value={
+                          draft.max_dsd_rate === null
+                            ? "none"
+                            : String(draft.max_dsd_rate)
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label="Max DSD rate"
+                          className="h-9 w-44"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Device maximum</SelectItem>
+                          {DSD_RATES.map((rate) => (
+                            <SelectItem key={rate} value={String(rate)}>
+                              {dsdRateLabel(rate)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Row>
+                  )}
                 </>
               )}
             </Section>

@@ -1,25 +1,18 @@
 import {
   SIGNAL_CLIPPING_COLOR,
-  buildSignalPath,
-  defaultDspSettings,
-  getConvolutionFilters,
-  getNativeOutputSession,
-  getNativeOutputs,
-  normalizeDspSettings,
-  playOnNativeOutput,
   DSD_STRATEGIES,
-  sendNativeOutputCommand,
+  getConvolutionFilters,
+  normalizeDspSettings,
   signalLightColor,
   signalLightLabel,
   signalQualityColors,
-  updateNativeOutputDsp,
-  updateNativeOutputSettings,
+  zoneSignalPath,
   type DsdStrategy,
   type DspSettings,
-  type NativeOutputCommand,
-  type NativeOutputs,
+  type ZoneCommand,
+  type ZoneSettingsPatch,
 } from "@parson/music-sdk";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { palette } from "@/constants/colors";
 import { useState } from "react";
@@ -31,152 +24,90 @@ import {
   serverDspStatusLine,
   serverDspSummary,
   serverHardwareLine,
+  serverOutputs,
   serverOutputSummary,
   serverSessionLine,
   serverTransportLine,
   unsupportedRates,
 } from "@/lib/server-outputs";
+import { useZones } from "@/providers/zones-provider";
 import { DspControls, QualityGlyph } from "./signal-path";
 
-const sessionKey = ["native-output-session"] as const;
+function errorMessage(error: unknown, fallback: string) {
+  const data = (error as { response?: { data?: { error?: unknown } } })
+    ?.response?.data;
+  if (typeof data?.error === "string") return data.error.replaceAll("_", " ");
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 /**
- * The server's own devices, for bit-perfect playback. A phone can only
- * play through its system mixer, so this hands the current track to the
- * computer running Parson, which opens its DAC exclusively; the phone
- * then acts as the remote.
+ * The zones the server plays itself: devices on the computer running
+ * Parson (opened exclusively for a bit-perfect path), Parson Bridges'
+ * devices and network players (UPnP, OpenHome, AirPlay) it streams to
+ * after its own DSP. A phone can only play through its system mixer, so
+ * "Play here" moves the queue to that zone and the phone becomes the
+ * remote. Each zone keeps its own DSP chain and DSD strategy.
  */
 export function ServerOutputs({
-  songId,
-  positionSeconds,
   onHandOff,
 }: {
-  songId: string | null;
-  positionSeconds: number;
-  /** Pauses local playback once the server has taken over. */
+  /** Pauses local playback once the zone has taken over. */
   onHandOff: () => void;
 }) {
-  const queryClient = useQueryClient();
-  const outputs = useQuery({
-    queryKey: ["native-outputs"],
-    queryFn: getNativeOutputs,
-    staleTime: 30_000,
-    retry: 1,
-  });
+  const zones = useZones();
   const filters = useQuery({
     queryKey: ["convolution-filters"],
     queryFn: getConvolutionFilters,
     staleTime: 60_000,
     retry: 1,
   });
-  const session = useQuery({
-    queryKey: sessionKey,
-    queryFn: getNativeOutputSession,
-    refetchInterval: 1_000,
-    retry: false,
-  });
   const play = useMutation({
-    mutationFn: (deviceId: string) =>
-      playOnNativeOutput({
-        device_id: deviceId,
-        song_id: songId ?? "",
-        position_ms: positionSeconds * 1000,
-      }),
-    onSuccess: (started) => {
-      queryClient.setQueryData(sessionKey, started);
-      onHandOff();
+    mutationFn: async (zoneId: string) => {
+      if (!zones.localZoneId)
+        throw new Error("This phone has not joined the zone list yet.");
+      await zones.transfer(zones.localZoneId, zoneId);
     },
+    onSuccess: onHandOff,
   });
   const command = useMutation({
-    mutationFn: (name: NativeOutputCommand) => sendNativeOutputCommand(name),
-    onSuccess: (next) => queryClient.setQueryData(sessionKey, next),
+    mutationFn: (input: { zoneId: string; command: ZoneCommand }) =>
+      zones.send(input.zoneId, input.command),
   });
-  // Edits show at once; the server saves them and restarts the track.
+  // Edits show at once; the server saves them and replans the stream.
   const [draft, setDraft] = useState<{
     id: string;
     settings: DspSettings;
   } | null>(null);
-  const saveDsp = useMutation({
-    mutationFn: (input: { id: string; settings: DspSettings }) =>
-      updateNativeOutputDsp(input.id, input.settings),
-    onSuccess: (saved) => {
-      queryClient.setQueryData<NativeOutputs>(["native-outputs"], (old) =>
-        old
-          ? {
-              ...old,
-              devices: old.devices.map((item) =>
-                item.id === saved.id ? saved : item,
-              ),
-            }
-          : old,
-      );
-      void queryClient.invalidateQueries({ queryKey: sessionKey });
-      // Drop the draft once the server holds it (a newer edit stays).
-      setDraft((pending) =>
-        pending?.id === saved.id &&
-        JSON.stringify(normalizeDspSettings(pending.settings)) ===
-          JSON.stringify(normalizeDspSettings(saved.dsp))
-          ? null
-          : pending,
-      );
-    },
+  const save = useMutation({
+    mutationFn: (input: { id: string; patch: ZoneSettingsPatch }) =>
+      zones.updateSettings(input.id, input.patch),
+    onSettled: () => setDraft(null),
   });
-  const saveSettings = useMutation({
-    mutationFn: (input: { id: string; strategy: DsdStrategy }) => {
-      const device = outputs.data?.devices.find((item) => item.id === input.id);
-      if (!device) throw new Error("That output device is not connected.");
-      return updateNativeOutputSettings(input.id, {
-        ...device.settings,
-        dsd_strategy: input.strategy,
-      });
-    },
-    onSuccess: (saved) => {
-      queryClient.setQueryData<NativeOutputs>(["native-outputs"], (old) =>
-        old
-          ? {
-              ...old,
-              devices: old.devices.map((item) =>
-                item.id === saved.id ? saved : item,
-              ),
-            }
-          : old,
-      );
-      void queryClient.invalidateQueries({ queryKey: sessionKey });
-    },
-  });
-  const devices = outputs.data?.devices ?? [];
-  if (!outputs.data?.supported || !devices.length) return null;
-  const current = session.data ?? null;
-  const focused =
-    devices.find((device) => device.id === current?.device_id) ?? devices[0]!;
+  const outputs = serverOutputs(zones.zones);
+  if (!outputs.length) return null;
+  const selected =
+    outputs.find((output) => output.zone.id === zones.selectedZone?.id) ?? null;
+  const focused = selected ?? outputs[0]!;
+  const settings = focused.zone.settings;
   const focusedDsp =
-    draft?.id === focused.id
+    draft?.id === focused.zone.id
       ? draft.settings
-      : focused.dsp
-        ? normalizeDspSettings(focused.dsp)
-        : defaultDspSettings();
-  const status = current?.signal_path.processing?.status ?? null;
+      : normalizeDspSettings(settings?.dsp);
+  const path = selected ? zoneSignalPath(selected.zone) : null;
+  const status = path?.processing?.status ?? null;
   const statusLine = serverDspStatusLine(status);
-  const path = current
-    ? buildSignalPath(current.signal_path, {
-        platform: "web",
-        engine: "native",
-        playbackRate: 1,
-        preservePitch: true,
-        reverbWet: 0,
-        output: { kind: "native", name: current.device_name },
-      })
-    : null;
+  const support = focused.endpoint.dsp_support;
 
   return (
     <View style={styles.section}>
       <Text style={styles.title}>Server outputs</Text>
       <Text style={styles.note}>
-        Play this track on a device attached to the computer running Parson,
-        opened in exclusive mode for a bit-perfect path, or on a network player
-        (UPnP, OpenHome, AirPlay) the server streams to after its own DSP.
+        Play on a device attached to the computer running Parson, opened in
+        exclusive mode for a bit-perfect path, or on a network player (UPnP,
+        OpenHome, AirPlay) the server streams to after its own DSP. The queue
+        moves there and this phone becomes the remote.
       </Text>
-      {current && path ? (
+      {selected && path ? (
         <View style={styles.session}>
           <View style={styles.row}>
             <QualityGlyph
@@ -184,7 +115,7 @@ export function ServerOutputs({
               quality={path.quality}
               size={12}
             />
-            <Text style={styles.sessionName}>{current.device_name}</Text>
+            <Text style={styles.sessionName}>{selected.zone.name}</Text>
             <Text
               style={[styles.sessionQuality, { color: signalLightColor(path) }]}
             >
@@ -196,16 +127,16 @@ export function ServerOutputs({
                   : ""}
             </Text>
           </View>
-          <Text style={styles.detail}>{serverSessionLine(current)}</Text>
-          {serverTransportLine(current) ? (
-            <Text style={styles.detail}>{serverTransportLine(current)}</Text>
+          <Text style={styles.detail}>{serverSessionLine(selected.zone)}</Text>
+          {serverTransportLine(path) ? (
+            <Text style={styles.detail}>{serverTransportLine(path)}</Text>
           ) : null}
-          {serverDriverLine(current) ? (
+          {serverDriverLine(path) ? (
             <Text
               style={[
                 styles.detail,
                 {
-                  color: current.hardware?.matches_stream
+                  color: path.hardwareVerified
                     ? path.quality === "lossless"
                       ? signalQualityColors.lossless
                       : palette.secondary
@@ -213,7 +144,7 @@ export function ServerOutputs({
                 },
               ]}
             >
-              {serverDriverLine(current)}
+              {serverDriverLine(path)}
             </Text>
           ) : null}
           {statusLine ? (
@@ -227,89 +158,114 @@ export function ServerOutputs({
             </Text>
           ) : null}
           <View style={styles.row}>
-            {current.state === "paused" ? (
+            {selected.zone.status === "paused" ? (
               <SmallButton
                 label="Resume"
-                onPress={() => command.mutate("resume")}
+                onPress={() =>
+                  command.mutate({
+                    zoneId: selected.zone.id,
+                    command: { command: "play" },
+                  })
+                }
               />
             ) : (
               <SmallButton
                 label="Pause"
-                onPress={() => command.mutate("pause")}
+                onPress={() =>
+                  command.mutate({
+                    zoneId: selected.zone.id,
+                    command: { command: "pause" },
+                  })
+                }
               />
             )}
-            <SmallButton label="Stop" onPress={() => command.mutate("stop")} />
+            <SmallButton
+              label="Stop"
+              onPress={() =>
+                command.mutate({
+                  zoneId: selected.zone.id,
+                  command: { command: "stop" },
+                })
+              }
+            />
           </View>
         </View>
       ) : null}
-      {devices.map((device) => (
-        <View key={device.id} style={styles.device}>
+      {outputs.map(({ zone, endpoint }) => (
+        <View key={zone.id} style={styles.device}>
           <View style={styles.deviceText}>
             <Text numberOfLines={1} style={styles.deviceName}>
-              {device.name}
+              {zone.name}
             </Text>
-            {networkPlayerLine(device) ? (
+            {networkPlayerLine(endpoint) ? (
               <Text numberOfLines={1} style={styles.network}>
-                {networkPlayerLine(device)}
+                {networkPlayerLine(endpoint)}
               </Text>
             ) : null}
             <Text numberOfLines={1} style={styles.detail}>
-              {device.mode_label} · {serverOutputSummary(device)}
+              {[endpoint.mode_label, serverOutputSummary(endpoint)]
+                .filter(Boolean)
+                .join(" · ")}
             </Text>
-            {networkPlayerNote(device) ? (
+            {networkPlayerNote(endpoint) ? (
               <Text numberOfLines={2} style={styles.tested}>
-                {networkPlayerNote(device)}
+                {networkPlayerNote(endpoint)}
               </Text>
             ) : null}
-            {unsupportedRates(device) ? (
+            {unsupportedRates(endpoint) ? (
               <Text numberOfLines={1} style={styles.unsupported}>
-                Converted: {unsupportedRates(device)}
+                Converted: {unsupportedRates(endpoint)}
               </Text>
             ) : null}
-            {serverHardwareLine(device) ? (
+            {serverHardwareLine(endpoint) ? (
               <Text numberOfLines={1} style={styles.detail}>
-                {serverHardwareLine(device)}
+                {serverHardwareLine(endpoint)}
               </Text>
             ) : null}
-            {serverDsdLine(device) ? (
+            {zone.settings?.supports.dsd &&
+            serverDsdLine(endpoint, zone.settings.dsd_strategy) ? (
               <Text numberOfLines={1} style={styles.detail}>
-                {serverDsdLine(device)}
+                {serverDsdLine(endpoint, zone.settings.dsd_strategy)}
               </Text>
             ) : null}
-            {serverDspSummary(device) ? (
+            {serverDspSummary(zone.settings?.dsp) ? (
               <Text
                 numberOfLines={1}
                 style={[styles.detail, { color: signalQualityColors.enhanced }]}
               >
-                Server DSP: {serverDspSummary(device)}
+                Server DSP: {serverDspSummary(zone.settings?.dsp)}
               </Text>
             ) : null}
           </View>
           <SmallButton
-            disabled={!songId || !device.formats || play.isPending}
-            label="Play here"
-            onPress={() => play.mutate(device.id)}
+            disabled={
+              zone.id === selected?.zone.id ||
+              !endpoint.formats ||
+              play.isPending
+            }
+            label={zone.id === selected?.zone.id ? "Playing here" : "Play here"}
+            onPress={() => play.mutate(zone.id)}
           />
         </View>
       ))}
-      {focused.formats?.dsd_rates ? (
+      {settings?.supports.dsd && focused.endpoint.formats?.dsd_rates ? (
         <View style={styles.strategies}>
-          <Text style={styles.detail}>DSD playback on {focused.name}</Text>
+          <Text style={styles.detail}>DSD playback on {focused.zone.name}</Text>
           <View style={styles.chips}>
             {DSD_STRATEGIES.map((strategy) => {
               const chosen =
-                (focused.settings.dsd_strategy ?? "auto") === strategy.value;
+                (settings.dsd_strategy ?? "auto") === strategy.value;
               return (
                 <Pressable
                   accessibilityLabel={`DSD playback strategy: ${strategy.label}`}
                   accessibilityRole="button"
                   accessibilityState={{ selected: chosen }}
-                  disabled={saveSettings.isPending}
+                  disabled={save.isPending}
                   key={strategy.value}
                   onPress={() =>
-                    saveSettings.mutate({
-                      id: focused.id,
-                      strategy: strategy.value,
+                    save.mutate({
+                      id: focused.zone.id,
+                      patch: { dsd_strategy: strategy.value as DsdStrategy },
                     })
                   }
                   style={[styles.button, chosen && styles.chosen]}
@@ -319,52 +275,37 @@ export function ServerOutputs({
               );
             })}
           </View>
-          {saveSettings.error ? (
-            <Text style={styles.unsupported}>
-              {saveSettings.error instanceof Error
-                ? saveSettings.error.message
-                : "The server did not save the setting."}
-            </Text>
-          ) : null}
         </View>
       ) : null}
-      <DspControls
-        crossfeed={focused.dsp_support ? focused.dsp_support.crossfeed : null}
-        filters={
-          filters.data
-            ? filters.data.map((filter) => ({
-                id: filter.id,
-                name: filter.name,
-                peakGainDb: filter.summary.peak_gain_db,
-              }))
-            : null
-        }
-        onChange={(settings) => {
-          setDraft({ id: focused.id, settings });
-          saveDsp.mutate({ id: focused.id, settings });
-        }}
-        settings={focusedDsp}
-        title={`DSP on ${focused.name} (server, 64-bit)`}
-        unavailable={
-          !focused.dsp_support
-            ? "This server does not run a DSP engine for its outputs."
-            : focused.dsp_support.available
-              ? null
-              : focused.dsp_support.reason
-        }
-      />
-      {saveDsp.error ? (
+      {settings?.supports.dsp ? (
+        <DspControls
+          crossfeed={support ? support.crossfeed : null}
+          filters={
+            filters.data
+              ? filters.data.map((filter) => ({
+                  id: filter.id,
+                  name: filter.name,
+                  peakGainDb: filter.summary.peak_gain_db,
+                }))
+              : null
+          }
+          onChange={(next) => {
+            setDraft({ id: focused.zone.id, settings: next });
+            save.mutate({ id: focused.zone.id, patch: { dsp: next } });
+          }}
+          settings={focusedDsp}
+          title={`DSP on ${focused.zone.name} (server, 64-bit)`}
+          unavailable={support && !support.available ? support.reason : null}
+        />
+      ) : null}
+      {save.error ? (
         <Text style={styles.unsupported}>
-          {saveDsp.error instanceof Error
-            ? saveDsp.error.message
-            : "The server did not save the DSP settings."}
+          {errorMessage(save.error, "The server did not save the setting.")}
         </Text>
       ) : null}
       {play.error ? (
         <Text style={styles.unsupported}>
-          {play.error instanceof Error
-            ? play.error.message
-            : "The server could not play this track."}
+          {errorMessage(play.error, "The zone could not take over.")}
         </Text>
       ) : null}
     </View>

@@ -2,14 +2,11 @@
 
 import type {
   DspSettings,
-  NativeOutputDevice,
   RadioSeed,
   RadioSkipReasonId,
   ResolvedRadioSeed,
-  ServerSignalPath,
   VolumeLevelingMode,
   VolumeLevelingResult,
-  ZoneDsp,
   ZoneRepeatMode,
 } from "@parson/music-sdk";
 import type { OutputDevice } from "./dsp-store";
@@ -72,9 +69,16 @@ export type Player = {
   signal: PlayerSignalState;
   volumeLevelingMode: VolumeLevelingMode;
   setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
-  /** DSP chain for the current output device. */
+  /**
+   * The DSP chain this browser runs: its zone's chain (`setZoneDsp`), or,
+   * before the zone list arrives, the chain kept in this browser.
+   */
   dsp: DspSettings;
+  /** The chain kept in this browser (used while there is no zone). */
+  browserDsp: DspSettings;
   setDsp: (settings: DspSettings) => void;
+  /** This device's zone chain, as the server keeps it; `null`: no zone. */
+  setZoneDsp: (settings: DspSettings | null) => void;
   output: PlayerOutputState;
   repeatMode: ZoneRepeatMode;
   shuffle: boolean;
@@ -107,8 +111,6 @@ export type Player = {
     crossfadeSeconds: number;
     /** The zone's leveling factor; `null` when the zone does not level. */
     levelingFactor: number | null;
-    /** This zone's DSP (preamp, shelves, crossfeed); `null` is off. */
-    dsp?: ZoneDsp | null;
   }) => void;
   toggleMute: () => void;
   toggleSlowedReverb: () => void;
@@ -133,16 +135,6 @@ export type PlayerSignalState = {
   /** Label of the device audio goes to, when the browser reveals it. */
   outputName: string | null;
   outputChosen: boolean;
-  /**
-   * A server output is playing instead of this browser; its path comes
-   * from the server, including the device and driver.
-   */
-  native: {
-    deviceId: string;
-    name: string | null;
-    /** The playing session's path, once the server has started. */
-    signalPath: ServerSignalPath | null;
-  } | null;
 };
 
 export type PlayerOutputState = {
@@ -157,12 +149,6 @@ export type PlayerOutputState = {
   selectable: boolean;
   select: (id: string) => void;
   requestLabels: () => Promise<void>;
-  /** The server's own devices; choosing one stores `server:<id>`. */
-  serverDevices: NativeOutputDevice[];
-  /** The server is playing (or will play) instead of this browser. */
-  serverOutputId: string | null;
-  /** Saving the server output's DSP chain failed. */
-  serverDspError: string | null;
 };
 
 export const PlayerContext = createContext<Omit<Player, "currentTime"> | null>(

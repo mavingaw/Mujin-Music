@@ -30,8 +30,16 @@ export function stepIcon(step: string): SignalStageIcon {
     return "depth";
   if (step.startsWith("Volume leveling") || step.startsWith("Software volume"))
     return "gain";
-  if (step.startsWith("DSP")) return "dsp";
-  if (step.startsWith("Decoded")) return "decode";
+  if (
+    step.startsWith("DSP") ||
+    step.startsWith("Parametric EQ") ||
+    step.startsWith("Headroom") ||
+    step.startsWith("Crossfeed") ||
+    step.startsWith("Convolution")
+  )
+    return "dsp";
+  if (step.startsWith("Decoded") || step.startsWith("Renderer reports"))
+    return "decode";
   if (step.startsWith("Sync")) return "sync";
   return "encode";
 }

@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { formatSampleRate } from "../player/signal-path";
+import { defaultDspSettings, normalizeDspSettings } from "../player/dsp";
 import api from "../core/http";
 import {
   bridgeBackendLabel,
@@ -562,62 +563,60 @@ test("audio devices and UPnP renderers sort, label and describe their output", (
 
 test("DSP summaries match the server and only changed DSP is saved", () => {
   expect(dspSummary(undefined)).toBe("Off");
-  expect(
-    dspSummary({
-      enabled: true,
-      preamp_db: 0,
-      bass_db: 3,
-      treble_db: -2,
-      crossfeed: true,
-    }),
-  ).toBe("Preamp \u22123 dB, Bass +3 dB, Treble \u22122 dB, Crossfeed");
-  expect(
-    dspSummary({
-      enabled: false,
-      preamp_db: -6,
-      bass_db: 0,
-      treble_db: 0,
-      crossfeed: false,
-    }),
-  ).toBe("Off");
+  expect(dspSummary(defaultDspSettings())).toBe("Off");
+  const shaped = defaultDspSettings();
+  shaped.headroom = { enabled: true, gainDb: -3 };
+  shaped.eq = {
+    enabled: true,
+    preset: "custom",
+    bands: [
+      {
+        id: "band-1",
+        enabled: true,
+        type: "lowshelf",
+        frequency: 100,
+        gainDb: 3,
+        q: 0.707,
+      },
+    ],
+  };
+  shaped.crossfeed = { enabled: true, strength: "strong" };
+  expect(dspSummary(shaped)).toBe(
+    "Headroom \u22123.0 dB, EQ 100 Hz low shelf +3.0 dB, Crossfeed (strong)",
+  );
+  expect(dspSummary({ ...shaped, enabled: false })).toBe("Off");
   const dac = zone({
     id: "device:dac",
     kind: "device",
     settings: settingsView({
-      dsp: {
-        enabled: false,
-        preamp_db: 0,
-        bass_db: 0,
-        treble_db: 0,
-        crossfeed: false,
-      },
+      dsp: defaultDspSettings(),
       exclusive: true,
       volume_mode: "hardware",
       max_sample_rate: null,
       max_bit_depth: null,
+      dsd_strategy: "native",
     }),
   });
   const initial = zoneSettingsDraft(dac);
+  expect(initial.dsd_strategy).toBe("native");
   expect(zoneSettingsPatch(initial, { ...initial })).toEqual({});
   expect(
     zoneSettingsPatch(initial, {
       ...initial,
-      dsp: { ...initial.dsp, enabled: true, bass_db: 4 },
+      dsp: shaped,
       exclusive: false,
       volume_mode: "fixed",
       max_sample_rate: 96_000,
+      dsd_strategy: "dop",
+      max_dsd_rate: 5_644_800,
     }),
   ).toEqual({
-    dsp: {
-      enabled: true,
-      preamp_db: 0,
-      bass_db: 4,
-      treble_db: 0,
-      crossfeed: false,
-    },
+    dsp: normalizeDspSettings(shaped),
     exclusive: false,
     volume_mode: "fixed",
     max_sample_rate: 96_000,
+    dsd_strategy: "dop",
+    max_dsd_rate: 5_644_800,
   });
 });
 
