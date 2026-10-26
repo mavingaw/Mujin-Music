@@ -142,6 +142,10 @@ pub enum BridgeMessage {
         underruns: u32,
         /// Playback has begun (a synced stream waits for its start time).
         started: bool,
+        /// The device is paused: `heard` holds until playback resumes.
+        /// Older bridges leave it out.
+        #[serde(default)]
+        paused: bool,
     },
     Drained {
         stream: u32,

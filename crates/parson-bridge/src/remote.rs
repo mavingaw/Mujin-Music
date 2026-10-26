@@ -30,6 +30,8 @@ const SILENCE_TIMEOUT: Duration = Duration::from_secs(6);
 /// there (bridges report every 50 ms, paused or not): writes fail instead
 /// of waiting forever for audio that will not be played.
 const STREAM_STALL: Duration = Duration::from_secs(3);
+/// How long a pause waits for the bridge to report its device stopped.
+const PAUSE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// What a bridge said about itself.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +59,8 @@ struct StreamStatus {
     corrections: i64,
     underruns: u32,
     started: bool,
+    /// The bridge reported the device paused.
+    paused: bool,
     drained: bool,
     rate: Option<RateEstimatorBox>,
 }
@@ -202,6 +206,7 @@ impl Link {
                 corrections,
                 underruns,
                 started,
+                paused,
             } => {
                 let at_server_us = self.clock().to_local(bridge_us);
                 let mut streams = self.streams();
@@ -215,6 +220,7 @@ impl Link {
                 status.corrections = corrections;
                 status.underruns = underruns;
                 status.started = started;
+                status.paused = paused;
                 if started && let Some(rate) = status.rate.as_mut() {
                     rate.0.add(at_server_us, heard);
                 }
@@ -560,6 +566,9 @@ pub struct StreamProgress {
     pub corrections: i64,
     pub underruns: u32,
     pub started: bool,
+    /// The bridge acknowledged a pause: its device has stopped and
+    /// `heard` holds until playback resumes.
+    pub paused: bool,
 }
 
 /// A stream's timeline: (server time, source frames heard, rate).
@@ -599,6 +608,7 @@ impl RemoteStream {
             corrections: status.corrections,
             underruns: status.underruns,
             started: status.started,
+            paused: status.paused,
         }
     }
 
@@ -668,9 +678,36 @@ impl OutputStream for RemoteStream {
             stream: self.stream,
             paused,
         })?;
+        let mut streams = self.link.streams();
+        if paused {
+            // Frames keep playing until the pause reaches the device, so
+            // wait for the bridge to report where it stopped: from then on
+            // the position is exact. This holds for a stream that has not
+            // started yet too: it may start before the pause arrives.
+            let deadline = Instant::now() + PAUSE_ACK_TIMEOUT;
+            while streams
+                .get(&self.stream)
+                .is_some_and(|status| !status.paused)
+                && self.link.connected.load(Ordering::Relaxed)
+            {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                streams = self
+                    .link
+                    .wake
+                    .wait_timeout(streams, deadline - now)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .0;
+            }
+        } else if let Some(status) = streams.get_mut(&self.stream) {
+            status.paused = false;
+        }
         // Freeze the extrapolation at the last report.
-        if let Some(status) = self.link.streams().get_mut(&self.stream)
+        if let Some(status) = streams.get_mut(&self.stream)
             && paused
+            && !status.paused
         {
             let heard = {
                 let status = status.clone();
