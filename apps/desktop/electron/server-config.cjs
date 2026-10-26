@@ -240,6 +240,11 @@ function useLocalServer(config) {
   return { ...config, mode: "local", activeServerId: null };
 }
 
+/**
+ * Forgets a saved server. Discovery results are not touched: a forgotten
+ * server that is still on the network stays listed, as a server that can be
+ * connected to again (signed out), instead of vanishing until the next scan.
+ */
 function forgetServer(config, id) {
   const servers = config.servers.filter((server) => server.id !== id);
   const forgettingActive = config.activeServerId === id;
@@ -255,20 +260,35 @@ function forgetServer(config, id) {
  * The rows the chooser shows: saved servers merged with what discovery just
  * found. A saved server that turns up at a new address (DHCP) is matched by
  * its instance id and shown at the new address.
+ *
+ * Every row has one consistent state: `active` is the server this window is
+ * connected to (by identity, wherever it was reached), and `online` is true
+ * for a row discovery confirmed or for the active server while its monitor
+ * reports it reachable, so a row is never "Connected" and "Offline" at once.
+ * This computer's own server is the local card, never a row.
  */
 function serverRows({
   config,
   discovered = [],
   localInstanceId = "",
   signedIn = new Set(),
+  activeId = undefined,
+  activeOnline = true,
 }) {
+  const currentId =
+    activeId !== undefined
+      ? activeId
+      : config.mode === "remote"
+        ? config.activeServerId
+        : null;
   const rows = new Map();
   for (const server of config.servers) {
+    if (localInstanceId && server.instanceId === localInstanceId) continue;
     rows.set(server.id, {
       ...server,
       saved: true,
       nearby: false,
-      active: config.mode === "remote" && server.id === config.activeServerId,
+      active: Boolean(currentId) && server.id === currentId,
     });
   }
   for (const found of discovered) {
@@ -300,11 +320,15 @@ function serverRows({
       manual: false,
       saved: false,
       nearby: true,
-      active: false,
+      active: Boolean(currentId) && id === currentId,
     });
   }
   return [...rows.values()]
-    .map((row) => ({ ...row, signedIn: signedIn.has(row.origin) }))
+    .map((row) => ({
+      ...row,
+      online: row.nearby || (row.active && activeOnline),
+      signedIn: signedIn.has(row.origin),
+    }))
     .sort(
       (left, right) =>
         Number(right.active) - Number(left.active) ||
@@ -313,6 +337,16 @@ function serverRows({
         right.lastConnectedAt - left.lastConnectedAt ||
         left.name.localeCompare(right.name),
     );
+}
+
+/**
+ * True when a server reached over the network is this computer's own
+ * background server, so the app should treat it as "local", not as a remote.
+ */
+function isThisComputer(instanceId, localInstanceId) {
+  return Boolean(
+    instanceId && localInstanceId && instanceId === localInstanceId,
+  );
 }
 
 /** Reconnect schedule: quick at first, then every 15 seconds. */
@@ -425,6 +459,7 @@ module.exports = {
   emptyConfig,
   forgetServer,
   isCompatibleManifest,
+  isThisComputer,
   isLoopbackOrigin,
   loadConfig,
   normalizeServerAddress,

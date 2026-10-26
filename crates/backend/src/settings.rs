@@ -274,10 +274,37 @@ pub fn apply_staged_restore() -> std::io::Result<()> {
             copy_restore_tree(&source, &destination)?;
         }
     }
+    adopt_restored_identity(
+        &data_path(&["Restore", "ADOPT_IDENTITY"]),
+        &data_path(&["Discovery", "instance-id"]),
+        &rollback,
+    )?;
     fs::remove_file(marker)?;
     fs::remove_dir_all(staged)?;
     prune_restore_rollbacks(&recovery)?;
     Ok(())
+}
+
+/// When a restore was staged with "take over this library", the server
+/// answers with the backed-up library's instance id from now on, so phones
+/// and computers that knew the old server treat this one as the same library.
+fn adopt_restored_identity(
+    marker: &Path,
+    instance_id_path: &Path,
+    rollback: &Path,
+) -> std::io::Result<()> {
+    let Ok(identity) = fs::read_to_string(marker) else {
+        return Ok(());
+    };
+    let identity = identity.trim();
+    if uuid::Uuid::parse_str(identity).is_ok() {
+        if instance_id_path.is_file() {
+            fs::create_dir_all(rollback)?;
+            fs::copy(instance_id_path, rollback.join("instance-id"))?;
+        }
+        persist_secret(instance_id_path, identity)?;
+    }
+    fs::remove_file(marker)
 }
 
 fn apply_reset_at(root: &Path) -> std::io::Result<bool> {
@@ -599,6 +626,40 @@ mod tests {
         assert!(parse_public_url(Some("null")).is_err());
         assert!(parse_public_url(Some("https://music.example/app")).is_err());
         assert!(parse_public_url(Some("https://user@music.example")).is_err());
+    }
+
+    #[test]
+    fn a_restore_can_take_over_the_backed_up_library_identity() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("parson-identity-{}", uuid::Uuid::new_v4()));
+        let marker = root.join("Restore/ADOPT_IDENTITY");
+        let identity = root.join("Discovery/instance-id");
+        let rollback = root.join("Recovery/before-restore-test");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        let old = "11111111-1111-4111-8111-111111111111";
+        let adopted = "22222222-2222-4222-8222-222222222222";
+        fs::write(&identity, old).unwrap();
+        fs::write(&marker, adopted).unwrap();
+
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert_eq!(
+            fs::read_to_string(rollback.join("instance-id")).unwrap(),
+            old
+        );
+        assert!(!marker.exists());
+
+        // No marker: the server keeps its own identity.
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+
+        // A malformed marker is dropped without touching the identity.
+        fs::write(&marker, "not-a-uuid").unwrap();
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

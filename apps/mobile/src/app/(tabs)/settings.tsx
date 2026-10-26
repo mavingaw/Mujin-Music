@@ -29,6 +29,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AwayFromHome } from "@/components/away-from-home";
 import { LibraryList, SearchingIndicator } from "@/components/library-list";
 import { PageTitle, Screen } from "@/components/music-ui";
 import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
@@ -361,21 +362,30 @@ export default function SettingsScreen() {
                 quality={quality}
               />
             ) : tab === "devices" ? (
-              <ServerSettings
-                busy={busy}
-                offline={session.phase === "offline"}
-                libraries={libraries}
-                onForget={(row) => void session.forgetLibrary(row.instanceId)}
-                onSwitch={(row) =>
-                  leaveAuthenticatedApp(async () => {
-                    await session.switchLibrary(row.origin);
-                  })
-                }
-                searching={nearbyLibraries.length === 0}
-                onChange={() => leaveAuthenticatedApp(session.changeServer)}
-                onRetry={session.retry}
-                origin={session.origin}
-              />
+              <>
+                <ServerSettings
+                  busy={busy}
+                  offline={session.phase === "offline"}
+                  libraries={libraries}
+                  onForget={(row) => void session.forgetLibrary(row.instanceId)}
+                  onSwitch={(row) =>
+                    leaveAuthenticatedApp(async () => {
+                      await session.switchLibrary(row.origin);
+                    })
+                  }
+                  searching={nearbyLibraries.length === 0}
+                  onChange={() => leaveAuthenticatedApp(session.changeServer)}
+                  onRetry={session.retry}
+                  origin={session.origin}
+                />
+                <AwayFromHome
+                  library={session.knownLibraries.find(
+                    (library) => library.instanceId === session.instanceId,
+                  )}
+                  origin={session.origin}
+                  route={session.connectionRoute}
+                />
+              </>
             ) : tab === "library" ? (
               <LibrarySettings
                 busy={busy}

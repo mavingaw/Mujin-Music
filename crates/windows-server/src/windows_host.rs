@@ -281,6 +281,14 @@ fn start_server(
                             let _ = graceful.await;
                             result
                         }
+                        () = parson_music::server::restart_requested() => {
+                            // The server asked to restart itself (for example
+                            // to apply a restored backup).
+                            let graceful = tokio::spawn(handle.stop(true));
+                            let result = server.await;
+                            let _ = graceful.await;
+                            result
+                        }
                     }
                 });
                 parson_music::persistence::connection::mark_clean_shutdown();
@@ -296,6 +304,9 @@ fn start_server(
             }
         }
         let _ = commands.send(ServerCommand::Exited(generation));
+        if parson_music::server::take_restart_request() {
+            let _ = commands.send(ServerCommand::Start);
+        }
     });
     RunningServer {
         generation,

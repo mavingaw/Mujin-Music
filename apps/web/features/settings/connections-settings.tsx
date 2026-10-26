@@ -2,6 +2,7 @@
 
 import DesktopServerCard from "@/features/server/desktop-server-card";
 import HostPanel from "@/features/server/host-panel";
+import RemoteAccessPanel from "@/features/server/remote-access-panel";
 import ServerConnectionPanel from "@/features/server/server-connection-panel";
 
 export default function ConnectionsSettings() {
@@ -16,6 +17,7 @@ export default function ConnectionsSettings() {
       </div>
       <DesktopServerCard />
       <HostPanel />
+      <RemoteAccessPanel />
       <ServerConnectionPanel />
     </div>
   );

@@ -17,6 +17,7 @@ import {
   getLibraryRoots,
   indexLibrary,
   refreshCurrentLibrary,
+  relocateLibraryRoot,
   removeLibraryRoot,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,7 +31,10 @@ export default function LibrarySettings() {
   const [desktop, setDesktop] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [removePath, setRemovePath] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"add" | "refresh" | "remove" | null>(null);
+  const [locatePath, setLocatePath] = useState<string | null>(null);
+  const [busy, setBusy] = useState<
+    "add" | "refresh" | "remove" | "locate" | null
+  >(null);
   const roots = useQuery({
     queryKey: ["library-roots"],
     queryFn: getLibraryRoots,
@@ -64,6 +68,46 @@ export default function LibrarySettings() {
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * A folder from another computer (a restored backup) is missing here: the
+   * server indexes its new location and moves playlists, favourites,
+   * history and edits over to it, track by track, before dropping the old
+   * path.
+   */
+  async function relocate(oldPath: string, nextPath: string) {
+    const selected = nextPath.trim();
+    if (!selected || busy) return;
+    setBusy("locate");
+    try {
+      const report = await relocateLibraryRoot(oldPath, selected);
+      setLocatePath(null);
+      await Promise.all([
+        roots.refetch(),
+        readiness.refetch(),
+        catalog.refetch(),
+      ]);
+      await invalidateCatalogRevisionQueries(queryClient);
+      toast.success(
+        report.missing_tracks
+          ? `Found ${report.matched_tracks.toLocaleString()} tracks; ${report.missing_tracks.toLocaleString()} weren’t in that folder. Playlists and history moved with the rest.`
+          : `Found all ${report.matched_tracks.toLocaleString()} tracks. Playlists, favourites and history moved with them.`,
+      );
+    } catch {
+      toast("Could not use that folder. Check the path and try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function locateFolder(oldPath: string) {
+    if (hasLocalDesktopBridge()) {
+      const selected = await selectMusicFolder();
+      if (selected) await relocate(oldPath, selected);
+      return;
+    }
+    setLocatePath(oldPath);
   }
 
   async function changeFolder() {
@@ -149,13 +193,33 @@ export default function LibrarySettings() {
                 className="flex items-center gap-3 border-b border-white/[0.08] px-4 py-4 last:border-0"
                 key={root.path}
               >
-                <Folder className="h-5 w-5 shrink-0 text-zinc-500" />
-                <p
-                  className="min-w-0 flex-1 truncate text-sm text-zinc-200"
-                  title={root.path}
-                >
-                  {root.path}
-                </p>
+                <Folder
+                  className={`h-5 w-5 shrink-0 ${root.available === false ? "text-amber-300/80" : "text-zinc-500"}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className="truncate text-sm text-zinc-200"
+                    title={root.path}
+                  >
+                    {root.path}
+                  </p>
+                  {root.available === false ? (
+                    <p className="mt-0.5 text-xs text-amber-200/80">
+                      Not found on this server. Moved here from another
+                      computer? Show Parson where this music is now.
+                    </p>
+                  ) : null}
+                </div>
+                {root.available === false ? (
+                  <Button
+                    className="h-8 px-3"
+                    disabled={Boolean(busy)}
+                    onClick={() => void locateFolder(root.path)}
+                    size="sm"
+                  >
+                    {busy === "locate" ? "Finding…" : "Locate…"}
+                  </Button>
+                ) : null}
                 <Button
                   aria-label={`Remove ${root.path}`}
                   className="h-8 px-2 text-zinc-400 hover:text-red-300"
@@ -214,6 +278,33 @@ export default function LibrarySettings() {
             initialDirectory="/"
             onCancel={() => setAddOpen(false)}
             onSelect={(selected) => void addLibrary(selected)}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(locatePath)}
+        onOpenChange={(open) => {
+          if (!open && busy !== "locate") setLocatePath(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Where is this music now?</DialogTitle>
+            <DialogDescription>
+              It used to be in {locatePath}. Choose the folder that holds it on
+              this server. Parson finds each track at the same place inside the
+              folder and moves playlists, favourites, history and edits over to
+              it.
+            </DialogDescription>
+          </DialogHeader>
+          <LibraryFolderBrowser
+            busy={busy === "locate"}
+            initialDirectory="/"
+            onCancel={() => setLocatePath(null)}
+            onSelect={(selected) =>
+              locatePath ? void relocate(locatePath, selected) : undefined
+            }
           />
         </DialogContent>
       </Dialog>

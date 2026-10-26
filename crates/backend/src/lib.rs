@@ -18,6 +18,8 @@ mod playlist_rules;
 pub mod product;
 pub mod recommendation;
 #[cfg(feature = "server")]
+pub mod remote_access;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod settings;
 #[cfg(feature = "server")]

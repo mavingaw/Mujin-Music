@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { serviceSummary } from "./desktop-service";
+import { remoteRoleCopy, serviceSummary } from "./desktop-service";
 
 describe("serviceSummary", () => {
   test("names each platform's background mechanism", () => {
@@ -40,4 +40,14 @@ describe("serviceSummary", () => {
     expect(serviceSummary(null)).toBeNull();
     expect(serviceSummary({ kind: null, available: false })).toBeNull();
   });
+});
+
+test("the remote role card never hides this computer's own server", () => {
+  expect(remoteRoleCopy({ name: "Studio NAS", localRunning: true })).toContain(
+    "This computer also runs its own Parson server",
+  );
+  expect(remoteRoleCopy({ name: "Studio NAS", localRunning: false })).toMatch(
+    /^No server runs on this computer/,
+  );
+  expect(remoteRoleCopy({ name: "Studio NAS" })).toMatch(/^No server runs/);
 });

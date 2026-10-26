@@ -779,17 +779,22 @@ pub async fn library_readiness(lifecycle: web::Data<LibraryLifecycle>) -> impl R
 #[derive(Serialize)]
 pub struct LibraryRootResponse {
     path: String,
+    /// False when the folder is missing on this server, for example after a
+    /// backup from another computer was restored here.
+    available: bool,
 }
 
 #[get("/roots")]
 pub async fn library_roots() -> impl Responder {
-    HttpResponse::Ok().json(
-        read_library_paths()
-            .await
-            .into_iter()
-            .map(|path| LibraryRootResponse { path })
-            .collect::<Vec<_>>(),
-    )
+    let mut roots = Vec::new();
+    for path in read_library_paths().await {
+        let available =
+            tokio::time::timeout(Duration::from_secs(2), tokio::fs::metadata(path.clone()))
+                .await
+                .is_ok_and(|metadata| metadata.is_ok_and(|metadata| metadata.is_dir()));
+        roots.push(LibraryRootResponse { path, available });
+    }
+    HttpResponse::Ok().json(roots)
 }
 
 #[derive(Deserialize)]
@@ -874,8 +879,21 @@ pub struct RemoveLibraryRootQuery {
     path: String,
 }
 
+impl RemoveLibraryRootQuery {
+    pub(crate) fn new(path: String) -> Self {
+        Self { path }
+    }
+}
+
 #[delete("/roots")]
 pub async fn remove_library_root(
+    query: web::Query<RemoveLibraryRootQuery>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    remove_root(query, lifecycle).await
+}
+
+pub(crate) async fn remove_root(
     query: web::Query<RemoveLibraryRootQuery>,
     lifecycle: web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
@@ -945,7 +963,10 @@ pub async fn remove_library_root(
     HttpResponse::Ok().json(
         remaining
             .into_iter()
-            .map(|path| LibraryRootResponse { path })
+            .map(|path| LibraryRootResponse {
+                available: Path::new(&path).is_dir(),
+                path,
+            })
             .collect::<Vec<_>>(),
     )
 }
@@ -1169,6 +1190,12 @@ where
 #[derive(Deserialize)]
 pub struct LibraryIndexRequest {
     path: String,
+}
+
+impl LibraryIndexRequest {
+    pub(crate) fn new(path: String) -> Self {
+        Self { path }
+    }
 }
 
 #[post("")]

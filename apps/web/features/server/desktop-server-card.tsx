@@ -2,6 +2,14 @@
 
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { createPrivateBackup, type BackupSummary } from "@parson/music-sdk";
+import {
   chooseDesktopServer,
   desktopServiceState,
   desktopServerState,
@@ -11,8 +19,15 @@ import {
   type DesktopServerState,
   type DesktopServiceState,
 } from "@/lib/desktop/bridge";
-import { serviceSummary } from "./desktop-service";
-import { ArrowLeftRight, Monitor, Server } from "lucide-react";
+import { remoteRoleCopy, serviceSummary } from "./desktop-service";
+import {
+  ArchiveRestore,
+  ArrowLeftRight,
+  CheckCircle2,
+  Loader2,
+  Monitor,
+  Server,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -24,6 +39,9 @@ export default function DesktopServerCard() {
   const [state, setState] = useState<DesktopServerState | null>(null);
   const [service, setService] = useState<DesktopServiceState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveBackup, setMoveBackup] = useState<BackupSummary | null>(null);
+  const [backingUp, setBackingUp] = useState(false);
   useEffect(() => {
     if (!hasDesktopBridge()) return;
     let active = true;
@@ -42,6 +60,20 @@ export default function DesktopServerCard() {
   if (!state?.mode) return null;
   const remote = state.mode === "remote";
   const summary = remote ? null : serviceSummary(service);
+  const remoteCopy = remoteRoleCopy(state);
+
+  async function backUpForMove() {
+    setBackingUp(true);
+    try {
+      setMoveBackup(await createPrivateBackup());
+    } catch (error) {
+      toast(
+        error instanceof Error ? error.message : "The backup was not created.",
+      );
+    } finally {
+      setBackingUp(false);
+    }
+  }
 
   async function changeService(
     change: Parameters<typeof updateDesktopService>[0],
@@ -92,7 +124,7 @@ export default function DesktopServerCard() {
           </h2>
           <p className="mt-0.5 text-sm leading-5 text-zinc-500">
             {remote
-              ? "No server runs here. Your library, queue and zones live on that server and stay in sync with every other app."
+              ? remoteCopy
               : "It runs in the background, apart from this window. Close or quit Parson and your phones, browsers and other computers keep their library and zones."}
           </p>
         </div>
@@ -104,13 +136,17 @@ export default function DesktopServerCard() {
               size="sm"
               variant="ghost"
             >
-              Run server here
+              {state.localRunning
+                ? "Open this computer’s server"
+                : "Run server here"}
             </Button>
           ) : null}
           <Button
             className="rounded-full"
             disabled={busy}
-            onClick={() => void run(chooseDesktopServer)}
+            onClick={() =>
+              remote ? void run(chooseDesktopServer) : setMoveOpen(true)
+            }
             size="sm"
           >
             <ArrowLeftRight />
@@ -190,6 +226,82 @@ export default function DesktopServerCard() {
           </div>
         </div>
       ) : null}
+      <Dialog
+        open={moveOpen}
+        onOpenChange={(open) => {
+          if (!backingUp) setMoveOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Use another server</DialogTitle>
+            <DialogDescription>
+              Moving this library to a NAS or a new computer? Back it up first,
+              then restore it there while setting it up. Accounts, playlists,
+              favourites, history and edits come along.
+            </DialogDescription>
+          </DialogHeader>
+          <ol className="grid gap-3 text-sm">
+            <li className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-black">
+                1
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-zinc-100">
+                  Back up this library
+                </p>
+                {moveBackup ? (
+                  <p className="mt-1 flex items-start gap-1.5 text-xs leading-5 text-emerald-300/90">
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    {moveBackup.copied_to
+                      ? `Saved and copied to ${moveBackup.copied_to}.`
+                      : "Saved in this server’s backup folder. Copy it to the new server, or set a NAS folder under Settings → Data so it lands there on its own."}
+                    {moveBackup.copy_error
+                      ? ` The copy to your backup folder failed: ${moveBackup.copy_error}`
+                      : ""}
+                  </p>
+                ) : (
+                  <Button
+                    className="mt-2"
+                    disabled={backingUp}
+                    onClick={() => void backUpForMove()}
+                    size="sm"
+                  >
+                    {backingUp ? <Loader2 className="animate-spin" /> : null}
+                    {backingUp ? "Backing up…" : "Back up now"}
+                  </Button>
+                )}
+              </div>
+            </li>
+            <li className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold text-white">
+                2
+              </span>
+              <p className="min-w-0 flex-1 leading-5 text-zinc-400">
+                <span className="font-medium text-zinc-100">
+                  On the new server
+                </span>
+                , choose{" "}
+                <ArchiveRestore className="inline h-3.5 w-3.5 align-[-2px]" />{" "}
+                “Moving from another Parson server?” when it asks for the first
+                account, and pick this backup.
+              </p>
+            </li>
+          </ol>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              disabled={backingUp}
+              onClick={() => {
+                setMoveOpen(false);
+                void run(chooseDesktopServer);
+              }}
+              variant={moveBackup ? "default" : "outline"}
+            >
+              {moveBackup ? "Continue to servers" : "Switch without a backup"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

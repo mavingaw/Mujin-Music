@@ -66,9 +66,19 @@ pub struct HostInfo {
     pub advertising: bool,
     pub public_url: Option<String>,
     pub addresses: Vec<HostAddress>,
+    /// Addresses for away from home (VPN, the owner's own address, a router
+    /// port forward), which the phone app saves and falls back to.
+    pub remote: Vec<crate::remote_access::RemoteAddress>,
 }
 
 pub fn host_info(port: u16) -> Result<HostInfo, String> {
+    let mut info = host_info_without_remote(port)?;
+    info.remote = crate::remote_access::remote_addresses(&info.addresses);
+    Ok(info)
+}
+
+/// [`host_info`] without the remote-access addresses.
+pub fn host_info_without_remote(port: u16) -> Result<HostInfo, String> {
     let instance_id = crate::settings::instance_id().map_err(|error| error.to_string())?;
     let bind_address = crate::settings::bind_address()?
         .parse::<IpAddr>()
@@ -112,6 +122,7 @@ pub fn host_info(port: u16) -> Result<HostInfo, String> {
         advertising: is_advertising(),
         public_url,
         addresses: rank_host_addresses(interfaces, port),
+        remote: Vec::new(),
     })
 }
 

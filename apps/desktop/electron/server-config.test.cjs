@@ -15,6 +15,7 @@ const {
   reconnectDelay,
   rememberServer,
   saveConfig,
+  isThisComputer,
   serverRows,
   startupPlan,
   useLocalServer,
@@ -294,4 +295,79 @@ test("probing tells Parson, other services and dead addresses apart", async () =
     probeMessage({ kind: "not-parson" }, living.origin),
     /isn’t a Parson server/,
   );
+});
+
+test("a connected server is never shown as offline", () => {
+  const config = useRemoteServer(emptyConfig(), living, 1_000);
+  // Discovery has not confirmed it yet (or the chooser opened mid-scan),
+  // but the window is connected and the monitor sees it.
+  const [row] = serverRows({ config, discovered: [], activeId: "living-room" });
+  assert.equal(row.active, true);
+  assert.equal(row.online, true);
+  // While reconnecting, the active row is honestly offline.
+  const [down] = serverRows({
+    config,
+    discovered: [],
+    activeId: "living-room",
+    activeOnline: false,
+  });
+  assert.equal(down.active, true);
+  assert.equal(down.online, false);
+  // Connected at a new DHCP address: still the same active row, matched by id.
+  const [moved] = serverRows({
+    config,
+    discovered: [{ ...living, origin: "http://192.168.1.77:1993" }],
+    activeId: "living-room",
+  });
+  assert.equal(moved.origin, "http://192.168.1.77:1993");
+  assert.equal(moved.active && moved.online && moved.nearby, true);
+});
+
+test("forgetting a server that is still online keeps it listed, signed out", () => {
+  const config = useRemoteServer(emptyConfig(), living, 1_000);
+  const forgotten = forgetServer(config, "living-room");
+  const rows = serverRows({
+    config: forgotten,
+    discovered: [living],
+    activeId: null,
+  });
+  assert.deepEqual(
+    rows.map((row) => [
+      row.name,
+      row.saved,
+      row.nearby,
+      row.online,
+      row.active,
+    ]),
+    [["Living room", false, true, true, false]],
+  );
+  // Gone from the network too: then it disappears.
+  assert.deepEqual(serverRows({ config: forgotten, discovered: [] }), []);
+});
+
+test("this computer's own server is the local card, not a remote row", () => {
+  let config = useRemoteServer(emptyConfig(), living, 1_000);
+  config = rememberServer(config, {
+    instanceId: "this-pc",
+    name: "This PC",
+    origin: "http://192.168.1.5:1993",
+  });
+  const rows = serverRows({
+    config,
+    discovered: [
+      {
+        instanceId: "this-pc",
+        name: "This PC",
+        origin: "http://192.168.1.5:1993",
+      },
+    ],
+    localInstanceId: "this-pc",
+  });
+  assert.deepEqual(
+    rows.map((row) => row.name),
+    ["Living room"],
+  );
+  assert.equal(isThisComputer("this-pc", "this-pc"), true);
+  assert.equal(isThisComputer("nas", "this-pc"), false);
+  assert.equal(isThisComputer("", ""), false);
 });

@@ -8,6 +8,7 @@ import {
   hostUptime,
   parseConnectLink,
   parseHostInfo,
+  usableRemoteOrigins,
 } from "./host";
 
 afterEach(() => mock.restore());
@@ -75,6 +76,7 @@ test("connect links round-trip through the parson scheme", () => {
     origin: "http://192.168.1.42:1993",
     name: "Listening room",
     instanceId: "a1b2c3",
+    remote: [],
   });
   expect(connectLink(info, "http://192.168.1.42:1993", "browser")).toBe(
     "http://192.168.1.42:1993/",
@@ -90,7 +92,61 @@ test("connect links reject other schemes, routes and server addresses", () => {
   ).toBeNull();
   expect(
     parseConnectLink("parson:///connect?server=http%3A%2F%2F10.0.0.9%3A1993"),
-  ).toEqual({ origin: "http://10.0.0.9:1993", name: null, instanceId: null });
+  ).toEqual({
+    origin: "http://10.0.0.9:1993",
+    name: null,
+    instanceId: null,
+    remote: [],
+  });
+});
+
+test("away-from-home addresses are validated and carried by connect links", () => {
+  const info = parseHostInfo({
+    ...raw,
+    remote: [
+      {
+        origin: "https://music.example.com",
+        kind: "manual",
+        label: "Your address",
+        verified: true,
+      },
+      {
+        origin: "http://music-nas.tail1234.ts.net:1993",
+        kind: "vpn",
+        label: "Tailscale",
+        verified: null,
+      },
+      {
+        origin: "http://203.0.113.9:41993",
+        kind: "router",
+        label: "Port forward",
+        verified: false,
+      },
+      { origin: "javascript:alert(1)", kind: "vpn", label: "x" },
+      { origin: "http://10.9.9.9:1", kind: "teleport", label: "x" },
+    ],
+  })!;
+  expect(info.remote.map((address) => address.kind)).toEqual([
+    "manual",
+    "vpn",
+    "router",
+  ]);
+  // A path the server found unreachable is not handed to the phone.
+  expect(usableRemoteOrigins(info)).toEqual([
+    "https://music.example.com",
+    "http://music-nas.tail1234.ts.net:1993",
+  ]);
+  const link = connectLink(info, "http://192.168.1.42:1993", "app");
+  expect(parseConnectLink(link)?.remote).toEqual([
+    "https://music.example.com",
+    "http://music-nas.tail1234.ts.net:1993",
+  ]);
+  expect(
+    parseConnectLink(
+      "parson://connect?server=http://10.0.0.9:1993&remote=file:///x&remote=http://10.0.0.9:1993&remote=https://a.example",
+    )?.remote,
+  ).toEqual(["https://a.example"]);
+  expect(parseHostInfo(raw)?.remote).toEqual([]);
 });
 
 test("uptime reads naturally", () => {

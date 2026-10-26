@@ -1,10 +1,16 @@
 import { expect, test } from "bun:test";
 import {
   forgetLibrary,
+  isRemoteRoute,
+  isTrustedRoute,
+  libraryRoutes,
   libraryRowDetail,
   libraryRows,
   parseKnownLibraries,
+  pickReachableRoute,
   rememberLibrary,
+  setRemoteOrigins,
+  touchLibrary,
 } from "./known-libraries";
 
 const home = {
@@ -105,4 +111,86 @@ test("row details read naturally", () => {
   expect(libraryRowDetail(row!, now)).toBe(
     "192.168.1.20:1993 · 1 account · used 3 days ago",
   );
+});
+
+test("away-from-home addresses are kept per library and trusted only there", () => {
+  let libraries = rememberLibrary([], home, 1);
+  libraries = setRemoteOrigins(libraries, "home", [
+    "http://music-nas.tail1234.ts.net:1993",
+    "https://music.example.com",
+    home.origin,
+    "javascript:alert(1)",
+  ]);
+  const [library] = libraries;
+  expect(library?.remoteOrigins).toEqual([
+    "http://music-nas.tail1234.ts.net:1993",
+    "https://music.example.com",
+  ]);
+  expect(libraryRoutes(library!)).toEqual([
+    home.origin,
+    "http://music-nas.tail1234.ts.net:1993",
+    "https://music.example.com",
+  ]);
+  expect(isRemoteRoute(library, "https://music.example.com")).toBe(true);
+  expect(isRemoteRoute(library, home.origin)).toBe(false);
+  expect(isTrustedRoute(libraries, "home", "https://music.example.com")).toBe(
+    true,
+  );
+  expect(isTrustedRoute(libraries, "home", "https://evil.example")).toBe(false);
+  expect(isTrustedRoute(libraries, "other", home.origin)).toBe(false);
+  // Unchanged lists keep the same array (no needless secure-store writes).
+  expect(
+    setRemoteOrigins(libraries, "home", [
+      "http://music-nas.tail1234.ts.net:1993",
+      "https://music.example.com",
+    ]),
+  ).toBe(libraries);
+  // Reconnecting at home keeps the away addresses; touching keeps the home one.
+  const again = rememberLibrary(libraries, home, 5);
+  expect(again[0]?.remoteOrigins?.length).toBe(2);
+  const touched = touchLibrary(again, "home", 9);
+  expect(touched[0]?.origin).toBe(home.origin);
+  expect(touched[0]?.lastConnectedAt).toBe(9);
+  // Saved and read back.
+  expect(
+    parseKnownLibraries(JSON.stringify(touched))[0]?.remoteOrigins,
+  ).toEqual(library?.remoteOrigins);
+  // Clearing them.
+  expect(
+    setRemoteOrigins(touched, "home", [])[0]?.remoteOrigins,
+  ).toBeUndefined();
+});
+
+test("away from home, the first route that answers as the library wins", async () => {
+  const routes = [
+    home.origin,
+    "http://music-nas.tail1234.ts.net:1993",
+    "https://music.example.com",
+  ];
+  const answers: Record<string, string | Error> = {
+    [home.origin]: new Error("timeout"),
+    "http://music-nas.tail1234.ts.net:1993": "home",
+    "https://music.example.com": "home",
+  };
+  const probe = async (origin: string) => {
+    const answer = answers[origin];
+    if (answer instanceof Error) throw answer;
+    return { instanceId: answer!, manifest: { origin } };
+  };
+  expect((await pickReachableRoute(routes, "home", probe))?.origin).toBe(
+    "http://music-nas.tail1234.ts.net:1993",
+  );
+  // Back home, the home address wins.
+  answers[home.origin] = "home";
+  expect((await pickReachableRoute(routes, "home", probe))?.origin).toBe(
+    home.origin,
+  );
+  // A different library answering an address is never used.
+  answers[home.origin] = new Error("down");
+  answers["http://music-nas.tail1234.ts.net:1993"] = "someone-else";
+  expect((await pickReachableRoute(routes, "home", probe))?.origin).toBe(
+    "https://music.example.com",
+  );
+  answers["https://music.example.com"] = new Error("down");
+  expect(await pickReachableRoute(routes, "home", probe)).toBeNull();
 });
