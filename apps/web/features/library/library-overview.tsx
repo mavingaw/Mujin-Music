@@ -24,29 +24,59 @@ import { usePlayer } from "@/features/player/player-context";
 import getBaseURL from "@/lib/api/server-url";
 import { defaultCover } from "@/lib/images/default-cover";
 import {
+  composerFacts,
+  decodeFocus,
+  emptyFocus,
+  encodeFocus,
+  getFocusPage,
   getLibraryCatalog,
   getLibraryCatalogArtists,
   getPlaylists,
+  isFocused,
+  withEntity,
+  type FocusComposer,
+  type FocusEntity,
+  type FocusQuery,
+  type LibraryCatalogAlbum,
   type LibraryCatalogArtist,
   type LibraryCatalogSong,
 } from "@parson/music-sdk";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   Ban,
   Disc3,
   ChevronRight,
+  Feather,
   ListMusic,
   Heart,
   Music2,
   Pause,
   Play,
   Plus,
+  ScrollText,
   UserRound,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import FocusBar from "./focus/focus-bar";
+import FocusPanel from "./focus/focus-panel";
+import SmartPlaylistDialog from "./focus/smart-playlist-dialog";
+import {
+  audioBadge,
+  focusCountLabel,
+  focusQueryKey,
+  qualityBadgeLabel,
+  usesFocusEndpoint,
+} from "./focus/focus-state";
+import { usePlayFocus } from "./focus/use-play-focus";
+import CompositionList from "./composition-list";
+import { composerInitials, composerSummary } from "./composer-summary";
 import { uniqueById } from "./library-items";
 import {
   InfiniteLoad,
@@ -56,8 +86,48 @@ import {
 } from "./library-view-primitives";
 
 const PAGE_SIZE = 100;
-const views = ["albums", "songs", "artists", "playlists", "banned"] as const;
+const views = [
+  "albums",
+  "songs",
+  "artists",
+  "composers",
+  "compositions",
+  "playlists",
+  "banned",
+] as const;
 type LibraryView = (typeof views)[number];
+type BrowseView = Exclude<LibraryView, "playlists" | "banned">;
+
+function isBrowseView(view: LibraryView): view is BrowseView {
+  return view !== "playlists" && view !== "banned";
+}
+
+type FocusedAlbum = LibraryCatalogAlbum & { quality?: string | null };
+type FocusedSong = LibraryCatalogSong & { badge?: string | null };
+
+function entityForView(view: LibraryView): FocusEntity {
+  return isBrowseView(view) ? view : "albums";
+}
+
+function libraryURL(view: LibraryView, focus: FocusQuery | null): string {
+  const next = new URLSearchParams(window.location.search);
+  if (view === "albums") next.delete("view");
+  else next.set("view", view);
+  if (focus && isBrowseView(view) && usesFocusEndpoint(focus)) {
+    next.set("focus", encodeFocus(focus));
+  } else {
+    next.delete("focus");
+  }
+  return `/library${next.size ? `?${next}` : ""}`;
+}
+
+function writeURL(view: LibraryView, focus: FocusQuery | null) {
+  window.history.replaceState(
+    window.history.state,
+    "",
+    libraryURL(view, focus),
+  );
+}
 
 export default function LibraryOverview() {
   const searchParams = useSearchParams();
@@ -67,7 +137,23 @@ export default function LibraryOverview() {
       ? (requestedView as LibraryView)
       : "albums",
   );
-  const catalogEnabled = view === "albums" || view === "songs";
+  const [focus, setFocusState] = useState<FocusQuery>(() =>
+    decodeFocus(
+      searchParams.get("focus"),
+      entityForView(
+        views.includes(requestedView as LibraryView)
+          ? (requestedView as LibraryView)
+          : "albums",
+      ),
+    ),
+  );
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [smartOpen, setSmartOpen] = useState(false);
+  const playFocusQuery = usePlayFocus();
+  const browsing = isBrowseView(view);
+  const focusActive = browsing && usesFocusEndpoint(focus);
+  const catalogEnabled =
+    !focusActive && (view === "albums" || view === "songs");
 
   const catalog = useInfiniteQuery({
     queryKey: ["library", "catalog", view],
@@ -88,7 +174,18 @@ export default function LibraryOverview() {
     queryFn: ({ pageParam }) => getLibraryCatalogArtists(pageParam, PAGE_SIZE),
     getNextPageParam: (lastPage, pages) =>
       lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
-    enabled: view === "artists",
+    enabled: !focusActive && view === "artists",
+  });
+  const focused = useInfiniteQuery({
+    queryKey: ["library", "focus", "page", focusQueryKey(focus)],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => getFocusPage(focus, pageParam, PAGE_SIZE),
+    getNextPageParam: (lastPage, pages) => {
+      const next = pages.length * PAGE_SIZE;
+      return next < lastPage.total ? next : undefined;
+    },
+    enabled: focusActive,
+    placeholderData: keepPreviousData,
   });
   const playlists = useQuery({
     queryKey: ["playlists"],
@@ -97,50 +194,91 @@ export default function LibraryOverview() {
   });
 
   const catalogPages = catalog.data?.pages ?? [];
-  const allAlbums = uniqueById(catalogPages.flatMap((page) => page.albums));
-  const allSongs = uniqueById(catalogPages.flatMap((page) => page.songs));
-  const allArtists = uniqueById(artists.data?.pages.flat() ?? []);
-  const initialLoading =
-    (catalogEnabled && catalog.isPending && !catalog.data) ||
-    (view === "artists" && artists.isPending && !artists.data) ||
-    (view === "playlists" && playlists.isPending);
-  const activeError =
-    (catalogEnabled ? catalog.error : null) ??
-    (view === "artists" ? artists.error : null) ??
-    (view === "playlists" ? playlists.error : null);
+  const focusPages = focused.data?.pages ?? [];
+  const allAlbums: FocusedAlbum[] = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.albums))
+    : uniqueById(catalogPages.flatMap((page) => page.albums));
+  const allSongs: FocusedSong[] = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.songs)).map((song) => ({
+        ...song,
+        badge: audioBadge(song.audio),
+      }))
+    : uniqueById(catalogPages.flatMap((page) => page.songs));
+  const allArtists = focusActive
+    ? uniqueById(focusPages.flatMap((page) => page.artists))
+    : uniqueById(artists.data?.pages.flat() ?? []);
+  const allComposers = uniqueById(
+    focusPages.flatMap((page) => page.composers ?? []),
+  );
+  const lastFocusPage = focusPages[focusPages.length - 1];
+  const lastCatalogPage = catalogPages[catalogPages.length - 1];
+  const countLabel = focusActive
+    ? focusCountLabel(focus, lastFocusPage?.total, lastFocusPage?.libraryTotal)
+    : view === "albums"
+      ? focusCountLabel(focus, lastCatalogPage?.totalAlbums, undefined)
+      : view === "songs"
+        ? focusCountLabel(focus, lastCatalogPage?.totalSongs, undefined)
+        : null;
+
+  const active = focusActive ? focused : view === "artists" ? artists : catalog;
+  const initialLoading = focusActive
+    ? focused.isPending && !focused.data
+    : (catalogEnabled && catalog.isPending && !catalog.data) ||
+      (view === "artists" && artists.isPending && !artists.data) ||
+      (view === "playlists" && playlists.isPending);
+  const activeError = focusActive
+    ? focused.error
+    : ((catalogEnabled ? catalog.error : null) ??
+      (view === "artists" ? artists.error : null) ??
+      (view === "playlists" ? playlists.error : null));
 
   const selectView = (nextView: LibraryView) => {
+    const nextFocus =
+      isBrowseView(nextView) ? withEntity(focus, nextView) : focus;
     setView(nextView);
-    const next = new URLSearchParams(window.location.search);
-    if (nextView === "albums") {
-      next.delete("view");
-    } else {
-      next.set("view", nextView);
-    }
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `/library${next.size ? `?${next}` : ""}`,
-    );
+    setFocusState(nextFocus);
+    writeURL(nextView, nextFocus);
   };
+
+  const setFocus = useCallback((next: FocusQuery) => {
+    const nextView = next.entity as LibraryView;
+    setView(nextView);
+    setFocusState(next);
+    writeURL(nextView, next);
+  }, []);
+
+  const playFocus = (shuffle: boolean) => playFocusQuery(focus, shuffle);
 
   useEffect(() => {
     const syncFromHistory = () => {
-      const requested = new URLSearchParams(window.location.search).get("view");
-      setView(
-        views.includes(requested as LibraryView)
-          ? (requested as LibraryView)
-          : "albums",
-      );
+      const params = new URLSearchParams(window.location.search);
+      const requested = params.get("view");
+      const nextView = views.includes(requested as LibraryView)
+        ? (requested as LibraryView)
+        : "albums";
+      setView(nextView);
+      setFocusState(decodeFocus(params.get("focus"), entityForView(nextView)));
     };
     window.addEventListener("popstate", syncFromHistory);
     return () => window.removeEventListener("popstate", syncFromHistory);
   }, []);
 
+  const clearFocus = () => setFocus(emptyFocus(focus.entity));
+
   return (
     <section className="mx-auto w-full max-w-266 space-y-7">
       <header className="flex items-end justify-between gap-5">
-        <h1 className="text-3xl font-semibold text-white">Library</h1>
+        <div>
+          <h1 className="text-3xl font-semibold text-white">Library</h1>
+          {browsing && countLabel && (
+            <p
+              aria-live="polite"
+              className="mt-1 text-sm tabular-nums text-zinc-500"
+            >
+              {countLabel}
+            </p>
+          )}
+        </div>
       </header>
 
       <div className="flex min-h-11 min-w-0 items-end border-b border-white/8">
@@ -168,6 +306,18 @@ export default function LibraryOverview() {
             onClick={() => selectView("artists")}
           />
           <LibraryTab
+            active={view === "composers"}
+            icon={<Feather />}
+            label="Composers"
+            onClick={() => selectView("composers")}
+          />
+          <LibraryTab
+            active={view === "compositions"}
+            icon={<ScrollText />}
+            label="Compositions"
+            onClick={() => selectView("compositions")}
+          />
+          <LibraryTab
             active={view === "playlists"}
             icon={<ListMusic />}
             label="Playlists"
@@ -187,6 +337,31 @@ export default function LibraryOverview() {
         )}
       </div>
 
+      {browsing && (
+        <div className="space-y-4">
+          <FocusBar
+            canPlay={
+              view === "albums" ||
+              view === "songs" ||
+              view === "compositions" ||
+              (view === "artists" && focusActive)
+            }
+            onCreateSmartPlaylist={() => setSmartOpen(true)}
+            onPlay={(shuffle) => void playFocus(shuffle)}
+            onTogglePanel={() => setPanelOpen((open) => !open)}
+            panelOpen={panelOpen}
+            query={focus}
+            setQuery={setFocus}
+          />
+          {panelOpen && <FocusPanel query={focus} setQuery={setFocus} />}
+        </div>
+      )}
+      <SmartPlaylistDialog
+        onOpenChange={setSmartOpen}
+        open={smartOpen}
+        query={focus}
+      />
+
       {activeError && (
         <p className="rounded-lg border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-sm text-amber-100">
           Some items could not be loaded. You can retry below.
@@ -196,28 +371,52 @@ export default function LibraryOverview() {
       {view === "albums" && (
         <AlbumsView
           albums={allAlbums}
-          hasMore={catalog.hasNextPage}
+          focused={focusActive}
+          hasMore={active.hasNextPage}
           loading={initialLoading}
-          loadingMore={catalog.isFetchingNextPage}
-          onLoadMore={() => void catalog.fetchNextPage()}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
         />
       )}
       {view === "songs" && (
         <SongsView
-          songs={allSongs}
-          hasMore={catalog.hasNextPage}
+          focused={focusActive}
+          hasMore={active.hasNextPage}
           loading={initialLoading}
-          loadingMore={catalog.isFetchingNextPage}
-          onLoadMore={() => void catalog.fetchNextPage()}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
+          songs={allSongs}
         />
       )}
       {view === "artists" && (
         <ArtistsView
           artists={allArtists}
-          hasMore={artists.hasNextPage}
-          loading={artists.isPending}
-          loadingMore={artists.isFetchingNextPage}
-          onLoadMore={() => void artists.fetchNextPage()}
+          focused={focusActive}
+          hasMore={active.hasNextPage}
+          loading={initialLoading}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
+        />
+      )}
+      {view === "composers" && (
+        <ComposersView
+          composers={allComposers}
+          focused={isFocused(focus)}
+          hasMore={active.hasNextPage}
+          loading={initialLoading}
+          loadingMore={active.isFetchingNextPage}
+          onClearFocus={clearFocus}
+          onLoadMore={() => void active.fetchNextPage()}
+        />
+      )}
+      {view === "compositions" && (
+        <CompositionList
+          emptyBody="Compositions appear when your files carry COMPOSER or WORK tags."
+          focus={focus}
+          onClear={clearFocus}
         />
       )}
       {view === "banned" && <BannedView />}
@@ -228,6 +427,17 @@ export default function LibraryOverview() {
         />
       )}
     </section>
+  );
+}
+
+function FocusEmpty({ onClear }: { onClear: () => void }) {
+  return (
+    <LibraryMessage
+      action="Clear focus"
+      body="Nothing in your library matches every filter. Remove a filter or switch to Match any."
+      onAction={onClear}
+      title="No matches"
+    />
   );
 }
 
@@ -263,19 +473,26 @@ function LibraryTab({
 
 function AlbumsView({
   albums,
+  focused,
   hasMore,
   loading,
   loadingMore,
+  onClearFocus,
   onLoadMore,
 }: {
-  albums: Awaited<ReturnType<typeof getLibraryCatalog>>["albums"];
+  albums: FocusedAlbum[];
+  focused: boolean;
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
+  onClearFocus: () => void;
   onLoadMore: () => void;
 }) {
   if (loading) {
     return <LibraryLoading compact />;
+  }
+  if (!albums.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
   }
   if (!albums.length) {
     return (
@@ -290,17 +507,27 @@ function AlbumsView({
   return (
     <>
       <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {albums.map((album) => (
-          <AlbumCard
-            key={album.id}
-            album_id={album.id}
-            album_name={album.name}
-            album_cover={album.coverPath}
-            artist_id={album.artistId}
-            artist_name={album.artistName}
-            first_release_date={album.releaseYear}
-          />
-        ))}
+        {albums.map((album) => {
+          const badge =
+            album.quality === "hires" ? qualityBadgeLabel("hires") : null;
+          return (
+            <div className="relative min-w-0" key={album.id}>
+              <AlbumCard
+                album_id={album.id}
+                album_name={album.name}
+                album_cover={album.coverPath}
+                artist_id={album.artistId}
+                artist_name={album.artistName}
+                first_release_date={album.releaseYear}
+              />
+              {badge && (
+                <span className="pointer-events-none absolute left-2 top-2 z-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200 backdrop-blur">
+                  {badge}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
       <InfiniteLoad
         hasMore={hasMore}
@@ -312,20 +539,27 @@ function AlbumsView({
 }
 
 function SongsView({
+  focused,
   songs,
   hasMore,
   loading,
   loadingMore,
+  onClearFocus,
   onLoadMore,
 }: {
-  songs: LibraryCatalogSong[];
+  focused: boolean;
+  songs: FocusedSong[];
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
+  onClearFocus: () => void;
   onLoadMore: () => void;
 }) {
   if (loading) {
     return <LibraryLoading compact />;
+  }
+  if (!songs.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
   }
   if (!songs.length) {
     return (
@@ -353,13 +587,7 @@ function SongsView({
   );
 }
 
-function CatalogSongRow({
-  index,
-  song,
-}: {
-  index: number;
-  song: LibraryCatalogSong;
-}) {
+function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
   const player = usePlayer();
   const active = player.song.id === song.id;
   const artwork = song.coverPath
@@ -444,7 +672,12 @@ function CatalogSongRow({
           {isExplicitSongTitle(song.name) && <ExplicitBadge />}
           <ArtistCreditLinks credits={catalogSongArtistCredits(song)} />
         </p>
-        <span className="pr-2 text-xs tabular-nums text-zinc-600">
+        <span className="flex items-center gap-3 pr-2 text-xs tabular-nums text-zinc-600">
+          {song.badge && (
+            <span className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 md:inline">
+              {song.badge}
+            </span>
+          )}
           {formatDuration(song.durationSeconds)}
         </span>
       </div>
@@ -454,19 +687,26 @@ function CatalogSongRow({
 
 function ArtistsView({
   artists,
+  focused,
   hasMore,
   loading,
   loadingMore,
+  onClearFocus,
   onLoadMore,
 }: {
   artists: LibraryCatalogArtist[];
+  focused: boolean;
   hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
+  onClearFocus: () => void;
   onLoadMore: () => void;
 }) {
   if (loading) {
     return <LibraryLoading compact />;
+  }
+  if (!artists.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
   }
   if (!artists.length) {
     return (
@@ -510,6 +750,72 @@ function ArtistRow({ artist }: { artist: LibraryCatalogArtist }) {
         <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600 transition-colors group-hover:text-white" />
       </Link>
     </ArtistMenu>
+  );
+}
+
+function ComposersView({
+  composers,
+  focused,
+  hasMore,
+  loading,
+  loadingMore,
+  onClearFocus,
+  onLoadMore,
+}: {
+  composers: FocusComposer[];
+  focused: boolean;
+  hasMore: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  onClearFocus: () => void;
+  onLoadMore: () => void;
+}) {
+  if (loading) {
+    return <LibraryLoading compact />;
+  }
+  if (!composers.length && focused) {
+    return <FocusEmpty onClear={onClearFocus} />;
+  }
+  if (!composers.length) {
+    return (
+      <LibraryMessage
+        title="No composers yet"
+        body="Composers appear when your files carry COMPOSER tags."
+      />
+    );
+  }
+  return (
+    <>
+      <div className="overflow-hidden rounded-xl border border-white/8">
+        {composers.map((composer) => (
+          <Link
+            className="group flex min-w-0 items-center gap-4 border-b border-white/6 px-4 py-4 transition-colors last:border-0 hover:bg-white/[0.035] sm:px-5"
+            href={`/composer?id=${encodeURIComponent(composer.id)}`}
+            key={composer.id}
+          >
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/[0.06] text-sm font-semibold text-zinc-300">
+              {composerInitials(composer.name)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-sm font-semibold text-zinc-100 group-hover:text-white">
+                {composer.name}
+              </h2>
+              <p className="mt-1 truncate text-xs text-zinc-500">
+                {[composerFacts(composer), composerSummary(composer)]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600 transition-colors group-hover:text-white" />
+          </Link>
+        ))}
+      </div>
+      <InfiniteLoad
+        hasMore={hasMore}
+        loading={loadingMore}
+        onLoadMore={onLoadMore}
+      />
+    </>
   );
 }
 

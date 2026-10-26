@@ -1,8 +1,28 @@
 "use client";
 
-import type { LibraryAlbum } from "@parson/music-sdk";
+import FocusBar from "@/features/library/focus/focus-bar";
+import FocusPanel from "@/features/library/focus/focus-panel";
+import {
+  focusCountLabel,
+  focusQueryKey,
+  focusedAlbumTracks,
+  shuffled,
+} from "@/features/library/focus/focus-state";
+import SmartPlaylistDialog from "@/features/library/focus/smart-playlist-dialog";
+import { LibraryMessage } from "@/features/library/library-view-primitives";
+import {
+  albumScope,
+  clearedFocus,
+  getFocusPage,
+  isFocused,
+  scopedFocus,
+  type FocusQuery,
+  type LibraryAlbum,
+} from "@parson/music-sdk";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Clock, Pause, Play } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import SongMenu from "@/features/library/song-menu";
 import {
   displaySongTitle,
@@ -18,6 +38,27 @@ function formatDuration(duration: number) {
   return `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
 }
 
+type AlbumTrack = LibraryAlbum["songs"][number];
+
+const FOCUS_PAGE = 200;
+const MAX_FOCUS_TRACKS = 1000;
+
+/** Ids of an album's tracks that a scoped focus matches, in focus order. */
+async function focusedTrackIds(query: FocusQuery) {
+  const first = await getFocusPage(query, 0, FOCUS_PAGE);
+  const ids = first.songs.map((song) => song.id);
+  for (
+    let offset = ids.length;
+    offset < Math.min(first.total, MAX_FOCUS_TRACKS);
+    offset += FOCUS_PAGE
+  ) {
+    const next = await getFocusPage(query, offset, FOCUS_PAGE);
+    if (!next.songs.length) break;
+    ids.push(...next.songs.map((song) => song.id));
+  }
+  return { ids, total: first.total, libraryTotal: first.libraryTotal };
+}
+
 export function AlbumTrackList({
   activeSongId,
   album,
@@ -29,10 +70,109 @@ export function AlbumTrackList({
   album: LibraryAlbum;
   artistName: string;
   isPlaying: boolean;
-  onPlay: (track: LibraryAlbum["songs"][number]) => void;
+  /** Plays a track with `tracks` (the visible list) as the queue. */
+  onPlay: (track: AlbumTrack, tracks: AlbumTrack[]) => void;
 }) {
+  const [focus, setFocus] = useState<FocusQuery>(() =>
+    scopedFocus("songs", [albumScope(album.id)]),
+  );
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [smartOpen, setSmartOpen] = useState(false);
+  useEffect(() => {
+    setFocus(scopedFocus("songs", [albumScope(album.id)]));
+    setPanelOpen(false);
+  }, [album.id]);
+  const sorted = Boolean(focus.sort);
+  const active = isFocused(focus) || sorted;
+  const focused = useQuery({
+    queryKey: ["library", "focus", "album-tracks", focusQueryKey(focus)],
+    queryFn: () => focusedTrackIds(focus),
+    enabled: active,
+    placeholderData: keepPreviousData,
+  });
+  const tracks = focusedAlbumTracks(
+    album.songs,
+    active ? focused.data?.ids : undefined,
+    sorted,
+  );
+  const countLabel =
+    active && focused.data
+      ? focusCountLabel(focus, focused.data.total, focused.data.libraryTotal)
+      : null;
+  const playTracks = (shuffle: boolean) => {
+    const queue = shuffle ? shuffled(tracks) : tracks;
+    const first = queue[0];
+    if (first) onPlay(first, queue);
+  };
+
   return (
     <div className="w-full pb-8">
+      {album.songs.length > 1 && (
+        <div className="mb-5 space-y-3">
+          <FocusBar
+            bookmarks={false}
+            canPlay={tracks.length > 0}
+            onCreateSmartPlaylist={() => setSmartOpen(true)}
+            onPlay={playTracks}
+            onTogglePanel={() => setPanelOpen((open) => !open)}
+            panelOpen={panelOpen}
+            query={focus}
+            setQuery={setFocus}
+          />
+          {panelOpen && <FocusPanel query={focus} setQuery={setFocus} />}
+          {countLabel && (
+            <p
+              aria-live="polite"
+              className="text-sm tabular-nums text-zinc-500"
+            >
+              {countLabel}
+            </p>
+          )}
+          <SmartPlaylistDialog
+            onOpenChange={setSmartOpen}
+            open={smartOpen}
+            query={focus}
+          />
+        </div>
+      )}
+      {active && focused.data && tracks.length === 0 ? (
+        <LibraryMessage
+          action="Clear focus"
+          body="No track on this album matches every filter."
+          onAction={() => setFocus(clearedFocus(focus))}
+          title="No matching tracks"
+        />
+      ) : (
+        <TrackRows
+          activeSongId={activeSongId}
+          album={album}
+          artistName={artistName}
+          isPlaying={isPlaying}
+          onPlay={(track) => onPlay(track, tracks)}
+          tracks={tracks}
+        />
+      )}
+    </div>
+  );
+}
+
+function TrackRows({
+  activeSongId,
+  album,
+  artistName,
+  isPlaying,
+  onPlay,
+  tracks,
+}: {
+  activeSongId?: string;
+  album: LibraryAlbum;
+  artistName: string;
+  isPlaying: boolean;
+  onPlay: (track: AlbumTrack) => void;
+  tracks: AlbumTrack[];
+}) {
+  return (
+    <div>
       <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_3rem] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
         <div className="text-center">#</div>
         <div>Track</div>
@@ -41,7 +181,7 @@ export function AlbumTrackList({
         </div>
       </div>
       <div className="flex flex-col space-y-1">
-        {album.songs.map((track, index) => {
+        {tracks.map((track, index) => {
           const active = activeSongId === track.id;
           const artistCredit = trackArtistCreditParts({
             albumArtist: artistName,

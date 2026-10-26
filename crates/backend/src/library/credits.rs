@@ -81,6 +81,23 @@ enum TagField {
     /// A record label; lower values win when several label fields exist.
     Label(u8),
     Isrc,
+    /// The musical work (composition) a recording performs.
+    Work,
+    /// A movement's name within its work.
+    Movement,
+    /// A movement's position within its work (`3` or `3/4`).
+    MovementNumber,
+    /// The MusicBrainz release type (`album`, `single`, `ep`, ...).
+    ReleaseType,
+    /// Picard's multi-value list of the individual performing artists.
+    Artists,
+    /// A conductor credit. Taggers that misuse ID3 `TPE3` for soloists
+    /// write `Name (instrument)`, which is a performer credit instead.
+    Conductor,
+    /// The MusicBrainz work id of the recorded work.
+    WorkId,
+    /// The year a work was composed (`1812`, `1808-1812`, `1812-05-01`).
+    ComposedYear,
 }
 
 /// Maps a Vorbis comment key, ID3 `TXXX` description or iTunes freeform name
@@ -97,7 +114,7 @@ fn named_field(key: &str) -> Option<TagField> {
         }
         "LYRICIST" | "LYRICSBY" | "TEXTWRITER" => TagField::Credit("lyricist"),
         "ARRANGER" | "ARRANGEDBY" => TagField::Credit("arranger"),
-        "CONDUCTOR" | "CONDUCTEDBY" => TagField::Credit("conductor"),
+        "CONDUCTOR" | "CONDUCTEDBY" => TagField::Conductor,
         "PERFORMER" => TagField::Performer,
         "ENSEMBLE" | "ORCHESTRA" => TagField::Credit("ensemble"),
         "PRODUCER" | "PRODUCEDBY" => TagField::Credit("producer"),
@@ -108,6 +125,14 @@ fn named_field(key: &str) -> Option<TagField> {
         "ORGANIZATION" | "ORGANISATION" => TagField::Label(1),
         "PUBLISHER" => TagField::Label(2),
         "ISRC" => TagField::Isrc,
+        "WORK" | "WORKTITLE" => TagField::Work,
+        "MOVEMENTNAME" => TagField::Movement,
+        "MOVEMENT" | "MOVEMENTNUMBER" => TagField::MovementNumber,
+        "RELEASETYPE" | "MUSICBRAINZALBUMTYPE" | "MUSICBRAINZRELEASETYPE" => TagField::ReleaseType,
+        "ARTISTS" => TagField::Artists,
+        "MUSICBRAINZWORKID" | "MUSICBRAINZWORK" => TagField::WorkId,
+        "COMPOSITIONDATE" | "COMPOSITIONYEAR" | "COMPOSED" | "DATECOMPOSED" | "COMPOSEDDATE"
+        | "WORKDATE" | "WORKYEAR" => TagField::ComposedYear,
         _ => return None,
     })
 }
@@ -117,10 +142,12 @@ fn id3_frame_field(id: &str) -> Option<TagField> {
     Some(match id {
         "TCOM" | "TCM" => TagField::Credit("composer"),
         "TEXT" | "TXT" => TagField::Credit("lyricist"),
-        "TPE3" | "TP3" => TagField::Credit("conductor"),
+        "TPE3" | "TP3" => TagField::Conductor,
         "TPE4" | "TP4" => TagField::Credit("remixer"),
         "TPUB" | "TPB" => TagField::Label(0),
         "TSRC" | "TRC" => TagField::Isrc,
+        "MVNM" => TagField::Movement,
+        "MVIN" => TagField::MovementNumber,
         _ => return None,
     })
 }
@@ -129,7 +156,9 @@ fn id3_frame_field(id: &str) -> Option<TagField> {
 fn involvement_role(involvement: &str) -> Option<&'static str> {
     match named_field(involvement) {
         Some(TagField::Credit(role)) => Some(role),
+        Some(TagField::Conductor) => Some("conductor"),
         Some(TagField::Performer) => Some("performer"),
+        Some(TagField::Artists) => Some("performer"),
         _ => {
             let involvement = involvement.trim().to_ascii_lowercase();
             match involvement.as_str() {
@@ -168,6 +197,46 @@ pub fn split_performer(value: &str) -> (String, Option<String>) {
     (value.to_string(), None)
 }
 
+/// Instruments a conductor credit may name without being a soloist.
+fn is_conducting(instrument: &str) -> bool {
+    matches!(
+        instrument,
+        "conductor" | "conducting" | "conducted by" | "dirigent" | "direction" | "director"
+    )
+}
+
+/// Reads a MusicBrainz id (a lowercase UUID).
+pub fn normalize_musicbrainz_id(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    let bytes = value.as_bytes();
+    let valid = bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => *byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    valid.then_some(value)
+}
+
+/// Reads the first plausible composition year from a date or range.
+pub fn parse_composed_year(value: &str) -> Option<u16> {
+    let bytes = value.as_bytes();
+    (0..bytes.len().saturating_sub(3)).find_map(|start| {
+        let digits = &bytes[start..start + 4];
+        let bounded = (start == 0 || !bytes[start - 1].is_ascii_digit())
+            && bytes
+                .get(start + 4)
+                .is_none_or(|next| !next.is_ascii_digit());
+        if !bounded || !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(digits)
+            .ok()?
+            .parse::<u16>()
+            .ok()
+            .filter(|year| (900..=2100).contains(year))
+    })
+}
+
 fn split_values(value: &str) -> impl Iterator<Item = &str> {
     value
         .split(['\0', ';'])
@@ -181,6 +250,14 @@ pub struct TagCredits {
     pub credits: Vec<TagCredit>,
     label: Option<(u8, String)>,
     pub isrc: Option<String>,
+    pub work: Option<String>,
+    pub movement: Option<String>,
+    pub movement_number: Option<u16>,
+    /// Canonical MusicBrainz release type; `None` when no tag states it.
+    pub release_type: Option<String>,
+    /// MusicBrainz work id (lowercase UUID).
+    pub work_id: Option<String>,
+    pub composed_year: Option<u16>,
 }
 
 impl TagCredits {
@@ -214,6 +291,51 @@ impl TagCredits {
             TagField::Isrc => {
                 if self.isrc.is_none() {
                     self.isrc = split_values(value).find_map(normalize_isrc);
+                }
+            }
+            TagField::Work => {
+                if self.work.is_none() {
+                    self.work = split_values(value).next().and_then(clean_text);
+                }
+            }
+            TagField::Movement => {
+                if self.movement.is_none() {
+                    self.movement = split_values(value).next().and_then(clean_text);
+                }
+            }
+            TagField::MovementNumber => {
+                if self.movement_number.is_none() {
+                    self.movement_number = parse_movement_number(value);
+                }
+            }
+            TagField::ReleaseType => {
+                if self.release_type.is_none() {
+                    self.release_type = normalize_release_type(value);
+                }
+            }
+            TagField::Artists => {
+                for name in split_values(value) {
+                    self.push("performer", name, None);
+                }
+            }
+            TagField::Conductor => {
+                for value in split_values(value) {
+                    match split_performer(value) {
+                        (name, Some(instrument)) if !is_conducting(&instrument) => {
+                            self.push("performer", &name, Some(instrument));
+                        }
+                        (name, _) => self.push("conductor", &name, None),
+                    }
+                }
+            }
+            TagField::WorkId => {
+                if self.work_id.is_none() {
+                    self.work_id = split_values(value).find_map(normalize_musicbrainz_id);
+                }
+            }
+            TagField::ComposedYear => {
+                if self.composed_year.is_none() {
+                    self.composed_year = parse_composed_year(value);
                 }
             }
         }
@@ -284,6 +406,61 @@ impl TagCredits {
             });
         }
     }
+}
+
+/// Reads a movement number such as `3`, `03` or `3/4`.
+pub fn parse_movement_number(value: &str) -> Option<u16> {
+    let digits = value
+        .trim()
+        .split(['/', ' ', '\0'])
+        .next()?
+        .trim_start_matches('0');
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u16>().ok().filter(|number| *number > 0)
+}
+
+/// Primary release types MusicBrainz defines, in the order a combined value
+/// is resolved.
+pub const PRIMARY_RELEASE_TYPES: [&str; 5] = ["album", "single", "ep", "broadcast", "other"];
+/// Secondary release types, used when no primary type is tagged.
+pub const SECONDARY_RELEASE_TYPES: [&str; 11] = [
+    "compilation",
+    "soundtrack",
+    "live",
+    "remix",
+    "spokenword",
+    "interview",
+    "audiobook",
+    "audio drama",
+    "demo",
+    "dj-mix",
+    "mixtape/street",
+];
+
+/// Canonical release type from a `RELEASETYPE` / `MusicBrainz Album Type`
+/// value such as `album`, `Album; Live` or `ep`. Primary types win over
+/// secondary ones; values that are not MusicBrainz types are rejected so
+/// that a stray tag never becomes a wrong fact.
+pub fn normalize_release_type(value: &str) -> Option<String> {
+    let values = value
+        .split(['\0', ';', ',', '/'])
+        .map(|part| part.trim().to_ascii_lowercase().replace(['_'], "-"))
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.as_str() {
+            "spoken word" | "spoken-word" => "spokenword".to_string(),
+            "dj mix" | "djmix" => "dj-mix".to_string(),
+            "mixtape" | "street" => "mixtape/street".to_string(),
+            "audio-drama" => "audio drama".to_string(),
+            _ => part,
+        })
+        .collect::<Vec<_>>();
+    PRIMARY_RELEASE_TYPES
+        .iter()
+        .chain(SECONDARY_RELEASE_TYPES.iter())
+        .find(|candidate| values.iter().any(|value| value == *candidate))
+        .map(|value| value.to_string())
 }
 
 /// Normalises an ISRC (`CC-XXX-YY-NNNNN` or `CCXXXYYNNNNN`) to its 12
@@ -402,6 +579,107 @@ mod tests {
             split_performer("Plain Name"),
             ("Plain Name".to_string(), None)
         );
+    }
+
+    #[test]
+    fn performer_conductor_ensemble_and_artists_tags_are_performance_credits() {
+        let mut credits = TagCredits::default();
+        assert!(credits.apply_named("PERFORMER", "Martha Argerich (piano)"));
+        assert!(credits.apply_named("CONDUCTOR", "Claudio Abbado"));
+        assert!(credits.apply_named("ORCHESTRA", "Berliner Philharmoniker"));
+        assert!(credits.apply_named("ENSEMBLE", "Arditti Quartet"));
+        assert!(credits.apply_named("ARTISTS", "Nora Kelly; Abe Rounds"));
+        assert!(credits.apply_id3_frame("TPE3", "Claudio Abbado"));
+        // Taggers that put soloists in TPE3 write "Name (instrument)".
+        assert!(credits.apply_id3_frame("TPE3", "Hilary Hahn (violin)"));
+        assert!(credits.apply_id3_frame("TPE3", "Simon Rattle (conductor)"));
+        let roles = credits
+            .credits
+            .iter()
+            .map(|credit| (credit.role_key(), credit.name.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            [
+                ("performer:piano".to_string(), "Martha Argerich"),
+                ("conductor".to_string(), "Claudio Abbado"),
+                ("ensemble".to_string(), "Berliner Philharmoniker"),
+                ("ensemble".to_string(), "Arditti Quartet"),
+                ("performer".to_string(), "Nora Kelly"),
+                ("performer".to_string(), "Abe Rounds"),
+                ("performer:violin".to_string(), "Hilary Hahn"),
+                ("conductor".to_string(), "Simon Rattle"),
+            ]
+        );
+    }
+
+    #[test]
+    fn work_ids_and_composition_dates_are_read_and_validated() {
+        let mut credits = TagCredits::default();
+        assert!(credits.apply_named("MUSICBRAINZ_WORKID", "not-a-uuid"));
+        assert!(credits.apply_named(
+            "MusicBrainz Work Id",
+            "1F9DF192-A621-4E4D-9A53-9A0E8B8A4B1E"
+        ));
+        assert!(credits.apply_named("COMPOSITIONDATE", "1808-12-22"));
+        assert_eq!(
+            credits.work_id.as_deref(),
+            Some("1f9df192-a621-4e4d-9a53-9a0e8b8a4b1e")
+        );
+        assert_eq!(credits.composed_year, Some(1808));
+        assert_eq!(parse_composed_year("c. 1720–1723"), Some(1720));
+        assert_eq!(parse_composed_year("Op. 12345"), None);
+        assert_eq!(parse_composed_year("BWV 988"), None);
+    }
+
+    #[test]
+    fn work_and_movement_tags_are_read_from_every_format() {
+        let mut vorbis = TagCredits::default();
+        assert!(vorbis.apply_named("WORK", "Symphony No. 5 in C minor, Op. 67"));
+        assert!(vorbis.apply_named("MOVEMENTNAME", "Allegro con brio"));
+        assert!(vorbis.apply_named("MOVEMENT", "1"));
+        assert_eq!(
+            vorbis.work.as_deref(),
+            Some("Symphony No. 5 in C minor, Op. 67")
+        );
+        assert_eq!(vorbis.movement.as_deref(), Some("Allegro con brio"));
+        assert_eq!(vorbis.movement_number, Some(1));
+
+        let mut id3 = TagCredits::default();
+        assert!(id3.apply_named("WORK", "Goldberg Variations"));
+        assert!(id3.apply_id3_frame("MVNM", "Aria"));
+        assert!(id3.apply_id3_frame("MVIN", "01/32"));
+        assert_eq!(id3.movement_number, Some(1));
+        assert_eq!(parse_movement_number("0"), None);
+        assert_eq!(parse_movement_number("IV"), None);
+    }
+
+    #[test]
+    fn release_types_come_only_from_musicbrainz_values() {
+        assert_eq!(normalize_release_type("Album").as_deref(), Some("album"));
+        assert_eq!(normalize_release_type("EP").as_deref(), Some("ep"));
+        assert_eq!(
+            normalize_release_type("album; live").as_deref(),
+            Some("album")
+        );
+        assert_eq!(
+            normalize_release_type("Compilation").as_deref(),
+            Some("compilation")
+        );
+        assert_eq!(
+            normalize_release_type("Spoken Word").as_deref(),
+            Some("spokenword")
+        );
+        assert_eq!(normalize_release_type("deluxe"), None);
+        assert_eq!(normalize_release_type(""), None);
+
+        let mut credits = TagCredits::default();
+        assert!(credits.apply_named("MusicBrainz Album Type", "single"));
+        assert!(credits.apply_named("RELEASETYPE", "album"));
+        assert_eq!(credits.release_type.as_deref(), Some("single"));
+        let mut untagged = TagCredits::default();
+        untagged.apply_named("COMPOSER", "Someone");
+        assert_eq!(untagged.release_type, None);
     }
 
     #[test]

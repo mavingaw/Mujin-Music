@@ -10,6 +10,8 @@ export * from "./resources/auth";
 export * from "./resources/cast";
 export * from "./resources/data";
 export * from "./resources/filesystem";
+export * from "./resources/focus";
+export * from "./resources/focus-model";
 export * from "./resources/genres";
 export * from "./resources/home";
 export * from "./resources/images";

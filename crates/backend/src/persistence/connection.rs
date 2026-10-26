@@ -18,7 +18,7 @@ pub type DbPool = Arc<r2d2::Pool<ConnectionManager<SqliteConnection>>>;
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
 // Embed crates/backend/migrations.
-const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+pub(crate) const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 const V1_BASELINE_MIGRATION: &str = "20260719000000";
 const LEGACY_MUSIC_MIGRATION: &str = "20240721200400";
 const DEFAULT_SNAPSHOT_GENERATIONS: usize = 3;

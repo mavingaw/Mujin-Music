@@ -30,6 +30,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { PlaylistCover } from "@/components/playlist-cover";
+import { SmartPlaylistBanner } from "@/components/smart-playlist-banner";
 import { Screen, SongRow } from "@/components/music-ui";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
@@ -174,6 +175,9 @@ export default function PlaylistScreen() {
             <Text style={styles.meta}>
               {data.song_count} songs, {duration}
             </Text>
+            {data.smart ? (
+              <SmartPlaylistBanner playlistId={data.id} smart={data.smart} />
+            ) : null}
             <View style={styles.playActions}>
               <Pressable
                 {...immediatePressFeedback}
