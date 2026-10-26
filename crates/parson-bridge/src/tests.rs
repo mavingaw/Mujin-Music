@@ -289,3 +289,52 @@ fn groups_take_the_formats_every_member_shares() {
     dac_only.sample_rates = vec![44_100];
     assert!(common_device("g", "Group", &[devices[1].clone(), dac_only]).is_none());
 }
+
+#[test]
+fn a_stream_whose_device_is_taken_over_fails_instead_of_hanging() {
+    // Real-time DAC, so the old stream's writes would block on the window.
+    let (endpoint, backend) = endpoint("pi", 1.0, 0);
+    let bridge = connect(&endpoint);
+    let format = StreamFormat {
+        sample_rate: 44_100,
+        format: SampleFormat::S16,
+        channels: 2,
+    };
+    let mut old = bridge.open("sim-usb-dac", format, true).expect("open");
+    let second = noise(44_100, 2, 3);
+    old.write(&second[..44_100]).expect("first writes play");
+    // Something else (a synced group, another zone) opens the same DAC.
+    let mut new = bridge
+        .open("sim-usb-dac", format, true)
+        .expect("the newer stream takes the device");
+    let started = Instant::now();
+    let mut failed = None;
+    for chunk in second.chunks(4_410 * format.frame_bytes()) {
+        if let Err(error) = old.write(chunk) {
+            failed = Some(error);
+            break;
+        }
+    }
+    let error = failed.expect("the replaced stream reports the takeover");
+    assert!(error.contains("another stream took over"), "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "fails at once: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        bridge.recent_errors().is_empty(),
+        "a takeover is not a bridge fault: {:?}",
+        bridge.recent_errors()
+    );
+    drop(old);
+    // The newer stream plays every sample.
+    let data = noise(8_820, 2, 11);
+    new.write(&data).expect("the new stream plays");
+    new.drain();
+    let capture = backend.capture("sim-usb-dac");
+    assert!(
+        capture.bytes.ends_with(&data),
+        "the new stream reached the DAC"
+    );
+}

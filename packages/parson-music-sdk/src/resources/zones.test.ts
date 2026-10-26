@@ -24,6 +24,9 @@ import {
   nextRepeatMode,
   orderZones,
   previewQueueEdit,
+  playOnZoneCommand,
+  queueOnZoneCommand,
+  MAX_ZONE_QUEUE_SONGS,
   sleepTimerLabel,
   reportClientZone,
   sendZoneCommand,
@@ -763,4 +766,35 @@ test("bridge zones group sample-synced and bridges are managed by address", asyn
   ).toBe("1 Parson Bridge (2 outputs)");
   await removeBridge("pi.local:1994");
   expect(remove).toHaveBeenCalledWith("/zones/bridges/pi.local%3A1994");
+});
+
+test("library actions become zone commands within the queue limit", () => {
+  expect(playOnZoneCommand(["a", "b", "c"], 1)).toEqual({
+    command: "load",
+    song_ids: ["a", "b", "c"],
+    current_position: 1,
+    position_ms: 0,
+    play: true,
+  });
+  // A huge playlist keeps the chosen track, centred in what is sent.
+  const many = Array.from({ length: 1_200 }, (_, index) => `s${index}`);
+  const load = playOnZoneCommand(many, 900);
+  expect(load.song_ids).toHaveLength(MAX_ZONE_QUEUE_SONGS);
+  expect(load.song_ids[load.current_position!]).toBe("s900");
+  expect(playOnZoneCommand(many, 1_199).song_ids.at(-1)).toBe("s1199");
+  expect(() => playOnZoneCommand([], 0)).toThrow();
+  expect(queueOnZoneCommand(["x"], true)).toEqual({
+    command: "add_to_queue",
+    song_ids: ["x"],
+    next: true,
+  });
+  expect(
+    previewQueueEdit(["a", "b", "c"], 0, queueOnZoneCommand(["x", "y"], true)),
+  ).toEqual(["a", "x", "y", "b", "c"]);
+  expect(
+    previewQueueEdit(["a", "b"], 0, queueOnZoneCommand(["z"], false)),
+  ).toEqual(["a", "b", "z"]);
+  expect(previewQueueEdit([], 0, queueOnZoneCommand(["z"], true))).toEqual([
+    "z",
+  ]);
 });

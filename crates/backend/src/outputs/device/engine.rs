@@ -656,6 +656,17 @@ impl Player {
             tracing::warn!(%error, device = self.device.id, "audio device write failed");
             self.close_stream(false);
             let mut shared = lock(&self.shared);
+            if error.contains(parson_bridge::endpoint::REPLACED) {
+                // Another zone (or a synced group) now plays this DAC: stop
+                // instead of taking it back, so the two never fight.
+                self.current = None;
+                shared.state.state = PlayState::Stopped;
+                shared.state.position_ms = 0;
+                shared.state.stream = None;
+                drop(shared);
+                self.notify();
+                return;
+            }
             shared.state.reachable = false;
             return;
         }

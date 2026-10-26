@@ -2122,3 +2122,179 @@ async fn chromecast_zones_are_driven_by_the_server_end_to_end() {
     server.stop(true).await;
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// Ungrouping a bridge group mid-track: the first zone carries on from the
+/// group's position, plays to the end, then takes stop and new loads (the
+/// round-5 bug left it frozen at "playing" with the old file).
+#[actix_web::test]
+async fn bridge_zone_carries_on_after_ungrouping_mid_track_and_stays_controllable() {
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-ungroup-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let raw_long = raw_s24(44_100 * 3, 31);
+    let raw_hi = raw_s24(96_000, 37);
+    let long = flac_from_raw(&directory, "long", &raw_long, 44_100);
+    let hi = flac_from_raw(&directory, "hi", &raw_hi, 96_000);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![
+            song("song-long", &long, 3.0, "flac", 44_100, Some(24)),
+            song("song-hi", &hi, 1.0, "flac", 96_000, Some(24)),
+        ]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+    let (kitchen, _kitchen_dacs) = bridge_endpoint("kitchen");
+    let (living, living_dacs) = bridge_endpoint("living-room");
+    let hub = crate::outputs::bridge::BridgeHub::new("server-id".into(), "Test".into(), None);
+    hub.add(&kitchen.address().to_string()).expect("kitchen");
+    hub.add(&living.address().to_string()).expect("living room");
+    let service = ZoneService::new(None, None);
+    service.set_outputs(Arc::new(Outputs {
+        bridges: Some(hub.clone()),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+    let kitchen_dac = "bridge:kitchen-id:sim-usb-dac";
+    let living_dac = "bridge:living-room-id:sim-usb-dac";
+
+    // The living room plays a two-track queue when it joins the kitchen.
+    service
+        .command(
+            USER,
+            living_dac,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-long", "song-hi"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load the living room");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, living_dac).status
+            == ZoneStatus::Playing)
+        .await
+    );
+    let group_id = service
+        .group(USER, &ids(&[living_dac, kitchen_dac]))
+        .await
+        .expect("group");
+    assert!(
+        drive_until(&service, |service| {
+            let group = zone(service, &cache, &group_id);
+            group.status == ZoneStatus::Playing && group.position_ms > 600
+        })
+        .await,
+        "the group plays"
+    );
+
+    // Ungroup while it plays: the first zone carries on.
+    service
+        .ungroup(USER, &group_id, None)
+        .await
+        .expect("ungroup mid-track");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, living_dac).status
+            == ZoneStatus::Playing)
+        .await,
+        "the first zone carries on"
+    );
+    assert!(
+        drive_until(&service, |service| {
+            let living = zone(service, &cache, living_dac);
+            living.queue.current_position == 1
+                && living.status == ZoneStatus::Playing
+                && living
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.stream.as_ref())
+                    .is_some_and(|stream| stream.output.starts_with("96 kHz/24-bit"))
+        })
+        .await,
+        "it moves on to the next track: {:?}",
+        zone(&service, &cache, living_dac)
+    );
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, living_dac).status
+            == ZoneStatus::Stopped)
+        .await,
+        "and plays its queue to the end instead of freezing: {:?}",
+        zone(&service, &cache, living_dac)
+    );
+
+    // A new load plays the new file (signal path included), and stop works.
+    service
+        .command(
+            USER,
+            living_dac,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-hi", "song-long"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load after the ungroup");
+    assert!(
+        drive_until(&service, |service| {
+            let living = zone(service, &cache, living_dac);
+            living.status == ZoneStatus::Playing
+                && living
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.stream.as_ref())
+                    .is_some_and(|stream| stream.output.starts_with("96 kHz/24-bit"))
+        })
+        .await,
+        "the new file plays: {:?}",
+        zone(&service, &cache, living_dac)
+    );
+    service
+        .command(USER, living_dac, ZoneCommand::Stop, Some(&cache))
+        .await
+        .expect("stop");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, living_dac).status
+            == ZoneStatus::Stopped)
+        .await,
+        "stop works after the ungroup"
+    );
+    // The second zone is free and plays on its own too.
+    service
+        .command(
+            USER,
+            kitchen_dac,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-hi"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load the kitchen");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, kitchen_dac)
+            .status
+            == ZoneStatus::Stopped)
+        .await,
+        "the kitchen plays its own file to the end"
+    );
+    assert!(
+        living_dacs
+            .capture("sim-usb-dac")
+            .opened
+            .iter()
+            .any(|(format, _)| format.sample_rate == 96_000),
+        "the living room DAC reopened at the new file's rate"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}

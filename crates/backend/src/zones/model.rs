@@ -720,6 +720,13 @@ pub enum ZoneCommand {
     },
     /// Removes everything after the current track.
     ClearUpcoming,
+    /// Adds songs right after the current track (`next`, "Play next") or at
+    /// the end ("Add to queue"). On a zone with no queue it starts them.
+    AddToQueue {
+        song_ids: Vec<String>,
+        #[serde(default)]
+        next: bool,
+    },
     SetRepeat {
         mode: RepeatMode,
     },
@@ -751,6 +758,15 @@ impl ZoneCommand {
                     Err("invalid_queue_position")
                 } else if *position_ms < 0 {
                     Err("invalid_seek_position")
+                } else if song_ids.iter().any(|id| id.is_empty() || id.len() > 256) {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::AddToQueue { song_ids, .. } => {
+                if song_ids.is_empty() || song_ids.len() > MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_length")
                 } else if song_ids.iter().any(|id| id.is_empty() || id.len() > 256) {
                     Err("invalid_song_id")
                 } else {
@@ -797,6 +813,7 @@ impl ZoneCommand {
             Self::MoveQueueItem { .. }
                 | Self::RemoveQueueItem { .. }
                 | Self::ClearUpcoming
+                | Self::AddToQueue { .. }
                 | Self::SetShuffle { .. }
         )
     }
@@ -852,6 +869,11 @@ pub enum QueueEdit {
     Removed {
         position: usize,
     },
+    /// `count` songs were inserted at `position` (play next, add to queue).
+    Inserted {
+        position: usize,
+        count: usize,
+    },
     /// Everything after `current` changed (clear, shuffle, unshuffle).
     UpcomingReplaced,
     Unchanged,
@@ -906,6 +928,36 @@ pub fn apply_queue_edit(
             forget_one(original, &removed, song_ids);
             Ok(QueueEdit::Removed {
                 position: *queue_position,
+            })
+        }
+        ZoneCommand::AddToQueue {
+            song_ids: added,
+            next,
+        } => {
+            if song_ids.len() + added.len() > MAX_ZONE_QUEUE_ITEMS {
+                return Err(ZoneError::Invalid("queue_full"));
+            }
+            let position = if *next && !song_ids.is_empty() {
+                (current + 1).min(song_ids.len())
+            } else {
+                song_ids.len()
+            };
+            song_ids.splice(position..position, added.iter().cloned());
+            if let Some(order) = original {
+                // Turning shuffle off keeps them where they were added.
+                let at = if *next {
+                    song_ids
+                        .get(current)
+                        .and_then(|playing| order.iter().position(|id| id == playing))
+                        .map_or(order.len(), |index| index + 1)
+                } else {
+                    order.len()
+                };
+                order.splice(at..at, added.iter().cloned());
+            }
+            Ok(QueueEdit::Inserted {
+                position,
+                count: added.len(),
             })
         }
         ZoneCommand::ClearUpcoming => {
@@ -1007,12 +1059,90 @@ pub fn extrapolate_position(
 #[cfg(test)]
 mod tests {
     use super::{
-        QueueEdit, RepeatMode, VolumeLimits, ZoneCommand, ZoneError, ZoneVolume, apply_queue_edit,
-        extrapolate_position,
+        MAX_ZONE_QUEUE_ITEMS, QueueEdit, RepeatMode, VolumeLimits, ZoneCommand, ZoneError,
+        ZoneVolume, apply_queue_edit, extrapolate_position,
     };
 
     fn ids(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn play_next_goes_after_the_current_track_and_add_to_queue_at_the_end() {
+        let mut queue = ids(&["a", "b", "c"]);
+        let mut shuffle = false;
+        let mut original = None;
+        let mut random = |_: usize| 0;
+        let add = |song_ids: &[&str], next: bool| ZoneCommand::AddToQueue {
+            song_ids: ids(song_ids),
+            next,
+        };
+        assert_eq!(
+            apply_queue_edit(
+                &mut queue,
+                1,
+                &mut shuffle,
+                &mut original,
+                &add(&["x", "y"], true),
+                &mut random
+            ),
+            Ok(QueueEdit::Inserted {
+                position: 2,
+                count: 2
+            })
+        );
+        assert_eq!(queue, ids(&["a", "b", "x", "y", "c"]));
+        assert_eq!(
+            apply_queue_edit(
+                &mut queue,
+                1,
+                &mut shuffle,
+                &mut original,
+                &add(&["z"], false),
+                &mut random
+            ),
+            Ok(QueueEdit::Inserted {
+                position: 5,
+                count: 1
+            })
+        );
+        assert_eq!(queue, ids(&["a", "b", "x", "y", "c", "z"]));
+        // While shuffled, the unshuffled order gets them in the same place.
+        let mut queue = ids(&["a", "c", "b"]);
+        let mut shuffle = true;
+        let mut original = Some(ids(&["a", "b", "c"]));
+        apply_queue_edit(
+            &mut queue,
+            0,
+            &mut shuffle,
+            &mut original,
+            &add(&["n"], true),
+            &mut random,
+        )
+        .expect("play next while shuffled");
+        assert_eq!(queue, ids(&["a", "n", "c", "b"]));
+        assert_eq!(original, Some(ids(&["a", "n", "b", "c"])));
+        // Never past the queue limit.
+        let mut full = vec!["s".to_string(); MAX_ZONE_QUEUE_ITEMS];
+        assert_eq!(
+            apply_queue_edit(
+                &mut full,
+                0,
+                &mut false,
+                &mut None,
+                &add(&["one-too-many"], false),
+                &mut random
+            ),
+            Err(ZoneError::Invalid("queue_full"))
+        );
+        assert_eq!(
+            add(&[], true).validate(),
+            Err("invalid_queue_length"),
+            "nothing to add"
+        );
+        let parsed: ZoneCommand =
+            serde_json::from_str(r#"{"command":"add_to_queue","song_ids":["a"]}"#).expect("json");
+        assert_eq!(parsed, add(&["a"], false), "add to the end by default");
     }
 
     #[test]

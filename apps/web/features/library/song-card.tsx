@@ -1,6 +1,6 @@
 "use client";
 
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import SongMenu from "@/features/library/song-menu";
 import { SongTitle, ExplicitBadge } from "./song-title";
 import { isExplicitSongTitle } from "./song-presentation";
@@ -35,8 +35,7 @@ export default function SongCard({
   album_cover,
   typeLabel,
 }: SongCardProps) {
-  const { playAudioSource, setQueue, setSongCallback, setCurrentSongIndex } =
-    usePlayer();
+  const playback = useZonePlayback();
   const imageSrc = album_cover
     ? `${getBaseURL()}/media/images/${encodeURIComponent(album_cover)}`
     : defaultCover;
@@ -45,10 +44,7 @@ export default function SongCard({
 
   function handlePlay() {
     const songInfo = { id: song_id, name: song_name, artist: artist_name };
-    setQueue([{ song: songInfo, album, artist }]);
-    setCurrentSongIndex(0);
-    setSongCallback(songInfo, artist, album);
-    playAudioSource();
+    void playback.playQueue([{ song: songInfo, album, artist }]);
   }
 
   return (

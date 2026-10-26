@@ -16,6 +16,7 @@ import {
   Download,
   ListEnd,
   ListPlus,
+  ListStart,
   Loader2,
   MoreHorizontal,
   Pause,
@@ -25,7 +26,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { downloadAlbum } from "@/lib/downloads/download-album";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor from "@/features/library/album-editor";
 import { useAlbum } from "@/features/library/use-library-entity";
@@ -101,16 +102,8 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     wrapperRef: titleWrapRef,
   } = useFitText(album?.name);
 
-  const {
-    setCurrentSongIndex,
-    addToQueue,
-    setQueue,
-    setSongCallback,
-    playAudioSource,
-    togglePlayPause,
-    isPlaying,
-    song: currentSong,
-  } = usePlayer();
+  const playback = useZonePlayback();
+  const { isPlaying, currentSongId, currentAlbumId } = playback;
 
   const albumCoverURL = useMemo(
     () => getLibraryImageUrl(album?.cover_url, getBaseURL),
@@ -152,14 +145,24 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     if (!album || !artist) {
       return;
     }
-    addToQueue(
+    void playback.addToQueue(
       album.songs.map((song) => ({
         song,
         album,
         artist,
       })),
+      album.name,
     );
-    toast.success(`Added ${album.name} to queue`);
+  };
+
+  const playAlbumNext = () => {
+    if (!album || !artist) {
+      return;
+    }
+    void playback.playNext(
+      album.songs.map((song) => ({ song, album, artist })),
+      album.name,
+    );
   };
 
   const saveAlbum = () => {
@@ -176,15 +179,15 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     if (!album || !artist) {
       return;
     }
-    const index = album.songs.findIndex((song) => song.id === track.id);
-    setQueue(album.songs.map((song) => ({ song, album, artist })));
-    setCurrentSongIndex(Math.max(index, 0));
-    if (currentSong?.id === track.id) {
-      togglePlayPause();
+    if (currentSongId === track.id) {
+      void playback.togglePlayPause();
       return;
     }
-    setSongCallback(track, artist, album);
-    playAudioSource();
+    const index = album.songs.findIndex((song) => song.id === track.id);
+    void playback.playQueue(
+      album.songs.map((song) => ({ song, album, artist })),
+      Math.max(index, 0),
+    );
   };
 
   const playAlbum = () => {
@@ -207,8 +210,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     );
   }
 
-  const isAlbumPlaying =
-    isPlaying && currentSong?.album_object?.id === album.id;
+  const isAlbumPlaying = isPlaying && currentAlbumId === album.id;
   const titleParts = titleWrapped ? splitQualifiedTitle(album.name) : null;
 
   return (
@@ -300,6 +302,10 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
                 <Play className="h-4 w-4 fill-current" />
                 Play
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={playAlbumNext}>
+                <ListStart className="h-4 w-4" />
+                Play next
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={addAlbumToQueue}>
                 <ListEnd className="h-4 w-4" />
                 Add to queue
@@ -370,7 +376,7 @@ export default function AlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
         </div>
 
         <AlbumTrackList
-          activeSongId={currentSong?.id}
+          activeSongId={currentSongId ?? undefined}
           album={album}
           artistName={artist.name}
           isPlaying={isPlaying}

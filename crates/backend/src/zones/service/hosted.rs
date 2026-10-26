@@ -608,6 +608,7 @@ impl ZoneService {
             ZoneCommand::MoveQueueItem { .. }
             | ZoneCommand::RemoveQueueItem { .. }
             | ZoneCommand::ClearUpcoming
+            | ZoneCommand::AddToQueue { .. }
             | ZoneCommand::SetShuffle { .. } => {
                 {
                     let mut state = self.lock();

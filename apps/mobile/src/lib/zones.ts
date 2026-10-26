@@ -1,4 +1,5 @@
 import type {
+  Zone,
   ZoneCommand,
   ZoneRepeatMode,
   ZoneStatus,
@@ -60,6 +61,8 @@ export interface MobileZoneControls {
   move: (from: number, to: number) => void;
   remove: (index: number) => void;
   clearUpcoming: () => void;
+  /** Play next (`next`) or add to the end. */
+  addSongs: (songIds: string[], next: boolean) => Promise<void>;
   setRepeat: (mode: MobileRepeatMode) => void;
   setShuffle: (enabled: boolean) => void;
 }
@@ -122,6 +125,9 @@ export async function applyMobileZoneCommand(
     case "clear_upcoming":
       controls.clearUpcoming();
       return true;
+    case "add_to_queue":
+      await controls.addSongs(command.song_ids, command.next ?? false);
+      return true;
     case "set_repeat":
       controls.setRepeat(mobileRepeatMode(command.mode));
       return true;
@@ -152,4 +158,44 @@ export function steppedValue(
 /** "+2 dB", "0 dB", "-3 dB". */
 export function signedLabel(value: number, unit: string): string {
   return `${value > 0 ? "+" : ""}${value} ${unit}`;
+}
+
+/** Where a library action goes: this phone, or the zone picked as remote. */
+export type MobilePlaybackTarget =
+  | { kind: "local" }
+  | {
+      kind: "zone";
+      zoneId: string;
+      name: string;
+      canLoad: boolean;
+      canQueue: boolean;
+    };
+
+export function mobilePlaybackTarget(
+  requestedZoneId: string | null,
+  localZoneId: string | null,
+  zones: readonly Zone[],
+  loaded: boolean,
+): MobilePlaybackTarget {
+  if (!requestedZoneId || requestedZoneId === localZoneId)
+    return { kind: "local" };
+  const zone = zones.find((candidate) => candidate.id === requestedZoneId);
+  if (!zone) {
+    return loaded
+      ? { kind: "local" }
+      : {
+          kind: "zone",
+          zoneId: requestedZoneId,
+          name: "the selected zone",
+          canLoad: true,
+          canQueue: true,
+        };
+  }
+  return {
+    kind: "zone",
+    zoneId: zone.id,
+    name: zone.name,
+    canLoad: zone.capabilities.transfer_target,
+    canQueue: zone.capabilities.queue_edit || zone.queue.song_ids.length === 0,
+  };
 }

@@ -24,7 +24,7 @@ import { PageTitle, Screen, SongRow } from "@/components/music-ui";
 import { AlbumActions } from "@/components/album-actions";
 import { ArtistActions } from "@/components/artist-actions";
 import { layout, palette } from "@/constants/colors";
-import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { playableSearchSong } from "@/lib/playable-song";
 
 export default function SearchScreen() {
@@ -111,7 +111,7 @@ export default function SearchScreen() {
 
 function SearchResult({ item }: { item: CombinedItem }) {
   const router = useRouter();
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const type = item.item_type.toLowerCase();
   const [menu, setMenu] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -122,7 +122,7 @@ function SearchResult({ item }: { item: CombinedItem }) {
     if (type.includes("album")) router.push(`/album/${item.id}`);
     else if (type.includes("artist")) router.push(`/artist/${item.id}`);
     else if (type.includes("song")) {
-      player.playSong(playableSearchSong(item));
+      playback.playSong(playableSearchSong(item));
     }
   };
   const playAlbum = async () => {
@@ -131,7 +131,7 @@ function SearchResult({ item }: { item: CombinedItem }) {
     setPlaying(true);
     try {
       const album = (await getAlbumInfo(item.id, false)) as LibraryAlbum;
-      if (album.songs[0]) player.playSong(album.songs[0], album.songs);
+      if (album.songs[0]) playback.playSong(album.songs[0], album.songs);
     } catch {
       setPlayFailed(true);
     } finally {

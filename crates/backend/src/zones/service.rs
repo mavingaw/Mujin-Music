@@ -1229,6 +1229,23 @@ impl ZoneService {
         cache: Option<&LibraryCache>,
     ) -> Result<(), ZoneError> {
         command.validate().map_err(ZoneError::Invalid)?;
+        // Adding to a zone that has nothing queued starts the songs there,
+        // as in Roon.
+        let command = match command {
+            ZoneCommand::AddToQueue { song_ids, .. }
+                if self
+                    .zone(user_id, zone_id, cache)
+                    .is_some_and(|zone| zone.queue.song_ids.is_empty()) =>
+            {
+                ZoneCommand::Load {
+                    song_ids,
+                    current_position: 0,
+                    position_ms: 0,
+                    play: true,
+                }
+            }
+            command => command,
+        };
         if let Some(group_id) = zone_id.strip_prefix("linked:").map(|_| zone_id) {
             let members = {
                 let state = self.lock();
@@ -1568,6 +1585,7 @@ impl ZoneService {
             command @ (ZoneCommand::MoveQueueItem { .. }
             | ZoneCommand::RemoveQueueItem { .. }
             | ZoneCommand::ClearUpcoming
+            | ZoneCommand::AddToQueue { .. }
             | ZoneCommand::SetShuffle { .. }) => {
                 let cache = cache.ok_or(ZoneError::Unsupported("library_unavailable"))?;
                 self.sonos_queue_edit(&sonos, &coordinator, &command, cache)
@@ -1674,7 +1692,34 @@ impl ZoneService {
                     }
                     Ok(())
                 }
-                QueueEdit::Moved { .. } | QueueEdit::UpcomingReplaced => {
+                QueueEdit::Inserted { position, count }
+                    if position == window_start + window_len
+                        && window_len + count <= MAX_SONOS_QUEUE_ITEMS =>
+                {
+                    // Added at the end of what the speaker holds: append
+                    // natively (AddURIToQueue), nothing else moves.
+                    let tracks = self.sonos_tracks(
+                        sonos,
+                        coordinator,
+                        &song_ids,
+                        position..position + count,
+                        cache,
+                    )?;
+                    new_len = window_len + tracks.len();
+                    commit(new_len);
+                    sonos
+                        .append_tracks(coordinator, &tracks)
+                        .await
+                        .map_err(device)
+                }
+                QueueEdit::Inserted { position, .. } if position > window_start + window_len => {
+                    // Beyond the speaker's window: it reaches them later.
+                    commit(window_len);
+                    Ok(())
+                }
+                QueueEdit::Moved { .. }
+                | QueueEdit::Inserted { .. }
+                | QueueEdit::UpcomingReplaced => {
                     let kept = current + 1 - window_start;
                     let end = (window_start + MAX_SONOS_QUEUE_ITEMS).min(song_ids.len());
                     let tracks = self.sonos_tracks(
@@ -2229,6 +2274,9 @@ impl ZoneService {
         for member in members {
             let _ = self.command(user_id, member, ZoneCommand::Stop, None).await;
         }
+        for member in members {
+            wait_until_released(hub.renderer(member)).await;
+        }
         let master = picked
             .first()
             .map(|zone| zone.name.clone())
@@ -2281,6 +2329,9 @@ impl ZoneService {
         let _ = self
             .command(user_id, group_id, ZoneCommand::Stop, None)
             .await;
+        // The group lets go of every member's DAC before a member opens it
+        // again; otherwise the two streams fight over the device.
+        wait_until_released(hub.renderer(group_id)).await;
         let freed = hub.leave_group(group_id, member).map_err(|error| {
             if error == "member_not_in_group" {
                 ZoneError::Invalid("member_not_in_group")
@@ -2921,6 +2972,19 @@ impl ZoneService {
 }
 
 /// Zones every account on the server sees (speakers, renderers, devices).
+/// Waits (briefly) until a stopped renderer has closed its device stream.
+async fn wait_until_released(renderer: Option<Arc<dyn crate::outputs::renderer::Renderer>>) {
+    let Some(renderer) = renderer else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while renderer.state().state != crate::outputs::renderer::PlayState::Stopped
+        && Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 fn shared_zone(zone_id: &str) -> bool {
     zone_id.starts_with("sonos:") || hosted_zone_id(zone_id)
 }

@@ -74,6 +74,10 @@ type ZonesContextValue = {
   selectedZoneId: string | null;
   /** The selected zone when it is another device. */
   remoteZone: Zone | null;
+  /** The zone picked in the picker, even before the zone list loaded. */
+  requestedZoneId: string | null;
+  /** True once a zone list arrived. */
+  loaded: boolean;
   selectZone: (zoneId: string | null) => void;
   send: (zoneId: string, command: ZoneCommand) => Promise<void>;
   transfer: (from: string, to: string) => Promise<void>;
@@ -516,6 +520,8 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       localZoneId,
       selectedZoneId: remoteZone ? remoteZone.id : localZoneId,
       remoteZone,
+      requestedZoneId: selectedZoneId,
+      loaded: query.dataUpdatedAt > 0,
       selectZone,
       send: async (zoneId, command) => {
         await run(() => sendZoneCommand(zoneId, command));
@@ -576,6 +582,7 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
       report,
       run,
       selectZone,
+      selectedZoneId,
       zones,
     ],
   );

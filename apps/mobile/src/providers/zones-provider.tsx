@@ -53,6 +53,9 @@ type ZonesValue = {
   fetchedAt: number;
   localZoneId: string | null;
   selectedZone: Zone | null;
+  /** The zone picked as remote, even before the zone list loaded. */
+  requestedZoneId: string | null;
+  loaded: boolean;
   select: (zoneId: string | null) => void;
   send: (zoneId: string, command: ZoneCommand) => Promise<void>;
   transfer: (from: string, to: string) => Promise<void>;
@@ -152,6 +155,22 @@ export function ZonesProvider({ children }: PropsWithChildren) {
       move: (from, to) => playerRef.current.moveInQueue(from, to),
       remove: (index) => playerRef.current.removeFromQueue(index),
       clearUpcoming: () => playerRef.current.clearUpcoming(),
+      addSongs: async (songIds, next) => {
+        const infos = await getSongInfos(songIds, false);
+        const songs = songIds
+          .map((id) => infos[id] as LibrarySong | undefined)
+          .filter((song): song is LibrarySong => Boolean(song?.album_object));
+        if (!songs.length) return;
+        const current = playerRef.current;
+        if (!current.current) {
+          current.playSong(songs[0]!, songs);
+        } else if (next) {
+          // Each one goes right after the current track: add in reverse.
+          for (const song of [...songs].reverse()) current.addNext(song);
+        } else {
+          current.addToQueue(songs);
+        }
+      },
       setRepeat: (mode) => playerRef.current.setRepeatMode(mode),
       setShuffle: (enabled) => playerRef.current.setShuffleEnabled(enabled),
     }),
@@ -261,6 +280,8 @@ export function ZonesProvider({ children }: PropsWithChildren) {
       fetchedAt: query.dataUpdatedAt,
       localZoneId,
       selectedZone,
+      requestedZoneId: selectedId,
+      loaded: query.dataUpdatedAt > 0,
       select: (zoneId) => {
         const next = zoneId && zoneId !== localZoneId ? zoneId : null;
         setSelectedId(next);
@@ -302,6 +323,7 @@ export function ZonesProvider({ children }: PropsWithChildren) {
       query.dataUpdatedAt,
       refresh,
       report,
+      selectedId,
       selectedZone,
       zones,
     ],

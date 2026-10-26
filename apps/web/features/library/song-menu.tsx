@@ -11,7 +11,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -62,7 +62,7 @@ export default function SongMenu({
   onRemoveFromPlaylist,
   removeFromPlaylistLabel = "Remove from playlist",
 }: SongMenuProps) {
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -103,24 +103,18 @@ export default function SongMenu({
 
   const play = () => {
     if (context === "player") {
-      player.togglePlayPause();
+      void playback.togglePlayPause();
       return;
     }
-    const item = queueItem();
-    player.setQueue([item]);
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(item.song, item.artist, item.album);
-    player.playAudioSource();
+    void playback.playQueue([queueItem()]);
   };
 
   const addToQueue = () => {
-    player.addToQueue([queueItem()]);
-    toast.success(`Added ${song_name} to queue`);
+    void playback.addToQueue([queueItem()], song_name);
   };
 
   const playNext = () => {
-    player.addNextToQueue([queueItem()]);
-    toast.success(`${song_name} will play next`);
+    void playback.playNext([queueItem()], song_name);
   };
 
   return (
@@ -129,12 +123,12 @@ export default function SongMenu({
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent className="w-60">
           <ContextMenuItem onSelect={play}>
-            {context === "player" && player.isPlaying ? (
+            {context === "player" && playback.isPlaying ? (
               <Pause className="h-4 w-4" />
             ) : (
               <Play className="h-4 w-4" />
             )}
-            {context === "player" && player.isPlaying ? "Pause" : "Play"}
+            {context === "player" && playback.isPlaying ? "Pause" : "Play"}
           </ContextMenuItem>
           {(context === "default" || context === "album") && (
             <ContextMenuItem onSelect={playNext}>

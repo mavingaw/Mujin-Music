@@ -24,6 +24,8 @@ use crate::protocol::{
 /// Frames per device write.
 const CHUNK_FRAMES: usize = 1_024;
 const STATUS_INTERVAL: Duration = Duration::from_millis(50);
+/// Why a stream ended when another one took its device.
+pub const REPLACED: &str = "another stream took over this device";
 const DEVICE_POLL: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
@@ -419,11 +421,21 @@ impl Session {
             );
             return;
         };
-        // One stream per device: a new one replaces the old.
-        self.streams.retain(|_, (shared, _, open_device)| {
+        // One stream per device: a new one replaces the old. The server is
+        // told, so whatever still feeds the old stream fails at once
+        // instead of waiting for audio that will never be played.
+        let writer = self.writer.clone();
+        self.streams.retain(|old, (shared, _, open_device)| {
             if *open_device == device {
                 shared.lock().close = true;
                 shared.wake.notify_all();
+                send(
+                    &writer,
+                    &BridgeMessage::Failed {
+                        stream: *old,
+                        error: REPLACED.to_string(),
+                    },
+                );
                 false
             } else {
                 true
