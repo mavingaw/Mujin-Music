@@ -213,6 +213,7 @@ struct PersonalDataExport {
     radio_bans: Vec<serde_json::Value>,
     tags: Vec<serde_json::Value>,
     saved_focuses: Vec<serde_json::Value>,
+    notes: Vec<serde_json::Value>,
 }
 
 fn safe_backup_filename(value: &str) -> Option<&str> {
@@ -1366,6 +1367,12 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                 "SELECT json_object('name', name, 'view', view, 'query', json(query_json),
                   'position', position, 'created_at', created_at) AS value
                  FROM saved_focus WHERE user_id = ? ORDER BY position, id",
+                &mut connection,
+            )?,
+            notes: object_rows(
+                "SELECT json_object('entity_type', entity_type, 'entity_id', entity_id,
+                  'body', body, 'updated_at', updated_at) AS value
+                 FROM user_note WHERE user_id = ? ORDER BY updated_at DESC",
                 &mut connection,
             )?,
         })

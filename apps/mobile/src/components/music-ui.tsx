@@ -1,4 +1,11 @@
-import type { LibrarySong, ResponseAlbum } from "@parson/music-sdk";
+import {
+  getSongWorks,
+  trackWorkTarget,
+  type LibrarySong,
+  type ResponseAlbum,
+  type WorkSummary,
+} from "@parson/music-sdk";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import {
   Disc3,
@@ -8,6 +15,7 @@ import {
   ListEnd,
   ListPlus,
   MoreHorizontal,
+  Music2,
   Play,
   X,
   UserRound,
@@ -77,6 +85,8 @@ export function SongRow({
   showAlbum = true,
   albumArtist,
   albumType,
+  work,
+  title,
 }: {
   song: LibrarySong;
   queue?: LibrarySong[];
@@ -88,6 +98,10 @@ export function SongRow({
   showAlbum?: boolean;
   albumArtist?: string;
   albumType?: string | null;
+  /** The piece the song performs when known; looked up when undefined. */
+  work?: WorkSummary | null;
+  /** Shown instead of the song name, e.g. a movement under a work heading. */
+  title?: string;
 }) {
   const player = usePlayer();
   const playback = useZonePlayback();
@@ -99,6 +113,14 @@ export function SongRow({
   const [downloadError, setDownloadError] = useState(false);
   useDownloadsRevision();
   const active = player.current?.id === song.id;
+  const songWorks = useQuery({
+    queryKey: ["song-works", song.id],
+    queryFn: () => getSongWorks(song.id),
+    enabled: menu && work === undefined && session.phase !== "offline",
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const piece = work === undefined ? trackWorkTarget(songWorks.data) : work;
   const albumCredit =
     !showAlbum && albumArtist
       ? trackArtistCredit({
@@ -136,7 +158,7 @@ export function SongRow({
         <View style={styles.songLabels}>
           <View style={styles.songTitleRow}>
             <Text numberOfLines={1} style={[styles.songTitle, styles.shrink]}>
-              {song.name}
+              {title ?? song.name}
             </Text>
             <BannedMark target={{ kind: "song", id: song.id }} />
           </View>
@@ -196,6 +218,16 @@ export function SongRow({
           target={{ kind: "song", id: song.id, name: song.name }}
           onDone={() => setMenu(false)}
         />
+        {session.phase !== "offline" && piece ? (
+          <DrawerAction
+            icon={Music2}
+            label="Go to work"
+            onPress={() => {
+              setMenu(false);
+              router.push(`/work/${encodeURIComponent(piece.mbid)}`);
+            }}
+          />
+        ) : null}
         {session.phase !== "offline" && song.album_object?.id ? (
           <DrawerAction
             icon={Disc3}

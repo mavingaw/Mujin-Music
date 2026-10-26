@@ -12,17 +12,23 @@ import SmartPlaylistDialog from "@/features/library/focus/smart-playlist-dialog"
 import { LibraryMessage } from "@/features/library/library-view-primitives";
 import {
   albumScope,
+  albumWorkSections,
   clearedFocus,
   getFocusPage,
   isFocused,
   scopedFocus,
+  workFacts,
   type FocusQuery,
   type LibraryAlbum,
 } from "@parson/music-sdk";
+import type { AboutCredit, TrackWork } from "@parson/music-sdk/types";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Clock, Pause, Play } from "lucide-react";
+import { Clock, Info, Pause, Play } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { CreditName } from "@/features/library/credits/credits-list";
+import { trackCreditLine } from "@/features/library/credits/credit-roles";
+import { TrackCreditsDialog } from "@/features/library/credits/track-credits-dialog";
 import SongMenu from "@/features/library/song-menu";
 import {
   displaySongTitle,
@@ -65,6 +71,8 @@ export function AlbumTrackList({
   artistName,
   isPlaying,
   onPlay,
+  trackCredits,
+  works,
 }: {
   activeSongId?: string;
   album: LibraryAlbum;
@@ -72,6 +80,9 @@ export function AlbumTrackList({
   isPlaying: boolean;
   /** Plays a track with `tracks` (the visible list) as the queue. */
   onPlay: (track: AlbumTrack, tracks: AlbumTrack[]) => void;
+  trackCredits?: Map<string, AboutCredit[]>;
+  /** Track-to-work links; undefined until the album's details load. */
+  works?: TrackWork[];
 }) {
   const [focus, setFocus] = useState<FocusQuery>(() =>
     scopedFocus("songs", [albumScope(album.id)]),
@@ -149,7 +160,9 @@ export function AlbumTrackList({
           artistName={artistName}
           isPlaying={isPlaying}
           onPlay={(track) => onPlay(track, tracks)}
+          trackCredits={trackCredits}
           tracks={tracks}
+          works={works}
         />
       )}
     </div>
@@ -162,18 +175,197 @@ function TrackRows({
   artistName,
   isPlaying,
   onPlay,
+  trackCredits,
   tracks,
+  works,
 }: {
   activeSongId?: string;
   album: LibraryAlbum;
   artistName: string;
   isPlaying: boolean;
   onPlay: (track: AlbumTrack) => void;
+  trackCredits?: Map<string, AboutCredit[]>;
+  /** The visible tracks, in order (the album, or what a focus keeps). */
   tracks: AlbumTrack[];
+  /** Track-to-work links; undefined until the album's details load. */
+  works?: TrackWork[];
 }) {
+  const [creditsFor, setCreditsFor] = useState<
+    LibraryAlbum["songs"][number] | null
+  >(null);
+  const workByTrack = useMemo(
+    () => new Map((works ?? []).map((entry) => [entry.track_id, entry])),
+    [works],
+  );
+  const sections = useMemo(
+    () =>
+      albumWorkSections(
+        tracks.map((song) => song.id),
+        works,
+      ),
+    [tracks, works],
+  );
+  const indexById = useMemo(
+    () => new Map(tracks.map((song, index) => [song.id, index])),
+    [tracks],
+  );
+  const renderTrack = (
+    track: LibraryAlbum["songs"][number],
+    index: number,
+    inWork: boolean,
+  ) => {
+    const active = activeSongId === track.id;
+    const artistCredit = trackArtistCreditParts({
+      albumArtist: artistName,
+      albumArtistId: album.artist_object.id,
+      albumType: album.primary_type,
+      contributingArtists: track.contributing_artists,
+      contributingArtistIds: track.contributing_artist_ids,
+      trackArtist: track.artist,
+    });
+    const displayTitle = displaySongTitle(track.name);
+    const credits = trackCredits?.get(track.id) ?? [];
+    const trackWork = workByTrack.get(track.id);
+    // Under a work heading the composer line repeats the heading.
+    const creditLine = inWork ? null : trackCreditLine(credits);
+    return (
+      <SongMenu
+        album_id={album.id}
+        album_name={album.name}
+        album_cover={album.cover_url}
+        artist_id={album.artist_object.id}
+        artist_name={artistName}
+        context="album"
+        key={track.id}
+        onViewCredits={() => setCreditsFor(track)}
+        song_id={track.id}
+        song_name={track.name}
+        work={
+          works === undefined
+            ? undefined
+            : (trackWork?.parent ?? trackWork?.work ?? null)
+        }
+      >
+        <div
+          className={`group relative grid min-h-14 grid-cols-[2rem_minmax(0,1fr)_5rem] items-center gap-4 rounded-md px-4 py-3 text-left text-sm transition-colors hover:bg-zinc-800/50 ${
+            active ? "bg-white/2" : ""
+          }`}
+        >
+          <button
+            aria-label={`Play ${displayTitle}`}
+            className="absolute inset-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/30"
+            onClick={() => onPlay(track)}
+            type="button"
+          />
+          <div className="pointer-events-none relative z-10 select-none text-center text-zinc-400">
+            <span className={active ? "block" : "group-hover:hidden"}>
+              {active ? (
+                <>
+                  {isPlaying ? (
+                    <Pause
+                      aria-hidden="true"
+                      className="mx-auto h-4 w-4 fill-white text-white"
+                    />
+                  ) : (
+                    <Play
+                      aria-hidden="true"
+                      className="mx-auto h-4 w-4 fill-white text-white"
+                    />
+                  )}
+                  <span className="sr-only">
+                    {isPlaying ? "Now playing" : "Current track"}
+                  </span>
+                </>
+              ) : (
+                track.track_number || index + 1
+              )}
+            </span>
+            {!active && (
+              <Play
+                aria-hidden="true"
+                className="absolute left-1/2 top-1/2 hidden h-4 w-4 -translate-x-1/2 -translate-y-1/2 fill-white text-white group-hover:block"
+              />
+            )}
+          </div>
+          <div className="pointer-events-none relative z-10 flex min-w-0 flex-col pr-4 text-left">
+            <span className="truncate font-medium text-white">
+              {inWork && trackWork ? (
+                <span title={track.name}>{trackWork.part_title}</span>
+              ) : (
+                <SongTitle title={track.name} />
+              )}
+              <BannedBadge
+                className="ml-1.5 align-[-2px]"
+                target={{ kind: "song", id: track.id }}
+              />
+            </span>
+            {(artistCredit || isExplicitSongTitle(track.name)) && (
+              <span className="mt-0.5 truncate text-zinc-400">
+                {isExplicitSongTitle(track.name) && <ExplicitBadge />}
+                {(
+                  artistCredit ?? [
+                    { id: album.artist_object.id, name: artistName },
+                  ]
+                ).map((credit, creditIndex) => (
+                  <span key={`${credit.id ?? credit.name}-${creditIndex}`}>
+                    {creditIndex > 0 && ", "}
+                    {credit.id ? (
+                      <Link
+                        className="pointer-events-auto relative z-20 hover:text-white hover:underline"
+                        href={`/artist?id=${credit.id}`}
+                      >
+                        {credit.name}
+                      </Link>
+                    ) : (
+                      credit.name
+                    )}
+                  </span>
+                ))}
+              </span>
+            )}
+            {creditLine && (
+              <span className="mt-0.5 truncate text-xs text-zinc-500">
+                {creditLine.label}{" "}
+                {creditLine.people.map((person, personIndex) => (
+                  <span key={`${person.id ?? person.name}-${personIndex}`}>
+                    {personIndex > 0 && ", "}
+                    <CreditName
+                      className="pointer-events-auto relative z-20 text-zinc-400"
+                      credit={{
+                        ...person,
+                        role:
+                          creditLine.label === "Lyrics by"
+                            ? "lyricist"
+                            : "composer",
+                      }}
+                    />
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+          <div className="relative z-10 flex items-center justify-end gap-2 text-right tabular-nums text-zinc-400">
+            <button
+              aria-label={`Credits for ${displayTitle}`}
+              className="rounded p-1 text-zinc-500 opacity-0 transition-opacity hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
+              onClick={() => setCreditsFor(track)}
+              title="View credits"
+              type="button"
+            >
+              <Info className="h-4 w-4" />
+            </button>
+            <span className="pointer-events-none">
+              {formatDuration(track.duration)}
+            </span>
+          </div>
+        </div>
+      </SongMenu>
+    );
+  };
+
   return (
-    <div>
-      <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_3rem] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
+    <div className="w-full pb-8">
+      <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_5rem] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
         <div className="text-center">#</div>
         <div>Track</div>
         <div className="flex justify-end text-right">
@@ -181,113 +373,58 @@ function TrackRows({
         </div>
       </div>
       <div className="flex flex-col space-y-1">
-        {tracks.map((track, index) => {
-          const active = activeSongId === track.id;
-          const artistCredit = trackArtistCreditParts({
-            albumArtist: artistName,
-            albumArtistId: album.artist_object.id,
-            albumType: album.primary_type,
-            contributingArtists: track.contributing_artists,
-            contributingArtistIds: track.contributing_artist_ids,
-            trackArtist: track.artist,
-          });
-          const displayTitle = displaySongTitle(track.name);
-          return (
-            <SongMenu
-              album_id={album.id}
-              album_name={album.name}
-              album_cover={album.cover_url}
-              artist_id={album.artist_object.id}
-              artist_name={artistName}
-              context="album"
-              key={track.id}
-              song_id={track.id}
-              song_name={track.name}
-            >
-              <div
-                className={`group relative grid min-h-14 grid-cols-[2rem_minmax(0,1fr)_3rem] items-center gap-4 rounded-md px-4 py-3 text-left text-sm transition-colors hover:bg-zinc-800/50 ${
-                  active ? "bg-white/2" : ""
-                }`}
-              >
-                <button
-                  aria-label={`Play ${displayTitle}`}
-                  className="absolute inset-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/30"
-                  onClick={() => onPlay(track)}
-                  type="button"
-                />
-                <div className="pointer-events-none relative z-10 select-none text-center text-zinc-400">
-                  <span className={active ? "block" : "group-hover:hidden"}>
-                    {active ? (
-                      <>
-                        {isPlaying ? (
-                          <Pause
-                            aria-hidden="true"
-                            className="mx-auto h-4 w-4 fill-white text-white"
-                          />
-                        ) : (
-                          <Play
-                            aria-hidden="true"
-                            className="mx-auto h-4 w-4 fill-white text-white"
-                          />
-                        )}
-                        <span className="sr-only">
-                          {isPlaying ? "Now playing" : "Current track"}
-                        </span>
-                      </>
-                    ) : (
-                      track.track_number || index + 1
-                    )}
-                  </span>
-                  {!active && (
-                    <Play
-                      aria-hidden="true"
-                      className="absolute left-1/2 top-1/2 hidden h-4 w-4 -translate-x-1/2 -translate-y-1/2 fill-white text-white group-hover:block"
-                    />
-                  )}
-                </div>
-                <div className="pointer-events-none relative z-10 flex min-w-0 flex-col pr-4 text-left">
-                  <span className="truncate font-medium text-white">
-                    <SongTitle title={track.name} />
-                    <BannedBadge
-                      className="ml-1.5 align-[-2px]"
-                      target={{ kind: "song", id: track.id }}
-                    />
-                  </span>
-                  {(artistCredit || isExplicitSongTitle(track.name)) && (
-                    <span className="mt-0.5 truncate text-zinc-400">
-                      {isExplicitSongTitle(track.name) && <ExplicitBadge />}
-                      {(
-                        artistCredit ?? [
-                          { id: album.artist_object.id, name: artistName },
-                        ]
-                      ).map((credit, creditIndex) => (
-                        <span
-                          key={`${credit.id ?? credit.name}-${creditIndex}`}
-                        >
-                          {creditIndex > 0 && ", "}
-                          {credit.id ? (
-                            <Link
-                              className="pointer-events-auto relative z-20 hover:text-white hover:underline"
-                              href={`/artist?id=${credit.id}`}
-                            >
-                              {credit.name}
-                            </Link>
-                          ) : (
-                            credit.name
-                          )}
-                        </span>
-                      ))}
-                    </span>
-                  )}
-                </div>
-                <div className="pointer-events-none relative z-10 text-right tabular-nums text-zinc-400">
-                  {formatDuration(track.duration)}
-                </div>
+        {sections.map((section) => (
+          <div
+            className={
+              section.work
+                ? "mt-3 flex flex-col space-y-1 border-l-2 border-white/10 pl-2 first:mt-0"
+                : "contents"
+            }
+            key={`${section.work?.mbid ?? "track"}-${section.trackIds[0]}`}
+          >
+            {section.work && (
+              <div className="px-4 pb-1 pt-2">
+                <Link
+                  className="block truncate text-sm font-semibold text-white hover:underline"
+                  href={`/work?id=${encodeURIComponent(section.work.mbid)}`}
+                  title="Go to work"
+                >
+                  {section.work.composer
+                    ? `${section.work.composer.name}: `
+                    : ""}
+                  {section.work.title}
+                </Link>
+                {workFacts(section.work).length > 0 && (
+                  <p className="truncate text-xs text-zinc-500">
+                    {workFacts(section.work).join(" · ")}
+                  </p>
+                )}
               </div>
-            </SongMenu>
-          );
-        })}
+            )}
+            {section.trackIds.map((trackId) => {
+              const index = indexById.get(trackId) ?? 0;
+              const track = tracks[index];
+              return track
+                ? renderTrack(track, index, Boolean(section.work))
+                : null;
+            })}
+          </div>
+        ))}
       </div>
+      {creditsFor && (
+        <TrackCreditsDialog
+          artistName={creditsFor.artist || artistName}
+          audio={creditsFor.audio}
+          credits={trackCredits?.get(creditsFor.id) ?? []}
+          isrc={creditsFor.isrc}
+          label={creditsFor.label}
+          onOpenChange={(open) => {
+            if (!open) setCreditsFor(null);
+          }}
+          open
+          title={displaySongTitle(creditsFor.name)}
+        />
+      )}
     </div>
   );
 }

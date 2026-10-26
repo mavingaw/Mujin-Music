@@ -1,0 +1,5752 @@
+//! The background enrichment worker. It consumes `metadata_task` rows only
+//! while the administrator has turned enrichment on.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use diesel::sqlite::SqliteConnection;
+use serde_json::{Value, json};
+use tokio::sync::Notify;
+
+use super::confidence;
+use super::fetch::{BoxError, Fetch, FetchResponse, HttpFetch, MAX_IMAGE_BYTES, MAX_JSON_BYTES};
+use super::musicbrainz as mb;
+use super::store::{
+    self, AliasRow, CreditRow, EditorialText, EnrichmentSettings, ImageRow, Outcome, ProfileRow,
+    Stage, Task, TrackWorkRow, WorkRow,
+};
+use super::wikimedia as wiki;
+use super::works::WorkInfo;
+use crate::library::identity::{normalize_artist_identity, normalize_song_identity};
+use crate::library::state::LibraryLifecycle;
+use crate::persistence::connection::DbPool;
+use crate::settings::data_path;
+
+const IDLE_POLL: Duration = Duration::from_secs(60);
+const MIN_THROTTLE: Duration = Duration::from_secs(30);
+const MAX_THROTTLE: Duration = Duration::from_secs(15 * 60);
+
+/// How long one host's queue pauses after that host said it is overloaded
+/// (MusicBrainz answers 503 when a client goes over its rate limit,
+/// Wikimedia answers 429). Doubles on each consecutive refusal and resets
+/// after a success.
+pub fn next_throttle(current: Duration, outcome: &Outcome) -> Duration {
+    match outcome {
+        Outcome::Retry(error) if error == "HTTP 429" || error == "HTTP 503" => {
+            (current * 2).clamp(MIN_THROTTLE, MAX_THROTTLE)
+        }
+        Outcome::Done | Outcome::Skipped(_) => Duration::ZERO,
+        Outcome::Retry(_) => current,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct HostBackoff {
+    delay: Duration,
+    until: Option<Instant>,
+}
+
+/// A separate back-off for each host. A 429 from Wikimedia Commons pauses
+/// only the Commons queue; MusicBrainz, Wikidata and Wikipedia carry on.
+#[derive(Debug, Default)]
+pub struct Backoffs {
+    hosts: Mutex<HashMap<Stage, HostBackoff>>,
+}
+
+impl Backoffs {
+    /// Records a stage's outcome and returns how long its queue now pauses.
+    pub fn record(&self, stage: Stage, outcome: &Outcome, now: Instant) -> Duration {
+        let mut hosts = self.hosts.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = hosts.entry(stage).or_default();
+        entry.delay = next_throttle(entry.delay, outcome);
+        let busy =
+            matches!(outcome, Outcome::Retry(error) if error == "HTTP 429" || error == "HTTP 503");
+        entry.until = match (busy, entry.delay.is_zero()) {
+            (true, false) => Some(now + entry.delay),
+            (_, true) => None,
+            (false, false) => entry.until,
+        };
+        if busy { entry.delay } else { Duration::ZERO }
+    }
+
+    /// How much longer the stage's host is paused.
+    pub fn paused_for(&self, stage: Stage, now: Instant) -> Duration {
+        let hosts = self.hosts.lock().unwrap_or_else(|error| error.into_inner());
+        hosts
+            .get(&stage)
+            .and_then(|entry| entry.until)
+            .map(|until| until.saturating_duration_since(now))
+            .unwrap_or_default()
+    }
+}
+
+/// The worker's back-offs, shared with the settings API so it can show
+/// which service is busy.
+pub fn backoffs() -> &'static Backoffs {
+    static BACKOFFS: std::sync::OnceLock<Backoffs> = std::sync::OnceLock::new();
+    BACKOFFS.get_or_init(Backoffs::default)
+}
+
+/// One wake-up signal per stage queue.
+pub struct Wake {
+    stages: [Notify; Stage::ALL.len()],
+}
+
+impl Wake {
+    /// Wakes every stage (settings changed, an entity was refreshed, or a
+    /// stage queued work for the next one).
+    pub fn notify_all(&self) {
+        for notify in &self.stages {
+            notify.notify_one();
+        }
+    }
+
+    fn stage(&self, stage: Stage) -> &Notify {
+        let index = Stage::ALL
+            .iter()
+            .position(|candidate| *candidate == stage)
+            .unwrap_or(0);
+        &self.stages[index]
+    }
+}
+
+/// Wakes the worker when settings change or an entity is refreshed.
+pub fn wake() -> &'static Wake {
+    static WAKE: std::sync::OnceLock<Wake> = std::sync::OnceLock::new();
+    WAKE.get_or_init(|| Wake {
+        stages: std::array::from_fn(|_| Notify::new()),
+    })
+}
+
+/// What one turn of a stage's queue did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// The host is backing off for this long.
+    Paused(Duration),
+    /// Nothing is due in this queue.
+    Idle,
+    /// A task ran.
+    Ran(Task, Outcome),
+}
+
+/// What the Wikidata stage stored for the later stages.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WikidataLinks {
+    article: Option<(String, String)>,
+    image: Option<String>,
+}
+
+fn wikidata_links(profile: &ProfileRow) -> WikidataLinks {
+    let value = serde_json::from_str::<Value>(&profile.profile_json).unwrap_or_default();
+    let wikidata = value.get(WIKIDATA_KEY);
+    let text = |key: &str| {
+        wikidata
+            .and_then(|links| links.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    WikidataLinks {
+        article: text("article_language").zip(text("article_title")),
+        image: text("image"),
+    }
+}
+
+/// The profile key holding what Wikidata linked to. It is internal and is
+/// not shown as a fact.
+pub const WIKIDATA_KEY: &str = "wikidata";
+/// The profile key holding the Commons file MusicBrainz links as the
+/// artist's image. Internal, like [`WIKIDATA_KEY`].
+pub const COMMONS_IMAGE_KEY: &str = "commons_image";
+
+/// The profile key holding the Wikipedia article MusicBrainz links
+/// directly (`{"language", "title"}`). Internal.
+pub const WIKIPEDIA_KEY: &str = "wikipedia_link";
+/// The profile key holding the Commons file the Wikipedia article shows as
+/// its page image. Internal.
+pub const PAGE_IMAGE_KEY: &str = "page_image";
+/// Profile keys that are bookkeeping for later stages, never facts.
+/// Profile key of an album article's review scores table.
+pub const REVIEW_SCORES_KEY: &str = "review_scores";
+
+pub const INTERNAL_KEYS: [&str; 5] = [
+    WIKIDATA_KEY,
+    COMMONS_IMAGE_KEY,
+    WIKIPEDIA_KEY,
+    PAGE_IMAGE_KEY,
+    REVIEW_SCORES_KEY,
+];
+
+/// The review scores an article lists, with what the attribution needs.
+fn review_scores_json(language: &str, page: &wiki::ArticlePage) -> Value {
+    if page.review_scores.is_empty() {
+        return Value::Null;
+    }
+    json!({
+        "scores": page.review_scores,
+        "title": page.summary.title,
+        "url": page.summary.url,
+        "language": language,
+        "license": wiki::WIKIPEDIA_LICENSE,
+        "license_url": wiki::WIKIPEDIA_LICENSE_URL,
+    })
+}
+
+fn profile_value(profile: &ProfileRow) -> Value {
+    serde_json::from_str::<Value>(&profile.profile_json)
+        .ok()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+fn profile_text(profile: &ProfileRow, key: &str) -> Option<String> {
+    profile_value(profile)
+        .get(key)?
+        .as_str()
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// The MusicBrainz-linked Commons photo, used when Wikidata has none.
+fn commons_fallback(profile: &ProfileRow) -> Option<String> {
+    profile_text(profile, COMMONS_IMAGE_KEY)
+}
+
+/// The Wikipedia article MusicBrainz links, as `(language, title)`.
+fn musicbrainz_article(profile: &ProfileRow) -> Option<(String, String)> {
+    let value = profile_value(profile);
+    let link = value.get(WIKIPEDIA_KEY)?;
+    let language = link.get("language")?.as_str()?;
+    let title = link.get("title")?.as_str()?;
+    (wiki::valid_language(language) && !title.trim().is_empty())
+        .then(|| (language.to_string(), title.to_string()))
+}
+
+fn wikipedia_link_json(link: &Option<(String, String)>) -> Value {
+    match link {
+        Some((language, title)) => json!({"language": language, "title": title}),
+        None => Value::Null,
+    }
+}
+
+/// The Commons files that may be an artist's photo, best first: Wikidata's
+/// P18 image, the image MusicBrainz links, the Wikipedia page image.
+fn photo_candidates(profile: &ProfileRow) -> Vec<String> {
+    let mut files = Vec::new();
+    for file in [
+        wikidata_links(profile).image,
+        commons_fallback(profile),
+        profile_text(profile, PAGE_IMAGE_KEY),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    files
+}
+
+/// Where the Wikipedia stage may find an entity's article.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArticleCandidate {
+    pub language: String,
+    pub title: String,
+    /// Named by Wikidata, MusicBrainz or the genre tree, so only a
+    /// disambiguation page is refused. A guessed title must prove itself.
+    pub linked: bool,
+}
+
+/// The names the Wikipedia stage may guess an article title from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntityNames {
+    pub name: String,
+    /// An album's artist.
+    pub artist: Option<String>,
+}
+
+fn push_candidate(candidates: &mut Vec<ArticleCandidate>, candidate: ArticleCandidate) {
+    if !candidates
+        .iter()
+        .any(|known| known.language == candidate.language && known.title == candidate.title)
+    {
+        candidates.push(candidate);
+    }
+}
+
+/// Articles to try, in order: the one Wikidata names in the preferred
+/// language, the one MusicBrainz links, then (albums and artists only)
+/// titles guessed the way Wikipedia names articles, which are accepted only
+/// when the page proves to be about this entity.
+pub fn article_candidates(
+    entity_type: &str,
+    profile: &ProfileRow,
+    names: &EntityNames,
+) -> Vec<ArticleCandidate> {
+    let mut candidates = Vec::new();
+    let linked = |(language, title): (String, String)| ArticleCandidate {
+        language,
+        title,
+        linked: true,
+    };
+    if let Some(article) = wikidata_links(profile).article {
+        push_candidate(&mut candidates, linked(article));
+    }
+    if let Some(article) = musicbrainz_article(profile) {
+        push_candidate(&mut candidates, linked(article));
+    }
+    let name = names.name.trim();
+    if name.is_empty() || name.chars().count() > 200 {
+        return candidates;
+    }
+    let guesses = match entity_type {
+        "album" => {
+            // Most albums have the bare title; namesakes are told apart
+            // as "Blue (Joni Mitchell album)".
+            let mut titles = vec![name.to_string()];
+            if let Some(artist) = names.artist.as_deref().map(str::trim)
+                && !artist.is_empty()
+                && !mb::is_placeholder_artist(artist)
+            {
+                titles.push(format!("{name} ({artist} album)"));
+            }
+            titles.push(format!("{name} (album)"));
+            titles
+        }
+        "artist" => ["", " (band)", " (musician)", " (composer)", " (singer)"]
+            .iter()
+            .map(|suffix| format!("{name}{suffix}"))
+            .collect(),
+        _ => Vec::new(),
+    };
+    for title in guesses {
+        push_candidate(
+            &mut candidates,
+            ArticleCandidate {
+                language: "en".into(),
+                title,
+                linked: false,
+            },
+        );
+    }
+    candidates
+}
+
+const MUSIC_WORDS: [&str; 36] = [
+    "music",
+    "band",
+    "singer",
+    "songwriter",
+    "composer",
+    "rapper",
+    "conductor",
+    "pianist",
+    "guitarist",
+    "violinist",
+    "cellist",
+    "drummer",
+    "bassist",
+    "saxophonist",
+    "trumpeter",
+    "organist",
+    "soprano",
+    "tenor",
+    "baritone",
+    "mezzo",
+    "contralto",
+    "orchestra",
+    "ensemble",
+    "choir",
+    "quartet",
+    "trio",
+    "duo",
+    "group",
+    "dj",
+    "producer",
+    "vocalist",
+    "harpist",
+    "percussionist",
+    "clarinetist",
+    "flautist",
+    "trombonist",
+];
+
+fn mentions(haystack: &str, needle: &str) -> bool {
+    let haystack = normalize_artist_identity(haystack);
+    let needle = normalize_artist_identity(needle);
+    !needle.is_empty() && format!(" {haystack} ").contains(&format!(" {needle} "))
+}
+
+/// Whether a summary is the article for this entity. A linked article is
+/// trusted unless it is a disambiguation page; a guessed one must carry the
+/// Wikidata item MusicBrainz names or, when there is none, read like an
+/// album by this artist or a musician of this name.
+pub fn accepts_article(
+    summary: &wiki::WikipediaSummary,
+    candidate: &ArticleCandidate,
+    wikidata_id: Option<&str>,
+    entity_type: &str,
+    names: &EntityNames,
+) -> bool {
+    if summary.disambiguation || summary.extract.trim().is_empty() {
+        return false;
+    }
+    if candidate.linked {
+        return true;
+    }
+    if let Some(expected) = wikidata_id {
+        return summary.wikibase_item.as_deref() == Some(expected);
+    }
+    let description = summary
+        .description
+        .clone()
+        .unwrap_or_default()
+        .to_lowercase();
+    let first_sentence = summary
+        .extract
+        .split(". ")
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    match entity_type {
+        "album" => {
+            let about = format!("{description} {first_sentence}");
+            let album_like = [
+                "album",
+                " ep ",
+                "ep by",
+                "soundtrack",
+                "mixtape",
+                "compilation",
+            ]
+            .iter()
+            .any(|word| format!(" {about} ").contains(word));
+            let artist = names.artist.as_deref().unwrap_or_default();
+            album_like && mentions(&about, artist)
+        }
+        "artist" => {
+            let base = summary
+                .title
+                .split(" (")
+                .next()
+                .unwrap_or(&summary.title)
+                .to_string();
+            let same_name =
+                normalize_artist_identity(&base) == normalize_artist_identity(&names.name);
+            let musical = description
+                .split(|character: char| !character.is_alphanumeric())
+                .any(|word| MUSIC_WORDS.iter().any(|music| word.starts_with(music)));
+            same_name && musical
+        }
+        _ => false,
+    }
+}
+
+pub fn images_directory() -> PathBuf {
+    data_path(&["Editorial", "Images"])
+}
+
+/// What the worker needs to know about a local album.
+#[derive(Debug, Clone, Default)]
+pub struct AlbumInput {
+    pub id: String,
+    pub title: String,
+    pub artist_id: String,
+    pub artist_name: String,
+    /// Release MBID from tags, when present.
+    pub musicbrainz_id: Option<String>,
+    pub tracks: Vec<TrackInput>,
+    /// Local artists by normalized name, for linking external credits.
+    pub known_artists: Vec<(String, String)>,
+    /// Release year from tags, to choose between recordings.
+    pub year: Option<String>,
+    /// The release was chosen by a person or named in tags, so tracks may
+    /// be matched by position even when the track counts differ.
+    pub release_trusted: bool,
+    /// Record label tagged on the files.
+    pub label: Option<String>,
+    /// Conductors and ensembles tagged on the files, for the match check.
+    pub conductors: Vec<String>,
+    pub ensembles: Vec<String>,
+    /// Composers tagged on the files.
+    pub composers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TrackInput {
+    pub id: String,
+    pub title: String,
+    pub track_number: u16,
+    /// Length in seconds (0 when unknown).
+    pub duration: f64,
+}
+
+impl AlbumInput {
+    /// What the files say, for [`confidence`].
+    pub fn local(&self) -> confidence::LocalAlbum<'_> {
+        confidence::LocalAlbum {
+            track_count: self.tracks.len(),
+            paired_lengths: Vec::new(),
+            paired_tracks: 0,
+            year: self.year.as_deref(),
+            label: self.label.as_deref(),
+            conductors: &self.conductors,
+            ensembles: &self.ensembles,
+            composers: &self.composers,
+        }
+    }
+}
+
+/// How the release applied to an album was chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMethod {
+    /// Found by searching; it had to pass the match check.
+    Automatic,
+    /// The release id in the files' tags.
+    Tagged,
+    /// Chosen by a person with "Identify album".
+    Identified,
+}
+
+impl MatchMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MatchMethod::Automatic => "automatic",
+            MatchMethod::Tagged => "tagged",
+            MatchMethod::Identified => "identified",
+        }
+    }
+}
+
+/// What a release search for an album came to.
+enum Searched {
+    Verified(Box<mb::ReleaseDetails>),
+    /// The best release looked up, which failed the check.
+    Unverified(Box<mb::ReleaseDetails>, confidence::MatchCheck),
+    NoCandidate,
+    Stop(Outcome),
+}
+
+/// Releases looked up per album search before giving up on a match.
+pub const MAX_RELEASE_CHECKS: usize = 3;
+
+/// Set when a wrong match's fetched cover was removed, so the library is
+/// reloaded to stop showing it.
+static COVERS_REMOVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Checks a looked-up release against the album's files.
+pub fn check_album_release(
+    album: &AlbumInput,
+    release: &mb::ReleaseDetails,
+) -> confidence::MatchCheck {
+    let pairs = match_tracks(album, release);
+    let paired_lengths = pairs
+        .iter()
+        .filter_map(|(index, track_id)| {
+            let local = album.tracks.iter().find(|track| &track.id == track_id)?;
+            let length = release.tracks[*index].length_ms? as f64 / 1000.0;
+            Some((local.duration, length))
+        })
+        .collect();
+    let mut local = album.local();
+    local.paired_tracks = pairs.len();
+    local.paired_lengths = paired_lengths;
+    confidence::check_release(&local, release)
+}
+
+/// The stored record of a check: the release, how it was chosen, and the
+/// evidence a page shows.
+fn release_match_row(
+    method: MatchMethod,
+    release: &mb::ReleaseDetails,
+    album: &AlbumInput,
+    check: &confidence::MatchCheck,
+) -> store::ReleaseMatchRow {
+    // A release from the tags or chosen by hand is used even when the
+    // evidence disagrees; the page then says what differs.
+    let applied = method != MatchMethod::Automatic || check.verified;
+    let artist = release
+        .artists
+        .iter()
+        .map(|(_, name)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    store::ReleaseMatchRow {
+        status: if applied { "verified" } else { "unverified" }.to_string(),
+        method: method.as_str().to_string(),
+        release_mbid: release.mbid.clone(),
+        release_title: release.title.clone(),
+        release_artist: artist,
+        score: check.score,
+        threshold: check.threshold,
+        details_json: json!({
+            "passed": check.verified,
+            "release_date": release.date,
+            "first_release_date": release.first_release_date,
+            "release_type": release.release_group_type,
+            "release_track_count": release.tracks.len(),
+            "local_track_count": album.tracks.len(),
+            "signals": check.signals,
+        })
+        .to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ArtistInput {
+    pub id: String,
+    pub name: String,
+}
+
+pub struct Enricher<F> {
+    pub fetch: F,
+    pub pool: DbPool,
+    pub images: PathBuf,
+}
+
+async fn db<T: Send + 'static>(
+    pool: &DbPool,
+    work: impl FnOnce(&mut SqliteConnection) -> diesel::QueryResult<T> + Send + 'static,
+) -> Result<T, BoxError> {
+    let pool = pool.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut connection = pool.get()?;
+        Ok::<_, BoxError>(work(&mut connection)?)
+    })
+    .await?
+}
+
+fn transient(response: &FetchResponse) -> Option<Outcome> {
+    match response.status {
+        429 | 500..=599 => Some(Outcome::Retry(format!("HTTP {}", response.status))),
+        _ => None,
+    }
+}
+
+fn json_body(response: &FetchResponse) -> Option<Value> {
+    response
+        .is_success()
+        .then(|| serde_json::from_slice(&response.body).ok())
+        .flatten()
+}
+
+/// The file a stored image is written to; ids are URL-safe hashes but are
+/// checked again so a crafted id can never escape the directory.
+pub fn image_file_name(entity_type: &str, entity_id: &str, mime_type: &str) -> Option<String> {
+    let extension = match mime_type {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        _ => return None,
+    };
+    let safe = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    (safe(entity_type) && safe(entity_id)).then(|| format!("{entity_type}-{entity_id}.{extension}"))
+}
+
+fn sniff_image(bytes: &[u8], mime_type: &str) -> bool {
+    match mime_type {
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/webp" => bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+impl<F: Fetch> Enricher<F> {
+    async fn get_json(&self, url: &str) -> Result<Result<Option<Value>, Outcome>, BoxError> {
+        let response = self.fetch.get(url, MAX_JSON_BYTES).await?;
+        if let Some(outcome) = transient(&response) {
+            return Ok(Err(outcome));
+        }
+        Ok(Ok(json_body(&response)))
+    }
+
+    /// A text body (HTML or wikitext); `Ok(None)` for a missing page.
+    async fn get_text(&self, url: &str) -> Result<Result<Option<String>, Outcome>, BoxError> {
+        let response = self.fetch.get(url, MAX_JSON_BYTES).await?;
+        if let Some(outcome) = transient(&response) {
+            return Ok(Err(outcome));
+        }
+        Ok(Ok(response
+            .is_success()
+            .then(|| String::from_utf8(response.body).ok())
+            .flatten()))
+    }
+
+    /// The MusicBrainz stage for an album: the release, its credits, works
+    /// and the release group's Wikidata item. Text comes later from the
+    /// Wikidata and Wikipedia queues.
+    ///
+    /// A release named in the tags or chosen by a person is used as is. A
+    /// release found by searching must first pass the match check
+    /// ([`super::confidence`]); one that does not is kept only as a
+    /// suggestion, and the album keeps its file-tag data.
+    pub async fn resolve_album(&self, album: &AlbumInput) -> Result<Outcome, BoxError> {
+        let album_id = album.id.clone();
+        let identified = db(&self.pool, move |connection| {
+            store::load_identification(connection, &album_id)
+        })
+        .await?
+        .map(|pinned| pinned.release_mbid)
+        .filter(|id| mb::is_mbid(id));
+        let tagged = album.musicbrainz_id.clone().filter(|id| mb::is_mbid(id));
+        let (method, release) = match identified.clone().or(tagged) {
+            Some(mbid) => {
+                let release = match self.get_json(&mb::release_lookup_url(&mbid)).await? {
+                    Ok(Some(body)) => mb::parse_release(&body),
+                    Ok(None) => None,
+                    Err(outcome) => return Ok(outcome),
+                };
+                let Some(release) = release else {
+                    return Ok(Outcome::Skipped(
+                        "the MusicBrainz release was not found".into(),
+                    ));
+                };
+                let method = if identified.as_deref() == Some(release.mbid.as_str()) {
+                    MatchMethod::Identified
+                } else {
+                    MatchMethod::Tagged
+                };
+                (method, release)
+            }
+            None => {
+                if album.artist_name.trim().is_empty() || album.title.trim().is_empty() {
+                    return Ok(Outcome::Skipped("the album has no title or artist".into()));
+                }
+                if mb::is_placeholder_artist(&album.artist_name) {
+                    // "Unknown Artist" would match a real namesake; only a
+                    // person can say which release this is.
+                    let album_id = album.id.clone();
+                    db(&self.pool, move |connection| {
+                        store::clear_editorial(connection, "album", &album_id)?;
+                        store::delete_release_match(connection, &album_id)?;
+                        drop_later_stages(connection, "album", &album_id)
+                    })
+                    .await?;
+                    return Ok(Outcome::Skipped(
+                        "the album artist is a placeholder; use Identify album".into(),
+                    ));
+                }
+                match self.search_and_check(album).await? {
+                    Searched::Verified(release) => (MatchMethod::Automatic, *release),
+                    Searched::Unverified(release, check) => {
+                        self.keep_tags_only(album, &release, &check).await?;
+                        return Ok(Outcome::Skipped(format!(
+                            "the closest release, {}, did not pass the match check",
+                            release.title
+                        )));
+                    }
+                    Searched::NoCandidate => {
+                        let album_id = album.id.clone();
+                        db(&self.pool, move |connection| {
+                            store::delete_release_match(connection, &album_id)
+                        })
+                        .await?;
+                        return Ok(Outcome::Skipped(
+                            "no confident MusicBrainz release match".into(),
+                        ));
+                    }
+                    Searched::Stop(outcome) => return Ok(outcome),
+                }
+            }
+        };
+
+        let mut wikidata_id = None;
+        let mut wikipedia = None;
+        let mut genres = Vec::new();
+        if let Some(group) = &release.release_group_mbid {
+            match self.get_json(&mb::release_group_lookup_url(group)).await? {
+                Ok(Some(body)) => {
+                    wikidata_id = mb::wikidata_relation(&body);
+                    wikipedia = mb::wikipedia_relation(&body);
+                    genres = mb::parse_genres(&body);
+                }
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+
+        let trusted = method != MatchMethod::Automatic;
+        let exact = trusted || release.tracks.len() == album.tracks.len();
+        let album = &AlbumInput {
+            release_trusted: trusted,
+            ..album.clone()
+        };
+        let check = check_album_release(album, &release);
+        let match_row = release_match_row(method, &release, album, &check);
+        let credits = album_credit_rows(album, &release);
+        let links = artist_links(album, &release);
+        let (works, work_links) = album_work_rows(album, &release);
+        // The pieces on the album (not their movements) get their own text
+        // from the work's Wikipedia link: the background a classical album
+        // usually lacks.
+        let pieces = works
+            .iter()
+            .filter(|work| work.parent_mbid.is_none())
+            .map(|work| work.mbid.clone())
+            .take(MAX_WORKS_PER_ALBUM)
+            .collect::<Vec<_>>();
+        let people = credited_people(&release, &links);
+        let aliases = release_aliases(&release);
+        // Each composer of a piece on the album gets their whole catalogue.
+        let mut composers = works
+            .iter()
+            .filter_map(|work| work.composer_mbid.clone())
+            .filter(|mbid| mb::is_mbid(mbid))
+            .collect::<Vec<_>>();
+        composers.sort();
+        composers.dedup();
+        let profile = ProfileRow {
+            musicbrainz_id: Some(release.mbid.clone()),
+            release_group_mbid: release.release_group_mbid.clone(),
+            wikidata_id,
+            profile_json: json!({
+                // Edition facts (date, country, catalog number, barcode) are
+                // only shown when this exact release is known to be the
+                // local one: a tagged id or the same track list.
+                "exact": exact,
+                "date": release.date,
+                "first_release_date": release.first_release_date,
+                "country": release.country,
+                "barcode": release.barcode,
+                "release_type": release.release_group_type,
+                "labels": release.labels.iter().map(|(name, catalog_number)| json!({
+                    "name": name, "catalog_number": catalog_number
+                })).collect::<Vec<_>>(),
+                "title": album.title,
+                "artist": album.artist_name,
+                WIKIPEDIA_KEY: wikipedia_link_json(&wikipedia),
+            })
+            .to_string(),
+        };
+        let album_id = album.id.clone();
+        db(&self.pool, move |connection| {
+            let linked = profile.wikidata_id.is_some();
+            store::save_profile(connection, "album", &album_id, &profile)?;
+            store::save_release_match(connection, &album_id, &match_row)?;
+            store::replace_album_credits(connection, &album_id, "musicbrainz", &credits)?;
+            store::save_aliases(connection, &aliases)?;
+            store::replace_album_works(connection, &album_id, &works, &work_links)?;
+            store::replace_genre_links(connection, "album", &album_id, "musicbrainz", &genres)?;
+            for (artist_id, mbid) in &links {
+                store::link_artist_mbid(connection, artist_id, mbid)?;
+            }
+            for piece in &pieces {
+                store::queue_stage_once(connection, Stage::Musicbrainz, "work", piece)?;
+            }
+            for person in &people {
+                store::queue_stage_once(connection, Stage::Musicbrainz, "artist", person)?;
+            }
+            for composer in &composers {
+                store::queue_stage_once(connection, Stage::Catalogue, "composer", composer)?;
+            }
+            // The matched release's front cover, for an album without art.
+            store::queue_stage(connection, Stage::CoverArt, "album", &album_id)?;
+            queue_text_stages(connection, "album", &album_id, linked)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// Searches MusicBrainz for an album and checks the most likely
+    /// releases (at most [`MAX_RELEASE_CHECKS`] lookups) until one passes.
+    async fn search_and_check(&self, album: &AlbumInput) -> Result<Searched, BoxError> {
+        let body = match self
+            .get_json(&mb::release_search_url(&album.title, &album.artist_name))
+            .await?
+        {
+            Ok(Some(body)) => body,
+            Ok(None) => {
+                return Ok(Searched::Stop(Outcome::Retry(
+                    "release search failed".into(),
+                )));
+            }
+            Err(outcome) => return Ok(Searched::Stop(outcome)),
+        };
+        let candidates = mb::parse_release_search(&body);
+        let ranked = confidence::rank_candidates(
+            &album.title,
+            &album.artist_name,
+            &album.local(),
+            &candidates,
+        );
+        let mut best: Option<(mb::ReleaseDetails, confidence::MatchCheck)> = None;
+        for (_, candidate) in ranked.into_iter().take(MAX_RELEASE_CHECKS) {
+            let release = match self
+                .get_json(&mb::release_lookup_url(&candidate.mbid))
+                .await?
+            {
+                Ok(Some(body)) => mb::parse_release(&body),
+                Ok(None) => None,
+                Err(outcome) => return Ok(Searched::Stop(outcome)),
+            };
+            let Some(release) = release else {
+                continue;
+            };
+            let check = check_album_release(album, &release);
+            if check.verified {
+                return Ok(Searched::Verified(Box::new(release)));
+            }
+            if best
+                .as_ref()
+                .is_none_or(|(_, known)| check.score > known.score)
+            {
+                best = Some((release, check));
+            }
+        }
+        Ok(match best {
+            Some((release, check)) => Searched::Unverified(Box::new(release), check),
+            None => Searched::NoCandidate,
+        })
+    }
+
+    /// An automatic match that failed the check: nothing from the release
+    /// is applied (cover, performers, works, genres, release type, text),
+    /// anything an earlier lookup applied is removed, and the release is
+    /// remembered only as a suggestion for "Identify album".
+    async fn keep_tags_only(
+        &self,
+        album: &AlbumInput,
+        release: &mb::ReleaseDetails,
+        check: &confidence::MatchCheck,
+    ) -> Result<(), BoxError> {
+        let album_id = album.id.clone();
+        let row = release_match_row(MatchMethod::Automatic, release, album, check);
+        let removed_cover = db(&self.pool, move |connection| {
+            let cover = store::load_cover_art(connection, &album_id)?;
+            store::clear_editorial(connection, "album", &album_id)?;
+            store::replace_genre_links(connection, "album", &album_id, "musicbrainz", &[])?;
+            store::save_release_match(connection, &album_id, &row)?;
+            drop_later_stages(connection, "album", &album_id)?;
+            Ok(cover)
+        })
+        .await?;
+        if let Some(cover) = removed_cover {
+            let path = PathBuf::from(&cover.file_path);
+            if path.starts_with(self.covers_directory()) {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            COVERS_REMOVED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// The MusicBrainz stage for a work: its Wikipedia and Wikidata links.
+    pub async fn resolve_work(&self, mbid: &str) -> Result<Outcome, BoxError> {
+        if !mb::is_mbid(mbid) {
+            return Ok(Outcome::Skipped("not a MusicBrainz work".into()));
+        }
+        let links = match self.get_json(&mb::work_lookup_url(mbid)).await? {
+            Ok(Some(body)) => mb::parse_work_links(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(links) = links else {
+            return Ok(Outcome::Skipped(
+                "the MusicBrainz work was not found".into(),
+            ));
+        };
+        if links.wikidata_id.is_none() && links.wikipedia.is_none() {
+            return Ok(Outcome::Skipped(
+                "the work has no Wikipedia or Wikidata link".into(),
+            ));
+        }
+        let profile = ProfileRow {
+            musicbrainz_id: Some(links.mbid.clone()),
+            release_group_mbid: None,
+            wikidata_id: links.wikidata_id.clone(),
+            profile_json: json!({
+                "title": links.title,
+                WIKIPEDIA_KEY: wikipedia_link_json(&links.wikipedia),
+            })
+            .to_string(),
+        };
+        let mbid = mbid.to_string();
+        db(&self.pool, move |connection| {
+            let linked = profile.wikidata_id.is_some();
+            store::save_profile(connection, "work", &mbid, &profile)?;
+            queue_text_stages(connection, "work", &mbid, linked)
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The MusicBrainz stage for an artist: who they are, their Wikipedia
+    /// and Wikidata links and the photo MusicBrainz links.
+    pub async fn resolve_artist(
+        &self,
+        artist: &ArtistInput,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if artist.name.trim().is_empty() {
+            return Ok(Outcome::Skipped("the artist has no name".into()));
+        }
+        let wanted = normalize_artist_identity(&artist.name);
+        if mb::is_placeholder_artist(&artist.name) {
+            // Drop anything an earlier version matched for this name.
+            let artist_id = artist.id.clone();
+            db(&self.pool, move |connection| {
+                store::clear_editorial(connection, "artist", &artist_id)?;
+                drop_later_stages(connection, "artist", &artist_id)
+            })
+            .await?;
+            return Ok(Outcome::Skipped(format!(
+                "\"{}\" is a placeholder, not an artist",
+                artist.name.trim()
+            )));
+        }
+        let artist_id = artist.id.clone();
+        let known = db(&self.pool, move |connection| {
+            store::linked_artist_mbids(connection, &artist_id)
+        })
+        .await?;
+
+        // A tagged or release-linked id is used when its name matches.
+        let mut profile = None;
+        for mbid in known.iter().filter(|mbid| mb::is_mbid(mbid)) {
+            match self.get_json(&mb::artist_lookup_url(mbid)).await? {
+                Ok(Some(body)) => {
+                    if let Some(found) = mb::parse_artist(&body)
+                        && normalize_artist_identity(&found.name) == wanted
+                    {
+                        profile = Some(found);
+                        break;
+                    }
+                }
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        if profile.is_none() {
+            let body = match self.get_json(&mb::artist_search_url(&artist.name)).await? {
+                Ok(Some(body)) => body,
+                Ok(None) => return Ok(Outcome::Retry("artist search failed".into())),
+                Err(outcome) => return Ok(outcome),
+            };
+            let Some(candidate) =
+                mb::choose_artist(&artist.name, &mb::parse_artist_search(&body), &known)
+            else {
+                return Ok(Outcome::Skipped(
+                    "no unambiguous MusicBrainz artist match".into(),
+                ));
+            };
+            profile = match self
+                .get_json(&mb::artist_lookup_url(&candidate.mbid))
+                .await?
+            {
+                Ok(Some(body)) => mb::parse_artist(&body),
+                Ok(None) => None,
+                Err(outcome) => return Ok(outcome),
+            };
+        }
+        let Some(profile) = profile else {
+            return Ok(Outcome::Skipped(
+                "the MusicBrainz artist was not found".into(),
+            ));
+        };
+        self.save_artist(&artist.id, profile, settings).await
+    }
+
+    /// The MusicBrainz stage for a person known only from MusicBrainz
+    /// credits (a producer, engineer or session player with no tracks of
+    /// their own): the id comes from the release itself, so no name search
+    /// is needed. Their page then gets a biography and photo like any
+    /// library artist.
+    pub async fn resolve_credited_person(
+        &self,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(mbid) = entity_id
+            .strip_prefix(EXTERNAL_PERSON_PREFIX)
+            .filter(|mbid| mb::is_mbid(mbid))
+        else {
+            return Ok(Outcome::Skipped("not a MusicBrainz artist id".into()));
+        };
+        let profile = match self.get_json(&mb::artist_lookup_url(mbid)).await? {
+            Ok(Some(body)) => mb::parse_artist(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(profile) = profile.filter(|profile| !mb::is_placeholder_artist(&profile.name))
+        else {
+            return Ok(Outcome::Skipped(
+                "the MusicBrainz artist was not found".into(),
+            ));
+        };
+        self.save_artist(entity_id, profile, settings).await
+    }
+
+    /// Stores a resolved MusicBrainz artist and queues its text and photo.
+    async fn save_artist(
+        &self,
+        artist_id: &str,
+        profile: mb::ArtistProfile,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let row = ProfileRow {
+            musicbrainz_id: Some(profile.mbid.clone()),
+            release_group_mbid: None,
+            wikidata_id: profile.wikidata_id.clone(),
+            profile_json: json!({
+                "name": profile.name,
+                "kind": profile.kind,
+                "area": profile.area,
+                "begin_area": profile.begin_area,
+                "begin": profile.begin,
+                "end": profile.end,
+                "disambiguation": profile.disambiguation,
+                "aliases": profile.aliases,
+                COMMONS_IMAGE_KEY: profile.image_file,
+                WIKIPEDIA_KEY: wikipedia_link_json(&profile.wikipedia),
+            })
+            .to_string(),
+        };
+        let artist_id = artist_id.to_string();
+        let genres = profile.genres.clone();
+        let photo = profile.image_file.is_some() && settings.artist_images;
+        let aliases = artist_aliases(&profile);
+        db(&self.pool, move |connection| {
+            let linked = row.wikidata_id.is_some();
+            store::save_profile(connection, "artist", &artist_id, &row)?;
+            store::save_aliases(connection, &aliases)?;
+            store::replace_genre_links(connection, "artist", &artist_id, "musicbrainz", &genres)?;
+            queue_text_stages(connection, "artist", &artist_id, linked)?;
+            if photo {
+                // MusicBrainz links a Commons photo: no need to wait for
+                // Wikidata or Wikipedia to name one.
+                store::queue_stage(connection, Stage::Commons, "artist", &artist_id)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The Wikidata stage: an article in the preferred language, life dates
+    /// and the P18 image. It enriches what the Wikipedia stage found and
+    /// queues that stage again only when it names a different article.
+    pub async fn wikidata_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(mut profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(wikidata_id) = profile.wikidata_id.clone() else {
+            return Ok(Outcome::Skipped("no Wikidata item".into()));
+        };
+        let entity = match self
+            .get_json(&wiki::wikidata_entity_url(&wikidata_id))
+            .await?
+        {
+            Ok(Some(body)) => wiki::parse_wikidata_entity(&body),
+            Ok(None) => None,
+            Err(outcome) => return Ok(outcome),
+        };
+        let Some(entity) = entity else {
+            return Ok(Outcome::Skipped("the Wikidata item was not found".into()));
+        };
+        let article = entity.article(&settings.language);
+        let image = (entity_type == "artist")
+            .then(|| entity.image.clone())
+            .flatten();
+        let mut facts = profile_value(&profile);
+        if entity_type == "artist" {
+            if let Some(begin) = entity.born.clone().or(entity.formed.clone()) {
+                facts["begin"] = json!(begin);
+            }
+            if let Some(end) = entity.died.clone().or(entity.dissolved.clone()) {
+                facts["end"] = json!(end);
+            }
+        }
+        let sitelinks = entity
+            .sitelinks
+            .iter()
+            .filter(|(language, _)| wiki::SOURCE_LANGUAGES.contains(&language.as_str()))
+            .map(|(language, title)| (language.clone(), json!(title)))
+            .collect::<serde_json::Map<_, _>>();
+        facts[WIKIDATA_KEY] = json!({
+            "article_language": article.as_ref().map(|(language, _)| language),
+            "article_title": article.as_ref().map(|(_, title)| title),
+            "image": image,
+            "sitelinks": sitelinks,
+        });
+        let more_sources =
+            matches!(entity_type, "album" | "artist") && !settings.extra_languages(None).is_empty();
+        profile.profile_json = facts.to_string();
+        let entity_type = entity_type.to_string();
+        let entity_id = entity_id.to_string();
+        let photos = settings.artist_images && entity_type == "artist";
+        db(&self.pool, move |connection| {
+            store::save_profile(connection, &entity_type, &entity_id, &profile)?;
+            let texts = store::load_texts(connection, &entity_type, &entity_id)?;
+            let current = texts
+                .first()
+                .map(|text| (text.language.clone(), text.title.clone()));
+            if let Some(article) = &article
+                && current.as_ref() != Some(article)
+            {
+                store::queue_stage(connection, Stage::Wikipedia, &entity_type, &entity_id)?;
+            }
+            if photos && let Some(file) = &image {
+                let stored = store::load_image(connection, &entity_type, &entity_id)?;
+                if stored.is_none_or(|stored| stored.page_url != wiki::commons_page_url(file)) {
+                    store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
+                }
+            }
+            if more_sources {
+                store::queue_stage(connection, Stage::Sources, &entity_type, &entity_id)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The names an entity's article may be guessed from.
+    async fn entity_names(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        profile: &ProfileRow,
+    ) -> Result<EntityNames, BoxError> {
+        let value = profile_value(profile);
+        let text = |key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|text| !text.trim().is_empty())
+        };
+        let mut names = EntityNames {
+            name: text(if entity_type == "artist" {
+                "name"
+            } else {
+                "title"
+            })
+            .unwrap_or_default(),
+            artist: text("artist"),
+        };
+        if names.name.is_empty() {
+            let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+            names = db(&self.pool, move |connection| {
+                store::entity_names(connection, &entity_type, &entity_id)
+            })
+            .await?
+            .map(|(name, artist)| EntityNames { name, artist })
+            .unwrap_or_default();
+        }
+        Ok(names)
+    }
+
+    /// The Wikipedia stage: an artist biography, an album's background and
+    /// critical reception, or a work's or genre's About text, with CC BY-SA
+    /// attribution. The article comes from the link MusicBrainz (or the
+    /// genre tree) gives, the one Wikidata named, or a title Wikipedia
+    /// confirms through the article's Wikidata item. It never waits for the
+    /// Wikidata stage, and it reads Wikipedia's cached REST pages.
+    pub async fn wikipedia_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let stored = self.profile(entity_type, entity_id).await?;
+        let (profile, names, mut candidates) = if entity_type == "genre" {
+            let Some(node) = super::genres::by_slug(entity_id) else {
+                return Ok(Outcome::Skipped("not a known genre".into()));
+            };
+            let profile = stored.unwrap_or_else(|| ProfileRow {
+                profile_json: json!({"name": node.name}).to_string(),
+                ..ProfileRow::default()
+            });
+            let mut candidates = article_candidates("genre", &profile, &EntityNames::default());
+            push_candidate(
+                &mut candidates,
+                ArticleCandidate {
+                    language: "en".into(),
+                    title: node.wikipedia.to_string(),
+                    linked: true,
+                },
+            );
+            (profile, EntityNames::default(), candidates)
+        } else {
+            let Some(profile) = stored else {
+                return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+            };
+            let names = self.entity_names(entity_type, entity_id, &profile).await?;
+            let candidates = article_candidates(entity_type, &profile, &names);
+            (profile, names, candidates)
+        };
+        candidates.retain(|candidate| wiki::valid_language(&candidate.language));
+        let mut found = None;
+        let mut retry = None;
+        for candidate in &candidates {
+            let page = match self.read_article(candidate).await? {
+                Ok(Some(page)) => page,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            if accepts_article(
+                &page.page.summary,
+                candidate,
+                profile.wikidata_id.as_deref(),
+                entity_type,
+                &names,
+            ) {
+                retry = page.busy;
+                found = Some((candidate.language.clone(), page.page));
+                break;
+            }
+        }
+        let Some((language, page)) = found else {
+            return Ok(Outcome::Skipped(if profile.wikidata_id.is_some() {
+                "no Wikipedia article yet; Wikidata may name one".into()
+            } else {
+                "no Wikipedia article found".into()
+            }));
+        };
+        let page_for_scores = wiki::ArticlePage {
+            summary: page.summary.clone(),
+            review_scores: page.review_scores.clone(),
+            ..Default::default()
+        };
+        let summary = page.summary;
+        let article = wiki::WikipediaArticle {
+            title: summary.title.clone(),
+            url: summary.url.clone(),
+            lead: if page.lead.trim().is_empty() {
+                wiki::tidy_text(&[summary.extract.as_str()])
+            } else {
+                page.lead
+            },
+            reception: page.reception,
+        };
+        let mut texts = vec![wikipedia_text(
+            if entity_type == "artist" {
+                "biography"
+            } else {
+                "background"
+            },
+            &language,
+            &article,
+            &article.lead,
+        )];
+        if entity_type == "album"
+            && let Some(reception) = &article.reception
+        {
+            texts.push(wikipedia_text("reception", &language, &article, reception));
+        }
+
+        let mut row = profile.clone();
+        let mut value = profile_value(&row);
+        value[PAGE_IMAGE_KEY] = json!(summary.commons_image);
+        if entity_type == "album" {
+            let scores = review_scores_json(&language, &page_for_scores);
+            if !scores.is_null()
+                || value.get(REVIEW_SCORES_KEY).is_some_and(|stored| {
+                    stored.get("language").and_then(Value::as_str) == Some(language.as_str())
+                })
+            {
+                value[REVIEW_SCORES_KEY] = scores;
+            }
+        }
+        row.profile_json = value.to_string();
+        let learned_item = row.wikidata_id.is_none() && summary.wikibase_item.is_some();
+        if learned_item {
+            row.wikidata_id = summary.wikibase_item.clone();
+        }
+        // Wikidata adds dates, a P18 photo and the article in the preferred
+        // language; for a genre only the language matters.
+        let wants_wikidata =
+            learned_item && (entity_type != "genre" || language != settings.language);
+        let photo = entity_type == "artist" && settings.artist_images;
+        // The same article in the other sources turned on.
+        let more_sources = matches!(entity_type, "album" | "artist")
+            && row.wikidata_id.is_some()
+            && !settings.extra_languages(Some(&language)).is_empty();
+        let entity_type = entity_type.to_string();
+        let entity_id = entity_id.to_string();
+        db(&self.pool, move |connection| {
+            store::save_profile(connection, &entity_type, &entity_id, &row)?;
+            store::replace_texts(connection, &entity_type, &entity_id, &texts)?;
+            if more_sources {
+                store::queue_stage_once(connection, Stage::Sources, &entity_type, &entity_id)?;
+            }
+            if wants_wikidata {
+                store::queue_stage(connection, Stage::Wikidata, &entity_type, &entity_id)?;
+            }
+            if learned_item && entity_type == "artist" {
+                store::queue_stage(connection, Stage::Relations, &entity_type, &entity_id)?;
+            }
+            if photo
+                && !photo_candidates(&row).is_empty()
+                && store::load_image(connection, &entity_type, &entity_id)?.is_none()
+                && store::task_status(connection, Stage::Commons, &entity_type, &entity_id)?
+                    .as_deref()
+                    != Some("pending")
+            {
+                store::queue_stage(connection, Stage::Commons, &entity_type, &entity_id)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(retry.unwrap_or(Outcome::Done))
+    }
+
+    /// The Commons stage: the artist's freely licensed photo, cached under
+    /// the data directory. Wikidata's image, the one MusicBrainz links and
+    /// the Wikipedia page image are tried in that order.
+    pub async fn commons_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if entity_type != "artist" || !settings.artist_images {
+            return Ok(Outcome::Skipped("artist photos are off".into()));
+        }
+        let Some(profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let files = photo_candidates(&profile);
+        if files.is_empty() {
+            return Ok(Outcome::Skipped(
+                "no Wikidata, MusicBrainz or Wikipedia image".into(),
+            ));
+        }
+        for file in files {
+            let image = match self.commons_license(&file).await? {
+                Ok(Some(image)) => image,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            let image = match self.download_image(entity_id, image).await? {
+                Ok(Some(image)) => image,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            let entity_id = entity_id.to_string();
+            db(&self.pool, move |connection| {
+                store::save_image(connection, "artist", &entity_id, &image)
+            })
+            .await?;
+            return Ok(Outcome::Done);
+        }
+        Ok(Outcome::Skipped(
+            "no freely licensed photo on Commons".into(),
+        ))
+    }
+
+    /// The Wikidata stage for a genre: the article in the preferred
+    /// language, through the item the Wikipedia stage found.
+    pub async fn genre_wikidata_stage(
+        &self,
+        slug: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if super::genres::by_slug(slug).is_none() {
+            return Ok(Outcome::Skipped("not a known genre".into()));
+        }
+        self.wikidata_stage("genre", slug, settings).await
+    }
+
+    /// The relations stage: who influenced a person and whom they
+    /// influenced, from one Wikidata Query Service request. For a library
+    /// artist, the most notable of those people with a MusicBrainz id are
+    /// looked up too, so their cards get a photo and their pages a
+    /// biography (one level deep: their own influences are not followed).
+    pub async fn relations_stage(
+        &self,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(profile) = self.profile("artist", entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(url) = profile
+            .wikidata_id
+            .as_deref()
+            .and_then(|item| wiki::influence_query_url(item, &settings.language))
+        else {
+            return Ok(Outcome::Skipped("no Wikidata item".into()));
+        };
+        let items = match self.get_json(&url).await? {
+            Ok(Some(body)) => wiki::parse_influences(&body),
+            Ok(None) => return Ok(Outcome::Retry("the Wikidata query failed".into())),
+            Err(outcome) => return Ok(outcome),
+        };
+        let mut positions: HashMap<&'static str, i32> = HashMap::new();
+        let rows = items
+            .iter()
+            .map(|item| {
+                let position = positions.entry(item.direction.as_str()).or_default();
+                *position += 1;
+                store::InfluenceRow {
+                    artist_id: entity_id.to_string(),
+                    direction: item.direction.as_str().to_string(),
+                    wikidata_id: item.id.clone(),
+                    name: item.name.clone(),
+                    description: item.description.clone(),
+                    musicbrainz_id: item.musicbrainz_id.clone(),
+                    image: item.image.clone(),
+                    position: *position,
+                }
+            })
+            .collect::<Vec<_>>();
+        let local = !entity_id.starts_with(EXTERNAL_PERSON_PREFIX);
+        let entity_id = entity_id.to_string();
+        let queued = db(&self.pool, move |connection| {
+            store::replace_influences(connection, &entity_id, &rows)?;
+            if !local {
+                return Ok(0);
+            }
+            let known = store::person_links(connection)?
+                .into_iter()
+                .map(|link| link.mbid)
+                .collect::<std::collections::HashSet<_>>();
+            let mut queued = 0;
+            // Influences first, then followers, each most notable first.
+            let mut wanted = rows
+                .iter()
+                .filter(|row| row.direction == "influence")
+                .chain(rows.iter().filter(|row| row.direction == "follower"))
+                .filter_map(|row| row.musicbrainz_id.as_deref())
+                .filter(|mbid| !known.contains(*mbid));
+            while queued < MAX_RELATED_LOOKUPS_PER_PERSON {
+                let Some(mbid) = wanted.next() else {
+                    break;
+                };
+                let person = format!("{EXTERNAL_PERSON_PREFIX}{mbid}");
+                if store::queue_stage_once(connection, Stage::Musicbrainz, "artist", &person)? {
+                    queued += 1;
+                }
+            }
+            Ok(queued)
+        })
+        .await?;
+        if queued > 0 {
+            wake().notify_all();
+        }
+        Ok(Outcome::Done)
+    }
+
+    /// Where fetched album covers are stored.
+    fn covers_directory(&self) -> PathBuf {
+        #[cfg(test)]
+        {
+            self.images.join("parson-test-covers")
+        }
+        #[cfg(not(test))]
+        {
+            crate::library::storage::get_cover_art_path()
+        }
+    }
+
+    /// The cover art stage: the front cover of the release MusicBrainz
+    /// matched (or of its release group) from the Cover Art Archive, for an
+    /// album with no artwork in its folder or tags. Files' own artwork
+    /// always wins and is never replaced.
+    pub async fn cover_art_stage(
+        &self,
+        cache: &crate::library::state::LibraryCache,
+        album_id: &str,
+    ) -> Result<Outcome, BoxError> {
+        let Some(album) = cache.album(album_id) else {
+            return Ok(Outcome::Skipped(
+                "the album is no longer in the library".into(),
+            ));
+        };
+        let covers = self.covers_directory();
+        let own_art = !album.cover_url.trim().is_empty()
+            && !Path::new(&album.cover_url)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(COVER_FILE_PREFIX));
+        if own_art {
+            // A person can prefer the online cover over the album's own.
+            let lookup = album_id.to_string();
+            let prefers_online = db(&self.pool, move |connection| {
+                use crate::enrichment::preferences as prefs;
+                let library = prefs::load_library_sources(connection)?.cover;
+                let album = prefs::load_album_preferences(connection, &lookup)?;
+                Ok(album
+                    .sources
+                    .get(&prefs::AlbumField::Cover)
+                    .copied()
+                    .unwrap_or(library)
+                    == prefs::FactSource::Online)
+            })
+            .await?;
+            if !prefers_online {
+                return Ok(Outcome::Skipped("the album has its own artwork".into()));
+            }
+        }
+        let Some(profile) = self.profile("album", album_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let mut candidates = Vec::new();
+        if let Some(release) = profile
+            .musicbrainz_id
+            .as_deref()
+            .filter(|id| mb::is_mbid(id))
+        {
+            candidates.push(format!(
+                "https://coverartarchive.org/release/{release}/front-500"
+            ));
+        }
+        if let Some(group) = profile
+            .release_group_mbid
+            .as_deref()
+            .filter(|id| mb::is_mbid(id))
+        {
+            candidates.push(format!(
+                "https://coverartarchive.org/release-group/{group}/front-500"
+            ));
+        }
+        if candidates.is_empty() {
+            return Ok(Outcome::Skipped("no MusicBrainz release".into()));
+        }
+        for url in candidates {
+            let response = self.fetch.get(&url, MAX_IMAGE_BYTES).await?;
+            if let Some(outcome) = transient(&response) {
+                return Ok(outcome);
+            }
+            if !response.is_success() {
+                continue;
+            }
+            let mime_type = ["image/jpeg", "image/png", "image/webp"]
+                .into_iter()
+                .find(|mime| sniff_image(&response.body, mime));
+            let Some(mime_type) = mime_type else {
+                continue;
+            };
+            let Some(file_name) = cover_file_name(album_id, mime_type) else {
+                return Ok(Outcome::Skipped("the album id cannot name a file".into()));
+            };
+            write_atomically(&covers, &file_name, &response.body).await?;
+            let row = store::CoverArtRow {
+                album_id: album_id.to_string(),
+                file_path: covers.join(&file_name).to_string_lossy().into_owned(),
+                mime_type: mime_type.to_string(),
+                source_url: url,
+                release_mbid: profile.musicbrainz_id.clone(),
+            };
+            db(&self.pool, move |connection| {
+                store::save_cover_art(connection, &row)
+            })
+            .await?;
+            return Ok(Outcome::Done);
+        }
+        Ok(Outcome::Skipped(
+            "the Cover Art Archive has no front cover for this release".into(),
+        ))
+    }
+
+    /// The catalogue stage for a composer: every work MusicBrainz lists for
+    /// them (at most [`MAX_CATALOGUE_PAGES`] pages of 100), then from
+    /// Wikidata the notable works (P800 on the composer's item) and the
+    /// year, key and form of works MusicBrainz described less fully. The
+    /// MusicBrainz part is kept when Wikidata is busy and is not read
+    /// again on the retry.
+    pub async fn catalogue_stage(
+        &self,
+        composer_mbid: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if !mb::is_mbid(composer_mbid) {
+            return Ok(Outcome::Skipped("not a MusicBrainz artist".into()));
+        }
+        let composer = composer_mbid.to_string();
+        let fresh = db(&self.pool, move |connection| {
+            store::catalogue_read_recently(connection, &composer, CATALOGUE_REFRESH_DAYS)
+        })
+        .await?;
+        if !fresh {
+            let mut entries: Vec<store::CatalogueEntry> = Vec::new();
+            let mut name = String::new();
+            let mut total = 0;
+            let mut complete = false;
+            for page in 0..MAX_CATALOGUE_PAGES {
+                let url = mb::work_browse_url(composer_mbid, page * mb::WORK_PAGE_SIZE);
+                let body = match self.get_json(&url).await? {
+                    Ok(Some(body)) => body,
+                    Ok(None) if page == 0 => {
+                        return Ok(Outcome::Skipped(
+                            "MusicBrainz does not know this composer".into(),
+                        ));
+                    }
+                    Ok(None) => break,
+                    Err(outcome) => return Ok(outcome),
+                };
+                let (count, works) = mb::parse_work_browse(&body);
+                total = count;
+                for work in works {
+                    let Some(found) = super::works::catalogue_work(work, composer_mbid) else {
+                        continue;
+                    };
+                    if entries
+                        .iter()
+                        .any(|known| known.work.mbid == found.info.mbid)
+                    {
+                        continue;
+                    }
+                    if name.is_empty() {
+                        name = found.composer.name.clone();
+                    }
+                    let mut row = work_row(&found.info, found.info.parent.as_deref());
+                    row.composer_name = Some(found.composer.name.clone());
+                    row.composer_normalized = Some(normalize_artist_identity(&found.composer.name));
+                    row.composer_mbid = Some(composer_mbid.to_string());
+                    entries.push(store::CatalogueEntry {
+                        work: row,
+                        wikidata_id: found.wikidata_id,
+                    });
+                }
+                if works.is_empty() || (page + 1) * mb::WORK_PAGE_SIZE >= count {
+                    complete = true;
+                    break;
+                }
+            }
+            if entries.is_empty() {
+                return Ok(Outcome::Skipped(
+                    "MusicBrainz lists no compositions for this person".into(),
+                ));
+            }
+            let composer = composer_mbid.to_string();
+            db(&self.pool, move |connection| {
+                store::save_catalogue(
+                    connection,
+                    &composer,
+                    &name,
+                    total as i64,
+                    complete,
+                    &entries,
+                )
+            })
+            .await?;
+        }
+        self.catalogue_wikidata(composer_mbid, settings).await
+    }
+
+    /// The Wikidata half of the catalogue stage.
+    async fn catalogue_wikidata(
+        &self,
+        composer_mbid: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let composer = composer_mbid.to_string();
+        let (known_item, items, ids) = db(&self.pool, move |connection| {
+            Ok((
+                store::wikidata_for_musicbrainz_artist(connection, &composer)?,
+                store::catalogue_wikidata_items(connection, &composer)?,
+                store::catalogue_work_ids(connection, &composer)?,
+            ))
+        })
+        .await?;
+        let item = match known_item {
+            Some(item) => Some(item),
+            None => match self.get_json(&mb::artist_lookup_url(composer_mbid)).await? {
+                Ok(Some(body)) => mb::wikidata_relation(&body),
+                Ok(None) => None,
+                Err(outcome) => return Ok(outcome),
+            },
+        };
+        let mut notable_items = Vec::new();
+        if let Some(item) = &item {
+            match self.get_json(&wiki::wikidata_entity_url(item)).await? {
+                Ok(Some(body)) => notable_items = wiki::parse_notable_works(&body),
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        // The notable works first, then the rest of the catalogue's items.
+        let mut wanted = notable_items.clone();
+        for (_, item) in &items {
+            if !wanted.contains(item) {
+                wanted.push(item.clone());
+            }
+        }
+        wanted.truncate(MAX_WIKIDATA_WORK_BATCHES * 50);
+        let language = settings
+            .source_languages()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "en".to_string());
+        let languages = [language.as_str(), "en"];
+        let mut described = Vec::new();
+        for batch in wanted.chunks(50) {
+            let url = wiki::wikidata_entities_url(batch, "claims|labels", &languages);
+            match self.get_json(&url).await? {
+                Ok(Some(body)) => described.extend(wiki::parse_wikidata_works(&body, &language)),
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        // Labels of the keys and forms the works point to.
+        let mut referenced = Vec::new();
+        for work in &described {
+            for id in work
+                .tonality
+                .iter()
+                .chain(&work.genres)
+                .chain(&work.instances)
+            {
+                if !referenced.contains(id) {
+                    referenced.push(id.clone());
+                }
+            }
+        }
+        referenced.sort();
+        referenced.truncate(150);
+        let mut labels = HashMap::new();
+        for batch in referenced.chunks(50) {
+            let url = wiki::wikidata_entities_url(batch, "labels", &["en"]);
+            match self.get_json(&url).await? {
+                Ok(Some(body)) => labels.extend(wiki::parse_labels(&body, "en")),
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        let by_item = items
+            .iter()
+            .map(|(work, item)| (item.clone(), work.clone()))
+            .collect::<HashMap<_, _>>();
+        let ids = ids.into_iter().collect::<std::collections::HashSet<_>>();
+        let work_for = |described: &wiki::WikidataWork| {
+            by_item.get(&described.item).cloned().or_else(|| {
+                described
+                    .musicbrainz_works
+                    .iter()
+                    .find(|mbid| ids.contains(*mbid))
+                    .cloned()
+            })
+        };
+        let mut notable = Vec::new();
+        for (rank, item) in notable_items.iter().enumerate() {
+            if let Some(work) = described
+                .iter()
+                .find(|described| described.item == *item)
+                .and_then(work_for)
+                .or_else(|| by_item.get(item).cloned())
+                && !notable.iter().any(|(known, _)| *known == work)
+            {
+                notable.push((work, rank as i64 + 1));
+            }
+        }
+        let facts = described
+            .iter()
+            .filter_map(|work| {
+                let mbid = work_for(work)?;
+                Some(store::WorkFactsUpdate {
+                    work_mbid: mbid,
+                    composed: work.inception.clone(),
+                    musical_key: work
+                        .tonality
+                        .as_ref()
+                        .and_then(|id| labels.get(id))
+                        .and_then(|label| super::works::key_from_title(&format!("in {label}"))),
+                    form: work
+                        .genres
+                        .iter()
+                        .chain(&work.instances)
+                        .filter_map(|id| labels.get(id))
+                        .find_map(|label| super::works::form_from_title(label)),
+                })
+            })
+            .collect::<Vec<_>>();
+        let composer = composer_mbid.to_string();
+        let notable_works = notable
+            .iter()
+            .map(|(work, _)| work.clone())
+            .collect::<Vec<_>>();
+        db(&self.pool, move |connection| {
+            store::save_catalogue_wikidata(
+                connection,
+                &composer,
+                item.as_deref(),
+                &notable,
+                &facts,
+            )?;
+            // Notable works get their own About text.
+            for work in &notable_works {
+                if store::load_profile(connection, "work", work)?.is_some() {
+                    continue;
+                }
+                let wikidata_id = by_item
+                    .iter()
+                    .find(|(_, mbid)| *mbid == work)
+                    .map(|(item, _)| item.clone());
+                if wikidata_id.is_none() {
+                    store::queue_stage_once(connection, Stage::Musicbrainz, "work", work)?;
+                    continue;
+                }
+                let title = store::load_work(connection, work)?
+                    .map(|row| row.title)
+                    .unwrap_or_default();
+                store::save_profile(
+                    connection,
+                    "work",
+                    work,
+                    &ProfileRow {
+                        musicbrainz_id: Some(work.clone()),
+                        release_group_mbid: None,
+                        wikidata_id,
+                        profile_json: json!({"title": title}).to_string(),
+                    },
+                )?;
+                store::queue_stage_once(connection, Stage::Wikipedia, "work", work)?;
+                store::queue_stage_once(connection, Stage::Wikidata, "work", work)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(Outcome::Done)
+    }
+
+    /// The sources stage: the article in each other editorial source turned
+    /// on (Wikipedia languages after the main one), from the item's
+    /// Wikidata sitelinks, so an album or artist page can switch source.
+    pub async fn sources_stage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        if !matches!(entity_type, "album" | "artist") {
+            return Ok(Outcome::Skipped(
+                "only albums and artists switch sources".into(),
+            ));
+        }
+        let Some(mut profile) = self.profile(entity_type, entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(wikidata_id) = profile.wikidata_id.clone() else {
+            return Ok(Outcome::Skipped("no Wikidata item".into()));
+        };
+        let (kind_type, kind_id) = (entity_type.to_string(), entity_id.to_string());
+        let main = db(&self.pool, move |connection| {
+            store::load_texts(connection, &kind_type, &kind_id)
+        })
+        .await?
+        .first()
+        .map(|text| text.language.clone());
+        let wanted = settings.extra_languages(main.as_deref());
+        let mut value = profile_value(&profile);
+        let mut sitelinks = value
+            .get(WIKIDATA_KEY)
+            .and_then(|wikidata| wikidata.get("sitelinks"))
+            .and_then(Value::as_object)
+            .map(|links| {
+                links
+                    .iter()
+                    .filter_map(|(language, title)| {
+                        Some((language.clone(), title.as_str()?.to_string()))
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
+        if sitelinks.is_none() && !wanted.is_empty() {
+            match self
+                .get_json(&wiki::wikidata_entity_url(&wikidata_id))
+                .await?
+            {
+                Ok(Some(body)) => {
+                    sitelinks = wiki::parse_wikidata_entity(&body)
+                        .map(|entity| entity.sitelinks.into_iter().collect());
+                }
+                Ok(None) => {}
+                Err(outcome) => return Ok(outcome),
+            }
+        }
+        let sitelinks = sitelinks.unwrap_or_default();
+        let mut texts = Vec::new();
+        let mut scores = Value::Null;
+        for language in &wanted {
+            let Some(title) = sitelinks.get(language) else {
+                continue;
+            };
+            let candidate = ArticleCandidate {
+                language: language.clone(),
+                title: title.clone(),
+                linked: true,
+            };
+            let read = match self.read_article(&candidate).await? {
+                Ok(Some(read)) => read,
+                Ok(None) => continue,
+                Err(outcome) => return Ok(outcome),
+            };
+            if let Some(busy) = read.busy {
+                return Ok(busy);
+            }
+            let page = read.page;
+            if page.summary.disambiguation
+                || page
+                    .summary
+                    .wikibase_item
+                    .as_deref()
+                    .is_some_and(|item| item != wikidata_id)
+            {
+                continue;
+            }
+            if scores.is_null() && entity_type == "album" {
+                scores = review_scores_json(language, &page);
+            }
+            let article = wiki::WikipediaArticle {
+                title: page.summary.title.clone(),
+                url: page.summary.url.clone(),
+                lead: if page.lead.trim().is_empty() {
+                    wiki::tidy_text(&[page.summary.extract.as_str()])
+                } else {
+                    page.lead.clone()
+                },
+                reception: page.reception.clone(),
+            };
+            if article.lead.trim().is_empty() {
+                continue;
+            }
+            texts.push(wikipedia_text(
+                if entity_type == "artist" {
+                    "biography"
+                } else {
+                    "background"
+                },
+                language,
+                &article,
+                &article.lead,
+            ));
+            if entity_type == "album"
+                && let Some(reception) = &article.reception
+            {
+                texts.push(wikipedia_text("reception", language, &article, reception));
+            }
+        }
+        // Review scores from another source when the main article has none.
+        let store_scores = !scores.is_null()
+            && value
+                .get(REVIEW_SCORES_KEY)
+                .is_none_or(|stored| stored.is_null());
+        if store_scores {
+            value[REVIEW_SCORES_KEY] = scores;
+            profile.profile_json = value.to_string();
+        }
+        let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+        let found = texts.len();
+        db(&self.pool, move |connection| {
+            store::replace_source_texts(connection, &entity_type, &entity_id, &texts)?;
+            if store_scores {
+                store::save_profile(connection, &entity_type, &entity_id, &profile)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(if found > 0 || wanted.is_empty() {
+            Outcome::Done
+        } else {
+            Outcome::Skipped("no article in the other sources".into())
+        })
+    }
+
+    async fn profile(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Option<ProfileRow>, BoxError> {
+        let entity_type = entity_type.to_string();
+        let entity_id = entity_id.to_string();
+        db(&self.pool, move |connection| {
+            store::load_profile(connection, &entity_type, &entity_id)
+        })
+        .await
+    }
+
+    /// Runs one stage for one task.
+    pub async fn run_task(
+        &self,
+        stage: Stage,
+        task: &Task,
+        settings: &EnrichmentSettings,
+        cache: Option<&crate::library::state::LibraryCache>,
+    ) -> Result<Outcome, BoxError> {
+        match (stage, task.entity_type.as_str()) {
+            (Stage::Musicbrainz, "album") => {
+                let Some(cache) = cache else {
+                    return Ok(Outcome::Retry("the library is not ready".into()));
+                };
+                match album_input(cache, &task.entity_id) {
+                    Some(input) => self.resolve_album(&input).await,
+                    None => Ok(Outcome::Skipped(
+                        "the album is no longer in the library".into(),
+                    )),
+                }
+            }
+            (Stage::Musicbrainz, "work") => self.resolve_work(&task.entity_id).await,
+            (Stage::Musicbrainz, "artist")
+                if task.entity_id.starts_with(EXTERNAL_PERSON_PREFIX) =>
+            {
+                self.resolve_credited_person(&task.entity_id, settings)
+                    .await
+            }
+            (Stage::Musicbrainz, _) => {
+                let artist_id = task.entity_id.clone();
+                match db(&self.pool, move |connection| {
+                    store::artist_name(connection, &artist_id)
+                })
+                .await?
+                {
+                    Some(name) => {
+                        self.resolve_artist(
+                            &ArtistInput {
+                                id: task.entity_id.clone(),
+                                name,
+                            },
+                            settings,
+                        )
+                        .await
+                    }
+                    None => Ok(Outcome::Skipped(
+                        "the artist is no longer in the library".into(),
+                    )),
+                }
+            }
+            (Stage::Wikidata, "genre") => {
+                self.genre_wikidata_stage(&task.entity_id, settings).await
+            }
+            (Stage::Wikidata, entity_type) => {
+                self.wikidata_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
+            (Stage::Wikipedia, entity_type) => {
+                self.wikipedia_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
+            (Stage::Commons, entity_type) => {
+                self.commons_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
+            (Stage::Relations, "artist") => self.relations_stage(&task.entity_id, settings).await,
+            (Stage::Relations, _) => Ok(Outcome::Skipped("only people have influences".into())),
+            (Stage::CoverArt, "album") => {
+                let Some(cache) = cache else {
+                    return Ok(Outcome::Retry("the library is not ready".into()));
+                };
+                self.cover_art_stage(cache, &task.entity_id).await
+            }
+            (Stage::CoverArt, _) => Ok(Outcome::Skipped("only albums have covers".into())),
+            (Stage::Catalogue, "composer") => self.catalogue_stage(&task.entity_id, settings).await,
+            (Stage::Catalogue, _) => Ok(Outcome::Skipped("only composers have catalogues".into())),
+            (Stage::Sources, entity_type) => {
+                self.sources_stage(entity_type, &task.entity_id, settings)
+                    .await
+            }
+        }
+    }
+
+    /// One turn of a stage's queue: nothing while its host backs off,
+    /// otherwise the next due task, recorded with its outcome. Other
+    /// stages are never held back by this one.
+    pub async fn step(
+        &self,
+        stage: Stage,
+        settings: &EnrichmentSettings,
+        cache: Option<&crate::library::state::LibraryCache>,
+        backoffs: &Backoffs,
+    ) -> Result<Step, BoxError> {
+        let paused = backoffs.paused_for(stage, Instant::now());
+        if !paused.is_zero() {
+            return Ok(Step::Paused(paused));
+        }
+        let Some(task) = db(&self.pool, move |connection| {
+            store::next_stage_task(connection, stage)
+        })
+        .await?
+        else {
+            return Ok(Step::Idle);
+        };
+        let outcome = self
+            .run_task(stage, &task, settings, cache)
+            .await
+            .unwrap_or_else(|error| Outcome::Retry(error.to_string()));
+        backoffs.record(stage, &outcome, Instant::now());
+        let finished = task.clone();
+        let recorded = outcome.clone();
+        db(&self.pool, move |connection| {
+            store::finish_task(connection, &finished, &recorded)
+        })
+        .await?;
+        Ok(Step::Ran(task, outcome))
+    }
+
+    /// Every stage for one album in order, as the queues would run them.
+    /// The first busy service's answer is returned; earlier stages' results
+    /// are kept.
+    #[cfg(test)]
+    pub async fn enrich_album(
+        &self,
+        album: &AlbumInput,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let outcome = self.resolve_album(album).await?;
+        if outcome != Outcome::Done {
+            return Ok(outcome);
+        }
+        self.later_stages("album", &album.id, settings).await
+    }
+
+    /// Every stage for one artist in order, as the queues would run them.
+    #[cfg(test)]
+    pub async fn enrich_artist(
+        &self,
+        artist: &ArtistInput,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let outcome = self.resolve_artist(artist, settings).await?;
+        if outcome != Outcome::Done {
+            return Ok(outcome);
+        }
+        self.later_stages("artist", &artist.id, settings).await
+    }
+
+    /// Runs the queued later stages of one entity until none is pending
+    /// (a stage may queue another, e.g. Wikidata naming a new article), and
+    /// returns the first busy answer.
+    #[cfg(test)]
+    pub async fn later_stages(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let mut result = Outcome::Done;
+        let mut busy = std::collections::HashSet::new();
+        for _ in 0..4 {
+            let mut ran = false;
+            // Relations and cover art have their own tests; they never
+            // change what a page's text stages produce.
+            for stage in Stage::ALL[1..]
+                .iter()
+                .filter(|stage| stage.feeds_page_text())
+            {
+                if busy.contains(stage) {
+                    continue;
+                }
+                let queued = {
+                    let (entity_type, entity_id) = (entity_type.to_string(), entity_id.to_string());
+                    let stage = *stage;
+                    db(&self.pool, move |connection| {
+                        Ok(
+                            store::task_status(connection, stage, &entity_type, &entity_id)?
+                                .as_deref()
+                                == Some("pending"),
+                        )
+                    })
+                    .await?
+                };
+                if !queued {
+                    continue;
+                }
+                ran = true;
+                let task = Task {
+                    id: 0,
+                    entity_type: entity_type.to_string(),
+                    entity_id: entity_id.to_string(),
+                    attempts: 0,
+                };
+                let outcome = self.run_task(*stage, &task, settings, None).await?;
+                let (entity_type, entity_id, stage, recorded) = (
+                    entity_type.to_string(),
+                    entity_id.to_string(),
+                    *stage,
+                    outcome.clone(),
+                );
+                db(&self.pool, move |connection| {
+                    store::finish_stage(connection, stage, &entity_type, &entity_id, &recorded)
+                })
+                .await?;
+                if let Outcome::Retry(_) = outcome {
+                    busy.insert(stage);
+                    if result == Outcome::Done {
+                        result = outcome;
+                    }
+                }
+            }
+            if !ran {
+                break;
+            }
+        }
+        Ok(result)
+    }
+
+    /// One candidate article: the page itself (lead, reception, Wikidata
+    /// item and photo in one cached response), or the REST summary when the
+    /// page is busy. A summary-only result is marked `busy` so the full text
+    /// is fetched again later, without pausing the queue.
+    async fn read_article(
+        &self,
+        candidate: &ArticleCandidate,
+    ) -> Result<Result<Option<ReadArticle>, Outcome>, BoxError> {
+        let busy = match self
+            .get_text(&wiki::wikipedia_page_url(
+                &candidate.language,
+                &candidate.title,
+            ))
+            .await?
+        {
+            Ok(Some(html)) => {
+                return Ok(Ok(
+                    wiki::parse_article_page(&html).map(|page| ReadArticle { page, busy: None })
+                ));
+            }
+            Ok(None) => return Ok(Ok(None)),
+            Err(outcome) => outcome,
+        };
+        match self
+            .get_json(&wiki::wikipedia_summary_url(
+                &candidate.language,
+                &candidate.title,
+            ))
+            .await?
+        {
+            Ok(Some(body)) => Ok(Ok(wiki::parse_wikipedia_summary(&body).map(|summary| {
+                ReadArticle {
+                    page: wiki::ArticlePage {
+                        lead: wiki::tidy_text(&[summary.extract.as_str()]),
+                        summary,
+                        reception: None,
+                        review_scores: Vec::new(),
+                    },
+                    busy: Some(Outcome::Retry(format!(
+                        "kept the summary; the full article answered {}",
+                        match &busy {
+                            Outcome::Retry(error) => error.as_str(),
+                            _ => "busy",
+                        }
+                    ))),
+                }
+            }))),
+            // The page was busy, so a missing summary proves nothing: try
+            // again later, pausing the Wikipedia queue.
+            Ok(None) | Err(_) => Ok(Err(busy)),
+        }
+    }
+
+    /// The license and author of a Commons file, from its description
+    /// page's wikitext (cached), or from the Action API when that page
+    /// cannot be read. A busy Commons is an `Err(outcome)`.
+    async fn commons_license(
+        &self,
+        file: &str,
+    ) -> Result<Result<Option<wiki::CommonsImage>, Outcome>, BoxError> {
+        match self.get_text(&wiki::commons_wikitext_url(file)).await? {
+            Ok(Some(wikitext)) => return Ok(Ok(wiki::parse_commons_wikitext(file, &wikitext))),
+            Ok(None) => {}
+            Err(outcome) => return Ok(Err(outcome)),
+        }
+        match self.get_json(&wiki::commons_image_info_url(file)).await? {
+            Ok(Some(body)) => Ok(Ok(wiki::parse_commons_image(&body))),
+            Ok(None) => Ok(Ok(None)),
+            Err(outcome) => Ok(Err(outcome)),
+        }
+    }
+
+    /// Downloads a freely licensed Commons image. A busy Commons is an
+    /// `Err(outcome)` so the artist is looked up again later.
+    async fn download_image(
+        &self,
+        artist_id: &str,
+        image: wiki::CommonsImage,
+    ) -> Result<Result<Option<ImageRow>, Outcome>, BoxError> {
+        // A credited person's id ("mb:<mbid>") is stored as "mb_<mbid>".
+        let Some(file_name) =
+            image_file_name("artist", &artist_id.replace(':', "_"), &image.mime_type)
+        else {
+            return Ok(Ok(None));
+        };
+        let response = self.fetch.get(&image.download_url, MAX_IMAGE_BYTES).await?;
+        if let Some(outcome) = transient(&response) {
+            return Ok(Err(outcome));
+        }
+        if !response.is_success() || !sniff_image(&response.body, &image.mime_type) {
+            return Ok(Ok(None));
+        }
+        write_atomically(&self.images, &file_name, &response.body).await?;
+        Ok(Ok(Some(ImageRow {
+            file_name,
+            mime_type: image.mime_type,
+            source_url: image.download_url,
+            page_url: image.page_url,
+            author: image.author,
+            license: image.license,
+            license_url: image.license_url,
+        })))
+    }
+}
+
+/// An article as the Wikipedia stage read it.
+struct ReadArticle {
+    page: wiki::ArticlePage,
+    /// Set when only the summary could be read.
+    busy: Option<Outcome>,
+}
+
+/// At most this many pages of 100 works are read for one composer: 4,000
+/// works, enough for every composer except a handful (Bach, Mozart,
+/// Schubert), whose catalogue page then says it is capped.
+pub const MAX_CATALOGUE_PAGES: usize = 40;
+
+/// A catalogue read from MusicBrainz is reused this long by a retry.
+const CATALOGUE_REFRESH_DAYS: i64 = 30;
+
+/// Wikidata items described per catalogue, 50 per request.
+const MAX_WIKIDATA_WORK_BATCHES: usize = 8;
+
+/// At most this many pieces per album are looked up for their own text.
+const MAX_WORKS_PER_ALBUM: usize = 6;
+
+/// The id prefix of a person known only from MusicBrainz credits.
+pub const EXTERNAL_PERSON_PREFIX: &str = "mb:";
+
+/// At most this many of a library artist's influences and followers are
+/// looked up on MusicBrainz for their own photo and biography.
+const MAX_RELATED_LOOKUPS_PER_PERSON: usize = 8;
+
+/// Album covers fetched from the Cover Art Archive are stored as
+/// `caa-<album id>.<ext>`, so they are never mistaken for a file's own art.
+pub const COVER_FILE_PREFIX: &str = "caa-";
+
+/// The file a fetched cover is stored in, or `None` for an id that cannot
+/// safely name a file.
+pub fn cover_file_name(album_id: &str, mime_type: &str) -> Option<String> {
+    let safe = album_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    image_file_name("caa", &safe, mime_type)
+}
+
+/// At most this many credited people per album are looked up for their own
+/// biography and photo, so one box set cannot flood the queue.
+const MAX_CREDITED_PEOPLE_PER_ALBUM: usize = 24;
+
+/// After MusicBrainz: the Wikipedia stage always (it finds the article from
+/// the MusicBrainz link or by title), and the Wikidata stage when there is
+/// an item, which only enriches.
+fn queue_text_stages(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+    linked: bool,
+) -> diesel::QueryResult<()> {
+    store::queue_stage(connection, Stage::Wikipedia, entity_type, entity_id)?;
+    if linked && entity_type == "artist" {
+        store::queue_stage(connection, Stage::Relations, entity_type, entity_id)?;
+    }
+    if linked {
+        store::queue_stage(connection, Stage::Wikidata, entity_type, entity_id)
+    } else {
+        store::drop_stage(connection, Stage::Wikidata, entity_type, entity_id)
+    }
+}
+
+fn drop_later_stages(
+    connection: &mut SqliteConnection,
+    entity_type: &str,
+    entity_id: &str,
+) -> diesel::QueryResult<()> {
+    for stage in &Stage::ALL[1..] {
+        store::drop_stage(connection, *stage, entity_type, entity_id)?;
+    }
+    Ok(())
+}
+
+async fn write_atomically(directory: &Path, file_name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(directory).await?;
+    let temporary = directory.join(format!("{file_name}.tmp"));
+    tokio::fs::write(&temporary, bytes).await?;
+    tokio::fs::rename(&temporary, directory.join(file_name)).await
+}
+
+fn wikipedia_text(
+    kind: &str,
+    language: &str,
+    article: &wiki::WikipediaArticle,
+    body: &str,
+) -> EditorialText {
+    EditorialText {
+        kind: kind.to_string(),
+        source: "wikipedia".to_string(),
+        language: language.to_string(),
+        title: article.title.clone(),
+        body: body.to_string(),
+        url: article.url.clone(),
+        license: wiki::WIKIPEDIA_LICENSE.to_string(),
+        license_url: wiki::WIKIPEDIA_LICENSE_URL.to_string(),
+    }
+}
+
+/// The part of a track title after the last colon ("…, Op. 125: II. Molto
+/// vivace" -> "ii molto vivace"), where movements differ.
+fn title_tail(title: &str) -> String {
+    let tail = title.rsplit_once(':').map_or(title, |(_, tail)| tail);
+    let normalized = normalize_song_identity(tail);
+    // "I. Grave" and "1. Grave" are the same movement.
+    let mut words = normalized.split(' ');
+    let first = words.next().unwrap_or_default();
+    let rest = words.collect::<Vec<_>>().join(" ");
+    let mut words = match roman_number(first) {
+        Some(number) => format!("{number} {rest}"),
+        None => normalized.clone(),
+    };
+    // "Adagio sostenuto - Attacca" is the same movement as "Adagio
+    // sostenuto".
+    if let Some(stripped) = words.strip_suffix(" attacca") {
+        words = stripped.to_string();
+    }
+    words.trim().to_string()
+}
+
+fn roman_number(word: &str) -> Option<u32> {
+    if word.is_empty() || word.len() > 6 {
+        return None;
+    }
+    let value = |c| match c {
+        'i' => Some(1),
+        'v' => Some(5),
+        'x' => Some(10),
+        'l' => Some(50),
+        _ => None,
+    };
+    let digits = word.chars().map(value).collect::<Option<Vec<u32>>>()?;
+    let mut total = 0;
+    for (index, digit) in digits.iter().enumerate() {
+        if digits.get(index + 1).is_some_and(|next| next > digit) {
+            total -= *digit as i64;
+        } else {
+            total += *digit as i64;
+        }
+    }
+    u32::try_from(total).ok().filter(|total| *total > 0)
+}
+
+/// Matches MusicBrainz tracks to local tracks: by title, then by the
+/// movement part of the title (tags often shorten "I. Allegro ma non
+/// troppo, un poco maestoso"), then by position when the track lists have
+/// the same length (and, for a release with several discs, only when a
+/// person chose it or tags name it).
+pub fn match_tracks(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<(usize, String)> {
+    let single_disc = release.tracks.iter().all(|track| track.disc == 1);
+    let same_length = release.tracks.len() == album.tracks.len();
+    let mut matched: Vec<Option<usize>> = vec![None; release.tracks.len()];
+    let mut used = vec![false; album.tracks.len()];
+    let unique = |used: &[bool], test: &dyn Fn(&TrackInput) -> bool| {
+        let found = album
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(local, track)| !used[*local] && test(track))
+            .map(|(local, _)| local)
+            .collect::<Vec<_>>();
+        match found.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    };
+    for (index, track) in release.tracks.iter().enumerate() {
+        let title = normalize_song_identity(&track.title);
+        if let Some(local) = unique(&used, &|local| {
+            normalize_song_identity(&local.title) == title
+        }) {
+            matched[index] = Some(local);
+            used[local] = true;
+        }
+    }
+    for (index, track) in release.tracks.iter().enumerate() {
+        if matched[index].is_some() {
+            continue;
+        }
+        let tail = title_tail(&track.title);
+        if tail.chars().count() < 6 {
+            continue;
+        }
+        let similar = |local: &TrackInput| {
+            let local_tail = title_tail(&local.title);
+            local_tail.chars().count() >= 6
+                && (local_tail == tail
+                    || tail.starts_with(&format!("{local_tail} "))
+                    || local_tail.starts_with(&format!("{tail} ")))
+        };
+        if let Some(local) = unique(&used, &similar) {
+            matched[index] = Some(local);
+            used[local] = true;
+        }
+    }
+    if same_length && (single_disc || album.release_trusted) {
+        for (index, track) in release.tracks.iter().enumerate() {
+            if matched[index].is_some() {
+                continue;
+            }
+            if let Some(local) = unique(&used, &|local| {
+                i64::from(local.track_number) == track.position
+            }) {
+                matched[index] = Some(local);
+                used[local] = true;
+            }
+        }
+    }
+    matched
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, local)| Some((index, album.tracks[local?].id.clone())))
+        .collect()
+}
+
+fn alias(mbid: &str, name: &str, kind: &str) -> AliasRow {
+    AliasRow {
+        mbid: mbid.to_string(),
+        normalized_name: normalize_artist_identity(name),
+        name: name.trim().to_string(),
+        kind: kind.to_string(),
+    }
+}
+
+/// The names a release knows its people by: each credited person's own
+/// MusicBrainz name and the name the release credits them as.
+fn release_aliases(release: &mb::ReleaseDetails) -> Vec<AliasRow> {
+    let mut aliases = Vec::new();
+    for (mbid, name) in &release.artists {
+        aliases.push(alias(mbid, name, "name"));
+    }
+    for credit in release
+        .credits
+        .iter()
+        .chain(release.tracks.iter().flat_map(|track| &track.credits))
+    {
+        let Some(mbid) = &credit.artist_mbid else {
+            continue;
+        };
+        if let Some(name) = &credit.artist_name {
+            aliases.push(alias(mbid, name, "name"));
+        }
+        aliases.push(alias(mbid, &credit.name, "credit"));
+    }
+    aliases.sort_by(|left, right| {
+        (&left.mbid, &left.normalized_name, left.kind != "name").cmp(&(
+            &right.mbid,
+            &right.normalized_name,
+            right.kind != "name",
+        ))
+    });
+    aliases.dedup_by(|later, earlier| {
+        later.mbid == earlier.mbid && later.normalized_name == earlier.normalized_name
+    });
+    aliases
+}
+
+/// A resolved person's own name and MusicBrainz aliases.
+fn artist_aliases(profile: &mb::ArtistProfile) -> Vec<AliasRow> {
+    let mut aliases = vec![alias(&profile.mbid, &profile.name, "name")];
+    for name in &profile.aliases {
+        let entry = alias(&profile.mbid, name, "alias");
+        if !aliases
+            .iter()
+            .any(|known| known.normalized_name == entry.normalized_name)
+        {
+            aliases.push(entry);
+        }
+    }
+    aliases
+}
+
+fn album_credit_rows(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<CreditRow> {
+    let row = |track_id: &str, credit: &mb::ExternalCredit| CreditRow {
+        album_id: album.id.clone(),
+        track_id: track_id.to_string(),
+        name: credit.name.clone(),
+        normalized_name: normalize_artist_identity(&credit.name),
+        role: credit.role.clone(),
+        instrument: credit.instrument.clone().unwrap_or_default(),
+        source: "musicbrainz".to_string(),
+        source_artist_id: credit.artist_mbid.clone(),
+    };
+    let mut rows = release
+        .credits
+        .iter()
+        .map(|credit| row("", credit))
+        .collect::<Vec<_>>();
+    for (index, track_id) in match_tracks(album, release) {
+        rows.extend(
+            release.tracks[index]
+                .credits
+                .iter()
+                .map(|credit| row(&track_id, credit)),
+        );
+    }
+    rows
+}
+
+fn work_row(work: &WorkInfo, parent: Option<&WorkInfo>) -> WorkRow {
+    let composer = work.composers.first();
+    WorkRow {
+        mbid: work.mbid.clone(),
+        title: work.title.clone(),
+        form: work.form.clone(),
+        musical_key: work.key.clone(),
+        catalogue: work.catalogue.clone(),
+        composed: work.composed.clone(),
+        composer_name: composer.map(|composer| composer.name.clone()),
+        composer_normalized: composer.map(|composer| normalize_artist_identity(&composer.name)),
+        composer_mbid: composer.and_then(|composer| composer.mbid.clone()),
+        language: work.language.clone(),
+        parent_mbid: parent.map(|parent| parent.mbid.clone()),
+        part_position: work.position,
+    }
+}
+
+/// Works performed on the release (movements and the pieces they belong
+/// to) and the local tracks that perform them.
+pub fn album_work_rows(
+    album: &AlbumInput,
+    release: &mb::ReleaseDetails,
+) -> (Vec<WorkRow>, Vec<TrackWorkRow>) {
+    let mut works: Vec<WorkRow> = Vec::new();
+    let mut add = |row: WorkRow| {
+        if !works.iter().any(|known| known.mbid == row.mbid) {
+            works.push(row);
+        }
+    };
+    let mut links = Vec::new();
+    for (index, track_id) in match_tracks(album, release) {
+        let track = &release.tracks[index];
+        for work in &track.works {
+            if let Some(parent) = work.parent.as_deref() {
+                add(work_row(parent, None));
+            }
+            add(work_row(work, work.parent.as_deref()));
+            links.push(TrackWorkRow {
+                track_id: track_id.clone(),
+                album_id: album.id.clone(),
+                work_mbid: work.mbid.clone(),
+                recording_mbid: track.recording_mbid.clone(),
+            });
+        }
+    }
+    (works, links)
+}
+
+/// Local artists named on the release (as album artist or in a credit) and
+/// the MusicBrainz ids MusicBrainz gives them.
+fn artist_links(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<(String, String)> {
+    let mut links = Vec::new();
+    let mut add = |name: &str, mbid: &str| {
+        let normalized = normalize_artist_identity(name);
+        let local = if normalized == normalize_artist_identity(&album.artist_name) {
+            Some(album.artist_id.clone())
+        } else {
+            album
+                .known_artists
+                .iter()
+                .find(|(known, _)| *known == normalized)
+                .map(|(_, id)| id.clone())
+        };
+        if let Some(local) = local
+            && !links.contains(&(local.clone(), mbid.to_string()))
+        {
+            links.push((local, mbid.to_string()));
+        }
+    };
+    for (mbid, name) in &release.artists {
+        add(name, mbid);
+    }
+    for credit in release
+        .credits
+        .iter()
+        .chain(release.tracks.iter().flat_map(|track| &track.credits))
+    {
+        if let Some(mbid) = &credit.artist_mbid {
+            add(&credit.name, mbid);
+        }
+    }
+    links
+}
+
+/// The people MusicBrainz credits on a release who are not artists in the
+/// library (producers, engineers, session players), as `mb:<mbid>` ids in
+/// credit order. Library artists are enriched under their own ids.
+fn credited_people(release: &mb::ReleaseDetails, links: &[(String, String)]) -> Vec<String> {
+    let mut people = Vec::new();
+    for credit in release
+        .credits
+        .iter()
+        .chain(release.tracks.iter().flat_map(|track| &track.credits))
+    {
+        let Some(mbid) = credit
+            .artist_mbid
+            .as_deref()
+            .filter(|mbid| mb::is_mbid(mbid))
+        else {
+            continue;
+        };
+        if release.artists.iter().any(|(artist, _)| artist == mbid)
+            || links.iter().any(|(_, linked)| linked == mbid)
+        {
+            continue;
+        }
+        let id = format!("{EXTERNAL_PERSON_PREFIX}{mbid}");
+        if !people.contains(&id) {
+            people.push(id);
+        }
+        if people.len() == MAX_CREDITED_PEOPLE_PER_ALBUM {
+            break;
+        }
+    }
+    people
+}
+
+/// The distinct people the album's tags credit in a role.
+fn tagged_people(songs: &[crate::domain::Song], role: &str) -> Vec<String> {
+    let mut people: Vec<String> = Vec::new();
+    for credit in songs
+        .iter()
+        .flat_map(|song| &song.credits)
+        .filter(|credit| credit.role == role)
+    {
+        let normalized = normalize_artist_identity(&credit.name);
+        if !people
+            .iter()
+            .any(|known| normalize_artist_identity(known) == normalized)
+            && people.len() < 8
+        {
+            people.push(credit.name.clone());
+        }
+    }
+    people
+}
+
+/// Builds worker input for an album from the catalog cache.
+pub fn album_input(
+    cache: &crate::library::state::LibraryCache,
+    album_id: &str,
+) -> Option<AlbumInput> {
+    let album = cache.album(album_id)?;
+    let owner = cache.album_owner(album_id)?;
+    let mut known_artists = Vec::new();
+    for song in &album.songs {
+        for credit in &song.credits {
+            let normalized = normalize_artist_identity(&credit.name);
+            if !known_artists.iter().any(|(known, _)| *known == normalized) {
+                known_artists.push((normalized, credit.artist_id.clone()));
+            }
+        }
+        for (name, id) in song
+            .contributing_artists
+            .iter()
+            .zip(&song.contributing_artist_ids)
+        {
+            let normalized = normalize_artist_identity(name);
+            if !known_artists.iter().any(|(known, _)| *known == normalized) {
+                known_artists.push((normalized, id.clone()));
+            }
+        }
+    }
+    Some(AlbumInput {
+        id: album.id.clone(),
+        title: album.name.clone(),
+        artist_id: owner.id.clone(),
+        artist_name: owner.name.clone(),
+        musicbrainz_id: Some(album.musicbrainz_id.clone()).filter(|id| !id.is_empty()),
+        tracks: album
+            .songs
+            .iter()
+            .map(|song| TrackInput {
+                id: song.id.clone(),
+                title: song.name.clone(),
+                track_number: song.track_number,
+                duration: song.duration,
+            })
+            .collect(),
+        label: album.songs.iter().find_map(|song| song.label.clone()),
+        conductors: tagged_people(&album.songs, "conductor"),
+        ensembles: tagged_people(&album.songs, "ensemble"),
+        composers: tagged_people(&album.songs, "composer"),
+        known_artists,
+        year: album
+            .first_release_date
+            .get(..4)
+            .filter(|year| year.bytes().all(|byte| byte.is_ascii_digit()))
+            .map(str::to_string),
+        release_trusted: false,
+    })
+}
+
+/// Runs forever, sleeping while enrichment is off or the library is not
+/// ready. Spawned once by the server; each stage gets its own queue loop so
+/// a busy host only pauses its own work.
+pub async fn run(pool: DbPool, library: Arc<LibraryLifecycle>) {
+    let enricher = match HttpFetch::new() {
+        Ok(fetch) => Arc::new(Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images_directory(),
+        }),
+        Err(error) => {
+            tracing::error!(%error, "metadata enrichment client could not start");
+            return;
+        }
+    };
+    let mut stages = tokio::task::JoinSet::new();
+    for stage in Stage::ALL {
+        stages.spawn(run_stage(
+            stage,
+            pool.clone(),
+            library.clone(),
+            enricher.clone(),
+        ));
+    }
+    while stages.join_next().await.is_some() {}
+}
+
+async fn run_stage(
+    stage: Stage,
+    pool: DbPool,
+    library: Arc<LibraryLifecycle>,
+    enricher: Arc<Enricher<HttpFetch>>,
+) {
+    let signal = wake().stage(stage);
+    let mut seeded = false;
+    let mut covers_waiting = 0usize;
+    loop {
+        let settings = db(&pool, store::load_settings).await.unwrap_or_default();
+        if !settings.enabled {
+            seeded = false;
+            let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
+            continue;
+        }
+        let cache = if matches!(stage, Stage::Musicbrainz | Stage::CoverArt) {
+            match library.cache().await {
+                Ok(cache) => Some(cache),
+                Err(_) => {
+                    let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        if stage == Stage::Musicbrainz && !seeded {
+            match db(&pool, store::seed_tasks).await {
+                Ok(queued) if queued > 0 => tracing::info!(queued, "queued metadata enrichment"),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "could not queue metadata enrichment"),
+            }
+            match db(&pool, store::seed_genre_tasks).await {
+                Ok(queued) if queued > 0 => {
+                    tracing::info!(queued, "queued genre descriptions");
+                    wake().notify_all();
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "could not queue genre descriptions"),
+            }
+            seeded = true;
+        }
+        match enricher
+            .step(stage, &settings, cache.as_deref(), backoffs())
+            .await
+        {
+            Ok(Step::Paused(pause)) => {
+                tracing::info!(
+                    host = stage.host(),
+                    seconds = pause.as_secs(),
+                    "metadata service is busy; pausing its queue"
+                );
+                tokio::time::sleep(pause).await;
+            }
+            Ok(Step::Idle) => {
+                if covers_waiting > 0 {
+                    covers_waiting = 0;
+                    show_new_covers(&library).await;
+                }
+                let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
+            }
+            Ok(Step::Ran(task, outcome)) => {
+                if COVERS_REMOVED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    show_new_covers(&library).await;
+                }
+                if stage == Stage::CoverArt && outcome == Outcome::Done {
+                    covers_waiting += 1;
+                    // Show covers in batches while a long queue runs.
+                    if covers_waiting >= COVERS_PER_REFRESH {
+                        covers_waiting = 0;
+                        show_new_covers(&library).await;
+                    }
+                }
+                match &outcome {
+                    Outcome::Retry(error) => tracing::debug!(
+                        stage = stage.provider(),
+                        entity = %task.entity_id,
+                        %error,
+                        "metadata enrichment will retry"
+                    ),
+                    // A finished stage may have queued the next one.
+                    Outcome::Done => wake().notify_all(),
+                    Outcome::Skipped(_) => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(stage = stage.provider(), %error, "metadata enrichment step failed");
+                tokio::time::sleep(IDLE_POLL).await;
+            }
+        }
+    }
+}
+
+/// Covers stored before the library is reloaded to show them.
+const COVERS_PER_REFRESH: usize = 25;
+
+/// Reloads the library so albums show the covers just fetched. A scan in
+/// progress shows them when it publishes its own catalog.
+async fn show_new_covers(library: &LibraryLifecycle) {
+    use crate::library::state::{LibraryEnrichmentState, LibraryReadinessState};
+    let readiness = library.readiness().await;
+    if readiness.state != LibraryReadinessState::Ready {
+        return;
+    }
+    // Hold the scan slot so a scan cannot start publishing meanwhile.
+    let Some(_lease) = library.try_begin_scan() else {
+        return;
+    };
+    crate::library::storage::refresh_cache().await;
+    match crate::library::state::LibraryCache::new().await {
+        Ok(cache) if readiness.enrichment == LibraryEnrichmentState::Complete => {
+            library.set_ready_and_persist(cache).await;
+        }
+        Ok(cache) => {
+            library
+                .set_available_with_message(cache, readiness.message.unwrap_or_default())
+                .await;
+        }
+        Err(error) => tracing::warn!(%error, "could not reload the library to show new covers"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::fetch::mock::MockFetch;
+    use super::*;
+    use crate::persistence::connection::migrated_memory_pool;
+
+    const RELEASE: &str = "0aa4b5f5-2fd0-4b3c-8bd5-1c1b6b6f6a1e";
+    const GROUP: &str = "8e8a594e-2b2d-4c3c-9f1d-6c5b0a1d2e3f";
+    const MILES: &str = "561d854a-6a28-4aa7-8c99-323e6ce46c2a";
+    const EVANS: &str = "c4b9e4a2-4f6f-4b39-9b8c-7a2e0f0a1b2c";
+
+    fn album() -> AlbumInput {
+        AlbumInput {
+            id: "album-1".into(),
+            title: "Kind of Blue".into(),
+            artist_id: "artist-miles".into(),
+            artist_name: "Miles Davis".into(),
+            musicbrainz_id: None,
+            tracks: vec![
+                TrackInput {
+                    id: "t1".into(),
+                    title: "So What".into(),
+                    track_number: 1,
+                    duration: 0.0,
+                },
+                TrackInput {
+                    id: "t3".into(),
+                    title: "Blue in Green".into(),
+                    track_number: 3,
+                    duration: 0.0,
+                },
+            ],
+            known_artists: vec![("bill evans".into(), "artist-evans".into())],
+            year: None,
+            release_trusted: false,
+            ..AlbumInput::default()
+        }
+    }
+
+    /// A Wikipedia REST summary as the API returns it.
+    pub(super) fn summary(
+        title: &str,
+        item: Option<&str>,
+        description: &str,
+        extract: &str,
+        image: Option<&str>,
+    ) -> Value {
+        let path = title.replace(' ', "_");
+        serde_json::json!({
+            "type": "standard",
+            "title": title,
+            "titles": {"canonical": path, "normalized": title},
+            "wikibase_item": item,
+            "description": description,
+            "extract": extract,
+            "originalimage": image.map(|source| serde_json::json!({"source": source})),
+            "content_urls": {"desktop": {"page": format!("https://en.wikipedia.org/wiki/{path}")}}
+        })
+    }
+
+    /// A desktop Wikipedia page as browsers get it: page config with the
+    /// Wikidata item, canonical link, page image, a short description whose
+    /// Parsoid attributes hold a `>`, an infobox and a reference to skip,
+    /// titled sections and the page chrome after the article.
+    pub(super) fn page(
+        title: &str,
+        item: Option<&str>,
+        description: &str,
+        lead: &str,
+        sections: &[(&str, &str)],
+        image: Option<&str>,
+    ) -> Vec<u8> {
+        let path = title.replace(' ', "_");
+        let item = item.map_or(String::new(), |item| {
+            format!(",\"wgWikibaseItemId\":\"{item}\"")
+        });
+        let image = image.map_or(String::new(), |image| {
+            format!(
+                "<meta property=\"og:image\" content=\"{image}?utm_source=x&amp;utm_content=y\">"
+            )
+        });
+        let mut html = format!(
+            "<!DOCTYPE html><html><head><script>RLCONF={{\"wgCategories\":[\"Articles with short description\"]{item}}};</script>\
+             <link rel=\"canonical\" href=\"https://en.wikipedia.org/wiki/{path}\">{image}</head><body>\
+             <div id=\"mw-content-text\"><div class=\"mw-content-ltr mw-parser-output\" lang=\"en\">\
+             <div class=\"shortdescription nomobile\" style=\"display:none\" data-mw='{{\"wt\":\"a&lt;ref>b\"}}'>{description}</div>\
+             <table class=\"infobox\"><tbody><tr><td><p>Infobox</p></td></tr></tbody></table>\
+             <p>{lead}<sup class=\"reference\"><a>[1]</a></sup></p>"
+        );
+        for (heading, body) in sections {
+            html.push_str(&format!(
+                "<div class=\"mw-heading mw-heading2\"><h2 id=\"x\">{heading}</h2></div><p>{body}</p>"
+            ));
+        }
+        html.push_str(
+            "</div></div><div class=\"printfooter\">Retrieved from</div>\
+             <div id=\"catlinks\"><p>Categories</p></div><h2>Navigation menu</h2></body></html>",
+        );
+        html.into_bytes()
+    }
+
+    fn mock() -> MockFetch {
+        MockFetch::default()
+            .json(
+                &mb::release_search_url("Kind of Blue", "Miles Davis"),
+                serde_json::json!({"releases": [{"id": RELEASE, "title": "Kind of Blue", "score": 100,
+                    "track-count": 2, "artist-credit": [{"name": "Miles Davis"}]}]}),
+            )
+            .json(
+                &mb::release_lookup_url(RELEASE),
+                serde_json::json!({
+                    "id": RELEASE, "title": "Kind of Blue", "date": "1959-08-17",
+                    "label-info": [{"catalog-number": "CL 1355", "label": {"name": "Columbia"}}],
+                    "release-group": {"id": GROUP, "primary-type": "Album"},
+                    "artist-credit": [{"name": "Miles Davis", "artist": {"id": MILES, "name": "Miles Davis"}}],
+                    "relations": [{"type": "producer", "target-type": "artist", "attributes": [],
+                                   "artist": {"id": EVANS, "name": "Irving Townsend"}}],
+                    "media": [{"position": 1, "tracks": [
+                        {"position": 1, "title": "So What", "recording": {"id": RELEASE, "relations": []}},
+                        {"position": 3, "title": "Blue in Green", "recording": {"id": RELEASE, "relations": [
+                            {"type": "instrument", "target-type": "artist", "attributes": ["piano"],
+                             "artist": {"id": EVANS, "name": "Bill Evans"}}
+                        ]}}
+                    ]}]
+                }),
+            )
+            .json(
+                &mb::release_group_lookup_url(GROUP),
+                serde_json::json!({"relations": [{"type": "wikidata",
+                    "url": {"resource": "https://www.wikidata.org/wiki/Q731473"}}]}),
+            )
+            .json(
+                &wiki::wikidata_entity_url("Q731473"),
+                serde_json::json!({"entities": {"Q731473": {"sitelinks": {"enwiki": {"title": "Kind of Blue"}}, "claims": {}}}}),
+            )
+            // The release group links Wikidata only; Wikipedia confirms the
+            // guessed title through the article's Wikidata item.
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Kind of Blue"),
+                "text/html",
+                &page(
+                    "Kind of Blue",
+                    Some("Q731473"),
+                    "1959 studio album by Miles Davis",
+                    "Kind of Blue is a 1959 album by Miles Davis.",
+                    &[("Background", "Davis had..."), ("Reception", "Widely acclaimed.")],
+                    Some("https://upload.wikimedia.org/wikipedia/en/1/10/Kind_of_Blue_cover.jpg"),
+                ),
+            )
+    }
+
+    #[test]
+    fn a_release_teaches_the_names_its_people_are_credited_as() {
+        let qtip = "7a9b2c5a-4e7e-4b8c-9c7a-1d2e3f4a5b6c";
+        let release = mb::ReleaseDetails {
+            mbid: qtip.into(),
+            title: "The Low End Theory".into(),
+            date: None,
+            country: None,
+            barcode: None,
+            labels: Vec::new(),
+            release_group_mbid: None,
+            release_group_type: None,
+            first_release_date: None,
+            artists: Vec::new(),
+            credits: vec![mb::ExternalCredit {
+                name: "Jonathan Davis".into(),
+                artist_name: Some("Q-Tip".into()),
+                artist_mbid: Some(qtip.into()),
+                role: "producer".into(),
+                instrument: None,
+            }],
+            tracks: Vec::new(),
+        };
+        let aliases = release_aliases(&release);
+        let names = aliases
+            .iter()
+            .map(|alias| (alias.name.as_str(), alias.kind.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![("Jonathan Davis", "credit"), ("Q-Tip", "name")]);
+    }
+
+    #[tokio::test]
+    async fn album_enrichment_stores_background_reception_credits_and_links() {
+        let pool = migrated_memory_pool();
+        let enricher = Enricher {
+            fetch: mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher
+            .enrich_album(
+                &album(),
+                &EnrichmentSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        let requests = enricher.fetch.requested();
+        assert!(requests.iter().all(|url| url.starts_with("https://")));
+        // Search, release, release group; the article page (no Action
+        // API); then Wikidata, which names the same article.
+        assert_eq!(requests.len(), 5);
+        assert!(!requests.iter().any(|url| url.contains("/w/api.php")));
+
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "album", "album-1").unwrap();
+        let kinds = texts
+            .iter()
+            .map(|text| text.kind.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["background", "reception"]);
+        assert_eq!(texts[1].body, "Widely acclaimed.");
+        assert_eq!(
+            texts[0].body,
+            "Kind of Blue is a 1959 album by Miles Davis."
+        );
+        assert_eq!(texts[0].url, "https://en.wikipedia.org/wiki/Kind_of_Blue");
+        assert_eq!(texts[0].license, "CC BY-SA 4.0");
+        let credits = store::album_credits(&mut connection, "album-1").unwrap();
+        let summary = credits
+            .iter()
+            .map(|credit| {
+                (
+                    credit.track_id.as_str(),
+                    credit.name.as_str(),
+                    credit.role.as_str(),
+                    credit.instrument.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                ("", "Irving Townsend", "producer", ""),
+                ("t3", "Bill Evans", "performer", "piano")
+            ]
+        );
+        let profile = store::load_profile(&mut connection, "album", "album-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.wikidata_id.as_deref(), Some("Q731473"));
+        assert!(profile.profile_json.contains("CL 1355"));
+        assert_eq!(
+            store::linked_artist_mbids(&mut connection, "artist-evans").unwrap(),
+            [EVANS.to_string()]
+        );
+        assert_eq!(
+            store::linked_artist_mbids(&mut connection, "artist-miles").unwrap(),
+            [MILES.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn frozen_edits_and_source_choices_survive_a_new_lookup() {
+        use crate::enrichment::preferences as prefs;
+        let pool = migrated_memory_pool();
+        let enricher = Enricher {
+            fetch: mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.enrich_album(&album(), &settings).await.unwrap(),
+            Outcome::Done
+        );
+        {
+            let mut connection = pool.get().unwrap();
+            prefs::save_field_edit(
+                &mut connection,
+                "album-1",
+                prefs::AlbumField::CatalogNumber,
+                Some("CL 1355 (my pressing)"),
+                Some(1),
+            )
+            .unwrap();
+            prefs::save_field_source(
+                &mut connection,
+                "album-1",
+                prefs::AlbumField::Label,
+                Some(prefs::FactSource::Online),
+                Some(1),
+            )
+            .unwrap();
+            let edited = vec![prefs::EditedCredit {
+                name: "Bill Evans".into(),
+                role: "performer".into(),
+                instrument: Some("piano".into()),
+                track_ids: vec!["t1".into()],
+                artist_id: None,
+            }];
+            prefs::save_credit_edit(&mut connection, "album-1", Some(&edited), Some(1)).unwrap();
+            // The edited list hides MusicBrainz credits for the album.
+            assert!(
+                store::album_credits(&mut connection, "album-1")
+                    .unwrap()
+                    .is_empty()
+            );
+            // "Look up online metadata again".
+            store::refresh_entity(&mut connection, "album", "album-1").unwrap();
+        }
+        assert_eq!(
+            enricher.enrich_album(&album(), &settings).await.unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let kept = prefs::load_album_preferences(&mut connection, "album-1").unwrap();
+        assert_eq!(
+            kept.edits
+                .get(&prefs::AlbumField::CatalogNumber)
+                .map(String::as_str),
+            Some("CL 1355 (my pressing)")
+        );
+        assert_eq!(
+            kept.sources.get(&prefs::AlbumField::Label),
+            Some(&prefs::FactSource::Online)
+        );
+        let credits = prefs::load_credit_edit(&mut connection, "album-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(credits[0].track_ids, ["t1"]);
+        // The lookup stored MusicBrainz credits again, but they stay hidden.
+        assert!(
+            store::album_credits(&mut connection, "album-1")
+                .unwrap()
+                .is_empty()
+        );
+        let (_, online) = prefs::credit_counts(&mut connection, "album-1").unwrap();
+        assert!(
+            online
+                .get(&prefs::AlbumField::Credits)
+                .copied()
+                .unwrap_or(0)
+                > 0
+        );
+        // Reverting the list brings them back.
+        prefs::save_credit_edit(&mut connection, "album-1", None, None).unwrap();
+        assert_eq!(
+            store::album_credits(&mut connection, "album-1")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limits_are_retried_and_unmatched_albums_are_skipped() {
+        let pool = migrated_memory_pool();
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let unknown = AlbumInput {
+            title: "Unknown Album".into(),
+            ..album()
+        };
+        let enricher = Enricher {
+            fetch: mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        // The mock answers 404 for the unknown search, which is not retried
+        // as "no match" but as a failed search.
+        assert!(matches!(
+            enricher.enrich_album(&unknown, &settings).await.unwrap(),
+            Outcome::Retry(_)
+        ));
+        let empty = MockFetch::default().json(
+            &mb::release_search_url("Unknown Album", "Miles Davis"),
+            serde_json::json!({"releases": []}),
+        );
+        let enricher = Enricher {
+            fetch: empty,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        assert!(matches!(
+            enricher.enrich_album(&unknown, &settings).await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        let limited = MockFetch::default().status(&mb::release_lookup_url(RELEASE), 503);
+        let enricher = Enricher {
+            fetch: limited,
+            pool,
+            images: std::env::temp_dir(),
+        };
+        let tagged = AlbumInput {
+            musicbrainz_id: Some(RELEASE.into()),
+            ..album()
+        };
+        assert_eq!(
+            enricher.enrich_album(&tagged, &settings).await.unwrap(),
+            Outcome::Retry("HTTP 503".into())
+        );
+        // A tagged release id skips the search request.
+        assert_eq!(
+            enricher.fetch.requested(),
+            [mb::release_lookup_url(RELEASE)]
+        );
+    }
+
+    #[tokio::test]
+    async fn artist_enrichment_stores_biography_facts_and_a_licensed_image() {
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = MockFetch::default()
+            .json(
+                &mb::artist_search_url("Miles Davis"),
+                serde_json::json!({"artists": [{"id": MILES, "name": "Miles Davis", "score": 100}]}),
+            )
+            .json(
+                &mb::artist_lookup_url(MILES),
+                serde_json::json!({"id": MILES, "name": "Miles Davis", "type": "Person",
+                    "area": {"name": "United States"}, "life-span": {"begin": "1926-05-26"},
+                    "relations": [{"type": "wikidata", "url": {"resource": "https://www.wikidata.org/wiki/Q93341"}}]}),
+            )
+            .json(
+                &wiki::wikidata_entity_url("Q93341"),
+                serde_json::json!({"entities": {"Q93341": {"sitelinks": {"enwiki": {"title": "Miles Davis"}},
+                    "claims": {"P18": [{"mainsnak": {"datavalue": {"value": "Miles Davis.jpg"}}}],
+                               "P570": [{"mainsnak": {"datavalue": {"value": {"time": "+1991-09-28T00:00:00Z", "precision": 11}}}}]}}}}),
+            )
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Miles Davis"),
+                "text/html",
+                &page(
+                    "Miles Davis",
+                    Some("Q93341"),
+                    "American jazz trumpeter (1926–1991)",
+                    "Miles Dewey Davis III was an American trumpeter.",
+                    &[],
+                    None,
+                ),
+            )
+            .bytes(
+                &wiki::commons_wikitext_url("Miles Davis.jpg"),
+                "text/plain",
+                b"{{Information\n|description={{en|Miles Davis}}\n|author=[[User:Tom|Tom Palumbo]]\n}}\n{{cc-by-sa-2.0}}",
+            )
+            .bytes(&wiki::commons_thumbnail_url("Miles Davis.jpg"), "image/jpeg", &jpeg);
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let artist = ArtistInput {
+            id: "artist-miles".into(),
+            name: "Miles Davis".into(),
+        };
+        let outcome = enricher
+            .enrich_artist(
+                &artist,
+                &EnrichmentSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "artist", "artist-miles").unwrap();
+        assert_eq!(texts[0].kind, "biography");
+        assert_eq!(texts[0].url, "https://en.wikipedia.org/wiki/Miles_Davis");
+        let profile = store::load_profile(&mut connection, "artist", "artist-miles")
+            .unwrap()
+            .unwrap();
+        let facts: Value = serde_json::from_str(&profile.profile_json).unwrap();
+        assert_eq!(facts["kind"], "Person");
+        assert_eq!(facts["begin"], "1926-05-26");
+        assert_eq!(facts["end"], "1991-09-28");
+        let image = store::load_image(&mut connection, "artist", "artist-miles")
+            .unwrap()
+            .unwrap();
+        assert_eq!(image.author, "Tom Palumbo");
+        assert_eq!(image.license, "CC BY-SA 2.0");
+        assert_eq!(
+            image.page_url,
+            "https://commons.wikimedia.org/wiki/File:Miles_Davis.jpg"
+        );
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[tokio::test]
+    async fn busy_wikipedia_keeps_musicbrainz_results_and_retries_the_text() {
+        let pool = migrated_memory_pool();
+        let fetch = mock().status(&wiki::wikipedia_page_url("en", "Kind of Blue"), 429);
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher
+            .enrich_album(
+                &album(),
+                &EnrichmentSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Retry("HTTP 429".into()));
+        let mut connection = pool.get().unwrap();
+        assert_eq!(
+            store::album_credits(&mut connection, "album-1")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            store::load_texts(&mut connection, "album", "album-1")
+                .unwrap()
+                .is_empty()
+        );
+        drop(connection);
+
+        // When only the page is busy, the REST summary's lead is kept at
+        // once and the full text is asked for again later, without pausing
+        // the Wikipedia queue for everyone else.
+        let fetch = mock()
+            .status(&wiki::wikipedia_page_url("en", "Kind of Blue"), 429)
+            .json(
+                &wiki::wikipedia_summary_url("en", "Kind of Blue"),
+                summary(
+                    "Kind of Blue",
+                    Some("Q731473"),
+                    "1959 studio album by Miles Davis",
+                    "Kind of Blue is a 1959 album.",
+                    None,
+                ),
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let Outcome::Retry(error) = enricher
+            .wikipedia_stage("album", "album-1", &settings)
+            .await
+            .unwrap()
+        else {
+            panic!("the full text is still wanted");
+        };
+        assert_eq!(
+            next_throttle(Duration::ZERO, &Outcome::Retry(error)),
+            Duration::ZERO
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "album", "album-1").unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].body, "Kind of Blue is a 1959 album.");
+    }
+
+    const KARAJAN_RELEASE: &str = "77777777-7777-4777-8777-777777777777";
+    const SYMPHONY: &str = "22222222-2222-4222-8222-222222222222";
+    const MOVEMENT_ONE: &str = "33333333-3333-4333-8333-333333333333";
+    const MOVEMENT_FOUR: &str = "44444444-4444-4444-8444-444444444444";
+    const BEETHOVEN: &str = "1f9df192-a621-4f54-8850-2c5373b7eac9";
+
+    fn karajan_album() -> AlbumInput {
+        AlbumInput {
+            id: "karajan-9".into(),
+            title: "Beethoven: Symphony No. 9".into(),
+            artist_id: "artist-karajan".into(),
+            artist_name: "Herbert von Karajan".into(),
+            musicbrainz_id: None,
+            tracks: vec![
+                TrackInput {
+                    id: "k1".into(),
+                    title: "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo".into(),
+                    track_number: 1,
+                    duration: 0.0,
+                },
+                TrackInput {
+                    id: "k4".into(),
+                    title: "Symphony No. 9 in D minor, Op. 125: IV. Presto".into(),
+                    track_number: 2,
+                    duration: 0.0,
+                },
+            ],
+            known_artists: Vec::new(),
+            year: None,
+            release_trusted: false,
+            ..AlbumInput::default()
+        }
+    }
+
+    fn movement(id: &str, title: &str, position: i64) -> Value {
+        serde_json::json!({"type": "performance", "target-type": "work", "work": {
+            "id": id, "title": title,
+            "relations": [
+                {"type": "composer", "target-type": "artist", "begin": "1822", "end": "1824",
+                 "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}},
+                {"type": "parts", "target-type": "work", "direction": "backward", "ordering-key": position,
+                 "work": {"id": SYMPHONY, "title": "Symphony no. 9 in D minor, op. 125", "type": "Symphony"}}
+            ]
+        }})
+    }
+
+    fn karajan_release() -> Value {
+        serde_json::json!({
+            "id": KARAJAN_RELEASE, "title": "Symphonie Nr. 9",
+            "release-group": {"primary-type": "Album"},
+            "artist-credit": [{"name": "Beethoven", "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}}],
+            "media": [{"position": 1, "tracks": [
+                {"position": 1, "title": "Symphonie Nr. 9: I. Allegro ma non troppo",
+                 "recording": {"id": MOVEMENT_ONE, "relations": [
+                     movement(MOVEMENT_ONE, "Symphony no. 9 in D minor, op. 125: I. Allegro ma non troppo, un poco maestoso", 1)
+                 ]}},
+                {"position": 2, "title": "Symphonie Nr. 9: IV. Presto",
+                 "recording": {"id": MOVEMENT_FOUR, "relations": [
+                     movement(MOVEMENT_FOUR, "Symphony no. 9 in D minor, op. 125: IV. Presto – Allegro assai", 4),
+                     {"type": "conductor", "target-type": "artist", "attributes": [],
+                      "artist": {"id": KARAJAN_RELEASE, "name": "Herbert von Karajan"}}
+                 ]}}
+            ]}]
+        })
+    }
+
+    #[tokio::test]
+    async fn an_identified_album_uses_the_chosen_release_and_stores_its_works() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::set_identification(
+                &mut connection,
+                "karajan-9",
+                Some((KARAJAN_RELEASE, "Symphonie Nr. 9", "Beethoven")),
+                None,
+            )
+            .unwrap();
+        }
+        let enricher = Enricher {
+            fetch: MockFetch::default()
+                .json(&mb::release_lookup_url(KARAJAN_RELEASE), karajan_release()),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher
+            .enrich_album(
+                &karajan_album(),
+                &EnrichmentSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        // No search: the administrator's choice is looked up directly.
+        assert_eq!(
+            enricher
+                .fetch
+                .requested()
+                .into_iter()
+                .filter(|url| url.contains("musicbrainz.org"))
+                .collect::<Vec<_>>(),
+            [mb::release_lookup_url(KARAJAN_RELEASE)]
+        );
+        let mut connection = pool.get().unwrap();
+        let symphony = store::load_work(&mut connection, SYMPHONY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(symphony.title, "Symphony No. 9 in D minor, Op. 125");
+        assert_eq!(symphony.catalogue.as_deref(), Some("Op. 125"));
+        assert_eq!(symphony.musical_key.as_deref(), Some("D minor"));
+        assert_eq!(symphony.form.as_deref(), Some("Symphony"));
+        assert_eq!(symphony.composed.as_deref(), Some("1822–1824"));
+        assert_eq!(symphony.composer_mbid.as_deref(), Some(BEETHOVEN));
+        let parts = store::work_parts(&mut connection, SYMPHONY).unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| (part.mbid.as_str(), part.part_position))
+                .collect::<Vec<_>>(),
+            [(MOVEMENT_ONE, Some(1)), (MOVEMENT_FOUR, Some(4))]
+        );
+        let links = store::work_tracks(&mut connection, SYMPHONY).unwrap();
+        assert_eq!(
+            links
+                .iter()
+                .map(|link| (link.track_id.as_str(), link.work_mbid.as_str()))
+                .collect::<Vec<_>>(),
+            [("k1", MOVEMENT_ONE), ("k4", MOVEMENT_FOUR)]
+        );
+        let profile = store::load_profile(&mut connection, "album", "karajan-9")
+            .unwrap()
+            .unwrap();
+        assert!(profile.profile_json.contains("\"exact\":true"));
+    }
+
+    #[test]
+    fn movements_match_by_their_shortened_titles_and_trusted_positions() {
+        let local = |id: &str, title: &str, number: u16| TrackInput {
+            id: id.into(),
+            title: title.into(),
+            track_number: number,
+            duration: 0.0,
+        };
+        let album = AlbumInput {
+            tracks: vec![
+                local(
+                    "k1",
+                    "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo",
+                    1,
+                ),
+                local(
+                    "k2",
+                    "Symphony No. 9 in D minor, Op. 125: II. Molto vivace",
+                    2,
+                ),
+                local("k3", "Adagio", 3),
+                local(
+                    "k4",
+                    "Symphony No. 9 in D minor, Op. 125: IV. Presto – Allegro assai",
+                    4,
+                ),
+            ],
+            ..karajan_album()
+        };
+        let release_track = |position: i64, title: &str| mb::ReleaseTrack {
+            disc: 1,
+            position,
+            title: title.into(),
+            recording_mbid: None,
+            length_ms: None,
+            credits: Vec::new(),
+            works: Vec::new(),
+        };
+        let release = mb::ReleaseDetails {
+            tracks: vec![
+                release_track(
+                    1,
+                    "Symphony No. 9 in D minor, Op. 125: I. Allegro ma non troppo, un poco maestoso",
+                ),
+                release_track(2, "Symphony No. 9 in D minor, Op. 125: II. Molto vivace"),
+                release_track(
+                    3,
+                    "Symphony No. 9 in D minor, Op. 125: III. Adagio molto e cantabile",
+                ),
+                release_track(4, "Symphony No. 9 in D minor, Op. 125: IV. Presto"),
+                release_track(
+                    5,
+                    "Symphony No. 9 in D minor, Op. 125: IV. Presto - \"O Freunde\" - Allegro assai",
+                ),
+            ],
+            ..mb::ReleaseDetails::default()
+        };
+        let summary = |album: &AlbumInput| {
+            match_tracks(album, &release)
+                .into_iter()
+                .map(|(index, id)| (release.tracks[index].position, id))
+                .collect::<Vec<_>>()
+        };
+        // Track counts differ, so an automatic match never guesses by
+        // position; "Adagio" is too short to match on its own.
+        assert_eq!(
+            summary(&album),
+            [
+                (1, "k1".to_string()),
+                (2, "k2".to_string()),
+                (4, "k4".to_string())
+            ]
+        );
+        // Even for a chosen release, positions only count when the track
+        // lists have the same length: a 4-track album is not tracks 1-4 of
+        // a 12-track compilation.
+        let chosen = AlbumInput {
+            release_trusted: true,
+            ..album.clone()
+        };
+        assert_eq!(summary(&chosen), summary(&album));
+        // Roman and Arabic movement numbers match, and "Attacca" is ignored.
+        let sonatas = AlbumInput {
+            tracks: vec![
+                local(
+                    "p1",
+                    "Piano Sonata No. 8, Op. 13: I. Grave – Allegro di molto e con brio",
+                    1,
+                ),
+                local(
+                    "p2",
+                    "Piano Sonata No. 14, Op. 27 No. 2: I. Adagio sostenuto",
+                    2,
+                ),
+            ],
+            ..karajan_album()
+        };
+        let release = mb::ReleaseDetails {
+            tracks: vec![
+                release_track(
+                    1,
+                    "Sonate no. 8 c-moll, op. 13: 1. Grave - Allegro di molto e con brio",
+                ),
+                release_track(2, "Sonate no. 8 c-moll, op. 13: 2. Adagio cantabile"),
+                release_track(
+                    4,
+                    "Sonate no. 14 cis-moll, op. 27 no. 2: 1. Adagio sostenuto - Attacca",
+                ),
+            ],
+            ..mb::ReleaseDetails::default()
+        };
+        assert_eq!(
+            match_tracks(&sonatas, &release),
+            [(0, "p1".to_string()), (2, "p2".to_string())]
+        );
+        assert_eq!(roman_number("iv"), Some(4));
+        assert_eq!(roman_number("xiv"), Some(14));
+        assert_eq!(roman_number("live"), None);
+    }
+
+    #[tokio::test]
+    async fn placeholder_artists_are_never_matched_automatically() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "artist",
+                "unknown",
+                &ProfileRow {
+                    musicbrainz_id: Some(MILES.into()),
+                    profile_json: "{\"disambiguation\":\"drum and bass\"}".into(),
+                    ..ProfileRow::default()
+                },
+            )
+            .unwrap();
+        }
+        let enricher = Enricher {
+            fetch: MockFetch::default(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        for name in ["Unknown Artist", "Various Artists", "[unknown]", "  VA "] {
+            let outcome = enricher
+                .enrich_artist(
+                    &ArtistInput {
+                        id: "unknown".into(),
+                        name: name.into(),
+                    },
+                    &settings,
+                )
+                .await
+                .unwrap();
+            assert!(matches!(outcome, Outcome::Skipped(_)), "{name}");
+        }
+        let album = AlbumInput {
+            title: "Basement Tapes".into(),
+            artist_name: "Unknown Artist".into(),
+            ..album()
+        };
+        assert!(matches!(
+            enricher.enrich_album(&album, &settings).await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        assert!(enricher.fetch.requested().is_empty());
+        let mut connection = pool.get().unwrap();
+        // The wrong match an earlier version stored is gone.
+        assert_eq!(
+            store::load_profile(&mut connection, "artist", "unknown").unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiguous_artists_get_no_biography() {
+        let pool = migrated_memory_pool();
+        let fetch = MockFetch::default().json(
+            &mb::artist_search_url("Nirvana"),
+            serde_json::json!({"artists": [
+                {"id": MILES, "name": "Nirvana", "score": 100},
+                {"id": EVANS, "name": "Nirvana", "score": 100}
+            ]}),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let artist = ArtistInput {
+            id: "nirvana".into(),
+            name: "Nirvana".into(),
+        };
+        let outcome = enricher
+            .enrich_artist(
+                &artist,
+                &EnrichmentSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, Outcome::Skipped(_)));
+        assert_eq!(enricher.fetch.requested().len(), 1);
+    }
+
+    const KARAJAN: &str = "d2ced2f1-6b58-47cf-ae87-5943e2ab6d99";
+    const KLEIBER: &str = "a6a3e7e4-4b0a-4a59-8b8a-8a0c8b3f6c11";
+
+    /// Three conductors and composers whose photos live on Commons.
+    fn classical_people() -> [(&'static str, &'static str, &'static str, &'static str); 3] {
+        [
+            ("beethoven", "Ludwig van Beethoven", BEETHOVEN, "Q255"),
+            ("karajan", "Herbert von Karajan", KARAJAN, "Q78491"),
+            ("kleiber", "Carlos Kleiber", KLEIBER, "Q57640"),
+        ]
+    }
+
+    fn classical_mock() -> MockFetch {
+        let mut fetch = MockFetch::default();
+        for (_, name, mbid, item) in classical_people() {
+            let file = format!("{name}.jpg");
+            fetch = fetch
+                .json(
+                    &mb::artist_search_url(name),
+                    serde_json::json!({"artists": [{"id": mbid, "name": name, "score": 100}]}),
+                )
+                .json(
+                    &mb::artist_lookup_url(mbid),
+                    serde_json::json!({"id": mbid, "name": name, "type": "Person",
+                        "relations": [{"type": "wikidata",
+                            "url": {"resource": format!("https://www.wikidata.org/wiki/{item}")}}]}),
+                )
+                .json(
+                    &wiki::wikidata_entity_url(item),
+                    serde_json::json!({"entities": {item: {"sitelinks": {"enwiki": {"title": name}},
+                        "claims": {"P18": [{"mainsnak": {"datavalue": {"value": file}}}]}}}}),
+                )
+                .bytes(
+                    &wiki::wikipedia_page_url("en", name),
+                    "text/html",
+                    &page(name, Some(item), "musician", &format!("{name} was a musician."), &[], None),
+                )
+                // Commons is rate limiting this client.
+                .status(&wiki::commons_wikitext_url(&file), 429);
+        }
+        fetch
+    }
+
+    /// Runs every stage's queue in turn, as the worker's loops do, until
+    /// no queue has anything it may run.
+    async fn drain(
+        enricher: &Enricher<MockFetch>,
+        settings: &EnrichmentSettings,
+        backoffs: &Backoffs,
+    ) -> Vec<(Stage, String, Outcome)> {
+        let mut ran = Vec::new();
+        loop {
+            let mut progressed = false;
+            for stage in Stage::ALL {
+                if let Step::Ran(task, outcome) = enricher
+                    .step(stage, settings, None, backoffs)
+                    .await
+                    .unwrap()
+                {
+                    ran.push((stage, task.entity_id, outcome));
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                return ran;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_busy_commons_does_not_hold_back_biographies() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            for (id, name, _, _) in classical_people() {
+                diesel::RunQueryDsl::execute(
+                    diesel::sql_query(
+                        "INSERT INTO artist_entity (id, name, normalized_name) VALUES (?, ?, ?)",
+                    )
+                    .bind::<diesel::sql_types::Text, _>(id)
+                    .bind::<diesel::sql_types::Text, _>(name)
+                    .bind::<diesel::sql_types::Text, _>(name.to_lowercase()),
+                    &mut connection,
+                )
+                .unwrap();
+            }
+            assert_eq!(store::seed_tasks(&mut connection).unwrap(), 3);
+        }
+        let enricher = Enricher {
+            fetch: classical_mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let backoffs = Backoffs::default();
+        let ran = drain(&enricher, &settings, &backoffs).await;
+
+        // Beethoven's photo request was refused first...
+        assert_eq!(
+            ran.iter()
+                .filter(|(stage, _, _)| *stage == Stage::Commons)
+                .collect::<Vec<_>>(),
+            [&(
+                Stage::Commons,
+                "beethoven".to_string(),
+                Outcome::Retry("HTTP 429".into())
+            )]
+        );
+        let now = Instant::now();
+        assert!(!backoffs.paused_for(Stage::Commons, now).is_zero());
+        for stage in [Stage::Musicbrainz, Stage::Wikidata, Stage::Wikipedia] {
+            assert!(backoffs.paused_for(stage, now).is_zero(), "{stage:?}");
+        }
+        // ...yet every biography arrived, and Commons was asked only once.
+        let mut connection = pool.get().unwrap();
+        for (id, name, _, _) in classical_people() {
+            let texts = store::load_texts(&mut connection, "artist", id).unwrap();
+            assert_eq!(texts.len(), 1, "{name}");
+            assert_eq!(texts[0].kind, "biography");
+            assert_eq!(texts[0].body, format!("{name} was a musician."));
+            assert_eq!(texts[0].license, "CC BY-SA 4.0");
+            let state = store::task_state(&mut connection, "artist", id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (state.status.as_str(), state.stage.as_str()),
+                ("pending", "commons")
+            );
+        }
+        let requests = enricher.fetch.requested();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|url| url.contains("commons.wikimedia.org"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|url| url.contains("musicbrainz.org"))
+                .count(),
+            6
+        );
+        assert_eq!(
+            store::stage_counts(&mut connection, Stage::Commons)
+                .unwrap()
+                .pending,
+            3
+        );
+        // The photo lookup is internal and never shown as a fact.
+        let profile = store::load_profile(&mut connection, "artist", "karajan")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            wikidata_links(&profile).image.as_deref(),
+            Some("Herbert von Karajan.jpg")
+        );
+    }
+
+    #[test]
+    fn each_host_backs_off_on_its_own() {
+        let backoffs = Backoffs::default();
+        let now = Instant::now();
+        let busy = Outcome::Retry("HTTP 429".into());
+        assert_eq!(backoffs.record(Stage::Commons, &busy, now), MIN_THROTTLE);
+        assert_eq!(backoffs.paused_for(Stage::Commons, now), MIN_THROTTLE);
+        assert!(backoffs.paused_for(Stage::Wikipedia, now).is_zero());
+        assert!(backoffs.paused_for(Stage::Musicbrainz, now).is_zero());
+        // A second refusal doubles only Commons' pause.
+        assert_eq!(
+            backoffs.record(Stage::Commons, &busy, now),
+            MIN_THROTTLE * 2
+        );
+        assert_eq!(
+            backoffs.record(Stage::Musicbrainz, &Outcome::Done, now),
+            Duration::ZERO
+        );
+        // The pause runs out, and a success resets it.
+        assert!(
+            backoffs
+                .paused_for(Stage::Commons, now + MIN_THROTTLE * 2)
+                .is_zero()
+        );
+        backoffs.record(Stage::Commons, &Outcome::Done, now);
+        assert!(backoffs.paused_for(Stage::Commons, now).is_zero());
+    }
+
+    #[test]
+    fn overload_answers_pause_the_worker_with_growing_backoff() {
+        let busy = Outcome::Retry("HTTP 503".into());
+        let first = next_throttle(Duration::ZERO, &busy);
+        assert_eq!(first, MIN_THROTTLE);
+        assert_eq!(next_throttle(first, &busy), MIN_THROTTLE * 2);
+        assert_eq!(next_throttle(MAX_THROTTLE, &busy), MAX_THROTTLE);
+        assert_eq!(next_throttle(first, &Outcome::Done), Duration::ZERO);
+        assert_eq!(
+            next_throttle(first, &Outcome::Retry("timeout".into())),
+            first
+        );
+    }
+
+    #[test]
+    fn image_names_cannot_escape_the_directory() {
+        assert_eq!(
+            image_file_name("artist", "abc_-1", "image/png").as_deref(),
+            Some("artist-abc_-1.png")
+        );
+        assert_eq!(image_file_name("artist", "../x", "image/png"), None);
+        assert_eq!(image_file_name("artist", "abc", "image/gif"), None);
+        assert!(sniff_image(b"\x89PNG\r\n\x1a\nrest", "image/png"));
+        assert!(!sniff_image(b"<html>", "image/jpeg"));
+    }
+
+    #[tokio::test]
+    async fn musicbrainz_genres_are_kept_and_genre_pages_get_text_from_wikipedia() {
+        let pool = migrated_memory_pool();
+        let fetch = mock()
+            .json(
+                &mb::release_group_lookup_url(GROUP),
+                serde_json::json!({
+                    "relations": [{"type": "wikidata",
+                        "url": {"resource": "https://www.wikidata.org/wiki/Q731473"}}],
+                    "genres": [{"name": "modal jazz", "count": 5}, {"name": "jazz", "count": 2}]
+                }),
+            )
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Modal jazz"),
+                "text/html",
+                &page(
+                    "Modal jazz",
+                    Some("Q845831"),
+                    "jazz that uses musical modes",
+                    "Modal jazz is jazz that uses musical modes.",
+                    &[],
+                    None,
+                ),
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.enrich_album(&album(), &settings).await.unwrap(),
+            Outcome::Done
+        );
+        {
+            let mut connection = pool.get().unwrap();
+            let links = store::genre_links(&mut connection, "album").unwrap();
+            assert_eq!(
+                links
+                    .iter()
+                    .map(|row| (row.name.as_str(), row.source.as_str(), row.weight))
+                    .collect::<Vec<_>>(),
+                [("modal jazz", "musicbrainz", 5), ("jazz", "musicbrainz", 2)]
+            );
+            // Modal Jazz and its parent Jazz are queued for their About text.
+            assert_eq!(store::seed_genre_tasks(&mut connection).unwrap(), 2);
+            assert_eq!(store::seed_genre_tasks(&mut connection).unwrap(), 0);
+            let state = store::task_state(&mut connection, "genre", "modal-jazz")
+                .unwrap()
+                .unwrap();
+            // Genres go straight to the Wikipedia article the genre tree names.
+            assert_eq!(
+                (state.status.as_str(), state.stage.as_str()),
+                ("pending", "wikipedia")
+            );
+        }
+        let Step::Ran(task, _) = enricher
+            .step(Stage::Wikipedia, &settings, None, &Backoffs::default())
+            .await
+            .unwrap()
+        else {
+            panic!("a genre task was due");
+        };
+        assert_eq!(task.entity_type, "genre");
+        assert_eq!(
+            enricher
+                .wikipedia_stage("genre", "modal-jazz", &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        assert!(matches!(
+            enricher
+                .wikipedia_stage("genre", "jazz", &settings)
+                .await
+                .unwrap(),
+            Outcome::Skipped(_)
+        ));
+        assert!(matches!(
+            enricher
+                .wikipedia_stage("genre", "not-a-genre", &settings)
+                .await
+                .unwrap(),
+            Outcome::Skipped(_)
+        ));
+        // English is the preferred language, so Wikidata is not asked.
+        assert!(
+            !enricher
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains("wbgetentities") || url.contains("Q845831"))
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "genre", "modal-jazz").unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].kind, "background");
+        assert_eq!(texts[0].body, "Modal jazz is jazz that uses musical modes.");
+        assert_eq!(texts[0].license, "CC BY-SA 4.0");
+        let profile = store::load_profile(&mut connection, "genre", "modal-jazz")
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.wikidata_id.as_deref(), Some("Q845831"));
+    }
+
+    #[tokio::test]
+    async fn a_musicbrainz_image_link_gives_a_photo_when_wikidata_has_none() {
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = MockFetch::default()
+            .json(
+                &mb::artist_search_url("Bill Evans"),
+                serde_json::json!({"artists": [{"id": EVANS, "name": "Bill Evans", "score": 100}]}),
+            )
+            .json(
+                &mb::artist_lookup_url(EVANS),
+                serde_json::json!({"id": EVANS, "name": "Bill Evans", "type": "Person",
+                    "genres": [{"name": "cool jazz", "count": 3}],
+                    "relations": [{"type": "image", "url": {"resource":
+                        "https://commons.wikimedia.org/wiki/File:Bill_Evans_1961.jpg"}}]}),
+            )
+            .json(
+                &wiki::commons_image_info_url("Bill Evans 1961.jpg"),
+                serde_json::json!({"query": {"pages": [{"imageinfo": [{
+                    "thumburl": "https://upload.wikimedia.org/thumb/evans.jpg",
+                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Bill_Evans_1961.jpg",
+                    "mime": "image/jpeg",
+                    "extmetadata": {"LicenseShortName": {"value": "Public domain"}, "Artist": {"value": "Unknown"}}
+                }]}]}}),
+            )
+            .bytes("https://upload.wikimedia.org/thumb/evans.jpg", "image/jpeg", &jpeg);
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let artist = ArtistInput {
+            id: "artist-evans".into(),
+            name: "Bill Evans".into(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.enrich_artist(&artist, &settings).await.unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let image = store::load_image(&mut connection, "artist", "artist-evans")
+            .unwrap()
+            .expect("the MusicBrainz-linked photo");
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        let genres = store::genre_links(&mut connection, "artist").unwrap();
+        assert_eq!(genres[0].name, "cool jazz");
+        // The internal key is never shown as a fact.
+        let profile = store::load_profile(&mut connection, "artist", "artist-evans")
+            .unwrap()
+            .unwrap();
+        assert!(profile.profile_json.contains(COMMONS_IMAGE_KEY));
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[tokio::test]
+    async fn biographies_and_photos_do_not_wait_for_a_busy_wikidata() {
+        const SIMONE: &str = "a1b2c3d4-0000-4000-8000-000000000001";
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = MockFetch::default()
+            .json(
+                &mb::artist_search_url("Nina Simone"),
+                serde_json::json!({"artists": [{"id": SIMONE, "name": "Nina Simone", "score": 100}]}),
+            )
+            .json(
+                &mb::artist_lookup_url(SIMONE),
+                serde_json::json!({"id": SIMONE, "name": "Nina Simone", "type": "Person",
+                    "relations": [
+                        {"type": "wikidata", "url": {"resource": "https://www.wikidata.org/wiki/Q187119"}},
+                        {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Nina_Simone"}}
+                    ]}),
+            )
+            // Wikidata is refusing this client.
+            .status(&wiki::wikidata_entity_url("Q187119"), 429)
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Nina Simone"),
+                "text/html",
+                &page(
+                    "Nina Simone",
+                    Some("Q187119"),
+                    "American singer and pianist (1933–2003)",
+                    "Eunice Kathleen Waymon, known as Nina Simone, was an American singer, songwriter and pianist.",
+                    &[("Early life", "Simone was born in Tryon.")],
+                    Some("https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Nina_Simone_1965.jpg/330px-Nina_Simone_1965.jpg"),
+                ),
+            )
+            .bytes(
+                &wiki::commons_wikitext_url("Nina Simone 1965.jpg"),
+                "text/plain",
+                b"{{Information\n|Author=Ron Kroon / Anefo\n}}\n== {{int:license-header}} ==\n{{cc-zero}}",
+            )
+            .bytes(
+                &wiki::commons_thumbnail_url("Nina Simone 1965.jpg"),
+                "image/jpeg",
+                &jpeg,
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let artist = ArtistInput {
+            id: "artist-simone".into(),
+            name: "Nina Simone".into(),
+        };
+        assert_eq!(
+            enricher.enrich_artist(&artist, &settings).await.unwrap(),
+            Outcome::Retry("HTTP 429".into())
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "artist", "artist-simone").unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].kind, "biography");
+        assert!(texts[0].body.starts_with("Eunice Kathleen Waymon"));
+        assert!(!texts[0].body.contains("Tryon"), "only the lead is kept");
+        assert!(!texts[0].body.contains("[1]"), "references are dropped");
+        assert!(!texts[0].body.contains("Infobox"));
+        let image = store::load_image(&mut connection, "artist", "artist-simone")
+            .unwrap()
+            .expect("the Wikipedia page image, licensed on Commons");
+        assert_eq!(image.license, "CC0");
+        assert_eq!(image.author, "Ron Kroon / Anefo");
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        // Wikidata is still asked later, only to enrich.
+        assert_eq!(
+            store::task_status(&mut connection, Stage::Wikidata, "artist", "artist-simone")
+                .unwrap()
+                .as_deref(),
+            Some("pending")
+        );
+        assert!(
+            !enricher
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains("/w/api.php"))
+        );
+        // The bookkeeping keys never show as facts.
+        let profile = store::load_profile(&mut connection, "artist", "artist-simone")
+            .unwrap()
+            .unwrap();
+        assert!(profile.profile_json.contains(WIKIPEDIA_KEY));
+        assert!(profile.profile_json.contains(PAGE_IMAGE_KEY));
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[test]
+    fn guessed_article_titles_must_prove_they_are_about_the_entity() {
+        let album = EntityNames {
+            name: "Nevermind".into(),
+            artist: Some("Nirvana".into()),
+        };
+        let guess = |title: &str| ArticleCandidate {
+            language: "en".into(),
+            title: title.into(),
+            linked: false,
+        };
+        let nevermind = wiki::WikipediaSummary {
+            title: "Nevermind".into(),
+            url: "https://en.wikipedia.org/wiki/Nevermind".into(),
+            extract: "Nevermind is the second studio album by Nirvana.".into(),
+            wikibase_item: Some("Q178327".into()),
+            description: Some("1991 studio album by Nirvana".into()),
+            ..Default::default()
+        };
+        // Without a Wikidata item to compare, the page must read like an
+        // album by this artist.
+        assert!(accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            None,
+            "album",
+            &album
+        ));
+        assert!(!accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            None,
+            "album",
+            &EntityNames {
+                name: "Nevermind".into(),
+                artist: Some("Someone Else".into()),
+            }
+        ));
+        // With one, only the same item is accepted.
+        assert!(accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            Some("Q178327"),
+            "album",
+            &album
+        ));
+        assert!(!accepts_article(
+            &nevermind,
+            &guess("Nevermind"),
+            Some("Q1"),
+            "album",
+            &album
+        ));
+        let disambiguation = wiki::WikipediaSummary {
+            disambiguation: true,
+            ..nevermind.clone()
+        };
+        assert!(!accepts_article(
+            &disambiguation,
+            &guess("Nevermind"),
+            None,
+            "album",
+            &album
+        ));
+        // A linked article is trusted.
+        let linked = ArticleCandidate {
+            linked: true,
+            ..guess("Nevermind")
+        };
+        assert!(accepts_article(
+            &nevermind,
+            &linked,
+            Some("Q1"),
+            "album",
+            &album
+        ));
+
+        let genesis = EntityNames {
+            name: "Genesis".into(),
+            artist: None,
+        };
+        let book = wiki::WikipediaSummary {
+            title: "Book of Genesis".into(),
+            extract: "The Book of Genesis is the first book of the Bible.".into(),
+            description: Some("first book of the Bible".into()),
+            ..Default::default()
+        };
+        assert!(!accepts_article(
+            &book,
+            &guess("Genesis"),
+            None,
+            "artist",
+            &genesis
+        ));
+        let band = wiki::WikipediaSummary {
+            title: "Genesis (band)".into(),
+            extract: "Genesis are an English rock band.".into(),
+            description: Some("English rock band".into()),
+            ..Default::default()
+        };
+        assert!(accepts_article(
+            &band,
+            &guess("Genesis (band)"),
+            None,
+            "artist",
+            &genesis
+        ));
+
+        // Guesses follow the links, and a placeholder artist is never used.
+        let profile = ProfileRow {
+            profile_json: serde_json::json!({
+                WIKIPEDIA_KEY: {"language": "en", "title": "Nevermind"}
+            })
+            .to_string(),
+            ..ProfileRow::default()
+        };
+        let titles = article_candidates("album", &profile, &album)
+            .into_iter()
+            .map(|candidate| (candidate.title, candidate.linked))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            [
+                ("Nevermind".to_string(), true),
+                ("Nevermind (Nirvana album)".to_string(), false),
+                ("Nevermind (album)".to_string(), false),
+            ]
+        );
+        let unknown = EntityNames {
+            name: "Greatest Hits".into(),
+            artist: Some("Unknown Artist".into()),
+        };
+        assert!(
+            article_candidates("album", &ProfileRow::default(), &unknown)
+                .iter()
+                .all(|candidate| !candidate.title.contains("Unknown"))
+        );
+        // Works use only their links.
+        assert!(
+            article_candidates(
+                "work",
+                &ProfileRow::default(),
+                &EntityNames {
+                    name: "Symphony No. 9".into(),
+                    artist: None
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn classical_albums_get_their_pieces_text_from_work_links() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::set_identification(
+                &mut connection,
+                "karajan-9",
+                Some((KARAJAN_RELEASE, "Symphonie Nr. 9", "Beethoven")),
+                None,
+            )
+            .unwrap();
+        }
+        let ninth = "Symphony No. 9 (Beethoven)";
+        let enricher = Enricher {
+            fetch: MockFetch::default()
+                .json(&mb::release_lookup_url(KARAJAN_RELEASE), karajan_release())
+                .json(
+                    &mb::work_lookup_url(SYMPHONY),
+                    serde_json::json!({"id": SYMPHONY, "title": "Symphony no. 9 in D minor, op. 125",
+                        "relations": [
+                            {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Symphony_No._9_(Beethoven)"}},
+                            {"type": "wikidata", "url": {"resource": "https://www.wikidata.org/wiki/Q190125"}}
+                        ]}),
+                )
+                .bytes(
+                    &wiki::wikipedia_page_url("en", ninth),
+                    "text/html",
+                    &page(
+                        ninth,
+                        Some("Q190125"),
+                        "symphony by Ludwig van Beethoven",
+                        "The Symphony No. 9 in D minor, Op. 125 is a choral symphony, the final complete symphony by Ludwig van Beethoven.",
+                        &[("Reception", "It is regarded as one of the greatest works.")],
+                        None,
+                    ),
+                ),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher
+                .enrich_album(&karajan_album(), &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        {
+            let mut connection = pool.get().unwrap();
+            // The piece is queued for its own lookup; its movements are not.
+            assert_eq!(
+                store::task_status(&mut connection, Stage::Musicbrainz, "work", SYMPHONY)
+                    .unwrap()
+                    .as_deref(),
+                Some("pending")
+            );
+            assert_eq!(
+                store::task_status(&mut connection, Stage::Musicbrainz, "work", MOVEMENT_ONE)
+                    .unwrap(),
+                None
+            );
+            // Once the album's own lookup is recorded, the piece is next.
+            store::finish_stage(
+                &mut connection,
+                Stage::Musicbrainz,
+                "album",
+                "karajan-9",
+                &Outcome::Done,
+            )
+            .unwrap();
+            let task = store::next_stage_task(&mut connection, Stage::Musicbrainz)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (task.entity_type.as_str(), task.entity_id.as_str()),
+                ("work", SYMPHONY)
+            );
+        }
+        let task = Task {
+            id: 0,
+            entity_type: "work".into(),
+            entity_id: SYMPHONY.into(),
+            attempts: 0,
+        };
+        assert_eq!(
+            enricher
+                .run_task(Stage::Musicbrainz, &task, &settings, None)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        // Wikidata answers 404 here; the text does not depend on it.
+        assert_eq!(
+            enricher
+                .later_stages("work", SYMPHONY, &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let about = store::work_background(&mut connection, SYMPHONY)
+            .unwrap()
+            .expect("the work's Wikipedia lead");
+        assert!(about.body.starts_with("The Symphony No. 9 in D minor"));
+        assert_eq!(
+            about.url,
+            "https://en.wikipedia.org/wiki/Symphony_No._9_(Beethoven)"
+        );
+        // A work's reception is not stored as an album review.
+        assert_eq!(
+            store::load_texts(&mut connection, "work", SYMPHONY)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store::load_texts(&mut connection, "album", "karajan-9")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn people_credited_only_on_musicbrainz_get_a_biography_and_photo() {
+        const MACERO: &str = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10];
+        let fetch = mock()
+            .json(
+                &mb::release_lookup_url(RELEASE),
+                serde_json::json!({
+                    "id": RELEASE, "title": "Kind of Blue", "date": "1959-08-17",
+                    "release-group": {"id": GROUP, "primary-type": "Album"},
+                    "artist-credit": [{"name": "Miles Davis", "artist": {"id": MILES, "name": "Miles Davis"}}],
+                    "relations": [
+                        {"type": "producer", "target-type": "artist", "attributes": [],
+                         "artist": {"id": MACERO, "name": "Teo Macero"}},
+                        {"type": "producer", "target-type": "artist", "attributes": [],
+                         "artist": {"id": MILES, "name": "Miles Davis"}}
+                    ],
+                    "media": [{"position": 1, "tracks": [
+                        {"position": 1, "title": "So What", "recording": {"id": RELEASE, "relations": []}},
+                        {"position": 3, "title": "Blue in Green", "recording": {"id": RELEASE, "relations": [
+                            {"type": "instrument", "target-type": "artist", "attributes": ["piano"],
+                             "artist": {"id": EVANS, "name": "Bill Evans"}},
+                            {"type": "producer", "target-type": "artist", "attributes": [],
+                             "artist": {"id": MACERO, "name": "Teo Macero"}}
+                        ]}}
+                    ]}]
+                }),
+            )
+            .json(
+                &mb::artist_lookup_url(MACERO),
+                serde_json::json!({"id": MACERO, "name": "Teo Macero", "type": "Person",
+                    "life-span": {"begin": "1925-10-30", "end": "2008-02-19"},
+                    "relations": [
+                        {"type": "wikipedia", "url": {"resource": "https://en.wikipedia.org/wiki/Teo_Macero"}},
+                        {"type": "image", "url": {"resource": "https://commons.wikimedia.org/wiki/File:Teo_Macero.jpg"}}
+                    ]}),
+            )
+            .bytes(
+                &wiki::wikipedia_page_url("en", "Teo Macero"),
+                "text/html",
+                &page(
+                    "Teo Macero",
+                    Some("Q1386346"),
+                    "American jazz saxophonist and record producer",
+                    "Attilio Joseph \"Teo\" Macero was an American jazz saxophonist and record producer.",
+                    &[],
+                    None,
+                ),
+            )
+            .bytes(
+                &wiki::commons_wikitext_url("Teo Macero.jpg"),
+                "text/plain",
+                b"{{Information\n|author=Tom Marcello\n}}\n{{cc-by-2.0}}",
+            )
+            .bytes(&wiki::commons_thumbnail_url("Teo Macero.jpg"), "image/jpeg", &jpeg);
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            enricher.resolve_album(&album()).await.unwrap(),
+            Outcome::Done
+        );
+        // Teo Macero is credited twice but queued once; Miles Davis and
+        // Bill Evans are library artists and keep their own ids.
+        let person = format!("{EXTERNAL_PERSON_PREFIX}{MACERO}");
+        {
+            let mut connection = pool.get().unwrap();
+            let task = store::next_stage_task(&mut connection, Stage::Musicbrainz)
+                .unwrap()
+                .expect("the credited producer's lookup");
+            assert_eq!(
+                (task.entity_type.as_str(), task.entity_id.as_str()),
+                ("artist", person.as_str())
+            );
+            store::finish_task(&mut connection, &task, &Outcome::Done).unwrap();
+            assert!(
+                store::next_stage_task(&mut connection, Stage::Musicbrainz)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let task = Task {
+            id: 0,
+            entity_type: "artist".into(),
+            entity_id: person.clone(),
+            attempts: 0,
+        };
+        assert_eq!(
+            enricher
+                .run_task(Stage::Musicbrainz, &task, &settings, None)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        assert_eq!(
+            enricher
+                .later_stages("artist", &person, &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_texts(&mut connection, "artist", &person).unwrap();
+        assert_eq!(texts[0].kind, "biography");
+        assert!(texts[0].body.contains("record producer"));
+        assert_eq!(texts[0].url, "https://en.wikipedia.org/wiki/Teo_Macero");
+        let image = store::load_image(&mut connection, "artist", &person)
+            .unwrap()
+            .expect("the credited producer's photo");
+        assert_eq!(image.file_name, format!("artist-mb_{MACERO}.jpg"));
+        assert_eq!(image.license, "CC BY 2.0");
+        assert_eq!(std::fs::read(images.join(&image.file_name)).unwrap(), jpeg);
+        assert!(
+            store::artists_with_images(&mut connection, std::slice::from_ref(&person))
+                .unwrap()
+                .contains(&person)
+        );
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_credited_person_id_that_is_not_a_musicbrainz_id_is_skipped() {
+        let enricher = Enricher {
+            fetch: MockFetch::default(),
+            pool: migrated_memory_pool(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        for id in ["mb:not-an-id", "mb:../../etc"] {
+            assert!(matches!(
+                enricher
+                    .resolve_credited_person(id, &settings)
+                    .await
+                    .unwrap(),
+                Outcome::Skipped(_)
+            ));
+        }
+        assert!(enricher.fetch.requested().is_empty());
+    }
+
+    #[tokio::test]
+    async fn influences_and_followers_come_from_one_wikidata_query() {
+        const DEBUSSY: &str = "0f4a1d9f-0000-4000-8000-00000000d0b5";
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "artist",
+                "artist-evans",
+                &ProfileRow {
+                    musicbrainz_id: Some(EVANS.into()),
+                    release_group_mbid: None,
+                    wikidata_id: Some("Q202019".into()),
+                    profile_json: "{}".into(),
+                },
+            )
+            .unwrap();
+        }
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let url = wiki::influence_query_url("Q202019", &settings.language).unwrap();
+        let binding = |item: &str, label: &str, direction: &str, mbid: Option<&str>| {
+            let mut value = serde_json::json!({
+                "item": {"type": "uri", "value": format!("http://www.wikidata.org/entity/{item}")},
+                "itemLabel": {"type": "literal", "value": label},
+                "direction": {"type": "literal", "value": direction},
+            });
+            if let Some(mbid) = mbid {
+                value["mbid"] = serde_json::json!({"type": "literal", "value": mbid});
+            }
+            value
+        };
+        let fetch = MockFetch::default().json(
+            &url,
+            serde_json::json!({"results": {"bindings": [
+                binding("Q4700", "Claude Debussy", "influence", Some(DEBUSSY)),
+                binding("Q93341", "Miles Davis", "influence", Some(MILES)),
+                binding("Q192474", "Herbie Hancock", "follower", None),
+            ]}}),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        // Miles is already a library person; only Debussy is looked up.
+        {
+            let mut connection = pool.get().unwrap();
+            store::link_artist_mbid(&mut connection, "artist-miles", MILES).unwrap();
+        }
+        assert_eq!(
+            enricher
+                .relations_stage("artist-evans", &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let rows = store::load_influences(&mut connection, &["artist-evans".into()]).unwrap();
+        let summary = rows
+            .iter()
+            .map(|row| (row.direction.as_str(), row.name.as_str(), row.position))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                ("follower", "Herbie Hancock", 1),
+                ("influence", "Claude Debussy", 1),
+                ("influence", "Miles Davis", 2),
+            ]
+        );
+        assert_eq!(
+            store::task_status(
+                &mut connection,
+                Stage::Musicbrainz,
+                "artist",
+                &format!("{EXTERNAL_PERSON_PREFIX}{DEBUSSY}")
+            )
+            .unwrap()
+            .as_deref(),
+            Some("pending")
+        );
+        assert_eq!(
+            store::task_status(
+                &mut connection,
+                Stage::Musicbrainz,
+                "artist",
+                &format!("{EXTERNAL_PERSON_PREFIX}{MILES}")
+            )
+            .unwrap(),
+            None
+        );
+        // A person with no Wikidata item is skipped, not retried.
+        drop(connection);
+        assert!(matches!(
+            enricher
+                .relations_stage("artist-nobody", &settings)
+                .await
+                .unwrap(),
+            Outcome::Skipped(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn albums_without_art_get_the_matched_releases_front_cover() {
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10, b'J', b'F'];
+        let artist = |id: &str, album_id: &str, cover: &str| crate::domain::Artist {
+            id: id.into(),
+            name: id.into(),
+            albums: vec![crate::domain::Album {
+                id: album_id.into(),
+                name: album_id.into(),
+                cover_url: cover.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cache = crate::library::state::LibraryCache::from_artists(vec![
+            artist("miles", "kind-of-blue", ""),
+            artist("coltrane", "blue-train", "/music/Blue Train/cover.jpg"),
+            artist("evans", "portrait", ""),
+        ]);
+        {
+            let mut connection = pool.get().unwrap();
+            for album in ["kind-of-blue", "blue-train", "portrait"] {
+                store::save_profile(
+                    &mut connection,
+                    "album",
+                    album,
+                    &ProfileRow {
+                        musicbrainz_id: Some(RELEASE.into()),
+                        release_group_mbid: Some(GROUP.into()),
+                        wikidata_id: None,
+                        profile_json: "{}".into(),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let release_url = format!("https://coverartarchive.org/release/{RELEASE}/front-500");
+        let group_url = format!("https://coverartarchive.org/release-group/{GROUP}/front-500");
+        // The release has no cover of its own; its release group does.
+        let enricher = Enricher {
+            fetch: MockFetch::default().status(&release_url, 404).bytes(
+                &group_url,
+                "image/jpeg",
+                &jpeg,
+            ),
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        assert_eq!(
+            enricher
+                .cover_art_stage(&cache, "kind-of-blue")
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let stored = store::load_cover_art(&mut connection, "kind-of-blue")
+            .unwrap()
+            .expect("a stored cover");
+        assert_eq!(stored.source_url, group_url);
+        assert!(stored.file_path.ends_with("caa-kind-of-blue.jpg"));
+        assert_eq!(std::fs::read(&stored.file_path).unwrap(), jpeg);
+        drop(connection);
+        // Files' own artwork is never replaced.
+        assert_eq!(
+            enricher
+                .cover_art_stage(&cache, "blue-train")
+                .await
+                .unwrap(),
+            Outcome::Skipped("the album has its own artwork".into())
+        );
+        // The stored cover shows on the album once the library reloads.
+        let mut library = vec![
+            artist("miles", "kind-of-blue", ""),
+            artist("coltrane", "blue-train", "/music/Blue Train/cover.jpg"),
+        ];
+        let covers = std::collections::HashMap::from([
+            ("kind-of-blue".to_string(), stored.file_path.clone()),
+            ("blue-train".to_string(), stored.file_path.clone()),
+        ]);
+        crate::library::storage::apply_fetched_covers(&mut library, &covers);
+        assert_eq!(library[0].albums[0].cover_url, stored.file_path);
+        assert_eq!(
+            library[1].albums[0].cover_url,
+            "/music/Blue Train/cover.jpg"
+        );
+        // A busy archive is retried; a missing cover is not.
+        let busy = Enricher {
+            fetch: MockFetch::default().status(&release_url, 503),
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        assert!(matches!(
+            busy.cover_art_stage(&cache, "portrait").await.unwrap(),
+            Outcome::Retry(_)
+        ));
+        let missing = Enricher {
+            fetch: MockFetch::default(),
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        assert!(matches!(
+            missing.cover_art_stage(&cache, "portrait").await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    const BLUE_TRAIN_LP: &str = "4ca248f9-0000-4000-8000-000000000001";
+    const BLUE_TRAIN_SINGLE: &str = "11365fd1-0000-4000-8000-000000000002";
+    const COLTRANE: &str = "b625448e-bf4a-41c3-a421-72ad46cdb831";
+
+    fn blue_train_album() -> AlbumInput {
+        let titles = [
+            "Blue Train",
+            "Moment's Notice",
+            "Locomotion",
+            "I'm Old Fashioned",
+            "Lazy Bird",
+        ];
+        AlbumInput {
+            id: "blue-train".into(),
+            title: "Blue Train".into(),
+            artist_id: "artist-coltrane".into(),
+            artist_name: "John Coltrane".into(),
+            tracks: titles
+                .iter()
+                .enumerate()
+                .map(|(index, title)| TrackInput {
+                    id: format!("bt{}", index + 1),
+                    title: (*title).into(),
+                    track_number: index as u16 + 1,
+                    duration: 4.0,
+                })
+                .collect(),
+            year: Some("1957".into()),
+            ..AlbumInput::default()
+        }
+    }
+
+    fn blue_train_search(releases: Value) -> MockFetch {
+        MockFetch::default().json(
+            &mb::release_search_url("Blue Train", "John Coltrane"),
+            serde_json::json!({ "releases": releases }),
+        )
+    }
+
+    fn search_hit(id: &str, tracks: i64, date: &str, kind: &str) -> Value {
+        serde_json::json!({"id": id, "title": "Blue Train", "score": 100, "track-count": tracks,
+            "date": date, "artist-credit": [{"name": "John Coltrane"}],
+            "release-group": {"primary-type": kind}})
+    }
+
+    fn lookup(id: &str, date: &str, kind: &str, titles: &[&str]) -> Value {
+        serde_json::json!({
+            "id": id, "title": "Blue Train", "date": date,
+            "release-group": {"primary-type": kind, "first-release-date": "1957"},
+            "artist-credit": [{"name": "John Coltrane", "artist": {"id": COLTRANE, "name": "John Coltrane"}}],
+            "media": [{"position": 1, "tracks": titles.iter().enumerate().map(|(index, title)| serde_json::json!({
+                "position": index + 1, "title": title, "length": 540_000,
+                "recording": {"id": id, "relations": [
+                    {"type": "instrument", "target-type": "artist", "attributes": ["trumpet"],
+                     "artist": {"id": EVANS, "name": "Lee Morgan"}}
+                ]}
+            })).collect::<Vec<_>>()}]
+        })
+    }
+
+    /// Blue Train's search answers with the 1957 7-inch single first (the
+    /// earliest date) and the five-track LP: the LP is checked and wins.
+    #[tokio::test]
+    async fn the_album_is_matched_over_a_single_with_its_title() {
+        let pool = migrated_memory_pool();
+        let fetch = blue_train_search(serde_json::json!([
+            search_hit(BLUE_TRAIN_SINGLE, 2, "1957", "Single"),
+            search_hit(BLUE_TRAIN_LP, 5, "1958", "Album"),
+        ]))
+        .json(
+            &mb::release_lookup_url(BLUE_TRAIN_LP),
+            lookup(
+                BLUE_TRAIN_LP,
+                "1958",
+                "Album",
+                &[
+                    "Blue Train",
+                    "Moment's Notice",
+                    "Locomotion",
+                    "I'm Old Fashioned",
+                    "Lazy Bird",
+                ],
+            ),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher.resolve_album(&blue_train_album()).await.unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        // The single was never looked up.
+        assert!(
+            !enricher
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains(BLUE_TRAIN_SINGLE))
+        );
+        let mut connection = pool.get().unwrap();
+        let check = store::load_release_match(&mut connection, "blue-train")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                check.status.as_str(),
+                check.method.as_str(),
+                check.release_mbid.as_str()
+            ),
+            ("verified", "automatic", BLUE_TRAIN_LP)
+        );
+        // Five tracks (+3), shortened files (-1), 1957 first release (+1).
+        assert_eq!(check.score, 3);
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        assert_eq!(details["passed"], true);
+        assert_eq!(details["release_type"], "Album");
+        assert_eq!(
+            details["signals"][0]["detail"],
+            "5 tracks, like your album."
+        );
+        assert_eq!(
+            store::album_credits(&mut connection, "blue-train")
+                .unwrap()
+                .len(),
+            5
+        );
+    }
+
+    /// When the single is all MusicBrainz offers, it fails the check:
+    /// nothing from it is applied, an earlier wrong match is removed, and
+    /// it stays only as a suggestion.
+    #[tokio::test]
+    async fn a_release_that_fails_the_check_is_only_a_suggestion() {
+        let pool = migrated_memory_pool();
+        {
+            // What an earlier version applied from the wrong release.
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "album",
+                "blue-train",
+                &ProfileRow {
+                    musicbrainz_id: Some(BLUE_TRAIN_SINGLE.into()),
+                    profile_json: "{\"release_type\":\"Single\"}".into(),
+                    ..ProfileRow::default()
+                },
+            )
+            .unwrap();
+            store::replace_genre_links(
+                &mut connection,
+                "album",
+                "blue-train",
+                "musicbrainz",
+                &[mb::MbGenre {
+                    name: "hard bop".into(),
+                    mbid: None,
+                    count: 1,
+                }],
+            )
+            .unwrap();
+            store::queue_stage(&mut connection, Stage::CoverArt, "album", "blue-train").unwrap();
+        }
+        let fetch = blue_train_search(serde_json::json!([search_hit(
+            BLUE_TRAIN_SINGLE,
+            2,
+            "1957",
+            "Single"
+        )]))
+        .json(
+            &mb::release_lookup_url(BLUE_TRAIN_SINGLE),
+            lookup(
+                BLUE_TRAIN_SINGLE,
+                "1957",
+                "Single",
+                &["Blue Train", "Lazy Bird"],
+            ),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = enricher.resolve_album(&blue_train_album()).await.unwrap();
+        assert_eq!(
+            outcome,
+            Outcome::Skipped(
+                "the closest release, Blue Train, did not pass the match check".into()
+            )
+        );
+        // No release group, Wikidata or cover requests for a rejected match.
+        assert_eq!(enricher.fetch.requested().len(), 2);
+        let mut connection = pool.get().unwrap();
+        assert_eq!(
+            store::load_profile(&mut connection, "album", "blue-train").unwrap(),
+            None
+        );
+        assert!(
+            store::album_credits(&mut connection, "blue-train")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store::genre_links(&mut connection, "album")
+                .unwrap()
+                .iter()
+                .any(|link| link.entity_id == "blue-train")
+        );
+        assert_eq!(
+            store::task_status(&mut connection, Stage::CoverArt, "album", "blue-train").unwrap(),
+            None
+        );
+        let check = store::load_release_match(&mut connection, "blue-train")
+            .unwrap()
+            .unwrap();
+        assert_eq!(check.status, "unverified");
+        assert_eq!(check.release_mbid, BLUE_TRAIN_SINGLE);
+        assert!(check.score < check.threshold);
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        assert_eq!(
+            details["signals"][0]["detail"],
+            "The release has 2 tracks; your album has 5."
+        );
+        assert_eq!(details["release_track_count"], 2);
+        assert_eq!(details["local_track_count"], 5);
+    }
+
+    /// The 1955 Philharmonia Ninth found only as a 1999 reissue of the
+    /// Berlin recording: the tagged orchestra is not on the release.
+    #[tokio::test]
+    async fn another_orchestras_recording_is_not_applied_to_a_classical_album() {
+        let pool = migrated_memory_pool();
+        let berlin = "c07a0583-0000-4000-8000-000000000003";
+        let album = AlbumInput {
+            year: Some("1955".into()),
+            conductors: vec!["Herbert von Karajan".into()],
+            ensembles: vec!["Philharmonia Orchestra".into()],
+            ..karajan_album()
+        };
+        let fetch = MockFetch::default()
+            .json(
+                &mb::release_search_url(&album.title, &album.artist_name),
+                serde_json::json!({"releases": [{"id": berlin, "title": "Symphony no. 9", "score": 100,
+                    "track-count": 2, "date": "1999-07-01",
+                    "artist-credit": [{"name": "Beethoven", "joinphrase": "; "},
+                                      {"name": "Berliner Philharmoniker", "joinphrase": ", "},
+                                      {"name": "Herbert von Karajan"}]}]}),
+            )
+            .json(
+                &mb::release_lookup_url(berlin),
+                serde_json::json!({
+                    "id": berlin, "title": "Symphony no. 9", "date": "1999-07-01",
+                    "release-group": {"primary-type": "Album", "first-release-date": "1977"},
+                    "artist-credit": [
+                        {"name": "Beethoven", "artist": {"id": BEETHOVEN, "name": "Ludwig van Beethoven"}},
+                        {"name": "Berliner Philharmoniker", "artist": {"id": EVANS, "name": "Berliner Philharmoniker"}},
+                        {"name": "Herbert von Karajan", "artist": {"id": MILES, "name": "Herbert von Karajan"}}
+                    ],
+                    "media": [{"position": 1, "tracks": [
+                        {"position": 1, "title": "Symphony no. 9: I. Allegro ma non troppo", "recording": {"id": MOVEMENT_ONE}},
+                        {"position": 2, "title": "Symphony no. 9: IV. Presto", "recording": {"id": MOVEMENT_FOUR}}
+                    ]}]
+                }),
+            );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        assert!(matches!(
+            enricher.resolve_album(&album).await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        let mut connection = pool.get().unwrap();
+        let check = store::load_release_match(&mut connection, "karajan-9")
+            .unwrap()
+            .unwrap();
+        assert_eq!(check.status, "unverified");
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        let signals = details["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|signal| {
+                (
+                    signal["key"].as_str().unwrap().to_string(),
+                    signal["outcome"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(signals.contains(&("ensemble".into(), "mismatch".into())));
+        assert!(signals.contains(&("conductor".into(), "match".into())));
+        assert!(signals.contains(&("year".into(), "mismatch".into())));
+        assert!(
+            store::album_credits(&mut connection, "karajan-9")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A release chosen by hand is used even when its evidence disagrees;
+    /// the stored check says what differs.
+    #[tokio::test]
+    async fn a_release_chosen_by_hand_is_applied_with_its_check() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::set_identification(
+                &mut connection,
+                "blue-train",
+                Some((BLUE_TRAIN_SINGLE, "Blue Train", "John Coltrane")),
+                None,
+            )
+            .unwrap();
+        }
+        let enricher = Enricher {
+            fetch: MockFetch::default().json(
+                &mb::release_lookup_url(BLUE_TRAIN_SINGLE),
+                lookup(
+                    BLUE_TRAIN_SINGLE,
+                    "1957",
+                    "Single",
+                    &["Blue Train", "Lazy Bird"],
+                ),
+            ),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        assert_eq!(
+            enricher.resolve_album(&blue_train_album()).await.unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let check = store::load_release_match(&mut connection, "blue-train")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (check.status.as_str(), check.method.as_str()),
+            ("verified", "identified")
+        );
+        let details: Value = serde_json::from_str(&check.details_json).unwrap();
+        assert_eq!(details["passed"], false);
+        assert!(
+            store::load_profile(&mut connection, "album", "blue-train")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn cover_files_are_named_safely() {
+        assert_eq!(
+            cover_file_name("album-1", "image/png").as_deref(),
+            Some("caa-album-1.png")
+        );
+        assert_eq!(
+            cover_file_name("../x/y", "image/jpeg").as_deref(),
+            Some("caa-___x_y.jpg")
+        );
+        assert_eq!(cover_file_name("a", "image/gif"), None);
+    }
+
+    const BEETHOVEN_MBID: &str = "1f9df192-a621-4f54-8850-2c5373b7eac9";
+    const FIFTH: &str = "22222222-2222-4222-8222-222222222222";
+    const FIFTH_FIRST: &str = "11111111-1111-4111-8111-111111111111";
+    const ELISE: &str = "44444444-4444-4444-8444-444444444444";
+    const ODE: &str = "33333333-3333-4333-8333-333333333333";
+    const MISSA: &str = "55555555-5555-4555-8555-555555555555";
+
+    fn composer_relation(begin: Option<&str>, end: Option<&str>) -> Value {
+        serde_json::json!({"type": "composer", "target-type": "artist", "direction": "backward",
+            "begin": begin, "end": end,
+            "artist": {"id": BEETHOVEN_MBID, "name": "Ludwig van Beethoven"}})
+    }
+
+    fn wikidata_url(item: &str) -> Value {
+        serde_json::json!({"type": "wikidata", "target-type": "url", "direction": "backward",
+            "url": {"resource": format!("https://www.wikidata.org/wiki/{item}")}})
+    }
+
+    fn claim(value: Value) -> Value {
+        serde_json::json!([{"mainsnak": {"datavalue": {"value": value}}, "rank": "normal"}])
+    }
+
+    fn catalogue_mock() -> MockFetch {
+        let works = serde_json::json!({"work-count": 5, "work-offset": 0, "works": [
+            {"id": FIFTH, "title": "Symphony no. 5 in C minor, op. 67", "type": "Symphony",
+             "attributes": [{"type": "Key", "value": "C minor"}],
+             "relations": [composer_relation(Some("1804"), Some("1808")), wikidata_url("Q193778")]},
+            {"id": FIFTH_FIRST, "title": "Symphony no. 5 in C minor, op. 67: I. Allegro con brio",
+             "relations": [composer_relation(None, None), {"type": "parts", "target-type": "work",
+                "direction": "backward", "ordering-key": 1,
+                "work": {"id": FIFTH, "title": "Symphony no. 5 in C minor, op. 67"}}]},
+            {"id": ELISE, "title": "Für Elise", "type": null,
+             "relations": [composer_relation(None, None), wikidata_url("Q201234")]},
+            {"id": ODE, "title": "Ode to Joy (arr. for brass)",
+             "relations": [composer_relation(None, None), {"type": "arrangement", "target-type": "work",
+                "direction": "backward", "work": {"id": FIFTH, "title": "x"}}]},
+            {"id": MISSA, "title": "Lyrics only",
+             "relations": [{"type": "lyricist", "target-type": "artist", "direction": "backward",
+                "artist": {"id": BEETHOVEN_MBID, "name": "Ludwig van Beethoven"}}]}
+        ]});
+        let described = vec![
+            "Q193778".to_string(),
+            "Q999".to_string(),
+            "Q201234".to_string(),
+        ];
+        MockFetch::default()
+            .json(&mb::work_browse_url(BEETHOVEN_MBID, 0), works)
+            .json(
+                &mb::artist_lookup_url(BEETHOVEN_MBID),
+                serde_json::json!({"id": BEETHOVEN_MBID, "relations": [wikidata_url("Q255")]}),
+            )
+            .json(
+                &wiki::wikidata_entity_url("Q255"),
+                serde_json::json!({"entities": {"Q255": {"claims": {
+                    "P800": [
+                        {"mainsnak": {"datavalue": {"value": {"id": "Q193778"}}}, "rank": "normal"},
+                        {"mainsnak": {"datavalue": {"value": {"id": "Q999"}}}, "rank": "normal"},
+                        {"mainsnak": {"datavalue": {"value": {"id": "Q201234"}}}, "rank": "normal"}
+                    ]
+                }}}}),
+            )
+            .json(
+                &wiki::wikidata_entities_url(&described, "claims|labels", &["en", "en"]),
+                serde_json::json!({"entities": {
+                    "Q193778": {"claims": {
+                        "P571": claim(serde_json::json!({"time": "+1808-00-00T00:00:00Z", "precision": 9})),
+                        "P826": claim(serde_json::json!({"id": "Q1"}))
+                    }},
+                    // A notable work this catalogue does not list.
+                    "Q999": {"claims": {"P435": claim(serde_json::json!(MISSA))}},
+                    "Q201234": {"claims": {
+                        "P571": claim(serde_json::json!({"time": "+1810-04-27T00:00:00Z", "precision": 11})),
+                        "P826": claim(serde_json::json!({"id": "Q3"})),
+                        "P136": claim(serde_json::json!({"id": "Q4"}))
+                    }}
+                }}),
+            )
+            .json(
+                &wiki::wikidata_entities_url(
+                    &["Q1".to_string(), "Q3".to_string(), "Q4".to_string()],
+                    "labels",
+                    &["en"],
+                ),
+                serde_json::json!({"entities": {
+                    "Q1": {"labels": {"en": {"value": "C minor"}}},
+                    "Q3": {"labels": {"en": {"value": "A minor"}}},
+                    "Q4": {"labels": {"en": {"value": "bagatelle"}}}
+                }}),
+            )
+    }
+
+    #[tokio::test]
+    async fn a_composers_whole_catalogue_comes_with_notable_works_and_wikidata_facts() {
+        let pool = migrated_memory_pool();
+        let enricher = Enricher {
+            fetch: catalogue_mock(),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let outcome = enricher
+            .catalogue_stage(BEETHOVEN_MBID, &settings)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+
+        let mut connection = pool.get().unwrap();
+        let catalogue = store::load_catalogue(&mut connection, BEETHOVEN_MBID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalogue.musicbrainz_total, 5);
+        assert!(catalogue.complete);
+        assert_eq!(catalogue.wikidata_id.as_deref(), Some("Q255"));
+        assert_eq!(catalogue.composer_name, "Ludwig van Beethoven");
+        // Pieces only (the movement sits under its symphony); the
+        // arrangement and the words he did not set are left out.
+        let works = store::catalogue_works(&mut connection, &[BEETHOVEN_MBID.to_string()]).unwrap();
+        let titles = works
+            .iter()
+            .map(|listing| {
+                (
+                    listing.work.title.as_str(),
+                    listing.notable_rank,
+                    listing.track_count,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            [
+                ("Für Elise", Some(3), 0),
+                ("Symphony No. 5 in C minor, Op. 67", Some(1), 0)
+            ]
+        );
+        let elise = &works[0].work;
+        // Wikidata fills what MusicBrainz left out...
+        assert_eq!(elise.composed.as_deref(), Some("1810"));
+        assert_eq!(elise.musical_key.as_deref(), Some("A minor"));
+        assert_eq!(elise.form.as_deref(), Some("Bagatelle"));
+        // ...and never replaces what MusicBrainz says.
+        let fifth = &works[1].work;
+        assert_eq!(fifth.composed.as_deref(), Some("1804–1808"));
+        assert_eq!(fifth.musical_key.as_deref(), Some("C minor"));
+        assert_eq!(
+            store::work_parts(&mut connection, FIFTH).unwrap()[0].mbid,
+            FIFTH_FIRST
+        );
+        // The notable works get their own About text.
+        assert_eq!(
+            store::task_status(&mut connection, Stage::Wikipedia, "work", FIFTH)
+                .unwrap()
+                .as_deref(),
+            Some("pending")
+        );
+        drop(connection);
+
+        // A busy Wikidata on the next run keeps the MusicBrainz catalogue
+        // and does not page through MusicBrainz again.
+        let busy = Enricher {
+            fetch: MockFetch::default().status(&wiki::wikidata_entity_url("Q255"), 429),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let outcome = busy
+            .catalogue_stage(BEETHOVEN_MBID, &settings)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Retry("HTTP 429".into()));
+        assert!(
+            !busy
+                .fetch
+                .requested()
+                .iter()
+                .any(|url| url.contains("/ws/2/work?"))
+        );
+        let mut connection = pool.get().unwrap();
+        assert_eq!(
+            store::catalogue_works(&mut connection, &[BEETHOVEN_MBID.to_string()])
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn albums_get_their_text_from_every_editorial_source_turned_on() {
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "album",
+                "album-1",
+                &ProfileRow {
+                    musicbrainz_id: Some(RELEASE.into()),
+                    release_group_mbid: Some(GROUP.into()),
+                    wikidata_id: Some("Q731473".into()),
+                    profile_json: serde_json::json!({
+                        "title": "Kind of Blue",
+                        WIKIDATA_KEY: {"sitelinks": {"en": "Kind of Blue", "de": "Kind of Blue", "fr": "Kind of Blue (album)", "it": "Kind of Blue"}}
+                    })
+                    .to_string(),
+                },
+            )
+            .unwrap();
+            store::replace_texts(
+                &mut connection,
+                "album",
+                "album-1",
+                &[EditorialText {
+                    kind: "background".into(),
+                    source: "wikipedia".into(),
+                    language: "en".into(),
+                    title: "Kind of Blue".into(),
+                    body: "Kind of Blue is a 1959 album.".into(),
+                    url: "https://en.wikipedia.org/wiki/Kind_of_Blue".into(),
+                    license: wiki::WIKIPEDIA_LICENSE.into(),
+                    license_url: wiki::WIKIPEDIA_LICENSE_URL.into(),
+                }],
+            )
+            .unwrap();
+        }
+        let german = String::from_utf8(page(
+            "Kind of Blue",
+            Some("Q731473"),
+            "Album von Miles Davis",
+            "Kind of Blue ist ein Jazzalbum von Miles Davis aus dem Jahr 1959.",
+            &[(
+                "Rezeption",
+                "Das Album gilt als eines der einflussreichsten des Jazz.",
+            )],
+            None,
+        ))
+        .unwrap()
+        .replace("https://en.wikipedia.org", "https://de.wikipedia.org");
+        // The French article belongs to another item (a namesake).
+        let french = String::from_utf8(page(
+            "Kind of Blue (album)",
+            Some("Q1"),
+            "",
+            "Autre chose.",
+            &[],
+            None,
+        ))
+        .unwrap();
+        let enricher = Enricher {
+            fetch: MockFetch::default()
+                .bytes(
+                    &wiki::wikipedia_page_url("de", "Kind of Blue"),
+                    "text/html",
+                    german.as_bytes(),
+                )
+                .bytes(
+                    &wiki::wikipedia_page_url("fr", "Kind of Blue (album)"),
+                    "text/html",
+                    french.as_bytes(),
+                ),
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        let settings = EnrichmentSettings {
+            enabled: true,
+            editorial_sources: ["en", "de", "fr"]
+                .iter()
+                .map(|language| store::EditorialSource {
+                    id: format!("wikipedia:{language}"),
+                    enabled: true,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let outcome = enricher
+            .sources_stage("album", "album-1", &settings)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::Done);
+        // English is the main text already; Italian is not turned on.
+        let requested = enricher.fetch.requested();
+        assert_eq!(requested.len(), 2, "{requested:?}");
+        assert!(!requested.iter().any(|url| url.contains("it.wikipedia")));
+
+        let mut connection = pool.get().unwrap();
+        let texts = store::load_source_texts(&mut connection, "album", "album-1").unwrap();
+        assert_eq!(
+            texts
+                .iter()
+                .map(|text| (text.language.as_str(), text.kind.as_str()))
+                .collect::<Vec<_>>(),
+            [("de", "background"), ("de", "reception")]
+        );
+        assert_eq!(
+            texts[1].body,
+            "Das Album gilt als eines der einflussreichsten des Jazz."
+        );
+        assert_eq!(texts[0].url, "https://de.wikipedia.org/wiki/Kind_of_Blue");
+    }
+}

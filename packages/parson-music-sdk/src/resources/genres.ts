@@ -1,5 +1,11 @@
 import api from "../core/http";
-import { Album, Artist } from "../domain/types";
+import type {
+  Album,
+  AlbumGenres,
+  Artist,
+  GenreDetails,
+  GenreTree,
+} from "../domain/types";
 
 export interface GenrePage {
   limit?: number;
@@ -72,4 +78,40 @@ export interface PopularGenre {
 export async function getPopularGenres(): Promise<PopularGenre[]> {
   const res = await api.get(`/genres/popular`);
   return res.data as PopularGenre[];
+}
+
+const segment = (value: string) => encodeURIComponent(value);
+
+/** The library's genres as a canonical tree with album counts. */
+export async function getGenreTree(): Promise<GenreTree> {
+  const response = await api.get<GenreTree>("/genres/canonical");
+  return response.data;
+}
+
+/** A genre page: About text, sub-genres, albums, artists and composers. */
+export async function getGenrePage(slug: string): Promise<GenreDetails> {
+  const response = await api.get<GenreDetails>(
+    `/genres/canonical/${segment(slug)}`,
+  );
+  return response.data;
+}
+
+/** Administrator: chooses an album's genres by hand. */
+export async function setAlbumGenres(
+  albumId: string,
+  genres: string[],
+): Promise<AlbumGenres> {
+  const response = await api.put<AlbumGenres>(
+    `/metadata/albums/${segment(albumId)}/genres`,
+    { genres },
+  );
+  return response.data;
+}
+
+/** Administrator: goes back to tag and online genres for an album. */
+export async function resetAlbumGenres(albumId: string): Promise<AlbumGenres> {
+  const response = await api.delete<AlbumGenres>(
+    `/metadata/albums/${segment(albumId)}/genres`,
+  );
+  return response.data;
 }

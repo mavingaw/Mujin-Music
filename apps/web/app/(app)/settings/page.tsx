@@ -10,6 +10,8 @@ import { useEffect, useState } from "react";
 import AudioOutputSettings from "@/features/settings/audio-output-settings";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
+import EnrichmentSettings from "@/features/settings/enrichment-settings";
+import MetadataSourcesSettings from "@/features/settings/metadata-sources-settings";
 import RadioSettings from "@/features/settings/radio-settings";
 
 const settingsTabs = [
@@ -41,11 +43,14 @@ export default function SettingsPage() {
     ? settingsTabs
     : (["account", "playback", "outputs", "data"] as const);
   useEffect(() => {
-    // Deep links such as /settings?tab=outputs from the signal path.
-    const wanted = new URLSearchParams(window.location.search).get("tab");
-    if (wanted && (settingsTabs as readonly string[]).includes(wanted))
-      setActiveTab(wanted as SettingsTab);
-  }, []);
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    const allowed: readonly string[] = isAdmin
+      ? settingsTabs
+      : ["account", "playback", "outputs", "data"];
+    if (requested && allowed.includes(requested)) {
+      setActiveTab(requested as SettingsTab);
+    }
+  }, [isAdmin]);
 
   return (
     <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
@@ -87,7 +92,17 @@ export default function SettingsPage() {
           )}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
-          {isAdmin && activeTab === "library" && <LibrarySettings />}
+          {isAdmin && activeTab === "library" && (
+            <>
+              <LibrarySettings />
+              <div className="mt-8">
+                <EnrichmentSettings />
+              </div>
+              <div className="mt-8">
+                <MetadataSourcesSettings />
+              </div>
+            </>
+          )}
           {isAdmin && activeTab === "users" && <UserForm />}
           {isAdmin && activeTab === "advanced" && <AdvancedSettings />}
         </div>

@@ -1,5 +1,6 @@
 import {
   albumScope,
+  albumWorkSections,
   clearedFocus,
   focusCountLabel,
   focusedAlbumTracks,
@@ -8,26 +9,33 @@ import {
   scopedFocus,
   type FocusQuery,
   type LibraryAlbum,
+  type TrackWork,
 } from "@parson/music-sdk";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Pressable, StyleSheet, Text } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { FocusSheet } from "@/components/focus-sheet";
 import { LibraryFocusBar } from "@/components/library-focus-bar";
 import { SongRow } from "@/components/music-ui";
+import { WorkHeading } from "@/components/works";
 import { palette } from "@/constants/colors";
 
 /**
  * An album's track list with a Focus scoped to the album, so box sets can
- * be narrowed by performer, conductor, work, format and the rest.
+ * be narrowed by performer, conductor, work, format and the rest. Tracks
+ * that perform one work are grouped under its heading (from the album's
+ * online metadata, once `works` has loaded).
  */
 export function AlbumFocusTracks({
   album,
   albumArtist,
+  works,
 }: {
   album: LibraryAlbum;
   albumArtist: string;
+  /** The album's works; `undefined` while they load. */
+  works?: readonly TrackWork[] | null;
 }) {
   const [focus, setFocus] = useState<FocusQuery>(() =>
     scopedFocus("songs", [albumScope(album.id)]),
@@ -79,16 +87,38 @@ export function AlbumFocusTracks({
           </Text>
         </Pressable>
       ) : (
-        tracks.map((song, index) => (
-          <SongRow
-            albumArtist={albumArtist}
-            albumType={album.primary_type}
-            index={index}
-            key={song.id}
-            queue={tracks}
-            showAlbum={false}
-            song={song}
-          />
+        albumWorkSections(
+          tracks.map((song) => song.id),
+          works ?? undefined,
+        ).map((section) => (
+          <View key={`${section.work?.mbid ?? "track"}-${section.trackIds[0]}`}>
+            {section.work ? <WorkHeading work={section.work} /> : null}
+            {section.trackIds.map((trackId) => {
+              const index = tracks.findIndex((song) => song.id === trackId);
+              const song = tracks[index];
+              if (!song) return null;
+              const trackWork = works?.find(
+                (entry) => entry.track_id === song.id,
+              );
+              return (
+                <SongRow
+                  albumArtist={albumArtist}
+                  albumType={album.primary_type}
+                  index={index}
+                  key={song.id}
+                  queue={tracks}
+                  showAlbum={false}
+                  song={song}
+                  title={section.work ? trackWork?.part_title : undefined}
+                  work={
+                    works === undefined
+                      ? undefined
+                      : (trackWork?.parent ?? trackWork?.work ?? null)
+                  }
+                />
+              );
+            })}
+          </View>
         ))
       )}
       <FocusSheet

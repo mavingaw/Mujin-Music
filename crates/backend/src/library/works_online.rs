@@ -237,6 +237,10 @@ fn enabled() -> bool {
 }
 
 async fn fetch_json(client: &Client, url: &str) -> Result<Option<Value>, BoxError> {
+    // Shares MusicBrainz' one request per second with the enrichment worker.
+    crate::enrichment::fetch::shared_limiter()
+        .acquire(crate::enrichment::fetch::url_host(url))
+        .await;
     let response = client.get(url).send().await?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);

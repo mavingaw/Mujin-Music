@@ -1,11 +1,15 @@
 pub mod album;
+pub mod album_sources;
 pub mod artist;
 pub mod auth;
 pub mod cast;
 pub mod data;
+pub mod discography;
+pub mod editorial;
 pub mod error;
 pub mod filesystem;
 pub mod focus;
+pub mod genre_pages;
 pub mod genres;
 pub mod home;
 pub mod image;
@@ -16,10 +20,12 @@ pub mod outputs;
 pub mod playback;
 pub mod playlist;
 pub mod radio_library;
+pub mod related;
 pub mod search;
 pub mod setup;
 pub mod song;
 pub mod user;
+pub mod works;
 pub mod zones;
 
 use crate::domain::{Album, Artist};

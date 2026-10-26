@@ -1,6 +1,7 @@
 pub mod artist_names;
 pub mod credits;
 pub mod delivery;
+pub mod discography_focus;
 pub(crate) mod discovery;
 pub mod dsd;
 pub mod focus;
