@@ -29,8 +29,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AwayFromHome } from "@/components/away-from-home";
+import { LibraryList, SearchingIndicator } from "@/components/library-list";
 import { PageTitle, Screen } from "@/components/music-ui";
 import { StreamingServicesSettings } from "@/components/streaming-services";
+import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
+import { libraryRows, type LibraryRow } from "@/lib/known-libraries";
 import { layout, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
 import { RadioSettingsRows } from "@/components/radio-ui";
@@ -57,6 +61,19 @@ export default function SettingsScreen() {
         ? ["account", "playback", "services", "devices", "library", "users"]
         : ["account", "playback", "services", "devices"];
   const [tab, setTab] = useState<Tab>("account");
+  const nearbyLibraries = useLibraryDiscovery(
+    tab === "devices" && session.phase !== "offline",
+  );
+  const libraries = libraryRows({
+    known: session.knownLibraries,
+    nearby: nearbyLibraries.map((library) => ({
+      instanceId: library.manifest.instanceId,
+      origin: library.origin,
+      name: library.manifest.name,
+    })),
+    currentInstanceId: session.instanceId,
+    accountInstanceIds: session.accountLibraryIds,
+  });
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const accountKey =
@@ -351,15 +368,31 @@ export default function SettingsScreen() {
             ) : tab === "services" ? (
               <StreamingServicesSettings />
             ) : tab === "devices" ? (
-              <ServerSettings
-                busy={busy}
-                offline={session.phase === "offline"}
-                libraryName={session.libraryName}
-                onChange={() => leaveAuthenticatedApp(session.changeServer)}
-                onOpenImports={() => router.push("/imports")}
-                onRetry={session.retry}
-                origin={session.origin}
-              />
+              <>
+                <ServerSettings
+                  busy={busy}
+                  offline={session.phase === "offline"}
+                  libraries={libraries}
+                  onForget={(row) => void session.forgetLibrary(row.instanceId)}
+                  onSwitch={(row) =>
+                    leaveAuthenticatedApp(async () => {
+                      await session.switchLibrary(row.origin);
+                    })
+                  }
+                  searching={nearbyLibraries.length === 0}
+                  onChange={() => leaveAuthenticatedApp(session.changeServer)}
+                  onOpenImports={() => router.push("/imports")}
+                  onRetry={session.retry}
+                  origin={session.origin}
+                />
+                <AwayFromHome
+                  library={session.knownLibraries.find(
+                    (library) => library.instanceId === session.instanceId,
+                  )}
+                  origin={session.origin}
+                  route={session.connectionRoute}
+                />
+              </>
             ) : tab === "library" ? (
               <LibrarySettings
                 busy={busy}
@@ -618,33 +651,56 @@ function PlaybackSettings({
 function ServerSettings({
   busy,
   offline,
-  libraryName,
+  libraries,
   onChange,
+  onForget,
   onOpenImports,
   onRetry,
+  onSwitch,
   origin,
+  searching,
 }: {
   busy: boolean;
   offline: boolean;
-  libraryName: string | null;
+  libraries: LibraryRow[];
   onChange: () => Promise<void>;
+  onForget: (row: LibraryRow) => void;
   onOpenImports: () => void;
   onRetry: () => Promise<void>;
+  onSwitch: (row: LibraryRow) => Promise<void>;
   origin: string | null;
+  searching: boolean;
 }) {
   return (
     <>
-      <View style={styles.card}>
-        <View style={styles.icon}>
-          <Radio color="white" size={21} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.label}>{libraryName}</Text>
-          <Text numberOfLines={1} style={styles.value}>
+      <Text style={styles.heading}>Libraries</Text>
+      <Text style={styles.value}>
+        Each Parson server is a library. Switch between them here; this phone
+        stays signed in to each one.
+      </Text>
+      <View style={{ marginTop: 14 }}>
+        <LibraryList
+          busy={busy}
+          onForget={onForget}
+          onSelect={(row) => {
+            if (!row.current) void onSwitch(row);
+          }}
+          rows={libraries}
+        />
+      </View>
+      {searching && !offline ? (
+        <SearchingIndicator label="Looking for other libraries nearby…" />
+      ) : null}
+      {!libraries.length && origin ? (
+        <View style={styles.card}>
+          <View style={styles.icon}>
+            <Radio color="white" size={21} />
+          </View>
+          <Text numberOfLines={1} style={[styles.value, { flex: 1 }]}>
             {origin}
           </Text>
         </View>
-      </View>
+      ) : null}
       {offline ? (
         <Pressable
           accessibilityRole="button"
@@ -662,7 +718,7 @@ function ServerSettings({
         onPress={() => void onChange()}
       >
         <Server color="white" size={21} />
-        <Text style={styles.actionText}>Change server</Text>
+        <Text style={styles.actionText}>Add another library</Text>
       </Pressable>
       {offline ? null : (
         <Pressable

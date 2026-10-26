@@ -266,7 +266,7 @@ jobs:
           }
       - name: Build native Windows release
         run: bun --filter parson-music-desktop desktop:build
-      - name: Verify Windows package license payload
+      - name: Verify Windows package payload (licenses, server and tray host)
         shell: pwsh
         run: |
           $unpacked = Get-ChildItem target\release\bundle\electron -Directory |
@@ -278,6 +278,8 @@ jobs:
           foreach ($relativePath in @(
             "resources\LICENSE",
             "resources\THIRD_PARTY_NOTICES.md",
+            "resources\parson-music-server.exe",
+            "resources\ParsonMusicServer.exe",
             "LICENSE.electron.txt",
             "LICENSES.chromium.html"
           )) {
@@ -295,14 +297,17 @@ jobs:
             target/release/bundle/electron/Parson_*-portable.exe
             target/release/bundle/electron/*.blockmap
           if-no-files-found: error
-      - name: Build standalone Windows server update
-        if: matrix.arch == 'x64' && (inputs.release || startsWith(github.ref, 'refs/tags/v'))
+      # The server-only Windows package (tray host, no desktop UI) is built
+      # and verified on every pull request, not only for releases, so a
+      # change that breaks a headless Windows install is caught before merge.
+      - name: Build standalone Windows server package
+        if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           ./crates/windows-server/package.ps1 -SkipWebBuild
           ./crates/windows-server/verify-update-assets.ps1
-      - name: Upload standalone Windows server update
-        if: matrix.arch == 'x64' && (inputs.release || startsWith(github.ref, 'refs/tags/v'))
+      - name: Upload standalone Windows server package
+        if: matrix.arch == 'x64'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: parson-windows-server

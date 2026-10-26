@@ -22,12 +22,11 @@ use crate::library::state::{LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
 use crate::settings;
 
-const BACKUP_FORMAT_VERSION: u32 = 1;
+pub(crate) const BACKUP_FORMAT_VERSION: u32 = 1;
 const PUBLIC_INDEX_VERSION: u32 = 1;
 const MAX_RESTORE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_RESTORE_EXTRACTED_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_RESTORE_ENTRIES: usize = 1_000_000;
-const AUTOMATIC_BACKUP_INTERVAL_HOURS: i64 = 24;
 const DAILY_BACKUP_COUNT: usize = 7;
 const WEEKLY_BACKUP_COUNT: usize = 4;
 const MONTHLY_BACKUP_COUNT: usize = 3;
@@ -42,7 +41,8 @@ struct DataStatus {
     favorite_items: i64,
     playlist_items: i64,
     backups: Vec<BackupSummary>,
-    automatic_backup_interval_hours: i64,
+    automatic_backup_interval_hours: Option<i64>,
+    schedule: crate::api::migration::ScheduleStatus,
     daily_backup_count: usize,
     weekly_backup_count: usize,
     monthly_backup_count: usize,
@@ -56,11 +56,16 @@ struct ResetRequest {
 }
 
 #[derive(Clone, Serialize)]
-struct BackupSummary {
-    filename: String,
-    created_at: String,
-    size_bytes: u64,
+pub(crate) struct BackupSummary {
+    pub(crate) filename: String,
+    pub(crate) created_at: String,
+    pub(crate) size_bytes: u64,
     tier: Option<BackupTier>,
+    /// Where the scheduled copy went (a folder or NAS), when one is set up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) copied_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) copy_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +89,13 @@ struct BackupManifest {
     created_at: String,
     product: &'static str,
     product_version: &'static str,
+    /// The library this backup came from, so a new server can say what it
+    /// is about to restore and, if asked, take over its identity.
+    library_name: String,
+    instance_id: Option<String>,
+    /// Music folders on the old server. Music files are not in the backup;
+    /// a new server shows these so they can be pointed at the new location.
+    library_roots: Vec<String>,
     includes: [&'static str; 6],
     excludes: [&'static str; 3],
 }
@@ -216,7 +228,7 @@ struct PersonalDataExport {
     notes: Vec<serde_json::Value>,
 }
 
-fn safe_backup_filename(value: &str) -> Option<&str> {
+pub(crate) fn safe_backup_filename(value: &str) -> Option<&str> {
     (!value.is_empty()
         && value.len() <= 128
         && value.starts_with("parson-backup-")
@@ -267,7 +279,7 @@ fn clear_cache_at(root: &Path) -> std::io::Result<u64> {
     Ok(cleared)
 }
 
-fn backup_directory() -> PathBuf {
+pub(crate) fn backup_directory() -> PathBuf {
     settings::data_path(&["Backups"])
 }
 
@@ -310,6 +322,8 @@ fn list_backup_records() -> std::io::Result<Vec<BackupRecord>> {
                     filename,
                     size_bytes: metadata.len(),
                     tier: None,
+                    copied_to: None,
+                    copy_error: None,
                 },
                 created_at,
                 meaningful_fingerprint: sidecar.map(|metadata| metadata.meaningful_fingerprint),
@@ -385,6 +399,12 @@ fn prune_old_backups() -> std::io::Result<()> {
 }
 
 fn automatic_backup_due(pool: &DbPool) -> Result<bool, String> {
+    let Some(interval_hours) = crate::api::migration::load_schedule()
+        .frequency
+        .interval_hours()
+    else {
+        return Ok(false);
+    };
     let backups = list_backup_records().map_err(|error| error.to_string())?;
     let Some(latest) = backups.first() else {
         return Ok(true);
@@ -392,7 +412,7 @@ fn automatic_backup_due(pool: &DbPool) -> Result<bool, String> {
     if Utc::now()
         .signed_duration_since(latest.created_at)
         .num_hours()
-        < AUTOMATIC_BACKUP_INTERVAL_HOURS
+        < interval_hours
     {
         return Ok(false);
     }
@@ -508,7 +528,33 @@ fn append_safe_tree<W: Write>(
     Ok(())
 }
 
-fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
+/// Creates a private backup in the server's own backup folder, then copies
+/// it to the scheduled destination (a folder or NAS share) when one is set.
+pub(crate) fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
+    let mut summary = create_local_backup_archive(pool)?;
+    let schedule = crate::api::migration::load_schedule();
+    if let Some(destination) = schedule.destination.as_deref() {
+        match crate::api::migration::mirror_backup(
+            &backup_directory(),
+            &summary.filename,
+            Path::new(destination),
+            schedule.destination_keep,
+        ) {
+            Ok(()) => {
+                crate::api::migration::record_mirror_result(&summary.filename, None);
+                summary.copied_to = Some(destination.to_string());
+            }
+            Err(error) => {
+                tracing::warn!(%error, %destination, "could not copy the backup to its destination");
+                crate::api::migration::record_mirror_result(&summary.filename, Some(&error));
+                summary.copy_error = Some(error);
+            }
+        }
+    }
+    Ok(summary)
+}
+
+fn create_local_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
     let _guard = BACKUP_LOCK
         .lock()
         .map_err(|_| "the backup lock is unavailable".to_string())?;
@@ -543,6 +589,9 @@ fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
             created_at: now.to_rfc3339(),
             product: "parson-music",
             product_version: env!("CARGO_PKG_VERSION"),
+            library_name: settings::library_name(),
+            instance_id: settings::instance_id().ok(),
+            library_roots: crate::api::migration::configured_library_roots(),
             includes: [
                 "music database",
                 "core database",
@@ -621,6 +670,8 @@ fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
         created_at: now.to_rfc3339(),
         size_bytes,
         tier: Some(BackupTier::Daily),
+        copied_to: None,
+        copy_error: None,
     })
 }
 
@@ -933,7 +984,11 @@ fn sanitize_backup_database(path: &Path) -> Result<(), String> {
     validate_restore_database(path)
 }
 
-fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
+/// Checks a private backup and stages it to replace this server's data on the
+/// next start. With `adopt_identity`, the server also takes over the backed-up
+/// library's identity, so phones and computers that knew the old server find
+/// this one as the same library.
+pub(crate) fn validate_and_stage_restore(path: &Path, adopt_identity: bool) -> Result<(), String> {
     let input = File::open(path).map_err(|error| error.to_string())?;
     let decoder = zstd::Decoder::new(input).map_err(|error| error.to_string())?;
     let mut archive = tar::Archive::new(decoder);
@@ -943,6 +998,7 @@ fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
     fs::create_dir_all(&incoming).map_err(|error| error.to_string())?;
     let mut found_manifest = false;
     let mut found_music_database = false;
+    let mut backed_up_identity = None::<String>;
     let mut extracted_bytes = 0_u64;
     for (entry_index, item) in archive
         .entries()
@@ -977,6 +1033,10 @@ fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
             {
                 return Err("this is not a supported Parson private backup".to_string());
             }
+            backed_up_identity = manifest["instance_id"]
+                .as_str()
+                .filter(|value| Uuid::parse_str(value).is_ok())
+                .map(str::to_string);
             found_manifest = true;
             fs::write(incoming.join("manifest.json"), bytes).map_err(|error| error.to_string())?;
             continue;
@@ -993,6 +1053,15 @@ fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
     validate_restore_database(&incoming.join("Database/parson-music.db"))?;
     let _ = fs::remove_dir_all(&stage);
     fs::rename(&incoming, &stage).map_err(|error| error.to_string())?;
+    let identity_marker = settings::data_path(&["Restore", "ADOPT_IDENTITY"]);
+    match backed_up_identity.filter(|_| adopt_identity) {
+        Some(identity) => fs::write(&identity_marker, identity),
+        None => match fs::remove_file(&identity_marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+    .map_err(|error| error.to_string())?;
     fs::write(
         settings::data_path(&["Restore", "READY"]),
         Utc::now().to_rfc3339(),
@@ -1044,7 +1113,10 @@ async fn status(pool: web::Data<DbPool>) -> HttpResponse {
             favorite_items: counts.favorites,
             playlist_items: counts.playlists,
             backups: list_backups().map_err(|error| error.to_string())?,
-            automatic_backup_interval_hours: AUTOMATIC_BACKUP_INTERVAL_HOURS,
+            automatic_backup_interval_hours: crate::api::migration::load_schedule()
+                .frequency
+                .interval_hours(),
+            schedule: crate::api::migration::schedule_status(),
             daily_backup_count: DAILY_BACKUP_COUNT,
             weekly_backup_count: WEEKLY_BACKUP_COUNT,
             monthly_backup_count: MONTHLY_BACKUP_COUNT,
@@ -1181,21 +1253,47 @@ async fn delete_backup(path: web::Path<String>) -> HttpResponse {
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct RestoreOptions {
+    #[serde(default)]
+    pub(crate) adopt_identity: bool,
+}
+
 #[post("/restore")]
-async fn restore_backup(mut multipart: Multipart) -> HttpResponse {
+async fn restore_backup(multipart: Multipart, options: web::Query<RestoreOptions>) -> HttpResponse {
+    match stage_uploaded_backup(multipart, options.adopt_identity).await {
+        Ok(()) => HttpResponse::Accepted().json(serde_json::json!({
+            "restart_required": true,
+            "message": "Backup validated. Restart Parson to apply it."
+        })),
+        Err(response) => response,
+    }
+}
+
+/// Receives one uploaded backup file, validates it and stages it.
+pub(crate) async fn stage_uploaded_backup(
+    mut multipart: Multipart,
+    adopt_identity: bool,
+) -> Result<(), HttpResponse> {
     let upload = settings::data_path(&["Restore", format!(".upload-{}", Uuid::new_v4()).as_str()]);
     if let Some(parent) = upload.parent()
         && let Err(error) = tokio::fs::create_dir_all(parent).await
     {
         tracing::error!(%error, "restore directory creation failed");
-        return internal_server_error("Could not receive the backup.", "restore_upload_failed");
+        return Err(internal_server_error(
+            "Could not receive the backup.",
+            "restore_upload_failed",
+        ));
     }
     let mut total = 0_u64;
     let mut output = match tokio::fs::File::create(&upload).await {
         Ok(file) => file,
         Err(error) => {
             tracing::error!(%error, "restore upload creation failed");
-            return internal_server_error("Could not receive the backup.", "restore_upload_failed");
+            return Err(internal_server_error(
+                "Could not receive the backup.",
+                "restore_upload_failed",
+            ));
         }
     };
     use tokio::io::AsyncWriteExt;
@@ -1203,7 +1301,10 @@ async fn restore_backup(mut multipart: Multipart) -> HttpResponse {
         Some(Ok(field)) => field,
         Some(Err(_)) | None => {
             let _ = tokio::fs::remove_file(&upload).await;
-            return bad_request("The backup upload is invalid.", "invalid_restore_upload");
+            return Err(bad_request(
+                "The backup upload is invalid.",
+                "invalid_restore_upload",
+            ));
         }
     };
     while let Some(chunk) = field.next().await {
@@ -1211,36 +1312,43 @@ async fn restore_backup(mut multipart: Multipart) -> HttpResponse {
             Ok(chunk) => chunk,
             Err(_) => {
                 let _ = tokio::fs::remove_file(&upload).await;
-                return bad_request("The backup upload is invalid.", "invalid_restore_upload");
+                return Err(bad_request(
+                    "The backup upload is invalid.",
+                    "invalid_restore_upload",
+                ));
             }
         };
         total = total.saturating_add(chunk.len() as u64);
         if total > MAX_RESTORE_BYTES || output.write_all(&chunk).await.is_err() {
             let _ = tokio::fs::remove_file(&upload).await;
-            return bad_request(
+            return Err(bad_request(
                 "The backup is too large or incomplete.",
                 "restore_too_large",
-            );
+            ));
         }
     }
     drop(field);
     if multipart.next().await.is_some() || total == 0 {
         let _ = tokio::fs::remove_file(&upload).await;
-        return bad_request("Upload exactly one backup file.", "invalid_restore_upload");
+        return Err(bad_request(
+            "Upload exactly one backup file.",
+            "invalid_restore_upload",
+        ));
     }
     drop(output);
     let validate_path = upload.clone();
-    let result = web::block(move || validate_and_stage_restore(&validate_path)).await;
+    let result =
+        web::block(move || validate_and_stage_restore(&validate_path, adopt_identity)).await;
     let _ = tokio::fs::remove_file(&upload).await;
     match result {
-        Ok(Ok(())) => HttpResponse::Accepted().json(serde_json::json!({
-            "restart_required": true,
-            "message": "Backup validated. Restart Parson to apply it."
-        })),
-        Ok(Err(error)) => bad_request(&error, "invalid_backup"),
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(bad_request(&error, "invalid_backup")),
         Err(error) => {
             tracing::error!(%error, "restore validation worker failed");
-            internal_server_error("Could not validate the backup.", "restore_failed")
+            Err(internal_server_error(
+                "Could not validate the backup.",
+                "restore_failed",
+            ))
         }
     }
 }
@@ -1474,7 +1582,10 @@ async fn clear_personal_history(pool: web::Data<DbPool>, request: HttpRequest) -
 }
 
 pub fn configure_admin(cfg: &mut web::ServiceConfig) {
-    cfg.service(status)
+    // `/backups/schedule` and `/backups/folder` must be registered before
+    // `/backups/{filename}`, which would otherwise match them first.
+    cfg.configure(crate::api::migration::configure_admin)
+        .service(status)
         .service(create_backup)
         .service(download_backup)
         .service(delete_backup)
@@ -1623,6 +1734,8 @@ mod tests {
                     created_at: created_at.to_rfc3339(),
                     size_bytes: 1,
                     tier: None,
+                    copied_to: None,
+                    copy_error: None,
                 },
                 created_at,
                 meaningful_fingerprint: Some(format!("revision-{offset}")),

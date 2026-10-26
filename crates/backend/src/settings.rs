@@ -108,6 +108,44 @@ pub fn is_container() -> bool {
         || Path::new("/run/.containerenv").exists()
 }
 
+/// Keys a desktop app or installer may set for a background server in
+/// `<data dir>/server.env`. A server started by systemd, launchd or the
+/// Windows tray has no shell environment of its own, so Parson Desktop leaves
+/// these here when it installs the server as a background service.
+const HOST_FILE_KEYS: [&str; 3] = [
+    "PARSON_DESKTOP_INSTANCE_TOKEN",
+    "PARSON_LIBRARY_NAME",
+    "PARSON_LOCAL_AUDIO",
+];
+
+/// A host setting: the process environment wins, then `server.env` in the
+/// data directory. The file is read on every call (it is tiny), so a desktop
+/// app can update it without restarting the server.
+pub fn host_setting(key: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(key)
+        && !value.trim().is_empty()
+    {
+        return Some(value);
+    }
+    let contents = fs::read_to_string(data_path(&["server.env"])).ok()?;
+    parse_host_file(&contents, key)
+}
+
+fn parse_host_file(contents: &str, key: &str) -> Option<String> {
+    if !HOST_FILE_KEYS.contains(&key) {
+        return None;
+    }
+    contents.lines().find_map(|line| {
+        let line = line.trim();
+        if line.starts_with('#') {
+            return None;
+        }
+        let (name, value) = line.split_once('=')?;
+        let value = value.trim();
+        (name.trim() == key && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
 pub fn data_path(parts: &[&str]) -> PathBuf {
     let mut path = if let Some(path) = std::env::var_os("PARSON_DATA_DIR") {
         PathBuf::from(path)
@@ -315,10 +353,37 @@ pub fn apply_staged_restore() -> std::io::Result<()> {
             copy_restore_tree(&source, &destination)?;
         }
     }
+    adopt_restored_identity(
+        &data_path(&["Restore", "ADOPT_IDENTITY"]),
+        &data_path(&["Discovery", "instance-id"]),
+        &rollback,
+    )?;
     fs::remove_file(marker)?;
     fs::remove_dir_all(staged)?;
     prune_restore_rollbacks(&recovery)?;
     Ok(())
+}
+
+/// When a restore was staged with "take over this library", the server
+/// answers with the backed-up library's instance id from now on, so phones
+/// and computers that knew the old server treat this one as the same library.
+fn adopt_restored_identity(
+    marker: &Path,
+    instance_id_path: &Path,
+    rollback: &Path,
+) -> std::io::Result<()> {
+    let Ok(identity) = fs::read_to_string(marker) else {
+        return Ok(());
+    };
+    let identity = identity.trim();
+    if uuid::Uuid::parse_str(identity).is_ok() {
+        if instance_id_path.is_file() {
+            fs::create_dir_all(rollback)?;
+            fs::copy(instance_id_path, rollback.join("instance-id"))?;
+        }
+        persist_secret(instance_id_path, identity)?;
+    }
+    fs::remove_file(marker)
 }
 
 fn apply_reset_at(root: &Path) -> std::io::Result<bool> {
@@ -383,8 +448,7 @@ pub fn suggested_library_path() -> PathBuf {
 }
 
 pub fn library_name() -> String {
-    let name = std::env::var("PARSON_LIBRARY_NAME")
-        .ok()
+    let name = host_setting("PARSON_LIBRARY_NAME")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "Parson Library".to_string());
@@ -582,8 +646,8 @@ fn restrict_secret_permissions(_path: &Path) {}
 mod tests {
     use super::{
         allowed_origins_for, apply_reset_at, load_or_create_instance_id_at, load_or_create_key_at,
-        load_or_create_session_secret_at, parse_bind_address, parse_port, parse_public_url,
-        persist_secret, secure_cookies_for, write_inside,
+        load_or_create_session_secret_at, parse_bind_address, parse_host_file, parse_port,
+        parse_public_url, persist_secret, secure_cookies_for, write_inside,
     };
 
     #[test]
@@ -625,6 +689,31 @@ mod tests {
         std::fs::write(&path, "not-a-key").expect("corrupt key");
         assert!(load_or_create_key_at(&path).is_err());
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn host_file_settings_only_expose_allowed_keys() {
+        let file = "# written by Parson Desktop\n\
+                    PARSON_DESKTOP_INSTANCE_TOKEN = abc123\n\
+                    PARSON_LOCAL_AUDIO=on\n\
+                    PARSON_PORT=80\n\
+                    PARSON_LIBRARY_NAME=\n";
+        assert_eq!(
+            parse_host_file(file, "PARSON_DESKTOP_INSTANCE_TOKEN").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            parse_host_file(file, "PARSON_LOCAL_AUDIO").as_deref(),
+            Some("on")
+        );
+        // Only the allow-listed keys can come from the file, and an empty
+        // value counts as unset.
+        assert_eq!(parse_host_file(file, "PARSON_PORT"), None);
+        assert_eq!(parse_host_file(file, "PARSON_LIBRARY_NAME"), None);
+        assert_eq!(
+            parse_host_file("#PARSON_LOCAL_AUDIO=on", "PARSON_LOCAL_AUDIO"),
+            None
+        );
     }
 
     #[test]
@@ -707,6 +796,40 @@ mod tests {
         assert!(parse_public_url(Some("null")).is_err());
         assert!(parse_public_url(Some("https://music.example/app")).is_err());
         assert!(parse_public_url(Some("https://user@music.example")).is_err());
+    }
+
+    #[test]
+    fn a_restore_can_take_over_the_backed_up_library_identity() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("parson-identity-{}", uuid::Uuid::new_v4()));
+        let marker = root.join("Restore/ADOPT_IDENTITY");
+        let identity = root.join("Discovery/instance-id");
+        let rollback = root.join("Recovery/before-restore-test");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        let old = "11111111-1111-4111-8111-111111111111";
+        let adopted = "22222222-2222-4222-8222-222222222222";
+        fs::write(&identity, old).unwrap();
+        fs::write(&marker, adopted).unwrap();
+
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert_eq!(
+            fs::read_to_string(rollback.join("instance-id")).unwrap(),
+            old
+        );
+        assert!(!marker.exists());
+
+        // No marker: the server keeps its own identity.
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+
+        // A malformed marker is dropped without touching the identity.
+        fs::write(&marker, "not-a-uuid").unwrap();
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

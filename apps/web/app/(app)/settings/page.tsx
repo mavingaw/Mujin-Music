@@ -13,7 +13,8 @@ import UpdateSettings from "@/features/settings/update-settings";
 import EnrichmentSettings from "@/features/settings/enrichment-settings";
 import MetadataSourcesSettings from "@/features/settings/metadata-sources-settings";
 import RadioSettings from "@/features/settings/radio-settings";
-import ConnectionsSettings from "@/features/imports/connections-settings";
+import MusicServiceConnections from "@/features/imports/connections-settings";
+import ConnectionsSettings from "@/features/settings/connections-settings";
 import ServicesSettings from "@/features/streaming/services-settings";
 import { useSearchParams } from "next/navigation";
 import HomeAssistantSettings from "@/features/settings/home-assistant-settings";
@@ -123,7 +124,14 @@ function SettingsContent() {
             </>
           )}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
-          {activeTab === "connections" && <ConnectionsSettings />}
+          {activeTab === "connections" && (
+            <>
+              <ConnectionsSettings />
+              <div className="mt-10">
+                <MusicServiceConnections />
+              </div>
+            </>
+          )}
           {activeTab === "services" && <ServicesSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {activeTab === "home-assistant" && <HomeAssistantSettings />}

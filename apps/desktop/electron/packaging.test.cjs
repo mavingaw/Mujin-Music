@@ -70,3 +70,18 @@ for (const architecture of ["x64", "arm64"]) {
     assert.equal(options.publish, "never");
   });
 }
+
+test("every shipped desktop file is packaged", () => {
+  const { readdirSync } = require("node:fs");
+  const metadata = require("../package.json");
+  const shipped = readdirSync(__dirname)
+    .filter((name) => /\.(cjs|html)$/.test(name))
+    .filter((name) => !name.endsWith(".test.cjs"))
+    .map((name) => `electron/${name}`);
+  for (const file of shipped) {
+    assert.ok(
+      metadata.build.files.includes(file),
+      `${file} must be listed in apps/desktop/package.json build.files`,
+    );
+  }
+});

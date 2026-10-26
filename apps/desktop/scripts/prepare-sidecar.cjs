@@ -33,6 +33,9 @@ const cargoArgs = [
   path.join(workspace, "Cargo.toml"),
   "-p",
   "parson-music",
+  // Windows: the tray host runs the server in the background, apart from
+  // the desktop window, when the user chooses "Use this computer".
+  ...(windows ? ["-p", "parson-music-windows-server"] : []),
   "--release",
 ];
 if (rustTarget) cargoArgs.push("--target", rustTarget);
@@ -50,6 +53,15 @@ const source = rustTarget
 const destination = path.join(binDirectory, executable);
 copyFileSync(source, destination);
 if (!windows) chmodSync(destination, 0o755);
+const trayHost = path.join(binDirectory, "ParsonMusicServer.exe");
+if (windows) {
+  copyFileSync(
+    path.join(path.dirname(source), "ParsonMusicServer.exe"),
+    trayHost,
+  );
+} else if (existsSync(trayHost)) {
+  unlinkSync(trayHost);
+}
 
 console.log(
   `Prepared the shared Electron shell with the ${rustTarget || targetPlatform} backend.`,

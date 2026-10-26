@@ -2,6 +2,12 @@
 
 import { Button } from "@/components/ui/button";
 import FailureState from "@/components/app/failure-state";
+import BackupSchedule from "@/features/migration/backup-schedule";
+import RestoreFlow from "@/features/migration/restore-flow";
+import {
+  readServerBootId,
+  waitForRestart,
+} from "@/features/migration/migration-presentation";
 import {
   Dialog,
   DialogContent,
@@ -20,11 +26,11 @@ import {
   exportPublicLibraryIndex,
   getDataStatus,
   resetParson,
-  restorePrivateBackup,
+  restartServer,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { Download, Loader2, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 type BusyAction =
@@ -37,6 +43,7 @@ type BusyAction =
   | "delete"
   | "cache"
   | "reset"
+  | "restart"
   | null;
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -63,7 +70,6 @@ function formatBytes(bytes: number) {
 }
 
 export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
-  const restoreInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
@@ -71,7 +77,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
   const [cacheOpen, setCacheOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
-  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoreOpen, setRestoreOpen] = useState(false);
   const status = useQuery({
     queryKey: ["data-status"],
     queryFn: getDataStatus,
@@ -105,6 +111,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
           delete: "Backup wasn’t deleted.",
           cache: "Cache wasn’t cleared.",
           reset: "Reset wasn’t prepared.",
+          restart: "Parson didn’t restart.",
         };
         toast.error(errors[action]);
       }
@@ -120,7 +127,30 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
       await status.refetch();
       const blob = await downloadPrivateBackup(backup.filename);
       downloadBlob(blob, backup.filename);
-      toast.success("Private backup created and downloaded.");
+      if (backup.copy_error) {
+        toast.warning(
+          `Backup downloaded, but the copy failed: ${backup.copy_error}`,
+        );
+      } else {
+        toast.success(
+          backup.copied_to
+            ? `Backup downloaded and copied to ${backup.copied_to}.`
+            : "Private backup created and downloaded.",
+        );
+      }
+    });
+  }
+
+  async function restartNow() {
+    await run("restart", async () => {
+      const previousBootId = await readServerBootId().catch(() => null);
+      await restartServer();
+      const back = await waitForRestart({
+        previousBootId,
+        readBootId: () => readServerBootId(),
+      });
+      if (!back) throw new Error("The server did not come back.");
+      window.location.reload();
     });
   }
 
@@ -144,22 +174,12 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
               </Button>
               <Button
                 disabled={Boolean(busy)}
-                onClick={() => restoreInput.current?.click()}
+                onClick={() => setRestoreOpen(true)}
                 type="button"
                 variant="outline"
               >
-                Restore from backup
+                Restore a backup
               </Button>
-              <input
-                accept=".zst,.tar.zst,application/zstd"
-                className="hidden"
-                onChange={(event) => {
-                  setRestoreFile(event.target.files?.[0] ?? null);
-                  event.currentTarget.value = "";
-                }}
-                ref={restoreInput}
-                type="file"
-              />
             </div>
             {backupError ? (
               <FailureState
@@ -240,11 +260,23 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
               )}
             </div>
             {status.data?.restore_pending && (
-              <p className="mt-4 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-                A validated restore is ready. Restart Parson to apply it.
-              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                <span className="flex-1">
+                  A validated restore is ready. Restart Parson to apply it.
+                </span>
+                <Button
+                  disabled={Boolean(busy)}
+                  onClick={() => void restartNow()}
+                  size="sm"
+                >
+                  {spinner("restart")}
+                  {busy === "restart" ? "Restarting…" : "Restart now"}
+                </Button>
+              </div>
             )}
           </section>
+
+          <BackupSchedule />
 
           <section className="border-t border-white/8 pt-8">
             <h2 className="text-base font-semibold text-white">
@@ -329,9 +361,19 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
             Reset Parson
           </Button>
           {status.data?.reset_pending && (
-            <p className="mt-4 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-              Reset is ready. Restart Parson to finish.
-            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <span className="flex-1">
+                Reset is ready. Restart Parson to finish.
+              </span>
+              <Button
+                disabled={Boolean(busy)}
+                onClick={() => void restartNow()}
+                size="sm"
+              >
+                {spinner("restart")}
+                {busy === "restart" ? "Restarting…" : "Restart now"}
+              </Button>
+            </div>
           )}
         </section>
       )}
@@ -506,51 +548,27 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
       </Dialog>
 
       <Dialog
-        open={Boolean(restoreFile)}
+        open={restoreOpen}
         onOpenChange={(open) => {
-          if (!open && busy !== "restore") {
-            setRestoreFile(null);
-          }
+          if (!open) setRestoreOpen(false);
         }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Restore this private backup?</DialogTitle>
+            <DialogTitle>Restore a backup</DialogTitle>
             <DialogDescription>
-              Parson will validate and stage the backup. It replaces databases
-              and user files only after a restart, with a rollback snapshot of
-              the current data.
+              Replaces this server’s accounts, playlists, history and edits with
+              the backup’s, then restarts Parson. The current data is kept as a
+              rollback copy.
             </DialogDescription>
           </DialogHeader>
-          <p className="truncate rounded-md bg-white/4 px-3 py-2 text-sm text-zinc-300">
-            {restoreFile?.name}
-          </p>
-          <DialogFooter className="gap-2">
-            <Button
-              disabled={busy === "restore"}
-              onClick={() => setRestoreFile(null)}
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={busy === "restore"}
-              onClick={() =>
-                void run("restore", async () => {
-                  if (!restoreFile) {
-                    return;
-                  }
-                  const result = await restorePrivateBackup(restoreFile);
-                  setRestoreFile(null);
-                  await status.refetch();
-                  toast.success(result.message, { duration: 10_000 });
-                })
-              }
-            >
-              {spinner("restore")}
-              Validate and stage
-            </Button>
-          </DialogFooter>
+          {restoreOpen ? (
+            <RestoreFlow
+              mode="admin"
+              onCancel={() => setRestoreOpen(false)}
+              onRestored={() => window.location.assign("/login")}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

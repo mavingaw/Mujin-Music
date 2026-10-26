@@ -1,3 +1,6 @@
+import { connectDesktopServer } from "@/lib/desktop/bridge";
+import { toast } from "sonner";
+
 export const OFFICIAL_PARSON_PORT = 1993;
 
 export function normalizeServerOrigin(value: string): string {
@@ -33,10 +36,20 @@ export function connectToServer(origin: string, libraryName?: string) {
   const target = serverConnectionTarget(origin, libraryName);
   if (!target || typeof window === "undefined") return false;
   if (window.__PARSON_ELECTRON__) {
-    // The desktop preload is intentionally restricted to its bundled backend.
-    // Open another library in the default browser instead of granting remote
-    // web content access to native desktop commands.
-    window.open(target, "_blank", "noopener,noreferrer");
+    // Parson Desktop switches itself to the other server (as a remote that
+    // never starts its own), checking it is really Parson first.
+    void connectDesktopServer(normalizeServerOrigin(origin)).catch(
+      (error: unknown) => {
+        toast(
+          error instanceof Error
+            ? error.message.replace(
+                /^Error invoking remote method '[^']+': (Error: )?/,
+                "",
+              )
+            : "Could not connect to that server.",
+        );
+      },
+    );
   } else {
     // Navigating to the server keeps browser authentication same-origin, so
     // access and refresh credentials can remain in HttpOnly cookies.

@@ -44,6 +44,7 @@ const MENU_DATA: usize = 1006;
 const MENU_AUTOSTART: usize = 1007;
 const MENU_EXIT: usize = 1008;
 const MENU_UPDATE: usize = 1009;
+const MENU_CONNECT: usize = 1010;
 
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static COMMAND_TX: OnceLock<mpsc::Sender<ServerCommand>> = OnceLock::new();
@@ -114,13 +115,17 @@ pub fn run(
     if instance.is_null() {
         return Err(std::io::Error::last_os_error().into());
     }
+    let background = std::env::args().any(|arg| arg == "--background");
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        open_url(default_url());
+        // Parson Desktop starts this host with `--background` every time it
+        // opens; only a person double-clicking it again wants a browser.
+        if !background {
+            open_url(default_url());
+        }
         unsafe { CloseHandle(instance) };
         return Ok(());
     }
 
-    let background = std::env::args().any(|arg| arg == "--background");
     MODEL
         .set(Mutex::new(Model {
             status: ServerStatus::Stopped,
@@ -276,6 +281,14 @@ fn start_server(
                             let _ = graceful.await;
                             result
                         }
+                        () = parson_music::server::restart_requested() => {
+                            // The server asked to restart itself (for example
+                            // to apply a restored backup).
+                            let graceful = tokio::spawn(handle.stop(true));
+                            let result = server.await;
+                            let _ = graceful.await;
+                            result
+                        }
                     }
                 });
                 parson_music::persistence::connection::mark_clean_shutdown();
@@ -291,6 +304,9 @@ fn start_server(
             }
         }
         let _ = commands.send(ServerCommand::Exited(generation));
+        if parson_music::server::take_restart_request() {
+            let _ = commands.send(ServerCommand::Start);
+        }
     });
     RunningServer {
         generation,
@@ -514,6 +530,7 @@ fn set_update_status(status: UpdateStatus) {
 fn handle_menu_command(hwnd: HWND, command_id: usize) {
     match command_id {
         MENU_OPEN => open_current_url(),
+        MENU_CONNECT => open_connections_page(),
         MENU_START => command("start"),
         MENU_STOP => command("stop"),
         MENU_RESTART => command("restart"),
@@ -652,7 +669,13 @@ fn show_context_menu(hwnd: HWND) {
         &status_label(&status),
     );
     unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
-    append_menu(menu, item_flags(!running), MENU_OPEN, "Open Parson");
+    append_menu(menu, item_flags(running), MENU_OPEN, "Open Parson");
+    append_menu(
+        menu,
+        item_flags(running),
+        MENU_CONNECT,
+        "Connect a phone or another computer…",
+    );
     append_menu(
         menu,
         item_flags(!running && !transitioning),
@@ -748,6 +771,23 @@ fn open_current_url() {
         })
         .unwrap_or_else(default_url);
     open_url(url);
+}
+
+/// Opens Settings → Connections, which shows this server's network address
+/// and a QR code for the Parson phone app.
+fn open_connections_page() {
+    let url = MODEL
+        .get()
+        .and_then(|model| model.lock().ok())
+        .and_then(|model| match model.status {
+            ServerStatus::Running(port) => Some(url_for_port(port)),
+            _ => None,
+        })
+        .unwrap_or_else(default_url);
+    open_url(format!(
+        "{}/settings?tab=connections",
+        url.trim_end_matches('/')
+    ));
 }
 
 fn open_url(url: String) {
