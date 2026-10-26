@@ -20,18 +20,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use parson_output::convolution::FilterSummary;
 use parson_output::dsd::{DsdPacking, DsdPcm, DsdReader, DsdSource, plan_dsd};
 use parson_output::dsp::{
-    DspChain, DspPcm, DspSettings, DspStats, ProcessingPlan, ResamplerKind, plan_processing,
-    selectable_rates,
+    ConvolutionFilter, DspChain, DspPcm, DspSettings, DspStats, ProcessingPlan, ResamplerKind,
+    plan_processing_with, selectable_rates,
 };
+use parson_output::network::{ManualEndpoint, NetworkInfo, NetworkRegistry, TrackInfo};
 use parson_output::player::{InputFormat, PcmOpener, PcmSource, Player, PlayerState, PlayerStatus};
 use parson_output::procfs::{HardwareInfo, HardwareStatus};
 use parson_output::{
     Backend, DepthChange, DeviceInfo, Driver, DsdMode, FormatSupport, OutputPlan, OutputSettings,
     PlanError, SampleFormat, SourceFormat, StreamFormat, format_support, plan_output,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::{AudioProperties, Song};
 use crate::signal_path::{
@@ -39,6 +41,13 @@ use crate::signal_path::{
 };
 
 pub const SIMULATE_ENV: &str = "PARSON_NATIVE_OUTPUT_SIMULATE";
+/// `0` turns off SSDP and mDNS discovery of network players (players
+/// added by address are still listed).
+pub const NETWORK_DISCOVERY_ENV: &str = "PARSON_NETWORK_DISCOVERY";
+/// Largest convolution filter file accepted.
+pub const MAX_FILTER_BYTES: usize = 32 * 1024 * 1024;
+/// Most filters kept on the server.
+pub const MAX_FILTERS: usize = 32;
 
 /// A device as the API presents it.
 #[derive(Serialize, Clone, Debug)]
@@ -73,6 +82,9 @@ pub struct DeviceView {
     /// What the kernel reports about the hardware: USB product name and
     /// id, and the formats its descriptors declare.
     pub hardware: Option<HardwareInfo>,
+    /// A network player's protocol, identity, format limits and what it
+    /// has been tested against.
+    pub network: Option<NetworkInfo>,
 }
 
 /// What the server-side DSP chain can do on a device.
@@ -100,6 +112,38 @@ pub struct DevicesView {
     pub driver: Option<Driver>,
     pub simulated: bool,
     pub devices: Vec<DeviceView>,
+    /// Network players: whether the server searches for them, and those
+    /// added by address.
+    pub network: NetworkView,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct NetworkView {
+    /// The server can play to network players.
+    pub available: bool,
+    /// SSDP (UPnP) and mDNS (AirPlay) discovery is on.
+    pub discovery: bool,
+    pub manual: Vec<ManualEndpoint>,
+}
+
+/// A convolution filter stored on the server.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FilterRecord {
+    pub id: String,
+    pub name: String,
+    /// The uploaded file's name.
+    pub file_name: Option<String>,
+    pub added_at: String,
+}
+
+/// A filter as the API lists it.
+#[derive(Serialize, Clone, Debug)]
+pub struct FilterView {
+    #[serde(flatten)]
+    pub record: FilterRecord,
+    pub summary: FilterSummary,
+    /// Magnitude response of the first channel, `[Hz, dB]`, 20 Hz–20 kHz.
+    pub response: Vec<[f64; 2]>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -268,6 +312,14 @@ pub struct NativeOutputs {
     resampler: &'static str,
     state: Mutex<State>,
     session: Mutex<Option<Session>>,
+    network: Option<Arc<NetworkRegistry>>,
+    network_discovery: bool,
+    filters: Mutex<HashMap<String, ConvolutionFilter>>,
+}
+
+/// Where network players added by address are kept.
+fn network_path(settings_path: &Path) -> PathBuf {
+    settings_path.with_file_name("network-outputs.json")
 }
 
 /// This machine's host name, for the transport stage ("studio-pc ·
@@ -312,17 +364,39 @@ pub fn global() -> Arc<NativeOutputs> {
         if simulated {
             backends.push(Arc::new(parson_output::simulated::SimulatedBackend));
         }
-        Arc::new(NativeOutputs::new(
-            backends,
-            simulated,
-            Some(crate::settings::data_path(&["native-outputs.json"])),
-            Arc::new(ffmpeg_decoder),
-            if ffmpeg_has_soxr() {
-                "soxr, very high quality"
-            } else {
-                "ffmpeg resampler, 64-tap sinc"
-            },
-        ))
+        let settings_path = crate::settings::data_path(&["native-outputs.json"]);
+        let manual = std::fs::read_to_string(network_path(&settings_path))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<ManualEndpoint>>(&text).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|endpoint| endpoint.validate().is_ok())
+            .take(32)
+            .collect();
+        let registry = Arc::new(NetworkRegistry::new(manual));
+        let discovery = std::env::var(NETWORK_DISCOVERY_ENV).map_or(true, |value| value != "0");
+        backends.push(Arc::new(parson_output::network::upnp::UpnpBackend::new(
+            Arc::clone(&registry),
+            discovery.then_some(parson_output::network::upnp::SSDP_MULTICAST),
+        )));
+        backends.push(Arc::new(parson_output::network::raop::RaopBackend::new(
+            Arc::clone(&registry),
+            discovery,
+        )));
+        Arc::new(
+            NativeOutputs::new(
+                backends,
+                simulated,
+                Some(settings_path),
+                Arc::new(ffmpeg_decoder),
+                if ffmpeg_has_soxr() {
+                    "soxr, very high quality"
+                } else {
+                    "ffmpeg resampler, 64-tap sinc"
+                },
+            )
+            .with_network(registry, discovery),
+        )
     }))
 }
 
@@ -343,7 +417,285 @@ impl NativeOutputs {
             resampler,
             state: Mutex::new(State::default()),
             session: Mutex::new(None),
+            network: None,
+            network_discovery: false,
+            filters: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Plays to network players too: `registry` holds those added by
+    /// address (the network backends must share it).
+    pub fn with_network(mut self, registry: Arc<NetworkRegistry>, discovery: bool) -> Self {
+        self.network = Some(registry);
+        self.network_discovery = discovery;
+        self
+    }
+
+    fn network_view(&self) -> NetworkView {
+        match &self.network {
+            Some(registry) => NetworkView {
+                available: true,
+                discovery: self.network_discovery,
+                manual: registry.manual(),
+            },
+            None => NetworkView::default(),
+        }
+    }
+
+    /// Adds (or renames) a network player by address and re-lists the
+    /// devices.
+    pub fn add_network_endpoint(&self, endpoint: ManualEndpoint) -> Result<DevicesView, String> {
+        endpoint.validate()?;
+        let registry = self
+            .network
+            .as_ref()
+            .ok_or("This server does not play to network players.")?;
+        let mut manual = registry.manual();
+        let address = endpoint.address.trim().to_string();
+        manual
+            .retain(|known| known.address.trim() != address || known.protocol != endpoint.protocol);
+        if manual.len() >= 32 {
+            return Err(
+                "Remove a network player first; at most 32 can be added by address.".into(),
+            );
+        }
+        manual.push(ManualEndpoint {
+            address,
+            ..endpoint
+        });
+        self.save_network(registry, manual)?;
+        Ok(self.devices(true))
+    }
+
+    pub fn remove_network_endpoint(&self, address: &str) -> Result<DevicesView, String> {
+        let registry = self
+            .network
+            .as_ref()
+            .ok_or("This server does not play to network players.")?;
+        let mut manual = registry.manual();
+        let before = manual.len();
+        manual.retain(|known| known.address.trim() != address.trim());
+        if manual.len() == before {
+            return Err("No network player was added at that address.".into());
+        }
+        self.save_network(registry, manual)?;
+        Ok(self.devices(true))
+    }
+
+    fn save_network(
+        &self,
+        registry: &NetworkRegistry,
+        manual: Vec<ManualEndpoint>,
+    ) -> Result<(), String> {
+        if let Some(path) = &self.settings_path {
+            Self::save_json(Some(network_path(path)), &manual)
+                .map_err(|error| format!("Could not save the network players: {error}"))?;
+        }
+        registry.set_manual(manual);
+        Ok(())
+    }
+
+    /// The device's own picture (a UPnP icon), fetched from the device.
+    pub fn device_icon(&self, device_id: &str) -> Option<(String, Vec<u8>)> {
+        self.devices(false);
+        let url = self
+            .state()
+            .devices
+            .iter()
+            .find(|device| device.id == device_id)?
+            .network
+            .as_ref()?
+            .icon_url
+            .clone()?;
+        let response =
+            parson_output::network::http::get(&url, std::time::Duration::from_secs(3), 1 << 20)
+                .ok()?;
+        let content_type = response
+            .header("Content-Type")
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        (response.status == 200
+            && matches!(
+                content_type.as_str(),
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            ))
+        .then_some((content_type, response.body))
+    }
+
+    /* -------------------------------------------------------------- */
+    /* Convolution filters                                             */
+    /* -------------------------------------------------------------- */
+
+    fn filter_dir(&self) -> Option<PathBuf> {
+        self.settings_path
+            .as_ref()
+            .map(|path| path.with_file_name("convolution"))
+    }
+
+    fn filter_records(&self) -> Vec<FilterRecord> {
+        self.filter_dir()
+            .and_then(|dir| std::fs::read_to_string(dir.join("index.json")).ok())
+            .and_then(|text| serde_json::from_str::<Vec<FilterRecord>>(&text).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|record| parson_output::dsp::valid_filter_id(&record.id))
+            .collect()
+    }
+
+    fn filter_view(record: FilterRecord, filter: &ConvolutionFilter) -> FilterView {
+        FilterView {
+            response: filter
+                .impulse
+                .response_db(0, 96)
+                .into_iter()
+                .map(|(frequency, db)| {
+                    [
+                        (frequency * 10.0).round() / 10.0,
+                        (db * 100.0).round() / 100.0,
+                    ]
+                })
+                .collect(),
+            summary: filter.summary.clone(),
+            record,
+        }
+    }
+
+    /// The filters on the server, with their summaries.
+    pub fn filters(&self) -> Vec<FilterView> {
+        self.filter_records()
+            .into_iter()
+            .filter_map(|record| {
+                let filter = self.load_filter(&record.id)?;
+                Some(Self::filter_view(record, &filter))
+            })
+            .collect()
+    }
+
+    /// Reads a filter, keeping it in memory once read.
+    pub fn load_filter(&self, id: &str) -> Option<ConvolutionFilter> {
+        if !parson_output::dsp::valid_filter_id(id) {
+            return None;
+        }
+        if let Some(filter) = self.filters.lock().ok()?.get(id) {
+            return Some(filter.clone());
+        }
+        let record = self
+            .filter_records()
+            .into_iter()
+            .find(|record| record.id == id)?;
+        let bytes = std::fs::read(self.filter_dir()?.join(format!("{id}.wav"))).ok()?;
+        let (impulse, format) = parson_output::convolution::parse_wav(&bytes).ok()?;
+        let filter = ConvolutionFilter {
+            id: id.to_string(),
+            name: record.name,
+            summary: impulse.summary(format),
+            impulse: Arc::new(impulse),
+        };
+        self.filters
+            .lock()
+            .ok()?
+            .insert(id.to_string(), filter.clone());
+        Some(filter)
+    }
+
+    /// The filter's WAV file, for a browser's own convolver.
+    pub fn filter_file(&self, id: &str) -> Option<Vec<u8>> {
+        if !parson_output::dsp::valid_filter_id(id)
+            || !self.filter_records().iter().any(|record| record.id == id)
+        {
+            return None;
+        }
+        std::fs::read(self.filter_dir()?.join(format!("{id}.wav"))).ok()
+    }
+
+    /// Stores an uploaded WAV impulse response.
+    pub fn add_filter(
+        &self,
+        name: &str,
+        file_name: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<FilterView, String> {
+        if bytes.len() > MAX_FILTER_BYTES {
+            return Err(format!(
+                "A filter file can be at most {} MB.",
+                MAX_FILTER_BYTES / (1024 * 1024)
+            ));
+        }
+        let (impulse, format) = parson_output::convolution::parse_wav(bytes)?;
+        let dir = self
+            .filter_dir()
+            .ok_or("This server has no data folder for filters.")?;
+        let mut records = self.filter_records();
+        if records.len() >= MAX_FILTERS {
+            return Err(format!(
+                "Delete a filter first; the server keeps at most {MAX_FILTERS}."
+            ));
+        }
+        let name: String = name
+            .trim()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(80)
+            .collect();
+        let name = if name.is_empty() {
+            file_name
+                .map(|file| {
+                    file.trim_end_matches(".wav")
+                        .trim_end_matches(".WAV")
+                        .to_string()
+                })
+                .filter(|file| !file.is_empty())
+                .unwrap_or_else(|| "Convolution filter".into())
+        } else {
+            name
+        };
+        let id = parson_output::network::random_hex(8);
+        std::fs::create_dir_all(&dir)
+            .map_err(|error| format!("Could not save the filter: {error}"))?;
+        std::fs::write(dir.join(format!("{id}.wav")), bytes)
+            .map_err(|error| format!("Could not save the filter: {error}"))?;
+        let record = FilterRecord {
+            id: id.clone(),
+            name: name.clone(),
+            file_name: file_name.map(|file| file.chars().take(120).collect()),
+            added_at: chrono::Utc::now().to_rfc3339(),
+        };
+        records.push(record.clone());
+        Self::save_json(Some(dir.join("index.json")), &records)
+            .map_err(|error| format!("Could not save the filter list: {error}"))?;
+        let filter = ConvolutionFilter {
+            id: id.clone(),
+            name,
+            summary: impulse.summary(format),
+            impulse: Arc::new(impulse),
+        };
+        if let Ok(mut cache) = self.filters.lock() {
+            cache.insert(id, filter.clone());
+        }
+        Ok(Self::filter_view(record, &filter))
+    }
+
+    pub fn delete_filter(&self, id: &str) -> Result<(), String> {
+        let dir = self
+            .filter_dir()
+            .ok_or("This server has no data folder for filters.")?;
+        let mut records = self.filter_records();
+        let before = records.len();
+        records.retain(|record| record.id != id);
+        if records.len() == before {
+            return Err("That filter is not on the server.".into());
+        }
+        Self::save_json(Some(dir.join("index.json")), &records)
+            .map_err(|error| format!("Could not save the filter list: {error}"))?;
+        let _ = std::fs::remove_file(dir.join(format!("{id}.wav")));
+        if let Ok(mut cache) = self.filters.lock() {
+            cache.remove(id);
+        }
+        Ok(())
     }
 
     /// Replaces the float decoder the DSP chain reads from.
@@ -425,8 +777,21 @@ impl NativeOutputs {
         if refresh || !state.probed {
             let previous = std::mem::take(&mut state.devices);
             let mut devices = Vec::new();
-            for backend in &self.backends {
-                for device in backend.devices() {
+            // Network discovery waits on the network, so every backend
+            // lists its devices at once.
+            let listed: Vec<Vec<DeviceInfo>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = self
+                    .backends
+                    .iter()
+                    .map(|backend| scope.spawn(|| backend.devices()))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or_default())
+                    .collect()
+            });
+            for listed in listed {
+                for device in listed {
                     if busy.as_deref() == Some(device.id.as_str())
                         && let Some(kept) = previous.iter().find(|old| old.id == device.id)
                     {
@@ -458,18 +823,23 @@ impl NativeOutputs {
                 .backends
                 .iter()
                 .map(|backend| backend.driver())
-                .find(|driver| *driver != Driver::Simulated),
+                .find(|driver| *driver != Driver::Simulated && !driver.is_network()),
             simulated: self.simulated,
             devices,
+            network: self.network_view(),
         }
     }
 
     pub fn set_settings(
         &self,
         device_id: &str,
-        settings: OutputSettings,
+        mut settings: OutputSettings,
     ) -> Result<DeviceView, String> {
         settings.validate()?;
+        if device_id.starts_with("upnp") || device_id.starts_with("airplay") {
+            // Nothing mixes on a network stream; there is no shared mode.
+            settings.exclusive = true;
+        }
         self.devices(false);
         let busy = self
             .session()
@@ -575,7 +945,13 @@ impl NativeOutputs {
             .find(|backend| backend.driver() == device.driver)
             .cloned()
             .ok_or(NativeError::UnknownDevice)?;
-        let settings = state.settings.get(device_id).cloned().unwrap_or_default();
+        let mut settings = state.settings.get(device_id).cloned().unwrap_or_default();
+        if device.driver.is_network() {
+            // A network stream is never mixed, and DSD reaches network
+            // players as PCM (DoP over UPnP is untested, AirPlay cannot).
+            settings.exclusive = true;
+            settings.dsd_strategy = parson_output::DsdStrategy::Pcm;
+        }
         let dsp = state.dsp.get(device_id).cloned().unwrap_or_default();
         Ok((device, settings, dsp, backend))
     }
@@ -632,18 +1008,20 @@ impl NativeOutputs {
             .is_some_and(|dsd| dsd.mode != DsdMode::Pcm);
         // Processing the listener asked for changes the samples on purpose;
         // it then runs in the server's own chain, before the device.
+        let filter = dsp.convolution_filter().and_then(|id| self.load_filter(id));
         let processing = device
             .caps
             .as_ref()
             .filter(|_| !sent_as_dsd)
             .and_then(|caps| {
-                plan_processing(
+                plan_processing_with(
                     &mut plan,
                     &source,
                     dsp,
                     leveling.map(|leveling| leveling.gain_db),
                     caps,
                     settings,
+                    filter.as_ref(),
                 )
             });
         let extension = Path::new(&song.path)
@@ -679,6 +1057,7 @@ impl NativeOutputs {
                     source: &leveling.source,
                 }),
                 processing: processing.as_ref(),
+                network: device.network.as_ref(),
             },
         );
         Ok((plan, processing, path, source))
@@ -697,6 +1076,20 @@ impl NativeOutputs {
         let (device, settings, dsp, backend) = self.device(device_id)?;
         let (plan, processing, signal_path, source) =
             self.plan_and_path(&device, &settings, &dsp, song, leveling.as_ref())?;
+        backend.prepare(
+            &device.id,
+            &TrackInfo {
+                title: song.name.clone(),
+                artist: Some(song.artist.clone()).filter(|artist| !artist.is_empty()),
+                album: None,
+                duration_ms: Some((song.duration.max(0.0) * 1000.0) as u64),
+            },
+        );
+        let impulse = processing
+            .as_ref()
+            .and_then(|processing| processing.convolution.as_ref())
+            .and_then(|convolution| self.load_filter(&convolution.filter_id))
+            .map(|filter| filter.impulse);
         let mut session = self.session();
         // Release the device (and any other) before opening it again.
         if let Some(previous) = session.take() {
@@ -740,8 +1133,11 @@ impl NativeOutputs {
                 let chain_stats = Arc::clone(&stats);
                 Box::new(move |position| {
                     let decoded = decoder(&song_path, &spec, position)?;
-                    let chain =
+                    let mut chain =
                         DspChain::new(&processing, input_rate, output, Arc::clone(&chain_stats));
+                    if let Some(impulse) = &impulse {
+                        chain = chain.with_convolution(impulse).map_err(io::Error::other)?;
+                    }
                     Ok(Box::new(DspPcm::new(decoded, chain)) as PcmSource)
                 })
             }
@@ -892,6 +1288,7 @@ fn view(
             })
             .unwrap_or_default(),
         hardware: device.hardware.clone(),
+        network: device.network.clone(),
         settings,
         in_use,
     }
@@ -1527,6 +1924,316 @@ mod tests {
         silent.stop().unwrap();
     }
 
+    fn network_outputs(endpoints: Vec<ManualEndpoint>, path: Option<PathBuf>) -> NativeOutputs {
+        let registry = Arc::new(NetworkRegistry::new(endpoints));
+        NativeOutputs::new(
+            vec![
+                Arc::new(parson_output::network::upnp::UpnpBackend::new(
+                    Arc::clone(&registry),
+                    None,
+                )),
+                Arc::new(parson_output::network::raop::RaopBackend::new(
+                    Arc::clone(&registry),
+                    false,
+                )),
+            ],
+            false,
+            path,
+            Arc::new(|_, plan, _, _, _| {
+                // Silence in the plan's container, like ffmpeg's output.
+                let _ = plan;
+                Ok(Box::new(io::repeat(0)) as PcmSource)
+            }),
+            "test resampler",
+        )
+        .with_float_decoder(Arc::new(|_, spec, _| {
+            Ok(Box::new(SineDecoder::new(spec.channels, spec.sample_rate)) as PcmSource)
+        }))
+        .with_network(registry, false)
+    }
+
+    #[test]
+    fn a_upnp_renderer_is_played_with_a_named_transport_and_its_own_report() {
+        use crate::signal_path::SignalQuality;
+        use parson_output::network::NetworkProtocol;
+        use parson_output::network::fakes::{FakeRenderer, FakeRendererConfig};
+        let renderer = FakeRenderer::start(FakeRendererConfig {
+            name: "Den Streamer".into(),
+            ..FakeRendererConfig::default()
+        })
+        .unwrap();
+        let outputs = network_outputs(
+            vec![ManualEndpoint {
+                protocol: NetworkProtocol::OpenHome,
+                address: renderer.description_url(),
+                name: None,
+            }],
+            None,
+        );
+        let view = outputs.devices(false);
+        assert!(view.network.available && !view.network.discovery);
+        assert_eq!(
+            view.driver, None,
+            "network drivers are not the platform driver"
+        );
+        let device = view
+            .devices
+            .iter()
+            .find(|device| device.name == "Den Streamer")
+            .unwrap();
+        assert_eq!(device.driver, Driver::Upnp);
+        assert_eq!(device.mode_label, "OpenHome · WAV (LPCM) over HTTP");
+        assert!(
+            device
+                .network
+                .as_ref()
+                .unwrap()
+                .verification
+                .contains("Not yet tested with a real network streamer")
+        );
+        // Settings cannot turn a network stream into shared mode.
+        let updated = outputs
+            .set_settings(
+                &device.id,
+                OutputSettings {
+                    exclusive: false,
+                    ..OutputSettings::default()
+                },
+            )
+            .unwrap();
+        assert!(updated.settings.exclusive);
+
+        let session = outputs
+            .play(1, &device.id, &song(96_000, 24, true), 0, None)
+            .unwrap();
+        assert!(session.plan.bit_perfect);
+        assert_eq!(session.plan.sample_rate, 96_000);
+        let path = &session.signal_path;
+        let transport = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-transport")
+            .unwrap();
+        assert_eq!(transport.title, "OpenHome to Den Streamer");
+        assert!(
+            transport.detail.starts_with("WAV (LPCM) over HTTP, "),
+            "{}",
+            transport.detail
+        );
+        assert!(
+            transport
+                .detail
+                .ends_with(&format!("→ {}", renderer.http_address)),
+            "{}",
+            transport.detail
+        );
+        let summary = path
+            .output_device
+            .as_ref()
+            .unwrap()
+            .network
+            .as_ref()
+            .unwrap();
+        assert_eq!(summary.protocol, NetworkProtocol::OpenHome);
+        assert_eq!(summary.endpoint, renderer.http_address.to_string());
+        let state = renderer.wait_for(Duration::from_secs(5), |state| !state.received.is_empty());
+        assert_eq!(state.stream_format, Some((96_000, 24, 2)));
+        assert!(
+            state
+                .metadata
+                .unwrap()
+                .contains("sampleFrequency=\"96000\"")
+        );
+        // While it plays, the renderer's own report closes the path.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let confirmed = loop {
+            let view = outputs.current().unwrap();
+            if view.hardware.is_some() || Instant::now() > deadline {
+                break view;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let last = confirmed.signal_path.stages.last().unwrap();
+        assert_eq!(last.title, "Confirmed by the renderer");
+        assert_eq!(last.detail, "decoding WAV 24bit, lossless at 96kHz");
+        assert_eq!(confirmed.signal_path.hardware_confirmed, Some(true));
+        assert_eq!(confirmed.signal_path.quality, SignalQuality::Lossless);
+        outputs.stop().unwrap();
+        let stopped = renderer.wait_for(Duration::from_secs(5), |state| {
+            state.transport_state == "STOPPED"
+        });
+        assert_eq!(stopped.transport_state, "STOPPED");
+    }
+
+    #[test]
+    fn airplay_is_high_quality_with_its_resample_and_dither_shown_and_dsp_before_the_hop() {
+        use crate::signal_path::SignalQuality;
+        use parson_output::network::NetworkProtocol;
+        use parson_output::network::fakes::{FakeAirPlayConfig, FakeAirPlayReceiver};
+        let receiver = FakeAirPlayReceiver::start(FakeAirPlayConfig::default()).unwrap();
+        let outputs = network_outputs(
+            vec![ManualEndpoint {
+                protocol: NetworkProtocol::AirPlay,
+                address: receiver.address.to_string(),
+                name: Some("Kitchen".into()),
+            }],
+            None,
+        );
+        let device = outputs.devices(false).devices.remove(0);
+        assert_eq!(device.name, "Kitchen");
+        assert_eq!(device.driver, Driver::AirPlay);
+        let (plan, path) = outputs
+            .describe(&device.id, &song(96_000, 24, true))
+            .unwrap();
+        assert_eq!(plan.resample, Some((96_000, 44_100)));
+        assert_eq!(plan.bit_depth, 16);
+        let ids = stage_ids(&path);
+        assert!(
+            ids.contains(&"native-resample") && ids.contains(&"native-depth"),
+            "{ids:?}"
+        );
+        let transport = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-transport")
+            .unwrap();
+        assert_eq!(transport.title, "AirPlay to Kitchen");
+        assert_eq!(transport.quality, Some(SignalQuality::HighQuality));
+        assert!(
+            transport
+                .detail
+                .starts_with("ALAC 44.1kHz 16bit over RTP (AirPlay 1)")
+        );
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+        // A CD-quality file is not converted, but AirPlay stays High quality.
+        let (plan, path) = outputs
+            .describe(&device.id, &song(44_100, 16, true))
+            .unwrap();
+        assert!(plan.resample.is_none());
+        assert_eq!(path.quality, SignalQuality::HighQuality);
+
+        // The DSP chain runs on the server, before the network hop.
+        let mut dsp = boosted(3.0, Some(-6.0));
+        dsp.crossfeed.enabled = true;
+        outputs.set_dsp(&device.id, dsp).unwrap();
+        let session = outputs
+            .play(1, &device.id, &song(44_100, 16, true), 0, None)
+            .unwrap();
+        let ids = stage_ids(&session.signal_path);
+        let eq = ids.iter().position(|id| *id == "native-eq").unwrap();
+        let transport = ids.iter().position(|id| *id == "native-transport").unwrap();
+        assert!(eq < transport, "{ids:?}");
+        let state = receiver.wait_for(Duration::from_secs(5), |state| state.packets > 20);
+        assert!(state.decode_errors.is_empty());
+        assert!(
+            state.samples.iter().any(|sample| *sample != 0),
+            "processed audio arrives"
+        );
+        outputs.stop().unwrap();
+    }
+
+    #[test]
+    fn network_players_are_added_by_address_and_persisted() {
+        use parson_output::network::NetworkProtocol;
+        let dir = temp_dir("network");
+        let path = dir.join("native-outputs.json");
+        let outputs = network_outputs(Vec::new(), Some(path.clone()));
+        let view = outputs
+            .add_network_endpoint(ManualEndpoint {
+                protocol: NetworkProtocol::UpnpAv,
+                address: "http://127.0.0.1:9/description.xml".into(),
+                name: None,
+            })
+            .unwrap();
+        assert_eq!(view.network.manual.len(), 1);
+        let unreachable = &view.devices[0];
+        assert!(
+            unreachable
+                .probe_error
+                .as_deref()
+                .unwrap()
+                .contains("could not reach")
+        );
+        let saved: Vec<ManualEndpoint> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("network-outputs.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved.len(), 1);
+        assert!(
+            outputs
+                .add_network_endpoint(ManualEndpoint {
+                    protocol: NetworkProtocol::AirPlay,
+                    address: "http://nope/".into(),
+                    name: None,
+                })
+                .is_err()
+        );
+        let view = outputs
+            .remove_network_endpoint("http://127.0.0.1:9/description.xml")
+            .unwrap();
+        assert!(view.network.manual.is_empty() && view.devices.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn convolution_filters_are_stored_planned_and_run_by_the_chain() {
+        use crate::signal_path::SignalQuality;
+        let dir = temp_dir("convolution");
+        let outputs = outputs(Some(dir.join("native-outputs.json")));
+        // A 48 kHz filter: 300 samples of delay, then −6 dB.
+        let mut taps = vec![0.0; 600];
+        taps[300] = 0.5;
+        let wav = parson_output::convolution::write_wav_f64(48_000, &[taps]);
+        let filter = outputs
+            .add_filter("", Some("Living room.wav"), &wav)
+            .unwrap();
+        assert_eq!(filter.record.name, "Living room");
+        assert_eq!(filter.summary.taps, 600);
+        assert!((filter.summary.peak_gain_db + 6.0).abs() < 0.1);
+        assert_eq!(filter.response.len(), 96);
+        assert!(outputs.add_filter("bad", None, b"RIFF....WAVE").is_err());
+        assert_eq!(outputs.filters().len(), 1);
+        assert_eq!(outputs.filter_file(&filter.record.id).unwrap(), wav);
+
+        let mut dsp = DspSettings::default();
+        dsp.convolution.enabled = true;
+        dsp.convolution.filter_id = Some(filter.record.id.clone());
+        outputs.set_dsp(SIMULATED_DEVICE_ID, dsp).unwrap();
+        let session = outputs
+            .play(1, SIMULATED_DEVICE_ID, &song(44_100, 16, true), 0, None)
+            .unwrap();
+        let stage = session
+            .signal_path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-convolution")
+            .expect("a convolution stage");
+        assert_eq!(
+            stage.detail,
+            "Living room: 600 taps at 44.1kHz, converted from 48kHz, one filter for every channel"
+        );
+        assert_eq!(stage.quality, Some(SignalQuality::Enhanced));
+        assert_eq!(session.signal_path.quality, SignalQuality::Enhanced);
+        let status = wait_for_status(&outputs, |status| {
+            status.peak_dbfs.is_some() && status.realtime_factor.is_some()
+        });
+        // The 0.9 sine comes out 6 dB lower.
+        assert!(
+            (status.peak_dbfs.unwrap() - 20.0 * 0.45f64.log10()).abs() < 0.3,
+            "{status:?}"
+        );
+        outputs.stop().unwrap();
+
+        // Deleting the filter leaves a note instead of a broken chain.
+        outputs.delete_filter(&filter.record.id).unwrap();
+        let (_, path) = outputs
+            .describe(SIMULATED_DEVICE_ID, &song(44_100, 16, true))
+            .unwrap();
+        assert!(!stage_ids(&path).contains(&"native-convolution"));
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn unknown_formats_and_devices_are_refused() {
         let outputs = outputs(None);
@@ -1811,6 +2518,8 @@ mod tests {
             requested_rate_unavailable: None,
             resampler: Some(ResamplerKind::Parson),
             output_bits: 24,
+            convolution: None,
+            convolution_skipped: None,
         };
         let stats = Arc::new(DspStats::default());
         let decoded = ffmpeg_float_decoder(&flac, &spec, 0).unwrap();

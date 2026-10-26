@@ -6,7 +6,17 @@ edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-only"
 
+[features]
+# Protocol-level fake UPnP renderer and AirPlay receiver, for demos and
+# integration tests without network audio hardware.
+network-fakes = []
+
+[[example]]
+name = "network_fakes"
+required-features = ["network-fakes"]
+
 [dependencies]
+mdns-sd = "0.21.5"
 serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]

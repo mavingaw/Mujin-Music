@@ -1,4 +1,5 @@
 import {
+  activeConvolutionFilter,
   activeEqBands,
   crossfeedActive,
   crossfeedStrengthLabels,
@@ -9,15 +10,41 @@ import {
   formatSampleRate,
   headroomActive,
   nativeFormatLabel,
+  networkCapsSourceLabels,
+  networkOutputIdentity,
   normalizeDspSettings,
   type NativeOutputDevice,
   type NativeOutputSession,
   type ServerDspStatus,
 } from "@parson/music-sdk";
 
-/** e.g. `Bit-perfect 44.1kHz–192kHz, 16/24 bit`. */
+/**
+ * e.g. `Bit-perfect 44.1kHz–192kHz, 16/24 bit`; for a network player
+ * `Up to 192kHz, 16/24 bit (assumed)` or `44.1kHz, 16 bit (AirPlay)`.
+ */
 export function serverOutputSummary(device: NativeOutputDevice) {
   if (!device.formats) return device.probe_error ?? "Formats unknown";
+  if (device.network) {
+    const rates = device.formats.sample_rates.filter(
+      (entry) => entry.supported,
+    );
+    const depths = device.formats.bit_depths
+      .filter((entry) => entry.supported)
+      .map((entry) => entry.value);
+    if (!rates.length || !depths.length) return "No PCM formats";
+    const first = nativeFormatLabel(rates[0]!.value);
+    const last = nativeFormatLabel(rates.at(-1)!.value);
+    const span = first === last ? first : `${first}–${last}`;
+    const source =
+      device.network.caps_source === "protocol"
+        ? "AirPlay"
+        : device.network.caps_source === "assumed"
+          ? "assumed"
+          : device.network.caps_source === "known_model"
+            ? "maker's limits"
+            : "declared";
+    return `${span}, ${depths.join("/")} bit (${source})`;
+  }
   const rates = device.formats.sample_rates.filter((entry) => entry.supported);
   const depths = device.formats.bit_depths
     .filter((entry) => entry.supported)
@@ -71,9 +98,28 @@ export function serverDspSummary(device: NativeOutputDevice): string | null {
   if (bands) parts.push(`EQ ${bands} ${bands === 1 ? "band" : "bands"}`);
   if (crossfeedActive(dsp))
     parts.push(`Crossfeed ${crossfeedStrengthLabels[dsp.crossfeed.strength]}`);
+  if (activeConvolutionFilter(dsp)) parts.push("Convolution");
   if (dsp.sampleRate.enabled && typeof dsp.sampleRate.mode === "number")
     parts.push(formatSampleRate(dsp.sampleRate.mode));
   return parts.length ? parts.join(" · ") : null;
+}
+
+/** e.g. `Linn Klimax DSM · OpenHome · 192.168.1.40`, or `null` off-network. */
+export function networkPlayerLine(device: NativeOutputDevice) {
+  const network = device.network;
+  if (!network) return null;
+  return `${networkOutputIdentity(network)} · ${network.host}`;
+}
+
+/** Where a network player's limits come from and what it was tested on. */
+export function networkPlayerNote(device: NativeOutputDevice) {
+  const network = device.network;
+  if (!network) return null;
+  return `${networkCapsSourceLabels[network.caps_source]}. ${
+    network.protocol === "air_play"
+      ? "Tested against Parson's protocol-level AirPlay receiver, not yet a real AirPlay device."
+      : "Tested against Parson's protocol-level UPnP/OpenHome renderer, not yet a real streamer."
+  }`;
 }
 
 /** e.g. `Processing speed 41.3x · Peak −1.2 dBFS · Clipping`. */
@@ -138,6 +184,12 @@ export function serverDriverLine(session: NativeOutputSession) {
   if (!hardware) return null;
   const params = hardware.params;
   const running = `${params.format} ${formatSampleRate(params.rate)} ${params.channels}ch`;
+  if (hardware.reporter === "renderer") {
+    const decoding = `${params.format} at ${formatSampleRate(params.rate)}`;
+    return hardware.matches_stream
+      ? `Confirmed by the renderer: decoding ${decoding}`
+      : `Renderer: decoding ${decoding}, converted by the renderer`;
+  }
   const chain = hardware.chain?.plugins.length
     ? ` via ${hardware.chain.plugins.join(" → ")}`
     : "";
@@ -157,6 +209,8 @@ export function serverDriverLine(session: NativeOutputSession) {
 export function serverTransportLine(session: NativeOutputSession) {
   const device = session.signal_path?.output_device;
   if (!device) return null;
+  if (device.network)
+    return `${device.network.protocol_label} to ${device.network.endpoint} · ${device.network.stream_format} from ${device.host}`;
   return [
     device.usb_id ? `USB ${device.usb_id}` : null,
     device.usb_speed,

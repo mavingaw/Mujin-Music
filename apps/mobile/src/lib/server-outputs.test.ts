@@ -5,6 +5,8 @@ import {
   type NativeOutputSession,
 } from "@parson/music-sdk";
 import {
+  networkPlayerLine,
+  networkPlayerNote,
   serverDriverLine,
   serverDsdLine,
   serverHardwareLine,
@@ -219,5 +221,67 @@ test("libasound reports name the plugin chain, and the transport names the drive
   } as unknown as NativeOutputSession;
   expect(serverTransportLine(bench)).toBe(
     "USB 1209:0001 · high speed · ALSA hw:1,0 exclusive on studio-pc · kernel ABI emulator, no DAC hardware",
+  );
+});
+
+test("network players name their protocol, limits and test status", () => {
+  const upnp = {
+    ...device,
+    id: "upnp:abc",
+    name: "Den Streamer",
+    driver: "upnp",
+    formats: {
+      sample_rates: [44_100, 96_000, 192_000, 352_800].map((value) => ({
+        value,
+        supported: value <= 192_000,
+        allowed: true,
+      })),
+      bit_depths: [16, 24, 32].map((value) => ({
+        value,
+        supported: value < 32,
+        allowed: true,
+      })),
+    },
+    network: {
+      protocol: "open_home",
+      host: "192.168.1.40",
+      port: 55178,
+      manufacturer: "Linn",
+      model: "Klimax DSM",
+      caps_source: "assumed",
+    },
+  } as unknown as NativeOutputDevice;
+  expect(serverOutputSummary(upnp)).toBe("44.1kHz–192kHz, 16/24 bit (assumed)");
+  expect(networkPlayerLine(upnp)).toBe(
+    "Linn Klimax DSM · OpenHome · 192.168.1.40",
+  );
+  expect(networkPlayerNote(upnp)).toContain("not yet a real streamer");
+  const session = {
+    hardware: {
+      reporter: "renderer",
+      params: { format: "WAV 24bit, lossless", rate: 96_000, channels: 2 },
+      matches_stream: true,
+    },
+    signal_path: {
+      output_device: {
+        host: "studio",
+        network: {
+          protocol_label: "OpenHome",
+          endpoint: "192.168.1.40:55178",
+          stream_format: "WAV (LPCM) over HTTP",
+        },
+      },
+    },
+  } as unknown as NativeOutputSession;
+  expect(serverDriverLine(session)).toBe(
+    "Confirmed by the renderer: decoding WAV 24bit, lossless at 96kHz",
+  );
+  expect(serverTransportLine(session)).toBe(
+    "OpenHome to 192.168.1.40:55178 · WAV (LPCM) over HTTP from studio",
+  );
+  const dsp = defaultDspSettings();
+  dsp.convolution = { enabled: true, filterId: "ab12" };
+  expect(serverDspSummary({ ...device, dsp } as NativeOutputDevice)).toBe(
+    "Convolution",
   );
 });

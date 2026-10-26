@@ -1,7 +1,9 @@
 import {
   dsdRateLabel,
   DSD_STRATEGIES,
+  isNetworkDriver,
   nativeFormatLabel,
+  networkCapsSourceLabels,
   type DsdStrategy,
   type FormatSupportEntry,
   type NativeOutputDevice,
@@ -73,7 +75,47 @@ export const driverLabels: Record<NativeOutputDevice["driver"], string> = {
   wasapi: "WASAPI",
   core_audio: "CoreAudio",
   simulated: "Simulated",
+  upnp: "UPnP",
+  airplay: "AirPlay",
 };
+
+export function isNetworkDevice(device: NativeOutputDevice) {
+  return isNetworkDriver(device.driver) || Boolean(device.network);
+}
+
+/** Devices on the server itself, and network players, each in order. */
+export function splitOutputDevices(devices: NativeOutputDevice[]) {
+  return {
+    local: devices.filter((device) => !isNetworkDevice(device)),
+    network: devices.filter(isNetworkDevice),
+  };
+}
+
+/** Where this player's format limits come from, and what to do about it. */
+export function networkLimitsNote(device: NativeOutputDevice) {
+  const network = device.network;
+  if (!network) return null;
+  const source = networkCapsSourceLabels[network.caps_source];
+  switch (network.caps_source) {
+    case "declared":
+      return `${source}: it lists the rates it takes, so Parson sends only those and converts the rest on the server.`;
+    case "protocol":
+      return `${source}: AirPlay 1 carries ALAC at 44.1kHz/16bit only, so higher-resolution files are converted on the server first, and the signal path shows it.`;
+    case "known_model":
+      return `${source} for ${network.model ?? device.name}; Parson converts anything above them on the server.`;
+    case "assumed":
+      return `${source}. It takes WAV but does not list rates, so Parson allows up to 192kHz/24bit. If a high-resolution track does not play, lower Max sample rate below.`;
+  }
+}
+
+/** How the audio travels to this player, in a sentence. */
+export function networkStreamNote(device: NativeOutputDevice) {
+  const network = device.network;
+  if (!network) return null;
+  if (network.protocol === "air_play")
+    return "AirPlay 1 (RAOP): the server's chain output is sent as uncompressed ALAC frames over RTP, with timing and sync. Rated High quality at best: the receiver applies its own volume and Parson cannot see past it.";
+  return `${network.stream_format}: the server runs its whole chain, DSP included, then serves the result as uncompressed PCM and tells the player over ${network.protocol === "open_home" ? "OpenHome" : "UPnP AV"} to fetch it. Nothing on this computer mixes it.${network.reports_format ? " This player reports what it decodes, so the signal path can confirm the format." : ""}`;
+}
 
 /** DSD rates the device takes natively. */
 export function nativeDsdRates(device: NativeOutputDevice) {

@@ -358,6 +358,9 @@ pub enum HardwareReporter {
     /// libasound, from the setup of the opened PCM chain (`snd_pcm_dump`):
     /// what the bottom of the chain negotiated, and every plugin on the way.
     Library,
+    /// A network renderer's own report of what it is decoding (OpenHome
+    /// `Info.Details`).
+    Renderer,
 }
 
 /// The driver's account of a stream that is playing.

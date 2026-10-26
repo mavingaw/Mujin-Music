@@ -159,6 +159,11 @@ pub struct ServerSignalPath {
     /// The server output that plays it, on a native path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_device: Option<OutputDeviceSummary>,
+    /// The driver's (or renderer's) report while it plays: `true` when
+    /// it runs exactly what Parson opened, `false` when something below
+    /// Parson converted it. Absent without a report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hardware_confirmed: Option<bool>,
 }
 
 /// The device end of a native path, as the kernel and driver name it.
@@ -178,6 +183,29 @@ pub struct OutputDeviceSummary {
     /// The card is answered by Parson's kernel-ABI emulator: the hw driver
     /// path ran, but there is no DAC hardware behind it.
     pub kernel_emulator: bool,
+    /// A network player: protocol, address and identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkEndpointSummary>,
+}
+
+/// The network end of a path to a streamer or speaker.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct NetworkEndpointSummary {
+    /// `upnp_av`, `open_home` or `air_play`.
+    pub protocol: parson_output::network::NetworkProtocol,
+    /// e.g. `OpenHome`.
+    pub protocol_label: &'static str,
+    /// `192.168.1.40:55178`.
+    pub endpoint: String,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub kind: parson_output::network::EndpointKind,
+    pub caps_source: parson_output::network::NetworkCapsSource,
+    /// e.g. `WAV (LPCM) over HTTP`.
+    pub stream_format: String,
+    /// The device has its own picture (served by the outputs API).
+    pub has_icon: bool,
+    pub verification: String,
 }
 
 /// Bitrate the stream is transcoded at, or `None` for the original bytes.
@@ -464,6 +492,7 @@ pub fn describe_server_leg(
             stages,
             processing: None,
             output_device: None,
+            hardware_confirmed: None,
         };
     };
 
@@ -606,6 +635,7 @@ pub fn describe_server_leg(
         stages,
         processing: None,
         output_device: None,
+        hardware_confirmed: None,
     }
 }
 
@@ -698,6 +728,7 @@ fn describe_dsd_compat(
         stages,
         processing: None,
         output_device: None,
+        hardware_confirmed: None,
     }
 }
 
@@ -747,6 +778,8 @@ pub struct NativeOutputTarget<'a> {
     /// The server's DSP chain for this track, when anything processes.
     /// Leveling alone (without a plan) is treated as a chain of one gain.
     pub processing: Option<&'a parson_output::dsp::ProcessingPlan>,
+    /// A network player, reached over UPnP, OpenHome or AirPlay.
+    pub network: Option<&'a parson_output::network::NetworkInfo>,
 }
 
 fn plan_format_summary(plan: &parson_output::OutputPlan) -> String {
@@ -883,6 +916,8 @@ pub fn describe_native_leg(
                     .resample
                     .map(|_| parson_output::dsp::ResamplerKind::Decoder),
                 output_bits: plan.bit_depth,
+                convolution: None,
+                convolution_skipped: None,
             };
             Some(&derived)
         }
@@ -977,6 +1012,46 @@ pub fn describe_native_leg(
                 "Crossfeed is on but this track plays in {} channels, so it is skipped.",
                 processing.channels
             ));
+        }
+        if let Some(convolution) = &processing.convolution {
+            chain.push("native-convolution");
+            let channels = if convolution.channels == 1 {
+                "one filter for every channel".to_string()
+            } else {
+                format!("{} channels", convolution.channels)
+            };
+            let converted = (convolution.filter_rate != convolution.run_rate)
+                .then(|| format!(", converted from {}", format_rate(convolution.filter_rate)));
+            stages.push(SignalStage {
+                id: "native-convolution",
+                kind: StageKind::Dsp,
+                title: "Convolution".into(),
+                detail: format!(
+                    "{}: {} taps at {}{}, {channels}",
+                    convolution.name,
+                    convolution.taps,
+                    format_rate(convolution.run_rate),
+                    converted.clone().unwrap_or_default()
+                ),
+                quality: Some(SignalQuality::Enhanced),
+                explanation: format!(
+                    "The FIR filter {} ({} taps, {:.0} ms) you chose, such as a room correction, convolved by the server in 64-bit float with uniformly partitioned FFT convolution: exact linear convolution, no added delay.{} Its response peaks at {}, so leave at least that much headroom.",
+                    convolution.name,
+                    convolution.taps,
+                    convolution.taps as f64 * 1000.0 / f64::from(convolution.filter_rate.max(1)),
+                    match converted {
+                        Some(_) => format!(
+                            " The filter was designed at {}, so the server converted it to {} with its linear-phase resampler, keeping its frequency response.",
+                            format_rate(convolution.filter_rate),
+                            format_rate(convolution.run_rate)
+                        ),
+                        None => String::new(),
+                    },
+                    format_decibels(convolution.peak_gain_db)
+                ),
+            });
+        } else if let Some(skipped) = &processing.convolution_skipped {
+            notes.push(skipped.clone());
         }
         if let Some(rate) = processing.requested_rate_unavailable {
             notes.push(format!(
@@ -1098,84 +1173,90 @@ pub fn describe_native_leg(
         });
     }
     let format = plan_format_summary(plan);
-    stages.push(SignalStage {
-        id: "native-transport",
-        kind: StageKind::Transport,
-        title: format!("{} · Parson audio transport", target.host),
-        detail: target.mode_label.to_string(),
-        quality: Some(if plan.exclusive {
-            SignalQuality::Lossless
-        } else {
-            SignalQuality::HighQuality
-        }),
-        explanation: if plan.exclusive {
-            format!(
-                "The server on {} writes the samples itself through {}, with the device's own driver and nothing else in between: no browser, phone, sound server or system mixer.",
-                target.host, target.mode_label
-            )
-        } else {
-            format!(
-                "The server on {} writes the samples through {}, which lets the system convert the format or mix in other sounds after this point.",
-                target.host, target.mode_label
-            )
-        },
-    });
-    let (quality, mut explanation) = if plan.exclusive && target.config_pcm {
-        (
-            SignalQuality::Lossless,
-            format!(
-                "The server opens the ALSA PCM for {} ({}) with ALSA's conversions turned off and switched it to {}. This PCM comes from the ALSA configuration, so it can be a chain of plugins: the driver report below lists every plugin the samples pass through and rates the path from it.",
-                target.device_name, target.mode_label, format
-            ),
-        )
-    } else if plan.exclusive {
-        (
-            SignalQuality::Lossless,
-            format!(
-                "{} is open in exclusive mode ({}): no other program can play through it, there is no system mixer, and the device runs at {} because the server switched it to this track's format. Volume is fixed; use the device's or amplifier's volume control.",
-                target.device_name, target.mode_label, format
-            ),
-        )
+    if let Some(network) = target.network {
+        let (transport, output) = network_stages(target, network, plan, &format);
+        stages.push(transport);
+        stages.push(output);
     } else {
-        (
-            SignalQuality::HighQuality,
-            format!(
-                "{} is open in shared mode ({}), so the system can still mix in other sounds or convert the format after this point. Turn on Exclusive Mode in the device's settings for a bit-perfect path.",
-                target.device_name, target.mode_label
-            ),
-        )
-    };
-    if dsd.is_some_and(|dsd| dsd.mode == parson_output::DsdMode::Native) {
-        explanation.push_str(" The driver takes DSD natively, so the DAC receives the file's one-bit stream as it is.");
-    }
-    if let Some(usb_id) = target.usb_id {
-        explanation.push_str(&format!(
-            " {} it as USB device {usb_id}{}.",
-            if target.kernel_emulator {
-                "Its /proc/asound entry reports"
+        stages.push(SignalStage {
+            id: "native-transport",
+            kind: StageKind::Transport,
+            title: format!("{} · Parson audio transport", target.host),
+            detail: target.mode_label.to_string(),
+            quality: Some(if plan.exclusive {
+                SignalQuality::Lossless
             } else {
-                "The kernel reports"
+                SignalQuality::HighQuality
+            }),
+            explanation: if plan.exclusive {
+                format!(
+                    "The server on {} writes the samples itself through {}, with the device's own driver and nothing else in between: no browser, phone, sound server or system mixer.",
+                    target.host, target.mode_label
+                )
+            } else {
+                format!(
+                    "The server on {} writes the samples through {}, which lets the system convert the format or mix in other sounds after this point.",
+                    target.host, target.mode_label
+                )
             },
-            target
-                .usb_speed
-                .map(|speed| format!(", {speed}"))
-                .unwrap_or_default()
-        ));
-    }
-    stages.push(SignalStage {
-        id: "native-output",
-        kind: StageKind::Output,
-        title: target.device_name.to_string(),
-        detail: format!("{}, {}", target.mode_label, format),
-        quality: Some(quality),
-        explanation: if target.simulated {
-            format!("{explanation} This is a simulated device: it consumes audio in real time without a sound card.")
-        } else if target.kernel_emulator {
-            format!("{explanation} {KERNEL_EMULATOR_NOTE}")
+        });
+        let (quality, mut explanation) = if plan.exclusive && target.config_pcm {
+            (
+                SignalQuality::Lossless,
+                format!(
+                    "The server opens the ALSA PCM for {} ({}) with ALSA's conversions turned off and switched it to {}. This PCM comes from the ALSA configuration, so it can be a chain of plugins: the driver report below lists every plugin the samples pass through and rates the path from it.",
+                    target.device_name, target.mode_label, format
+                ),
+            )
+        } else if plan.exclusive {
+            (
+                SignalQuality::Lossless,
+                format!(
+                    "{} is open in exclusive mode ({}): no other program can play through it, there is no system mixer, and the device runs at {} because the server switched it to this track's format. Volume is fixed; use the device's or amplifier's volume control.",
+                    target.device_name, target.mode_label, format
+                ),
+            )
         } else {
-            explanation
-        },
-    });
+            (
+                SignalQuality::HighQuality,
+                format!(
+                    "{} is open in shared mode ({}), so the system can still mix in other sounds or convert the format after this point. Turn on Exclusive Mode in the device's settings for a bit-perfect path.",
+                    target.device_name, target.mode_label
+                ),
+            )
+        };
+        if dsd.is_some_and(|dsd| dsd.mode == parson_output::DsdMode::Native) {
+            explanation.push_str(" The driver takes DSD natively, so the DAC receives the file's one-bit stream as it is.");
+        }
+        if let Some(usb_id) = target.usb_id {
+            explanation.push_str(&format!(
+                " {} it as USB device {usb_id}{}.",
+                if target.kernel_emulator {
+                    "Its /proc/asound entry reports"
+                } else {
+                    "The kernel reports"
+                },
+                target
+                    .usb_speed
+                    .map(|speed| format!(", {speed}"))
+                    .unwrap_or_default()
+            ));
+        }
+        stages.push(SignalStage {
+            id: "native-output",
+            kind: StageKind::Output,
+            title: target.device_name.to_string(),
+            detail: format!("{}, {}", target.mode_label, format),
+            quality: Some(quality),
+            explanation: if target.simulated {
+                format!("{explanation} This is a simulated device: it consumes audio in real time without a sound card.")
+            } else if target.kernel_emulator {
+                format!("{explanation} {KERNEL_EMULATOR_NOTE}")
+            } else {
+                explanation
+            },
+        });
+    }
     let as_dsd = dsd.filter(|dsd| dsd.mode != parson_output::DsdMode::Pcm);
     let mut delivered = SignalFormat {
         codec: Some(if as_dsd.is_some() { "dsd" } else { "pcm" }.into()),
@@ -1224,8 +1305,115 @@ pub fn describe_native_leg(
             usb_speed: target.usb_speed.map(str::to_string),
             simulated: target.simulated,
             kernel_emulator: target.kernel_emulator,
+            network: target.network.map(|network| NetworkEndpointSummary {
+                protocol: network.protocol,
+                protocol_label: network.protocol.label(),
+                endpoint: endpoint_address(network),
+                manufacturer: network.manufacturer.clone(),
+                model: network.model.clone(),
+                kind: network.kind,
+                caps_source: network.caps_source,
+                stream_format: network.stream_format.clone(),
+                has_icon: network.icon_url.is_some(),
+                verification: network.verification.clone(),
+            }),
         }),
+        hardware_confirmed: None,
     }
+}
+
+fn endpoint_address(network: &parson_output::network::NetworkInfo) -> String {
+    if network.host.contains(':') {
+        format!("[{}]:{}", network.host, network.port)
+    } else {
+        format!("{}:{}", network.host, network.port)
+    }
+}
+
+/// The transport and output stages of a path that ends at a network
+/// player: the protocol and endpoint, then the player itself.
+fn network_stages(
+    target: &NativeOutputTarget<'_>,
+    network: &parson_output::network::NetworkInfo,
+    plan: &parson_output::OutputPlan,
+    format: &str,
+) -> (SignalStage, SignalStage) {
+    use parson_output::network::{NetworkCapsSource, NetworkProtocol};
+    let endpoint = endpoint_address(network);
+    let airplay = network.protocol == NetworkProtocol::AirPlay;
+    let transport = SignalStage {
+        id: "native-transport",
+        kind: StageKind::Transport,
+        title: format!("{} to {}", network.protocol.label(), target.device_name),
+        detail: format!("{}, {} → {endpoint}", network.stream_format, target.host),
+        quality: Some(if airplay {
+            SignalQuality::HighQuality
+        } else {
+            SignalQuality::Lossless
+        }),
+        explanation: if airplay {
+            format!(
+                "The server on {} sends the result of its chain to {endpoint} over AirPlay 1 (RAOP): uncompressed ALAC frames at 44.1kHz/16bit in RTP packets, with timing and sync on their own ports. The samples arrive intact, but AirPlay is High quality at best, as Roon also rates it: the format is fixed at 44.1kHz/16bit (so higher-resolution files are converted above), and the receiver applies its own volume and output processing, which Parson can neither see nor turn off.",
+                target.host
+            )
+        } else {
+            format!(
+                "The server on {} serves the samples its chain produced as uncompressed PCM ({}) at {format}, and tells the renderer at {endpoint} over {} to fetch it. TCP carries every byte unchanged, so the renderer's network input receives exactly what Parson computed; the renderer's own pace keeps the chain in real time.",
+                target.host,
+                network.stream_format,
+                if network.protocol == NetworkProtocol::OpenHome {
+                    "OpenHome / UPnP control"
+                } else {
+                    "UPnP AV control (AVTransport)"
+                }
+            )
+        },
+    };
+    let limits = match network.caps_source {
+        NetworkCapsSource::Declared => format!(
+            "{} declared in its protocol info that it takes this format.",
+            target.device_name
+        ),
+        NetworkCapsSource::Protocol => "AirPlay 1 only carries 44.1kHz/16bit.".to_string(),
+        NetworkCapsSource::KnownModel => format!(
+            "Parson applies the maker's published limits for {}.",
+            network.model.as_deref().unwrap_or(target.device_name)
+        ),
+        NetworkCapsSource::Assumed => format!(
+            "{} takes WAV but does not say which rates; Parson assumes up to 192kHz/24bit. If a track does not play, lower Max sample rate for it in Settings → Audio outputs.",
+            target.device_name
+        ),
+    };
+    let identity = match (&network.manufacturer, &network.model) {
+        (Some(maker), Some(model)) if !model.contains(maker.as_str()) => format!("{maker} {model}"),
+        (_, Some(model)) => model.clone(),
+        (Some(maker), None) => maker.clone(),
+        (None, None) => network.protocol.label().to_string(),
+    };
+    let quality = if airplay || !plan.exclusive {
+        SignalQuality::HighQuality
+    } else {
+        SignalQuality::Lossless
+    };
+    let boundary = if airplay {
+        "What the receiver does after decoding (its volume, any processing) is outside what Parson can see.".to_string()
+    } else if network.reports_format {
+        "Parson cannot see past the renderer's network input, but this renderer reports what it decodes; the stage below shows its report while it plays.".to_string()
+    } else {
+        "Parson cannot see past the renderer's network input: whatever its firmware does next (volume, resampling, room correction) is not shown, and this renderer does not report what it decodes.".to_string()
+    };
+    let output = SignalStage {
+        id: "native-output",
+        kind: StageKind::Output,
+        title: target.device_name.to_string(),
+        detail: format!("{identity}, {format}"),
+        quality: Some(quality),
+        explanation: format!(
+            "{} receives {format} from Parson. {limits} {boundary} {}",
+            target.device_name, network.verification
+        ),
+    };
+    (transport, output)
 }
 
 /// Said wherever an emulated card appears, so no run on it reads as a DAC.
@@ -1254,6 +1442,9 @@ pub fn add_hardware_report(
         .as_ref()
         .map(parson_output::pcm_chain::chain_label);
     let mut detail = match (hardware.reporter, chain.as_deref()) {
+        (HardwareReporter::Renderer, _) => {
+            format!("decoding {} at {}", params.format, format_rate(params.rate))
+        }
         (HardwareReporter::Kernel, _) | (_, None) => format!("hardware running at {running}"),
         (HardwareReporter::Library, Some(chain)) => {
             format!("running at {running}, through {chain}")
@@ -1262,12 +1453,21 @@ pub fn add_hardware_report(
     if let Some(hz) = hardware.momentary_hz {
         detail.push_str(&format!(", USB clock {}", format_rate(hz)));
     }
-    let opened = format!(
-        "{} at {} {}ch",
-        parson_output::procfs::alsa_format_name(stream.sample_format),
-        format_rate(stream.sample_rate),
-        stream.channels
-    );
+    let opened = if hardware.reporter == HardwareReporter::Renderer {
+        format!(
+            "{} {}bit {}ch",
+            format_rate(stream.sample_rate),
+            stream.sample_format.bits(),
+            stream.channels
+        )
+    } else {
+        format!(
+            "{} at {} {}ch",
+            parson_output::procfs::alsa_format_name(stream.sample_format),
+            format_rate(stream.sample_rate),
+            stream.channels
+        )
+    };
     let who = match hardware.reporter {
         HardwareReporter::Kernel if hardware.kernel_emulator => format!(
             "Read through the kernel's ALSA interface ({}), answered here by Parson's kernel-ABI emulator rather than a kernel driver",
@@ -1278,13 +1478,37 @@ pub fn add_hardware_report(
             "Read from libasound ({}), which lists the plugin chain it built and the setup its bottom negotiated",
             hardware.source
         ),
+        HardwareReporter::Renderer => {
+            format!("Reported by the renderer itself ({})", hardware.source)
+        }
     };
     let converting = hardware
         .chain
         .as_ref()
         .map(|chain| chain.converting.join(", "))
         .filter(|plugins| !plugins.is_empty());
-    let (title, quality, explanation) = if hardware.matches_stream {
+    let renderer = hardware.reporter == HardwareReporter::Renderer;
+    let (title, quality, explanation) = if hardware.matches_stream && renderer {
+        (
+            "Confirmed by the renderer",
+            SignalQuality::Lossless,
+            format!(
+                "{who} while this track plays: {device_name} is decoding {} at {}, exactly the rate and depth Parson sends ({opened}), and calls it lossless. This is the renderer's own account; Parson cannot inspect its DAC.",
+                params.format,
+                format_rate(params.rate)
+            ),
+        )
+    } else if renderer {
+        (
+            "Converted by the renderer",
+            SignalQuality::HighQuality,
+            format!(
+                "{who} while this track plays: Parson sends {opened}, but {device_name} reports {} at {}. The renderer converts the stream itself, so the path is not bit-perfect past its network input.",
+                params.format,
+                format_rate(params.rate)
+            ),
+        )
+    } else if hardware.matches_stream {
         (
             "Confirmed by the driver",
             SignalQuality::Lossless,
@@ -1309,6 +1533,7 @@ pub fn add_hardware_report(
             ),
         )
     };
+    path.hardware_confirmed = Some(hardware.matches_stream);
     path.stages.retain(|stage| stage.id != "native-hardware");
     path.stages.push(SignalStage {
         id: "native-hardware",
@@ -1481,6 +1706,112 @@ mod tests {
         add_hardware_report(&mut path, "DragonFly Red", &wrong, &stream);
         assert_eq!(path.quality, SignalQuality::HighQuality);
         assert_eq!(path.stages.last().unwrap().title, "Converted below Parson");
+    }
+
+    #[test]
+    fn a_lossy_file_the_driver_confirms_is_confirmed_not_contradicted() {
+        // Screenshot 36: an MP3 on a USB DAC, with the hardware running
+        // exactly what Parson opened. The report confirms the format; the
+        // MP3 alone makes the light yellow.
+        let audio = mp3(320);
+        let plan = native_plan(&audio, &usb_dac(), true);
+        let mut path = describe_native_leg("s", Some(&audio), Some("mp3"), &plan, &DAC);
+        let stream = parson_output::StreamFormat {
+            sample_rate: plan.sample_rate,
+            sample_format: plan.sample_format,
+            channels: plan.channels,
+        };
+        let params = parson_output::procfs::parse_hw_params(&format!(
+            "format: {}\nchannels: 2\nrate: {} ({}/1)\n",
+            parson_output::procfs::alsa_format_name(plan.sample_format),
+            plan.sample_rate,
+            plan.sample_rate
+        ))
+        .unwrap();
+        let report = parson_output::procfs::HardwareStatus {
+            source: "/proc/asound/card1/pcm0p/sub0/hw_params".into(),
+            reporter: parson_output::procfs::HardwareReporter::Kernel,
+            chain: None,
+            matches_stream: parson_output::procfs::params_match(&params, &stream),
+            params,
+            momentary_hz: None,
+            kernel_emulator: false,
+        };
+        add_hardware_report(&mut path, "USB DAC", &report, &stream);
+        assert_eq!(path.hardware_confirmed, Some(true));
+        let stage = path.stages.last().unwrap();
+        assert_eq!(stage.title, "Confirmed by the driver");
+        // Rated by the lossy generation it carries, but not "converted".
+        assert_eq!(stage.quality, Some(SignalQuality::LowQuality));
+        assert_eq!(path.quality, SignalQuality::LowQuality);
+    }
+
+    #[test]
+    fn network_paths_name_protocol_endpoint_and_what_was_tested() {
+        use parson_output::network::{
+            EndpointKind, NetworkCapsSource, NetworkInfo, NetworkProtocol,
+        };
+        let network = NetworkInfo {
+            protocol: NetworkProtocol::UpnpAv,
+            host: "192.168.1.40".into(),
+            port: 49152,
+            location: Some("http://192.168.1.40:49152/d.xml".into()),
+            manufacturer: Some("Bluesound".into()),
+            model: Some("NODE".into()),
+            model_description: None,
+            icon_url: None,
+            kind: EndpointKind::Streamer,
+            caps_source: NetworkCapsSource::Declared,
+            stream_format: "LPCM (audio/L16) over HTTP".into(),
+            accepts: vec!["L16 44.1/48kHz".into()],
+            reports_format: false,
+            manual: false,
+            verification: parson_output::network::UPNP_VERIFICATION.into(),
+        };
+        let audio = flac(44_100, 16, 2);
+        let caps = parson_output::DeviceCaps {
+            sample_rates: vec![44_100, 48_000],
+            sample_formats: vec![parson_output::SampleFormat::S16],
+            min_channels: 2,
+            max_channels: 2,
+            ..parson_output::DeviceCaps::default()
+        };
+        let plan = native_plan(&audio, &caps, true);
+        let target = NativeOutputTarget {
+            device_name: "Office NODE",
+            mode_label: "UPnP AV · LPCM (audio/L16) over HTTP",
+            network: Some(&network),
+            ..DAC
+        };
+        let path = describe_native_leg("s", Some(&audio), Some("flac"), &plan, &target);
+        let transport = path
+            .stages
+            .iter()
+            .find(|stage| stage.id == "native-transport")
+            .unwrap();
+        assert_eq!(transport.title, "UPnP AV to Office NODE");
+        assert_eq!(
+            transport.detail,
+            "LPCM (audio/L16) over HTTP, studio-pc → 192.168.1.40:49152"
+        );
+        let output = path.stages.last().unwrap();
+        assert_eq!(output.id, "native-output");
+        assert_eq!(output.detail, "Bluesound NODE, 44.1kHz 16bit 2ch");
+        assert!(output.explanation.contains("declared in its protocol info"));
+        assert!(
+            output
+                .explanation
+                .contains("does not report what it decodes")
+        );
+        assert!(
+            output
+                .explanation
+                .contains("Not yet tested with a real network streamer")
+        );
+        assert_eq!(path.quality, SignalQuality::Lossless);
+        let summary = path.output_device.unwrap().network.unwrap();
+        assert_eq!(summary.endpoint, "192.168.1.40:49152");
+        assert_eq!(summary.protocol_label, "UPnP AV");
     }
 
     #[test]
@@ -1827,6 +2158,7 @@ mod tests {
         resampler: "soxr, very high quality",
         leveling: None,
         processing: None,
+        network: None,
     };
 
     #[test]

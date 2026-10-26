@@ -272,6 +272,7 @@ export function DspControls({
   title = "DSP engine",
   unavailable = null,
   crossfeed = null,
+  filters = null,
 }: {
   onChange: (settings: DspSettings) => void;
   settings: DspSettings;
@@ -280,6 +281,11 @@ export function DspControls({
   unavailable?: string | null;
   /** `true`/`false` shows a crossfeed switch; `null` hides it. */
   crossfeed?: boolean | null;
+  /**
+   * Convolution filters on the server (a server output convolves; this
+   * phone's engine cannot); `null` hides convolution.
+   */
+  filters?: { id: string; name: string; peakGainDb: number }[] | null;
 }) {
   if (unavailable) {
     return (
@@ -408,7 +414,99 @@ export function DspControls({
           />
         </View>
       ) : null}
+      {filters ? (
+        <ConvolutionRow
+          filters={filters}
+          onChange={onChange}
+          settings={settings}
+        />
+      ) : null}
     </View>
+  );
+}
+
+function ConvolutionRow({
+  filters,
+  onChange,
+  settings,
+}: {
+  filters: { id: string; name: string; peakGainDb: number }[];
+  onChange: (settings: DspSettings) => void;
+  settings: DspSettings;
+}) {
+  const convolution = settings.convolution ?? {
+    enabled: false,
+    filterId: null,
+  };
+  const chosen = filters.find((filter) => filter.id === convolution.filterId);
+  return (
+    <>
+      <View
+        style={[
+          styles.dspRow,
+          (!settings.enabled || !filters.length) && styles.dspOff,
+        ]}
+      >
+        <Text style={styles.dspLabel}>
+          {filters.length
+            ? `Convolution${chosen ? `, ${chosen.name}` : ""}`
+            : "Convolution: upload a filter on the web"}
+        </Text>
+        <Switch
+          accessibilityLabel="Convolution"
+          disabled={!settings.enabled || !filters.length}
+          onValueChange={(enabled) =>
+            onChange({
+              ...settings,
+              convolution: {
+                enabled,
+                filterId: convolution.filterId ?? filters[0]?.id ?? null,
+              },
+            })
+          }
+          trackColor={{ true: signalQualityColors.enhanced }}
+          value={convolution.enabled && Boolean(chosen)}
+        />
+      </View>
+      {filters.length > 1 ? (
+        <View
+          accessibilityRole="radiogroup"
+          style={[
+            styles.presetRow,
+            (!settings.enabled || !convolution.enabled) && styles.dspOff,
+          ]}
+        >
+          {filters.map((filter) => {
+            const active = filter.id === convolution.filterId;
+            return (
+              <Pressable
+                accessibilityLabel={`Convolution filter ${filter.name}`}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: active }}
+                disabled={!settings.enabled}
+                key={filter.id}
+                onPress={() =>
+                  onChange({
+                    ...settings,
+                    convolution: { enabled: true, filterId: filter.id },
+                  })
+                }
+                style={[styles.segment, active && styles.segmentActive]}
+              >
+                <Text
+                  style={[
+                    styles.segmentText,
+                    active && styles.segmentTextActive,
+                  ]}
+                >
+                  {filter.name}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+    </>
   );
 }
 

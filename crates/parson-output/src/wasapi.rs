@@ -223,6 +223,7 @@ impl Backend for WasapiBackend {
                 is_default: default_id.as_deref() == Some(endpoint.as_str()),
                 hardware: None,
                 address: None,
+                network: None,
             });
         }
         devices

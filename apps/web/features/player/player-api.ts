@@ -70,6 +70,8 @@ export type PlayerSignalState = {
   leveling: VolumeLevelingResult | null;
   levelingUnavailable: boolean;
   dsp: DspSettings | null;
+  /** The convolution filter the browser chain runs, once known. */
+  convolution?: { name: string; loaded: boolean } | null;
   /** The output device's own rate, probed with an AudioContext. */
   deviceSampleRate: number | null;
   /** Label of the device audio goes to, when the browser reveals it. */

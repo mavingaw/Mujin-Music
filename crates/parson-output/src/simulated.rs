@@ -49,6 +49,7 @@ impl Backend for SimulatedBackend {
             is_default: false,
             hardware: None,
             address: None,
+            network: None,
         }]
     }
 
