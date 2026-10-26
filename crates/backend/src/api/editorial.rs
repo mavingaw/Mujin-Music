@@ -1579,6 +1579,68 @@ mod tests {
     }
 
     #[test]
+    fn a_musicbrainz_person_reads_as_one_person_in_every_role() {
+        // The Low End Theory: MusicBrainz credits one person as composer
+        // under his legal name and as a performer under his stage name.
+        use crate::enrichment::identity::tests::cache as tribe;
+        const DIAMOND: &str = "0b3d0a5d-7c5e-4b1e-9a43-5a8c6d4a1f10";
+        let cache = tribe();
+        let album = cache.album("low-end").unwrap().clone();
+        let identity = PersonIdentity::build(
+            &cache,
+            &[],
+            &[
+                store::AliasRow {
+                    mbid: DIAMOND.into(),
+                    normalized_name: normalize_artist_identity("Diamond D"),
+                    name: "Diamond D".into(),
+                    kind: "name".into(),
+                },
+                store::AliasRow {
+                    mbid: DIAMOND.into(),
+                    normalized_name: normalize_artist_identity("Joseph Kirkland"),
+                    name: "Joseph Kirkland".into(),
+                    kind: "credit".into(),
+                },
+            ],
+            &[],
+        );
+        let external = [
+            row(
+                "low-end",
+                "check-the-rhime",
+                "Joseph Kirkland",
+                "composer",
+                "",
+                DIAMOND,
+            ),
+            row(
+                "low-end",
+                "check-the-rhime",
+                "Diamond D",
+                "performer",
+                "vocals",
+                DIAMOND,
+            ),
+        ];
+        let known = album_known_artists(&cache, &album);
+        let merged = merge_album_credits_with(&album, &known, &external, &identity);
+        let diamond = merged
+            .iter()
+            .filter(|credit| credit.artist_id.as_deref() == Some(&*format!("mb:{DIAMOND}")))
+            .collect::<Vec<_>>();
+        assert_eq!(diamond.len(), 2, "one credit per role");
+        for credit in &diamond {
+            assert_eq!(credit.name, "Diamond D");
+        }
+        let composer = diamond
+            .iter()
+            .find(|credit| credit.role == "composer")
+            .unwrap();
+        assert_eq!(composer.credited_as, vec!["Joseph Kirkland".to_string()]);
+    }
+
+    #[test]
     fn a_person_page_collects_credits_under_every_name() {
         use crate::enrichment::identity::tests::{KORN_JD, QTIP, cache as tribe, identity};
         let cache = tribe();

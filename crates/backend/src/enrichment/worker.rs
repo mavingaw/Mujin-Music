@@ -90,7 +90,7 @@ pub fn backoffs() -> &'static Backoffs {
 
 /// One wake-up signal per stage queue.
 pub struct Wake {
-    stages: [Notify; 4],
+    stages: [Notify; Stage::ALL.len()],
 }
 
 impl Wake {
@@ -115,7 +115,7 @@ impl Wake {
 pub fn wake() -> &'static Wake {
     static WAKE: std::sync::OnceLock<Wake> = std::sync::OnceLock::new();
     WAKE.get_or_init(|| Wake {
-        stages: [Notify::new(), Notify::new(), Notify::new(), Notify::new()],
+        stages: std::array::from_fn(|_| Notify::new()),
     })
 }
 
@@ -687,6 +687,8 @@ impl<F: Fetch> Enricher<F> {
             for person in &people {
                 store::queue_stage_once(connection, Stage::Musicbrainz, "artist", person)?;
             }
+            // The matched release's front cover, for an album without art.
+            store::queue_stage(connection, Stage::CoverArt, "album", &album_id)?;
             queue_text_stages(connection, "album", &album_id, linked)
         })
         .await?;
@@ -1107,6 +1109,9 @@ impl<F: Fetch> Enricher<F> {
             if wants_wikidata {
                 store::queue_stage(connection, Stage::Wikidata, &entity_type, &entity_id)?;
             }
+            if learned_item && entity_type == "artist" {
+                store::queue_stage(connection, Stage::Relations, &entity_type, &entity_id)?;
+            }
             if photo
                 && !photo_candidates(&row).is_empty()
                 && store::load_image(connection, &entity_type, &entity_id)?.is_none()
@@ -1177,6 +1182,182 @@ impl<F: Fetch> Enricher<F> {
             return Ok(Outcome::Skipped("not a known genre".into()));
         }
         self.wikidata_stage("genre", slug, settings).await
+    }
+
+    /// The relations stage: who influenced a person and whom they
+    /// influenced, from one Wikidata Query Service request. For a library
+    /// artist, the most notable of those people with a MusicBrainz id are
+    /// looked up too, so their cards get a photo and their pages a
+    /// biography (one level deep: their own influences are not followed).
+    pub async fn relations_stage(
+        &self,
+        entity_id: &str,
+        settings: &EnrichmentSettings,
+    ) -> Result<Outcome, BoxError> {
+        let Some(profile) = self.profile("artist", entity_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let Some(url) = profile
+            .wikidata_id
+            .as_deref()
+            .and_then(|item| wiki::influence_query_url(item, &settings.language))
+        else {
+            return Ok(Outcome::Skipped("no Wikidata item".into()));
+        };
+        let items = match self.get_json(&url).await? {
+            Ok(Some(body)) => wiki::parse_influences(&body),
+            Ok(None) => return Ok(Outcome::Retry("the Wikidata query failed".into())),
+            Err(outcome) => return Ok(outcome),
+        };
+        let mut positions: HashMap<&'static str, i32> = HashMap::new();
+        let rows = items
+            .iter()
+            .map(|item| {
+                let position = positions.entry(item.direction.as_str()).or_default();
+                *position += 1;
+                store::InfluenceRow {
+                    artist_id: entity_id.to_string(),
+                    direction: item.direction.as_str().to_string(),
+                    wikidata_id: item.id.clone(),
+                    name: item.name.clone(),
+                    description: item.description.clone(),
+                    musicbrainz_id: item.musicbrainz_id.clone(),
+                    image: item.image.clone(),
+                    position: *position,
+                }
+            })
+            .collect::<Vec<_>>();
+        let local = !entity_id.starts_with(EXTERNAL_PERSON_PREFIX);
+        let entity_id = entity_id.to_string();
+        let queued = db(&self.pool, move |connection| {
+            store::replace_influences(connection, &entity_id, &rows)?;
+            if !local {
+                return Ok(0);
+            }
+            let known = store::person_links(connection)?
+                .into_iter()
+                .map(|link| link.mbid)
+                .collect::<std::collections::HashSet<_>>();
+            let mut queued = 0;
+            // Influences first, then followers, each most notable first.
+            let mut wanted = rows
+                .iter()
+                .filter(|row| row.direction == "influence")
+                .chain(rows.iter().filter(|row| row.direction == "follower"))
+                .filter_map(|row| row.musicbrainz_id.as_deref())
+                .filter(|mbid| !known.contains(*mbid));
+            while queued < MAX_RELATED_LOOKUPS_PER_PERSON {
+                let Some(mbid) = wanted.next() else {
+                    break;
+                };
+                let person = format!("{EXTERNAL_PERSON_PREFIX}{mbid}");
+                if store::queue_stage_once(connection, Stage::Musicbrainz, "artist", &person)? {
+                    queued += 1;
+                }
+            }
+            Ok(queued)
+        })
+        .await?;
+        if queued > 0 {
+            wake().notify_all();
+        }
+        Ok(Outcome::Done)
+    }
+
+    /// Where fetched album covers are stored.
+    fn covers_directory(&self) -> PathBuf {
+        #[cfg(test)]
+        {
+            self.images.join("parson-test-covers")
+        }
+        #[cfg(not(test))]
+        {
+            crate::library::storage::get_cover_art_path()
+        }
+    }
+
+    /// The cover art stage: the front cover of the release MusicBrainz
+    /// matched (or of its release group) from the Cover Art Archive, for an
+    /// album with no artwork in its folder or tags. Files' own artwork
+    /// always wins and is never replaced.
+    pub async fn cover_art_stage(
+        &self,
+        cache: &crate::library::state::LibraryCache,
+        album_id: &str,
+    ) -> Result<Outcome, BoxError> {
+        let Some(album) = cache.album(album_id) else {
+            return Ok(Outcome::Skipped(
+                "the album is no longer in the library".into(),
+            ));
+        };
+        let covers = self.covers_directory();
+        let own_art = !album.cover_url.trim().is_empty()
+            && !Path::new(&album.cover_url)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(COVER_FILE_PREFIX));
+        if own_art {
+            return Ok(Outcome::Skipped("the album has its own artwork".into()));
+        }
+        let Some(profile) = self.profile("album", album_id).await? else {
+            return Ok(Outcome::Skipped("not matched on MusicBrainz yet".into()));
+        };
+        let mut candidates = Vec::new();
+        if let Some(release) = profile
+            .musicbrainz_id
+            .as_deref()
+            .filter(|id| mb::is_mbid(id))
+        {
+            candidates.push(format!(
+                "https://coverartarchive.org/release/{release}/front-500"
+            ));
+        }
+        if let Some(group) = profile
+            .release_group_mbid
+            .as_deref()
+            .filter(|id| mb::is_mbid(id))
+        {
+            candidates.push(format!(
+                "https://coverartarchive.org/release-group/{group}/front-500"
+            ));
+        }
+        if candidates.is_empty() {
+            return Ok(Outcome::Skipped("no MusicBrainz release".into()));
+        }
+        for url in candidates {
+            let response = self.fetch.get(&url, MAX_IMAGE_BYTES).await?;
+            if let Some(outcome) = transient(&response) {
+                return Ok(outcome);
+            }
+            if !response.is_success() {
+                continue;
+            }
+            let mime_type = ["image/jpeg", "image/png", "image/webp"]
+                .into_iter()
+                .find(|mime| sniff_image(&response.body, mime));
+            let Some(mime_type) = mime_type else {
+                continue;
+            };
+            let Some(file_name) = cover_file_name(album_id, mime_type) else {
+                return Ok(Outcome::Skipped("the album id cannot name a file".into()));
+            };
+            write_atomically(&covers, &file_name, &response.body).await?;
+            let row = store::CoverArtRow {
+                album_id: album_id.to_string(),
+                file_path: covers.join(&file_name).to_string_lossy().into_owned(),
+                mime_type: mime_type.to_string(),
+                source_url: url,
+                release_mbid: profile.musicbrainz_id.clone(),
+            };
+            db(&self.pool, move |connection| {
+                store::save_cover_art(connection, &row)
+            })
+            .await?;
+            return Ok(Outcome::Done);
+        }
+        Ok(Outcome::Skipped(
+            "the Cover Art Archive has no front cover for this release".into(),
+        ))
     }
 
     async fn profile(
@@ -1256,6 +1437,15 @@ impl<F: Fetch> Enricher<F> {
                 self.commons_stage(entity_type, &task.entity_id, settings)
                     .await
             }
+            (Stage::Relations, "artist") => self.relations_stage(&task.entity_id, settings).await,
+            (Stage::Relations, _) => Ok(Outcome::Skipped("only people have influences".into())),
+            (Stage::CoverArt, "album") => {
+                let Some(cache) = cache else {
+                    return Ok(Outcome::Retry("the library is not ready".into()));
+                };
+                self.cover_art_stage(cache, &task.entity_id).await
+            }
+            (Stage::CoverArt, _) => Ok(Outcome::Skipped("only albums have covers".into())),
         }
     }
 
@@ -1338,7 +1528,12 @@ impl<F: Fetch> Enricher<F> {
         let mut busy = std::collections::HashSet::new();
         for _ in 0..4 {
             let mut ran = false;
-            for stage in &Stage::ALL[1..] {
+            // Relations and cover art have their own tests; they never
+            // change what a page's text stages produce.
+            for stage in Stage::ALL[1..]
+                .iter()
+                .filter(|stage| stage.feeds_page_text())
+            {
                 if busy.contains(stage) {
                     continue;
                 }
@@ -1506,6 +1701,30 @@ const MAX_WORKS_PER_ALBUM: usize = 6;
 /// The id prefix of a person known only from MusicBrainz credits.
 pub const EXTERNAL_PERSON_PREFIX: &str = "mb:";
 
+/// At most this many of a library artist's influences and followers are
+/// looked up on MusicBrainz for their own photo and biography.
+const MAX_RELATED_LOOKUPS_PER_PERSON: usize = 8;
+
+/// Album covers fetched from the Cover Art Archive are stored as
+/// `caa-<album id>.<ext>`, so they are never mistaken for a file's own art.
+pub const COVER_FILE_PREFIX: &str = "caa-";
+
+/// The file a fetched cover is stored in, or `None` for an id that cannot
+/// safely name a file.
+pub fn cover_file_name(album_id: &str, mime_type: &str) -> Option<String> {
+    let safe = album_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    image_file_name("caa", &safe, mime_type)
+}
+
 /// At most this many credited people per album are looked up for their own
 /// biography and photo, so one box set cannot flood the queue.
 const MAX_CREDITED_PEOPLE_PER_ALBUM: usize = 24;
@@ -1520,6 +1739,9 @@ fn queue_text_stages(
     linked: bool,
 ) -> diesel::QueryResult<()> {
     store::queue_stage(connection, Stage::Wikipedia, entity_type, entity_id)?;
+    if linked && entity_type == "artist" {
+        store::queue_stage(connection, Stage::Relations, entity_type, entity_id)?;
+    }
     if linked {
         store::queue_stage(connection, Stage::Wikidata, entity_type, entity_id)
     } else {
@@ -1964,6 +2186,7 @@ async fn run_stage(
 ) {
     let signal = wake().stage(stage);
     let mut seeded = false;
+    let mut covers_waiting = 0usize;
     loop {
         let settings = db(&pool, store::load_settings).await.unwrap_or_default();
         if !settings.enabled {
@@ -1971,7 +2194,7 @@ async fn run_stage(
             let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
             continue;
         }
-        let cache = if stage == Stage::Musicbrainz {
+        let cache = if matches!(stage, Stage::Musicbrainz | Stage::CoverArt) {
             match library.cache().await {
                 Ok(cache) => Some(cache),
                 Err(_) => {
@@ -2011,9 +2234,21 @@ async fn run_stage(
                 tokio::time::sleep(pause).await;
             }
             Ok(Step::Idle) => {
+                if covers_waiting > 0 {
+                    covers_waiting = 0;
+                    show_new_covers(&library).await;
+                }
                 let _ = tokio::time::timeout(IDLE_POLL, signal.notified()).await;
             }
             Ok(Step::Ran(task, outcome)) => {
+                if stage == Stage::CoverArt && outcome == Outcome::Done {
+                    covers_waiting += 1;
+                    // Show covers in batches while a long queue runs.
+                    if covers_waiting >= COVERS_PER_REFRESH {
+                        covers_waiting = 0;
+                        show_new_covers(&library).await;
+                    }
+                }
                 match &outcome {
                     Outcome::Retry(error) => tracing::debug!(
                         stage = stage.provider(),
@@ -2031,6 +2266,35 @@ async fn run_stage(
                 tokio::time::sleep(IDLE_POLL).await;
             }
         }
+    }
+}
+
+/// Covers stored before the library is reloaded to show them.
+const COVERS_PER_REFRESH: usize = 25;
+
+/// Reloads the library so albums show the covers just fetched. A scan in
+/// progress shows them when it publishes its own catalog.
+async fn show_new_covers(library: &LibraryLifecycle) {
+    use crate::library::state::{LibraryEnrichmentState, LibraryReadinessState};
+    let readiness = library.readiness().await;
+    if readiness.state != LibraryReadinessState::Ready {
+        return;
+    }
+    // Hold the scan slot so a scan cannot start publishing meanwhile.
+    let Some(_lease) = library.try_begin_scan() else {
+        return;
+    };
+    crate::library::storage::refresh_cache().await;
+    match crate::library::state::LibraryCache::new().await {
+        Ok(cache) if readiness.enrichment == LibraryEnrichmentState::Complete => {
+            library.set_ready_and_persist(cache).await;
+        }
+        Ok(cache) => {
+            library
+                .set_available_with_message(cache, readiness.message.unwrap_or_default())
+                .await;
+        }
+        Err(error) => tracing::warn!(%error, "could not reload the library to show new covers"),
     }
 }
 
@@ -3756,5 +4020,235 @@ mod tests {
             ));
         }
         assert!(enricher.fetch.requested().is_empty());
+    }
+
+    #[tokio::test]
+    async fn influences_and_followers_come_from_one_wikidata_query() {
+        const DEBUSSY: &str = "0f4a1d9f-0000-4000-8000-00000000d0b5";
+        let pool = migrated_memory_pool();
+        {
+            let mut connection = pool.get().unwrap();
+            store::save_profile(
+                &mut connection,
+                "artist",
+                "artist-evans",
+                &ProfileRow {
+                    musicbrainz_id: Some(EVANS.into()),
+                    release_group_mbid: None,
+                    wikidata_id: Some("Q202019".into()),
+                    profile_json: "{}".into(),
+                },
+            )
+            .unwrap();
+        }
+        let settings = EnrichmentSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let url = wiki::influence_query_url("Q202019", &settings.language).unwrap();
+        let binding = |item: &str, label: &str, direction: &str, mbid: Option<&str>| {
+            let mut value = serde_json::json!({
+                "item": {"type": "uri", "value": format!("http://www.wikidata.org/entity/{item}")},
+                "itemLabel": {"type": "literal", "value": label},
+                "direction": {"type": "literal", "value": direction},
+            });
+            if let Some(mbid) = mbid {
+                value["mbid"] = serde_json::json!({"type": "literal", "value": mbid});
+            }
+            value
+        };
+        let fetch = MockFetch::default().json(
+            &url,
+            serde_json::json!({"results": {"bindings": [
+                binding("Q4700", "Claude Debussy", "influence", Some(DEBUSSY)),
+                binding("Q93341", "Miles Davis", "influence", Some(MILES)),
+                binding("Q192474", "Herbie Hancock", "follower", None),
+            ]}}),
+        );
+        let enricher = Enricher {
+            fetch,
+            pool: pool.clone(),
+            images: std::env::temp_dir(),
+        };
+        // Miles is already a library person; only Debussy is looked up.
+        {
+            let mut connection = pool.get().unwrap();
+            store::link_artist_mbid(&mut connection, "artist-miles", MILES).unwrap();
+        }
+        assert_eq!(
+            enricher
+                .relations_stage("artist-evans", &settings)
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let rows = store::load_influences(&mut connection, &["artist-evans".into()]).unwrap();
+        let summary = rows
+            .iter()
+            .map(|row| (row.direction.as_str(), row.name.as_str(), row.position))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                ("follower", "Herbie Hancock", 1),
+                ("influence", "Claude Debussy", 1),
+                ("influence", "Miles Davis", 2),
+            ]
+        );
+        assert_eq!(
+            store::task_status(
+                &mut connection,
+                Stage::Musicbrainz,
+                "artist",
+                &format!("{EXTERNAL_PERSON_PREFIX}{DEBUSSY}")
+            )
+            .unwrap()
+            .as_deref(),
+            Some("pending")
+        );
+        assert_eq!(
+            store::task_status(
+                &mut connection,
+                Stage::Musicbrainz,
+                "artist",
+                &format!("{EXTERNAL_PERSON_PREFIX}{MILES}")
+            )
+            .unwrap(),
+            None
+        );
+        // A person with no Wikidata item is skipped, not retried.
+        drop(connection);
+        assert!(matches!(
+            enricher
+                .relations_stage("artist-nobody", &settings)
+                .await
+                .unwrap(),
+            Outcome::Skipped(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn albums_without_art_get_the_matched_releases_front_cover() {
+        let pool = migrated_memory_pool();
+        let images =
+            std::env::temp_dir().join(format!("parson-editorial-{}", uuid::Uuid::new_v4()));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 0x10, b'J', b'F'];
+        let artist = |id: &str, album_id: &str, cover: &str| crate::domain::Artist {
+            id: id.into(),
+            name: id.into(),
+            albums: vec![crate::domain::Album {
+                id: album_id.into(),
+                name: album_id.into(),
+                cover_url: cover.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cache = crate::library::state::LibraryCache::from_artists(vec![
+            artist("miles", "kind-of-blue", ""),
+            artist("coltrane", "blue-train", "/music/Blue Train/cover.jpg"),
+            artist("evans", "portrait", ""),
+        ]);
+        {
+            let mut connection = pool.get().unwrap();
+            for album in ["kind-of-blue", "blue-train", "portrait"] {
+                store::save_profile(
+                    &mut connection,
+                    "album",
+                    album,
+                    &ProfileRow {
+                        musicbrainz_id: Some(RELEASE.into()),
+                        release_group_mbid: Some(GROUP.into()),
+                        wikidata_id: None,
+                        profile_json: "{}".into(),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let release_url = format!("https://coverartarchive.org/release/{RELEASE}/front-500");
+        let group_url = format!("https://coverartarchive.org/release-group/{GROUP}/front-500");
+        // The release has no cover of its own; its release group does.
+        let enricher = Enricher {
+            fetch: MockFetch::default().status(&release_url, 404).bytes(
+                &group_url,
+                "image/jpeg",
+                &jpeg,
+            ),
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        assert_eq!(
+            enricher
+                .cover_art_stage(&cache, "kind-of-blue")
+                .await
+                .unwrap(),
+            Outcome::Done
+        );
+        let mut connection = pool.get().unwrap();
+        let stored = store::load_cover_art(&mut connection, "kind-of-blue")
+            .unwrap()
+            .expect("a stored cover");
+        assert_eq!(stored.source_url, group_url);
+        assert!(stored.file_path.ends_with("caa-kind-of-blue.jpg"));
+        assert_eq!(std::fs::read(&stored.file_path).unwrap(), jpeg);
+        drop(connection);
+        // Files' own artwork is never replaced.
+        assert_eq!(
+            enricher
+                .cover_art_stage(&cache, "blue-train")
+                .await
+                .unwrap(),
+            Outcome::Skipped("the album has its own artwork".into())
+        );
+        // The stored cover shows on the album once the library reloads.
+        let mut library = vec![
+            artist("miles", "kind-of-blue", ""),
+            artist("coltrane", "blue-train", "/music/Blue Train/cover.jpg"),
+        ];
+        let covers = std::collections::HashMap::from([
+            ("kind-of-blue".to_string(), stored.file_path.clone()),
+            ("blue-train".to_string(), stored.file_path.clone()),
+        ]);
+        crate::library::storage::apply_fetched_covers(&mut library, &covers);
+        assert_eq!(library[0].albums[0].cover_url, stored.file_path);
+        assert_eq!(
+            library[1].albums[0].cover_url,
+            "/music/Blue Train/cover.jpg"
+        );
+        // A busy archive is retried; a missing cover is not.
+        let busy = Enricher {
+            fetch: MockFetch::default().status(&release_url, 503),
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        assert!(matches!(
+            busy.cover_art_stage(&cache, "portrait").await.unwrap(),
+            Outcome::Retry(_)
+        ));
+        let missing = Enricher {
+            fetch: MockFetch::default(),
+            pool: pool.clone(),
+            images: images.clone(),
+        };
+        assert!(matches!(
+            missing.cover_art_stage(&cache, "portrait").await.unwrap(),
+            Outcome::Skipped(_)
+        ));
+        std::fs::remove_dir_all(images).unwrap();
+    }
+
+    #[test]
+    fn cover_files_are_named_safely() {
+        assert_eq!(
+            cover_file_name("album-1", "image/png").as_deref(),
+            Some("caa-album-1.png")
+        );
+        assert_eq!(
+            cover_file_name("../x/y", "image/jpeg").as_deref(),
+            Some("caa-___x_y.jpg")
+        );
+        assert_eq!(cover_file_name("a", "image/gif"), None);
     }
 }

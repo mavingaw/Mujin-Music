@@ -96,6 +96,8 @@ export const ENRICHMENT_STAGE_LABELS: Record<string, string> = {
   wikidata: "Wikidata (links and dates)",
   wikipedia: "Wikipedia (biographies and reviews)",
   commons: "Wikimedia Commons (artist photos)",
+  relations: "Wikidata Query Service (influences and followers)",
+  coverart: "Cover Art Archive (album covers)",
 };
 
 /** One line per stage queue for the settings page. */

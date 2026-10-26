@@ -328,9 +328,25 @@ export function albumFormat(
     (left, right) => right[1] - left[1],
   );
   if (!best) return null;
-  return counts.size === 1 || best[1] * 2 > songs.length
-    ? best[0]
-    : "Mixed formats";
+  if (counts.size === 1 || best[1] * 2 > songs.length) return best[0];
+  // Variable-bitrate files of one lossy codec differ only in bitrate:
+  // "Opus 128 kbps" and "Opus 131 kbps" are one format at its average.
+  const lossy = songs
+    .map((song) => song.audio)
+    .filter((audio): audio is AudioProperties => Boolean(audio?.codec));
+  const codecs = new Set(lossy.map((audio) => audio.codec));
+  if (
+    lossy.length === songs.length &&
+    codecs.size === 1 &&
+    lossy.every((audio) => audio.lossless === false && audio.bitrate_kbps)
+  ) {
+    const average =
+      lossy.reduce((total, audio) => total + (audio.bitrate_kbps ?? 0), 0) /
+      lossy.length;
+    const codec = lossy[0]?.codec ?? "";
+    return `${CODEC_NAMES[codec] ?? codec.toUpperCase()} ~${Math.round(average)} kbps`;
+  }
+  return "Mixed formats";
 }
 
 /** Splits stored editorial text into paragraphs. */

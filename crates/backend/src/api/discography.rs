@@ -63,6 +63,20 @@ pub struct AlbumExtras {
     pub credits: Vec<CreditRow>,
     pub track_works: Vec<TrackWorkRow>,
     pub works: Vec<WorkRow>,
+    /// The release group's type on MusicBrainz ("Album", "EP", ...), which
+    /// wins over the type guessed from track count and length.
+    pub release_type: Option<String>,
+}
+
+/// The MusicBrainz release group type stored for a matched album.
+pub fn stored_release_type(profile: Option<&store::ProfileRow>) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(&profile?.profile_json).ok()?;
+    value
+        .get("release_type")?
+        .as_str()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+        .map(str::to_lowercase)
 }
 
 fn role_label(role: &str) -> String {
@@ -132,12 +146,17 @@ fn format_rank(audio: &AudioProperties) -> (u8, u8, u32, u32) {
 }
 
 /// Who someone is on a focus record: canonical id and display name.
-struct Resolved {
-    id: Option<String>,
-    name: String,
+pub(crate) struct Resolved {
+    pub id: Option<String>,
+    pub name: String,
 }
 
-fn resolve_local(identity: &PersonIdentity, id: &str, name: &str, album_id: &str) -> Resolved {
+pub(crate) fn resolve_local(
+    identity: &PersonIdentity,
+    id: &str,
+    name: &str,
+    album_id: &str,
+) -> Resolved {
     let canonical = identity.for_local(id, name, Some(album_id));
     Resolved {
         name: identity
@@ -148,7 +167,7 @@ fn resolve_local(identity: &PersonIdentity, id: &str, name: &str, album_id: &str
     }
 }
 
-fn resolve_row(
+pub(crate) fn resolve_row(
     identity: &PersonIdentity,
     known: &HashMap<String, String>,
     row: &CreditRow,
@@ -245,6 +264,12 @@ pub fn album_record(
                 record.add_person("conductor", resolved.id.as_deref(), &resolved.name);
             }
             "ensemble" => {
+                push_ref(ensembles, &resolved);
+                record.add_person("ensemble", resolved.id.as_deref(), &resolved.name);
+            }
+            // An orchestra or choir credited as a performer is an
+            // ensemble, never a soloist.
+            "performer" if looks_like_ensemble(&resolved.name) => {
                 push_ref(ensembles, &resolved);
                 record.add_person("ensemble", resolved.id.as_deref(), &resolved.name);
             }
@@ -407,8 +432,12 @@ pub fn album_record(
         .collect::<Vec<_>>();
     sources.sort();
     sources.dedup();
+    let mut reference = crate::api::album_reference(album);
+    if let Some(kind) = &extras.release_type {
+        reference.primary_type = kind.clone();
+    }
     let card = FocusAlbum {
-        album: crate::api::album_reference(album),
+        album: reference,
         artist: owner.map(crate::api::artist_reference).unwrap_or_default(),
         year: first_year(&album.first_release_date),
         roles,
@@ -591,12 +620,16 @@ pub async fn get_discography(
                 let credits = store::album_credits(connection, &album_id)?;
                 let (track_works, works) =
                     crate::api::works::load_album_track_works(connection, &album_id)?;
+                let release_type = stored_release_type(
+                    store::load_profile(connection, "album", &album_id)?.as_ref(),
+                );
                 Ok((
                     album_id,
                     AlbumExtras {
                         credits,
                         track_works,
                         works,
+                        release_type,
                     },
                 ))
             })
@@ -901,6 +934,37 @@ mod tests {
             credited_names(&cache, &identity, &members, &[row], "Q-Tip"),
             vec!["Jonathan Davis".to_string()]
         );
+    }
+
+    #[test]
+    fn musicbrainz_release_types_file_albums_in_the_right_section() {
+        let profile = |json: &str| store::ProfileRow {
+            musicbrainz_id: None,
+            release_group_mbid: None,
+            wikidata_id: None,
+            profile_json: json.into(),
+        };
+        assert_eq!(
+            stored_release_type(Some(&profile(r#"{"release_type":"Album"}"#))).as_deref(),
+            Some("album")
+        );
+        assert_eq!(
+            stored_release_type(Some(&profile(r#"{"release_type":null}"#))),
+            None
+        );
+        assert_eq!(stored_release_type(None), None);
+        // A short album the scanner guessed was an EP is filed as MusicBrainz says.
+        let cache = cache();
+        let identity = PersonIdentity::build(&cache, &[], &[], &[]);
+        let known = known_people(&cache);
+        let mut album = cache.album("kleiber-vienna").unwrap().clone();
+        album.primary_type = "ep".into();
+        let extras = AlbumExtras {
+            release_type: Some("album".into()),
+            ..AlbumExtras::default()
+        };
+        let (card, _) = album_record(&cache, &identity, &known, Some("kleiber"), &album, &extras);
+        assert_eq!(card.album.primary_type, "album");
     }
 
     #[test]

@@ -71,9 +71,11 @@ export default function EnrichmentSettings() {
             Online metadata
           </h2>
           <p className="mt-1 max-w-xl text-sm leading-6 text-zinc-500">
-            Adds credits from MusicBrainz, and biographies, album background and
-            critical reception from Wikipedia, with their sources and licenses
-            shown. Off by default.
+            Adds credits from MusicBrainz; biographies, album background and
+            critical reception from Wikipedia; influences and followers from
+            Wikidata; and front covers from the Cover Art Archive for albums
+            without artwork, with their sources and licenses shown. Off by
+            default.
           </p>
         </div>
         <Button

@@ -90,5 +90,21 @@ describe("enrichmentStageLine", () => {
         paused_seconds: 0,
       }).detail,
     ).toBe("4 done · 2 failed");
+    expect(
+      enrichmentStageLine({
+        stage: "coverart",
+        host: "coverartarchive.org",
+        counts: { pending: 0, done: 5, skipped: 1, failed: 0 },
+        paused_seconds: 0,
+      }).label,
+    ).toBe("Cover Art Archive (album covers)");
+    expect(
+      enrichmentStageLine({
+        stage: "relations",
+        host: "query.wikidata.org",
+        counts: { pending: 1, done: 0, skipped: 0, failed: 0 },
+        paused_seconds: 0,
+      }).label,
+    ).toBe("Wikidata Query Service (influences and followers)");
   });
 });

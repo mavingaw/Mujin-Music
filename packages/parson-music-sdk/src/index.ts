@@ -4,6 +4,7 @@ export * from "./editorial/credits";
 export * from "./editorial/focus";
 export * from "./editorial/genres";
 export * from "./editorial/people";
+export * from "./editorial/related";
 export * from "./player/audio-presets";
 export * from "./resources/albums";
 export * from "./resources/artists";

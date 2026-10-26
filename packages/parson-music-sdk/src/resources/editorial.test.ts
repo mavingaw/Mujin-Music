@@ -5,6 +5,7 @@ import {
   getAlbumAbout,
   getArtistAbout,
   getArtistCredits,
+  getArtistRelated,
   getEnrichment,
   refreshEnrichment,
   saveNote,
@@ -23,10 +24,12 @@ test("editorial reads use the album and artist routes with encoded ids", async (
   await getAlbumAbout("album/1");
   await getArtistAbout("mb:561d854a");
   await getArtistCredits("teo macero");
+  await getArtistRelated("mb:561d854a");
   expect(get.mock.calls.map((call) => call[0])).toEqual([
     "/albums/album%2F1/about",
     "/artists/mb%3A561d854a/about",
     "/artists/teo%20macero/credits",
+    "/artists/mb%3A561d854a/related",
   ]);
   expect(artistEditorialImagePath("a b")).toBe("/artists/a%20b/image");
 });

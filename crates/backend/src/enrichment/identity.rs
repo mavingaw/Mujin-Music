@@ -38,6 +38,9 @@ pub struct PersonIdentity {
     name_mbids: HashMap<String, BTreeSet<String>>,
     /// Each MusicBrainz person's own name, normalized.
     mbid_names: HashMap<String, String>,
+    /// Each MusicBrainz person's own name as MusicBrainz spells it, shown
+    /// for people with no local identity whatever name a credit uses.
+    mbid_display: HashMap<String, String>,
     /// Every normalized name each MusicBrainz person is known by.
     mbid_all_names: HashMap<String, BTreeSet<String>>,
     /// Which MusicBrainz person a name credited on an album is.
@@ -126,6 +129,9 @@ impl PersonIdentity {
                 identity
                     .mbid_names
                     .insert(alias.mbid.clone(), alias.normalized_name.clone());
+                identity
+                    .mbid_display
+                    .insert(alias.mbid.clone(), alias.name.clone());
             }
         }
         for row in credited {
@@ -269,9 +275,18 @@ impl PersonIdentity {
         Some(self.for_local(id, &row.name, Some(&row.album_id)))
     }
 
-    /// The local display name for a canonical id, when it is local.
+    /// The display name for a canonical id: how tags spell a local
+    /// person, or a MusicBrainz-only person's own MusicBrainz name (so
+    /// "Joseph Kirkland" credited as composer and "Diamond D" credited as
+    /// performer read as the one person they are).
     pub fn display_name(&self, id: &str) -> Option<&str> {
-        self.display.get(id).map(String::as_str)
+        self.display
+            .get(id)
+            .or_else(|| {
+                id.strip_prefix(EXTERNAL_PREFIX)
+                    .and_then(|mbid| self.mbid_display.get(mbid))
+            })
+            .map(String::as_str)
     }
 
     /// Every id and name that is the same person as `id`.

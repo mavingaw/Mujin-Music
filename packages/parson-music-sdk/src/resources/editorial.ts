@@ -7,6 +7,7 @@ import type {
   EnrichmentOverview,
   EnrichmentSettings,
   PersonDiscography,
+  PersonRelations,
   UserNote,
 } from "../domain/types";
 
@@ -43,6 +44,17 @@ export async function getArtistDiscography(
   const query = focusQueryString(selection);
   const response = await api.get<PersonDiscography>(
     `/artists/${segment(id)}/discography${query ? `?${query}` : ""}`,
+  );
+  return response.data;
+}
+
+/**
+ * The people around a person: collaborators, top performers of their
+ * music, the composers they perform, and their influences and followers.
+ */
+export async function getArtistRelated(id: string): Promise<PersonRelations> {
+  const response = await api.get<PersonRelations>(
+    `/artists/${segment(id)}/related`,
   );
   return response.data;
 }

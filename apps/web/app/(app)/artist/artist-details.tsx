@@ -21,6 +21,7 @@ import {
   useArtistAbout,
   useArtistCredits,
   useArtistDiscography,
+  useArtistRelated,
 } from "@/features/library/credits/use-editorial";
 import { ArtistDiscography } from "./artist-discography";
 import { useFocusSelection } from "@/features/library/focus/use-focus-selection";
@@ -33,6 +34,7 @@ import { ArtistCreditsPanel } from "./artist-credits";
 import { ArtistCompositionsPanel } from "./artist-compositions";
 import { useArtistWorks } from "@/features/library/works/use-works";
 import { ArtistOverview } from "./artist-overview";
+import { ArtistRelated } from "./artist-related";
 import { PersonAvatar } from "@/features/library/credits/person-avatar";
 import { lifeSpanFacts } from "@/features/library/credits/credit-roles";
 import { GenreChips } from "@/features/library/genres/genre-chips";
@@ -112,6 +114,7 @@ export default function ArtistDetails({
     about?.roles.some((role) => role.role === "composer"),
   );
   const worksQuery = useArtistWorks(devArtist ? null : id, isComposer);
+  const relatedQuery = useArtistRelated(devArtist ? null : id);
   const hasCompositions = Boolean(worksQuery.data?.works.length);
   const workFilter = {
     form: searchParams?.get("form"),
@@ -351,13 +354,13 @@ export default function ArtistDetails({
         {tabs.length > 1 && (
           <div
             aria-label="Artist sections"
-            className="mb-8 flex gap-6 border-b border-white/10"
+            className="mb-8 flex gap-5 overflow-x-auto shadow-[inset_0_-1px_0_rgba(255,255,255,0.1)] [scrollbar-width:none] sm:gap-6"
             role="tablist"
           >
             {tabs.map((tab) => (
               <button
                 aria-selected={activeTab === tab.key}
-                className={`-mb-px border-b-2 pb-3 text-sm font-semibold uppercase tracking-[0.08em] transition-colors ${
+                className={`shrink-0 whitespace-nowrap border-b-2 pb-3 text-sm font-semibold uppercase tracking-[0.08em] transition-colors ${
                   activeTab === tab.key
                     ? "border-white text-white"
                     : "border-transparent text-zinc-500 hover:text-zinc-200"
@@ -379,6 +382,12 @@ export default function ArtistDetails({
             isAdmin={session?.role === "admin"}
             onShowCredits={(role) => navigate("credits", role)}
           />
+        )}
+
+        {activeTab === "overview" && about && relatedQuery.data && (
+          <div className="mt-14">
+            <ArtistRelated name={about.name} relations={relatedQuery.data} />
+          </div>
         )}
 
         {activeTab === "compositions" && worksQuery.data && (

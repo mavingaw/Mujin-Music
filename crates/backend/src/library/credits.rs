@@ -81,6 +81,45 @@ enum TagField {
     /// A record label; lower values win when several label fields exist.
     Label(u8),
     Isrc,
+    /// A MusicBrainz id written by Picard or another tagger.
+    MusicBrainz(MbidField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MbidField {
+    Recording,
+    Release,
+    Artist,
+    AlbumArtist,
+}
+
+/// MusicBrainz ids read from a file's tags. The release id lets online
+/// metadata use exactly the tagged release instead of searching.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MusicBrainzIds {
+    pub recording: Option<String>,
+    pub release: Option<String>,
+    pub artist: Option<String>,
+    pub album_artist: Option<String>,
+}
+
+/// The first well-formed MusicBrainz id in a tag value (several may be
+/// joined with `;` or `/`), lower-cased.
+pub fn first_mbid(value: &str) -> Option<String> {
+    value
+        .split([';', '/', ',', '\0'])
+        .map(str::trim)
+        .find(|candidate| {
+            candidate.len() == 36
+                && candidate.char_indices().all(|(index, character)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        character == '-'
+                    } else {
+                        character.is_ascii_hexdigit()
+                    }
+                })
+        })
+        .map(str::to_ascii_lowercase)
 }
 
 /// Maps a Vorbis comment key, ID3 `TXXX` description or iTunes freeform name
@@ -108,6 +147,11 @@ fn named_field(key: &str) -> Option<TagField> {
         "ORGANIZATION" | "ORGANISATION" => TagField::Label(1),
         "PUBLISHER" => TagField::Label(2),
         "ISRC" => TagField::Isrc,
+        // Vorbis and iTunes spell the recording id "track id".
+        "MUSICBRAINZTRACKID" => TagField::MusicBrainz(MbidField::Recording),
+        "MUSICBRAINZALBUMID" => TagField::MusicBrainz(MbidField::Release),
+        "MUSICBRAINZARTISTID" => TagField::MusicBrainz(MbidField::Artist),
+        "MUSICBRAINZALBUMARTISTID" => TagField::MusicBrainz(MbidField::AlbumArtist),
         _ => return None,
     })
 }
@@ -181,6 +225,7 @@ pub struct TagCredits {
     pub credits: Vec<TagCredit>,
     label: Option<(u8, String)>,
     pub isrc: Option<String>,
+    pub musicbrainz: MusicBrainzIds,
 }
 
 impl TagCredits {
@@ -220,6 +265,17 @@ impl TagCredits {
             TagField::Isrc => {
                 if self.isrc.is_none() {
                     self.isrc = split_values(value).find_map(normalize_isrc);
+                }
+            }
+            TagField::MusicBrainz(field) => {
+                let slot = match field {
+                    MbidField::Recording => &mut self.musicbrainz.recording,
+                    MbidField::Release => &mut self.musicbrainz.release,
+                    MbidField::Artist => &mut self.musicbrainz.artist,
+                    MbidField::AlbumArtist => &mut self.musicbrainz.album_artist,
+                };
+                if slot.is_none() {
+                    *slot = first_mbid(value);
                 }
             }
         }
@@ -438,5 +494,39 @@ mod tests {
         assert_eq!(role_key("performer", Some("violin")), "performer:violin");
         assert!(role_rank("composer") < role_rank("engineer"));
         assert_eq!(role_rank("unknown"), CREDIT_ROLES.len());
+    }
+
+    #[test]
+    fn musicbrainz_ids_are_read_from_picard_tags() {
+        let mut credits = TagCredits::default();
+        assert!(credits.apply_named(
+            "MUSICBRAINZ_ALBUMID",
+            "E1BB14AE-CB3D-4582-B4BE-7ED1F558A0CB"
+        ));
+        assert!(credits.apply_named(
+            "MusicBrainz Artist Id",
+            "not-an-id; 4d0ce1d6-8462-4436-b5b9-4fa5ac8e8b35"
+        ));
+        assert!(credits.apply_named(
+            "MUSICBRAINZ_TRACKID",
+            "6d3b1a2c-0000-4000-8000-000000000001"
+        ));
+        assert!(credits.apply_named("musicbrainz_albumartistid", "garbage"));
+        // A later value never replaces the first.
+        credits.apply_named(
+            "MUSICBRAINZ_ALBUMID",
+            "00000000-0000-4000-8000-000000000000",
+        );
+        assert_eq!(
+            credits.musicbrainz.release.as_deref(),
+            Some("e1bb14ae-cb3d-4582-b4be-7ed1f558a0cb")
+        );
+        assert_eq!(
+            credits.musicbrainz.artist.as_deref(),
+            Some("4d0ce1d6-8462-4436-b5b9-4fa5ac8e8b35")
+        );
+        assert!(credits.musicbrainz.recording.is_some());
+        assert_eq!(credits.musicbrainz.album_artist, None);
+        assert!(credits.credits.is_empty());
     }
 }

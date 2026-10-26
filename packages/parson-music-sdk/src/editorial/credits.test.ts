@@ -160,6 +160,13 @@ describe("facts and formats", () => {
       "Mixed formats",
     );
     expect(albumFormat([{ audio: null }])).toBeNull();
+    // Variable-bitrate Opus files are one format, not "Mixed formats".
+    const opus = (bitrate_kbps: number) => ({
+      audio: { ...mp3, codec: "opus", bitrate_kbps },
+    });
+    expect(albumFormat([opus(128), opus(131), opus(119), opus(140)])).toBe(
+      "Opus ~130 kbps",
+    );
   });
 
   test("editorial text splits into paragraphs", () => {
