@@ -331,14 +331,16 @@ export default function WorkDetails() {
                 Part of {parent.title}
               </Link>
             )}
-            <a
-              className="inline-flex items-center gap-1.5 text-zinc-500 hover:text-white"
-              href={page.url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              MusicBrainz <ExternalLink className="h-3.5 w-3.5" />
-            </a>
+            {page.url ? (
+              <a
+                className="inline-flex items-center gap-1.5 text-zinc-500 hover:text-white"
+                href={page.url}
+                rel="noreferrer"
+                target="_blank"
+              >
+                MusicBrainz <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            ) : null}
           </div>
         </header>
 

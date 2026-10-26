@@ -939,21 +939,37 @@ impl<F: Fetch> Enricher<F> {
         Ok(())
     }
 
-    /// The MusicBrainz stage for a work: its Wikipedia and Wikidata links.
+    /// The MusicBrainz stage for a work: what MusicBrainz says about it
+    /// (form, key, catalogue number, composer, date, the piece a movement
+    /// belongs to), which the library's works are built with, and its
+    /// Wikipedia and Wikidata links.
     pub async fn resolve_work(&self, mbid: &str) -> Result<Outcome, BoxError> {
         if !mb::is_mbid(mbid) {
             return Ok(Outcome::Skipped("not a MusicBrainz work".into()));
         }
-        let links = match self.get_json(&mb::work_lookup_url(mbid)).await? {
-            Ok(Some(body)) => mb::parse_work_links(&body),
-            Ok(None) => None,
+        let body = match self.get_json(&mb::work_lookup_url(mbid)).await? {
+            Ok(body) => body,
             Err(outcome) => return Ok(outcome),
         };
-        let Some(links) = links else {
+        let Some(links) = body.as_ref().and_then(mb::parse_work_links) else {
             return Ok(Outcome::Skipped(
                 "the MusicBrainz work was not found".into(),
             ));
         };
+        if let Some(work) = body
+            .as_ref()
+            .and_then(|body| super::works::parse_work(body, 0))
+        {
+            let mut rows = Vec::new();
+            if let Some(parent) = work.parent.as_deref() {
+                rows.push(work_row(parent, None));
+            }
+            rows.push(work_row(&work, work.parent.as_deref()));
+            db(&self.pool, move |connection| {
+                store::save_works(connection, &rows)
+            })
+            .await?;
+        }
         if links.wikidata_id.is_none() && links.wikipedia.is_none() {
             return Ok(Outcome::Skipped(
                 "the work has no Wikipedia or Wikidata link".into(),

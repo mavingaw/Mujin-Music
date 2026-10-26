@@ -279,7 +279,7 @@ pub fn seed_tasks(connection: &mut SqliteConnection) -> QueryResult<usize> {
         "INSERT INTO metadata_task (provider, entity_type, entity_id)
          SELECT DISTINCT 'musicbrainz-works', 'composer', work.composer_mbid FROM work
          WHERE length(work.composer_mbid) = 36
-           AND EXISTS (SELECT 1 FROM editorial_track_work tw
+           AND EXISTS (SELECT 1 FROM track_work tw
                        WHERE tw.work_mbid = work.mbid
                           OR tw.work_mbid IN (SELECT part.mbid FROM work part
                                               WHERE part.parent_mbid = work.mbid))
@@ -1260,9 +1260,11 @@ fn upsert_work(connection: &mut SqliteConnection, work: &WorkRow) -> QueryResult
     // directly; never replace a known fact with nothing.
     diesel::sql_query(
         "INSERT INTO work (mbid, title, form, musical_key, catalogue, composed, composer_name,
-             composer_normalized, composer_mbid, language, parent_mbid, part_position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             composer_normalized, composer_mbid, language, parent_mbid, part_position,
+             musicbrainz_facts, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
          ON CONFLICT(mbid) DO UPDATE SET
+             musicbrainz_facts = 1,
              title = excluded.title,
              form = COALESCE(excluded.form, work.form),
              musical_key = COALESCE(excluded.musical_key, work.musical_key),
@@ -1292,6 +1294,16 @@ fn upsert_work(connection: &mut SqliteConnection, work: &WorkRow) -> QueryResult
     Ok(())
 }
 
+/// Stores what MusicBrainz says about works (a work lookup).
+pub fn save_works(connection: &mut SqliteConnection, works: &[WorkRow]) -> QueryResult<()> {
+    connection.transaction(|connection| {
+        for work in works {
+            upsert_work(connection, work)?;
+        }
+        Ok(())
+    })
+}
+
 /// Stores the works an album's tracks perform and replaces the album's
 /// MusicBrainz track-to-work links.
 pub fn replace_album_works(
@@ -1304,12 +1316,12 @@ pub fn replace_album_works(
         for work in works {
             upsert_work(connection, work)?;
         }
-        diesel::sql_query("DELETE FROM editorial_track_work WHERE album_id = ? AND source = 'musicbrainz'")
+        diesel::sql_query("DELETE FROM track_work WHERE album_id = ? AND source = 'musicbrainz'")
             .bind::<Text, _>(album_id)
             .execute(connection)?;
         for link in links {
             diesel::sql_query(
-                "INSERT INTO editorial_track_work (track_id, album_id, work_mbid, recording_mbid, source)
+                "INSERT INTO track_work (track_id, album_id, work_mbid, recording_mbid, source)
                  VALUES (?, ?, ?, ?, 'musicbrainz') ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(&link.track_id)
@@ -1344,10 +1356,15 @@ pub fn work_tracks(
     connection: &mut SqliteConnection,
     mbid: &str,
 ) -> QueryResult<Vec<TrackWorkRow>> {
+    // A track linked twice (by its tags to the piece, by MusicBrainz to a
+    // movement) is listed once, under MusicBrainz's more precise link.
     diesel::sql_query(
-        "SELECT track_id, album_id, work_mbid, recording_mbid FROM editorial_track_work
+        "SELECT track_id, album_id, work_mbid, recording_mbid,
+                MIN(CASE source WHEN 'musicbrainz' THEN 0 ELSE 1 END) AS preference
+         FROM track_work
          WHERE work_mbid = ? OR work_mbid IN (SELECT mbid FROM work WHERE parent_mbid = ?)
-         ORDER BY album_id, rowid",
+         GROUP BY track_id
+         ORDER BY album_id, MIN(rowid)",
     )
     .bind::<Text, _>(mbid)
     .bind::<Text, _>(mbid)
@@ -1361,12 +1378,21 @@ pub fn track_works(
 ) -> QueryResult<Vec<(WorkRow, Option<WorkRow>)>> {
     let works = diesel::sql_query(format!(
         "SELECT {WORK_COLUMNS} FROM work
-         WHERE mbid IN (SELECT work_mbid FROM editorial_track_work WHERE track_id = ?)"
+         WHERE mbid IN (SELECT work_mbid FROM track_work WHERE track_id = ?)"
     ))
     .bind::<Text, _>(track_id)
     .load::<WorkRow>(connection)?;
+    // The piece a linked movement belongs to is that movement's parent,
+    // not a second work of the track.
+    let parents = works
+        .iter()
+        .filter_map(|work| work.parent_mbid.clone())
+        .collect::<std::collections::HashSet<_>>();
     let mut result = Vec::new();
-    for work in works {
+    for work in works
+        .into_iter()
+        .filter(|work| !parents.contains(&work.mbid))
+    {
         let parent = match &work.parent_mbid {
             Some(parent) => load_work(connection, parent)?,
             None => None,
@@ -1382,8 +1408,9 @@ pub fn album_track_works(
     album_id: &str,
 ) -> QueryResult<Vec<TrackWorkRow>> {
     diesel::sql_query(
-        "SELECT track_id, album_id, work_mbid, recording_mbid FROM editorial_track_work
-         WHERE album_id = ? ORDER BY rowid",
+        "SELECT track_id, album_id, work_mbid, recording_mbid FROM track_work
+         WHERE album_id = ?
+         ORDER BY CASE source WHEN 'musicbrainz' THEN 0 ELSE 1 END, rowid",
     )
     .bind::<Text, _>(album_id)
     .load::<TrackWorkRow>(connection)
@@ -1441,17 +1468,17 @@ pub fn composer_works(
     let rows = diesel::sql_query(format!(
         "SELECT w.mbid, w.title, w.form, w.musical_key, w.catalogue, w.composed, w.composer_name,
                 w.composer_normalized, w.composer_mbid, w.language, w.parent_mbid, w.part_position,
-                (SELECT COUNT(DISTINCT tw.track_id) FROM editorial_track_work tw
+                (SELECT COUNT(DISTINCT tw.track_id) FROM track_work tw
                  WHERE tw.work_mbid = w.mbid
                     OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
                   AS track_count,
-                (SELECT COUNT(DISTINCT tw.album_id) FROM editorial_track_work tw
+                (SELECT COUNT(DISTINCT tw.album_id) FROM track_work tw
                  WHERE tw.work_mbid = w.mbid
                     OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
                   AS album_count
          FROM work w
          WHERE w.parent_mbid IS NULL AND (w.composer_normalized = ?{by_id})
-           AND EXISTS (SELECT 1 FROM editorial_track_work tw
+           AND EXISTS (SELECT 1 FROM track_work tw
                        WHERE tw.work_mbid = w.mbid
                           OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
          ORDER BY w.title LIMIT 2000"
@@ -1747,11 +1774,11 @@ pub fn catalogue_works(
                 "SELECT w.mbid, w.title, w.form, w.musical_key, w.catalogue, w.composed, w.composer_name,
                         w.composer_normalized, w.composer_mbid, w.language, w.parent_mbid, w.part_position,
                         cw.wikidata_id, cw.notable_rank,
-                        (SELECT COUNT(DISTINCT tw.track_id) FROM editorial_track_work tw
+                        (SELECT COUNT(DISTINCT tw.track_id) FROM track_work tw
                          WHERE tw.work_mbid = w.mbid
                             OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
                           AS track_count,
-                        (SELECT COUNT(DISTINCT tw.album_id) FROM editorial_track_work tw
+                        (SELECT COUNT(DISTINCT tw.album_id) FROM track_work tw
                          WHERE tw.work_mbid = w.mbid
                             OR tw.work_mbid IN (SELECT p.mbid FROM work p WHERE p.parent_mbid = w.mbid))
                           AS album_count
@@ -1990,11 +2017,9 @@ pub fn clear_editorial(
         )
         .bind::<Text, _>(entity_id)
         .execute(connection)?;
-        diesel::sql_query(
-            "DELETE FROM editorial_track_work WHERE album_id = ? AND source = 'musicbrainz'",
-        )
-        .bind::<Text, _>(entity_id)
-        .execute(connection)?;
+        diesel::sql_query("DELETE FROM track_work WHERE album_id = ? AND source = 'musicbrainz'")
+            .bind::<Text, _>(entity_id)
+            .execute(connection)?;
     }
     Ok(())
 }
@@ -2942,10 +2967,10 @@ pub fn composer_work_albums(
             }
         }
     };
-    const QUERY: &str = "SELECT DISTINCT tw.album_id AS value FROM editorial_track_work tw
+    const QUERY: &str = "SELECT DISTINCT tw.album_id AS value FROM track_work tw
          JOIN work w ON w.mbid = tw.work_mbid
          LEFT JOIN work p ON p.mbid = w.parent_mbid
-         WHERE w.{column} = ? OR p.{column} = ? LIMIT 2000";
+         WHERE tw.album_id <> '' AND (w.{column} = ? OR p.{column} = ?) LIMIT 2000";
     for name in normalized_names.iter().take(16) {
         add(
             diesel::sql_query(QUERY.replace("{column}", "composer_normalized"))

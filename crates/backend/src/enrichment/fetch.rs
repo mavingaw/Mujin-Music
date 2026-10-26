@@ -92,10 +92,9 @@ impl RateLimiter {
     }
 }
 
-/// One limiter for the whole process, so the background worker, an
-/// administrator's "Identify album" search and the library's work lookups
-/// (`library::works_online`) together stay within MusicBrainz' one request
-/// per second.
+/// One limiter for the whole process, so the background worker and an
+/// administrator's "Identify album" search together stay within
+/// MusicBrainz' one request per second.
 pub(crate) fn shared_limiter() -> &'static RateLimiter {
     static LIMITER: std::sync::OnceLock<RateLimiter> = std::sync::OnceLock::new();
     LIMITER.get_or_init(RateLimiter::default)

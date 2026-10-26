@@ -136,8 +136,10 @@ pub fn release_group_lookup_url(mbid: &str) -> String {
 }
 
 /// A work with its URL relationships (Wikidata and Wikipedia links).
+/// A work with its composer (the relation dates it), the piece it is part
+/// of, and its Wikipedia and Wikidata links.
 pub fn work_lookup_url(mbid: &str) -> String {
-    format!("{API_ROOT}/work/{mbid}?inc=url-rels&fmt=json")
+    format!("{API_ROOT}/work/{mbid}?inc=artist-rels+work-rels+url-rels&fmt=json")
 }
 
 /// Works MusicBrainz lists for a composer (browse works by artist), with
@@ -391,7 +393,7 @@ pub fn wikipedia_relation(body: &Value) -> Option<(String, String)> {
     links.into_iter().next()
 }
 
-/// Wikipedia and Wikidata links of a work looked up with `inc=url-rels`.
+/// Wikipedia and Wikidata links of a work looked up with [`work_lookup_url`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkLinks {
     pub mbid: String,
@@ -1269,7 +1271,9 @@ mod tests {
         let links = parse_work_links(&body).unwrap();
         assert_eq!(links.wikidata_id.as_deref(), Some("Q190125"));
         assert_eq!(links.title, "Symphony no. 9 in D minor, op. 125");
-        assert!(work_lookup_url(&links.mbid).ends_with("?inc=url-rels&fmt=json"));
+        assert!(
+            work_lookup_url(&links.mbid).ends_with("?inc=artist-rels+work-rels+url-rels&fmt=json")
+        );
         assert!(parse_work_links(&serde_json::json!({"id": "nope"})).is_none());
         assert_eq!(
             wikipedia_relation(&serde_json::json!({"relations": []})),

@@ -566,7 +566,7 @@ impl CriterionSets {
 
 /// Tracks that belong to a set of works.
 fn work_tracks(works: &Fragment) -> Fragment {
-    let mut tracks = Fragment::new("SELECT track_id FROM track_work WHERE work_id IN (");
+    let mut tracks = Fragment::new("SELECT track_id FROM library_track_work WHERE work_id IN (");
     tracks.append(works.clone()).push(")");
     tracks
 }
@@ -785,15 +785,15 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
                 .text(format!("-{days} days")),
         ),
         Criterion::Form { value } => work_level(
-            Fragment::new("SELECT id FROM work_entity WHERE form = ? COLLATE NOCASE")
+            Fragment::new("SELECT id FROM library_work WHERE form = ? COLLATE NOCASE")
                 .text(value.trim()),
         ),
         Criterion::Instrumentation { value } => work_level(
-            Fragment::new("SELECT id FROM work_entity WHERE instrumentation = ? COLLATE NOCASE")
+            Fragment::new("SELECT id FROM library_work WHERE instrumentation = ? COLLATE NOCASE")
                 .text(value.trim()),
         ),
         Criterion::Composed { from, to } => {
-            let mut works = Fragment::new("SELECT id FROM work_entity WHERE ");
+            let mut works = Fragment::new("SELECT id FROM library_work WHERE ");
             works.append(range_condition("composed_year", *from, *to));
             work_level(works)
         }
@@ -802,7 +802,7 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
         }
         Criterion::Period { value } => {
             // Works by their own period; composers by theirs.
-            let works = Fragment::new("SELECT id FROM work_entity WHERE period = ? COLLATE NOCASE")
+            let works = Fragment::new("SELECT id FROM library_work WHERE period = ? COLLATE NOCASE")
                 .text(value.trim());
             CriterionSets {
                 tracks: work_tracks(&works),
@@ -873,7 +873,8 @@ fn entity_set(entity: FocusEntity, sets: CriterionSets) -> Fragment {
         FocusEntity::Compositions => match sets.works {
             Some(works) => works,
             None => {
-                let mut works = Fragment::new("SELECT work_id FROM track_work WHERE track_id IN (");
+                let mut works =
+                    Fragment::new("SELECT work_id FROM library_track_work WHERE track_id IN (");
                 works.append(sets.tracks).push(")");
                 works
             }
@@ -886,7 +887,7 @@ fn entity_table(entity: FocusEntity) -> &'static str {
         FocusEntity::Albums => "album_entity",
         FocusEntity::Songs => "track_entity",
         FocusEntity::Artists | FocusEntity::Composers => "artist_entity",
-        FocusEntity::Compositions => "work_entity",
+        FocusEntity::Compositions => "library_work",
     }
 }
 
@@ -1188,12 +1189,12 @@ fn sort_plan(query: &FocusQuery, user_id: i32) -> SortPlan {
             Fragment::new(format!("e.created_at {dir}, e.title COLLATE NOCASE ASC"))
         }
         (FocusEntity::Compositions, FocusSort::TrackCount) => Fragment::new(format!(
-            "(SELECT COUNT(*) FROM track_work WHERE work_id = e.id) {dir}"
+            "(SELECT COUNT(*) FROM library_track_work WHERE work_id = e.id) {dir}"
         )),
         (FocusEntity::Compositions, FocusSort::MostPlayed | FocusSort::LastPlayed) => {
             joins = Fragment::new(
                 " LEFT JOIN (SELECT tw.work_id AS id, COUNT(*) AS plays, MAX(h.listened_at) AS last \
-                   FROM listen_history_item h JOIN track_work tw ON tw.track_id = h.song_id \
+                   FROM listen_history_item h JOIN library_track_work tw ON tw.track_id = h.song_id \
                    WHERE h.user_id = ? GROUP BY tw.work_id) sp ON sp.id = e.id",
             )
             .int(user);
@@ -1404,7 +1405,7 @@ fn scope_pairs(entity: FocusEntity) -> &'static str {
              WHERE role = 'composer' AND artist_id IN (SELECT id FROM focused)"
         }
         FocusEntity::Compositions => {
-            "SELECT work_id AS entity_id, track_id FROM track_work \
+            "SELECT work_id AS entity_id, track_id FROM library_track_work \
              WHERE work_id IN (SELECT id FROM focused)"
         }
     }
@@ -1416,7 +1417,7 @@ fn work_pairs(entity: FocusEntity) -> &'static str {
         FocusEntity::Compositions => "SELECT id AS entity_id, id AS work_id FROM focused",
         _ => {
             "SELECT DISTINCT ft.entity_id AS entity_id, tw.work_id AS work_id FROM ft \
-             JOIN track_work tw ON tw.track_id = ft.track_id"
+             JOIN library_track_work tw ON tw.track_id = ft.track_id"
         }
     }
 }
@@ -1627,7 +1628,7 @@ fn facet_branch(
             key,
             Fragment::new(format!(
                 "SELECT wp.entity_id AS entity_id, w.{key} AS value, w.{key} AS label \
-                 FROM ({pairs}) wp JOIN work_entity w ON w.id = wp.work_id \
+                 FROM ({pairs}) wp JOIN library_work w ON w.id = wp.work_id \
                  WHERE w.{key} IS NOT NULL",
                 pairs = work_pairs(entity),
             )),
@@ -1640,7 +1641,7 @@ fn facet_branch(
             Fragment::new(format!(
                 "SELECT wp.entity_id AS entity_id, w.composed_year AS value, \
                  w.composed_year AS label FROM ({pairs}) wp \
-                 JOIN work_entity w ON w.id = wp.work_id WHERE w.composed_year > 0",
+                 JOIN library_work w ON w.id = wp.work_id WHERE w.composed_year > 0",
                 pairs = work_pairs(entity),
             )),
             search,
@@ -1668,7 +1669,7 @@ fn facet_branch(
             } else {
                 Fragment::new(format!(
                     "SELECT wp.entity_id AS entity_id, w.period AS value, w.period AS label \
-                     FROM ({pairs}) wp JOIN work_entity w ON w.id = wp.work_id \
+                     FROM ({pairs}) wp JOIN library_work w ON w.id = wp.work_id \
                      WHERE w.period IS NOT NULL",
                     pairs = work_pairs(entity),
                 ))
@@ -2020,7 +2021,7 @@ const COMPOSER_STATS: &str = "SELECT ar.id AS id, ar.name AS name, \
      FROM artist_entity ar \
      JOIN track_artist ta ON ta.artist_id = ar.id AND ta.role = 'composer' \
      JOIN track_entity t ON t.id = ta.track_id \
-     LEFT JOIN track_work tw ON tw.track_id = t.id \
+     LEFT JOIN library_track_work tw ON tw.track_id = t.id \
      LEFT JOIN composer_entity ce ON ce.artist_id = ar.id";
 
 /// Composer rows for focused composer ids, in the given order.
@@ -2140,7 +2141,7 @@ pub fn work_rows(
            COUNT(DISTINCT COALESCE(t.album_id, 'track:' || t.id)) AS recording_count, \
            COUNT(DISTINCT tw.track_id) AS track_count, CAST(w.tagged AS BIGINT) AS tagged, \
            w.musicbrainz_work_id AS musicbrainz_work_id \
-         FROM work_entity w LEFT JOIN track_work tw ON tw.work_id = w.id \
+         FROM library_work w LEFT JOIN library_track_work tw ON tw.work_id = w.id \
          LEFT JOIN track_entity t ON t.id = tw.track_id WHERE w.id IN (",
     );
     push_id_list(&mut sql, ids);
@@ -2426,8 +2427,8 @@ pub fn focus_compositions(
            CAST(w.composed_year AS BIGINT) AS composed_year, w.period AS period, \
            tw.movement AS movement, CAST(tw.movement_number AS BIGINT) AS movement_number \
          FROM focused f JOIN track_entity t ON t.id = f.id \
-         LEFT JOIN track_work tw ON tw.track_id = t.id \
-         LEFT JOIN work_entity w ON w.id = tw.work_id \
+         LEFT JOIN library_track_work tw ON tw.track_id = t.id \
+         LEFT JOIN library_work w ON w.id = tw.work_id \
          LEFT JOIN album_entity a ON a.id = t.album_id \
          LEFT JOIN album_artist aa ON aa.album_id = t.album_id AND aa.role = 'primary' \
            AND aa.artist_id = (SELECT artist_id FROM album_artist WHERE album_id = t.album_id \
@@ -3642,8 +3643,8 @@ mod tests {
         );
     }
 
-    /// Beethoven works with forms, scorings and dates, plus MusicBrainz
-    /// facts for another composer.
+    /// Beethoven works with forms, scorings and dates, plus what
+    /// MusicBrainz says about one of them and about another composer.
     fn works(connection: &mut SqliteConnection) {
         classical(connection);
         connection
@@ -3655,12 +3656,250 @@ mod tests {
                  UPDATE raw_file_metadata SET work = 'Violin Concerto in D major, Op. 61' WHERE file_id = 1;
                  UPDATE raw_file_metadata SET work = 'Piano Sonata No. 23 in F minor, Op. 57', composed_year = 1805 WHERE file_id = 2;
                  UPDATE raw_file_metadata SET work_mbid = '0e3b5e4c-1111-4c1e-9d6f-000000000001' WHERE file_id = 5;
-                 INSERT INTO musicbrainz_work(mbid, title, work_type, composed_year, status) VALUES
-                   ('0e3b5e4c-1111-4c1e-9d6f-000000000001', 'An die ferne Geliebte', 'Song-cycle', 1816, 'ok');
-                 INSERT INTO musicbrainz_composer(mbid, name, normalized_name, birth_year, country, status) VALUES
-                   ('c0', 'Anna Hamilton', 'anna hamilton', 1950, 'GB', 'ok');",
+                 INSERT INTO work(mbid, title, form, composed, musicbrainz_facts) VALUES
+                   ('0e3b5e4c-1111-4c1e-9d6f-000000000001', 'An die ferne Geliebte', 'Song-cycle', '1816', 1);
+                 INSERT INTO editorial_profile(entity_type, entity_id, musicbrainz_id, profile_json) VALUES
+                   ('artist', 'a-comp', 'c0', '{\"name\": \"Anna Hamilton\", \"begin\": \"1950-03-02\", \"area\": \"United Kingdom\"}');",
             )
             .expect("works fixture");
+    }
+
+    #[derive(diesel::QueryableByName, Debug, PartialEq)]
+    struct LinkRow {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        track_id: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        work_id: String,
+    }
+
+    fn library_links(connection: &mut SqliteConnection) -> Vec<(String, String)> {
+        diesel::sql_query("SELECT track_id, work_id FROM library_track_work ORDER BY track_id")
+            .load::<LinkRow>(connection)
+            .expect("library links")
+            .into_iter()
+            .map(|row| (row.track_id, row.work_id))
+            .collect()
+    }
+
+    const MB_MOVEMENT: &str = "22222222-2222-4222-8222-222222222222";
+    const MB_MASS: &str = "33333333-3333-4333-8333-333333333333";
+    const MB_OTHER: &str = "11111111-1111-4111-8111-111111111111";
+    const TAGGED_ONLY: &str = "44444444-4444-4444-8444-444444444444";
+    const TAGGED_CONCERTO: &str = "55555555-5555-4555-8555-555555555555";
+
+    #[test]
+    fn one_works_model_takes_tags_first_then_musicbrainz() {
+        let mut connection = catalog();
+        works(&mut connection);
+        connection
+            .batch_execute(&format!(
+                "INSERT INTO work(mbid, title, form, musicbrainz_facts) VALUES
+                   ('{MB_OTHER}', 'Something Else', 'Song', 1),
+                   ('{MB_MASS}', 'Great Mass', 'Mass', 1);
+                 INSERT INTO work(mbid, title, parent_mbid, part_position, musicbrainz_facts) VALUES
+                   ('{MB_MOVEMENT}', 'Great Mass: Kyrie', '{MB_MASS}', 1, 1);
+                 -- MusicBrainz album matching links t1 (whose tags name
+                 -- another work id) and t8 (untagged) to works.
+                 INSERT INTO track_work(track_id, album_id, work_mbid, source) VALUES
+                   ('t1', 'al-pop', '{MB_OTHER}', 'musicbrainz'),
+                   ('t8', '', '{MB_MOVEMENT}', 'musicbrainz');
+                 UPDATE raw_file_metadata SET work_mbid = '{TAGGED_CONCERTO}' WHERE file_id = 1;
+                 UPDATE raw_file_metadata SET work_mbid = '{TAGGED_ONLY}' WHERE file_id = 4;"
+            ))
+            .expect("links");
+        crate::library::works::ensure_works(&mut connection).expect("works");
+        let links = library_links(&mut connection);
+        let link = |track: &str| {
+            links
+                .iter()
+                .find(|(id, _)| id == track)
+                .map(|(_, work)| work.clone())
+        };
+        // Tags win: t1's tagged work id over MusicBrainz's album link.
+        assert_eq!(link("t1").as_deref(), Some(TAGGED_CONCERTO));
+        let concerto = crate::enrichment::store::load_work(&mut connection, TAGGED_CONCERTO)
+            .expect("concerto")
+            .expect("in the works");
+        assert_eq!(concerto.title, "Violin Concerto in D major, Op. 61");
+        let sonata_id = link("t2").expect("t2");
+        assert!(sonata_id.starts_with("wk_"), "{sonata_id}");
+        // Without tags, MusicBrainz's link counts, grouped under the piece.
+        assert_eq!(link("t8").as_deref(), Some(MB_MASS));
+        // A tagged MusicBrainz id is the work's id.
+        assert_eq!(
+            link("t5").as_deref(),
+            Some("0e3b5e4c-1111-4c1e-9d6f-000000000001")
+        );
+        assert_eq!(link("t4").as_deref(), Some(TAGGED_ONLY));
+        assert_eq!(link("t3").as_deref(), Some(TAGGED_ONLY), "same Suite");
+
+        // The work pages and song pages read the same works.
+        let mass = crate::enrichment::store::work_tracks(&mut connection, MB_MASS).expect("tracks");
+        assert_eq!(
+            mass.iter()
+                .map(|row| row.track_id.as_str())
+                .collect::<Vec<_>>(),
+            ["t8"],
+            "listed once, under MusicBrainz's movement"
+        );
+        assert_eq!(mass[0].work_mbid, MB_MOVEMENT);
+        let t8 = crate::enrichment::store::track_works(&mut connection, "t8").expect("t8");
+        assert_eq!(t8.len(), 1, "the movement, with the mass as its parent");
+        assert_eq!(t8[0].0.mbid, MB_MOVEMENT);
+        assert_eq!(
+            t8[0].1.as_ref().map(|parent| parent.mbid.as_str()),
+            Some(MB_MASS)
+        );
+        let sonata = crate::enrichment::store::track_works(&mut connection, "t2").expect("t2");
+        assert_eq!(
+            sonata.len(),
+            1,
+            "a work known only from tags has a page too"
+        );
+        assert_eq!(sonata[0].0.title, "Piano Sonata No. 23 in F minor, Op. 57");
+        assert_eq!(
+            sonata[0].0.composer_name.as_deref(),
+            Some("Ludwig van Beethoven")
+        );
+
+        // MusicBrainz is asked about tagged ids it has not described yet.
+        assert_eq!(
+            crate::enrichment::store::task_status(
+                &mut connection,
+                crate::enrichment::store::Stage::Musicbrainz,
+                "work",
+                TAGGED_ONLY
+            )
+            .expect("task")
+            .as_deref(),
+            Some("pending")
+        );
+        // A rebuild keeps MusicBrainz's facts and drops what only the
+        // library knew once no track names it.
+        connection
+            .batch_execute(
+                "UPDATE raw_file_metadata SET work = NULL, work_mbid = NULL;
+                 DELETE FROM track_artist WHERE role = 'composer';
+                 DELETE FROM track_work WHERE source = 'musicbrainz';",
+            )
+            .expect("untag");
+        crate::library::works::ensure_works(&mut connection).expect("rebuild");
+        assert!(library_links(&mut connection).is_empty());
+        let mass = crate::enrichment::store::load_work(&mut connection, MB_MASS).expect("mass");
+        assert_eq!(mass.map(|work| work.title).as_deref(), Some("Great Mass"));
+        for gone in [sonata_id.as_str(), TAGGED_CONCERTO] {
+            assert!(
+                crate::enrichment::store::load_work(&mut connection, gone)
+                    .expect("work")
+                    .is_none(),
+                "{gone}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_works_models_migrate_into_one() {
+        let mut connection = SqliteConnection::establish(":memory:").expect("database");
+        connection
+            .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
+            .expect("migrations");
+        while connection
+            .applied_migrations()
+            .expect("applied")
+            .iter()
+            .any(|version| version.to_string() == "20261105000000")
+        {
+            connection
+                .revert_last_migration(crate::persistence::connection::MIGRATIONS)
+                .expect("revert");
+        }
+        connection
+            .batch_execute(&format!(
+                "INSERT INTO artist_entity(id, name, normalized_name) VALUES
+                   ('a-beet', 'Ludwig van Beethoven', 'ludwig van beethoven');
+                 INSERT INTO album_entity(id, title, normalized_title) VALUES ('al', 'Nine', 'nine');
+                 INSERT INTO track_entity(id, title, normalized_title, album_id) VALUES
+                   ('t1', 'Ode', 'ode', 'al'), ('t2', 'Adagio', 'adagio', 'al');
+                 INSERT INTO track_artist(track_id, artist_id, role) VALUES ('t1', 'a-beet', 'composer');
+                 INSERT INTO work(mbid, title, form) VALUES ('{MB_MASS}', 'Missa solemnis', 'Mass');
+                 INSERT INTO editorial_track_work(track_id, album_id, work_mbid) VALUES
+                   ('t2', 'al', '{MB_MASS}');
+                 INSERT INTO musicbrainz_work(mbid, title, work_type, composed_year, parent_mbid,
+                     composer_mbids_json, status) VALUES
+                   ('{MB_OTHER}', 'Symphony No. 9', 'Symphony', 1824, NULL, '[\"c-beet\"]', 'ok'),
+                   ('{MB_MOVEMENT}', NULL, NULL, NULL, NULL, '[]', 'missing');
+                 INSERT INTO musicbrainz_composer(mbid, name, normalized_name, birth_year,
+                     death_year, country, status) VALUES
+                   ('c-beet', 'Ludwig van Beethoven', 'ludwig van beethoven', 1770, 1827, 'DE', 'ok');
+                 INSERT INTO work_entity(id, title, musicbrainz_work_id, form, period, tagged) VALUES
+                   ('wk_0000000000000001', 'Symphony No. 9', '{MB_OTHER}', 'Symphony', 'Classical', 1),
+                   ('wk_0000000000000002', 'Bagatelle', NULL, 'Bagatelle', NULL, 1);
+                 INSERT INTO track_work(track_id, work_id, movement, movement_number) VALUES
+                   ('t1', 'wk_0000000000000001', 'IV. Finale', 4);
+                 INSERT INTO work_composer(work_id, artist_id) VALUES ('wk_0000000000000001', 'a-beet');"
+            ))
+            .expect("old rows");
+        connection
+            .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
+            .expect("one works model");
+
+        #[derive(diesel::QueryableByName)]
+        struct Moved {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            mbid: String,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            composer_name: Option<String>,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            composed: Option<String>,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            in_library: i32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            musicbrainz_facts: i32,
+        }
+        let works = diesel::sql_query(
+            "SELECT mbid, composer_name, composed, in_library, musicbrainz_facts FROM work ORDER BY mbid",
+        )
+        .load::<Moved>(&mut connection)
+        .expect("works");
+        let row = |mbid: &str| works.iter().find(|work| work.mbid == mbid);
+        let ninth = row(MB_OTHER).expect("the lookup's work moved");
+        assert_eq!(ninth.composer_name.as_deref(), Some("Ludwig van Beethoven"));
+        assert_eq!(ninth.composed.as_deref(), Some("1824"));
+        assert_eq!((ninth.in_library, ninth.musicbrainz_facts), (1, 1));
+        assert!(row(MB_MOVEMENT).is_none(), "missing lookups are not works");
+        let bagatelle = row("wk_0000000000000002").expect("a tag-only work");
+        assert_eq!((bagatelle.in_library, bagatelle.musicbrainz_facts), (1, 0));
+        assert_eq!(row(MB_MASS).map(|work| work.musicbrainz_facts), Some(1));
+
+        let links = library_links(&mut connection);
+        assert_eq!(links, [("t1".to_string(), MB_OTHER.to_string())]);
+        let mass = crate::enrichment::store::work_tracks(&mut connection, MB_MASS).expect("mass");
+        assert_eq!(mass.len(), 1, "MusicBrainz's album link moved");
+
+        #[derive(diesel::QueryableByName)]
+        struct Composer {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
+            birth_year: Option<i32>,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            country: Option<String>,
+        }
+        let composer = diesel::sql_query(
+            "SELECT birth_year, country FROM composer_entity WHERE artist_id = 'a-beet'",
+        )
+        .get_result::<Composer>(&mut connection)
+        .expect("composer facts moved");
+        assert_eq!(
+            (composer.birth_year, composer.country.as_deref()),
+            (Some(1770), Some("DE"))
+        );
+        // The rebuild that follows keeps them.
+        crate::library::works::ensure_works(&mut connection).expect("rebuild");
+        let composer = diesel::sql_query(
+            "SELECT birth_year, country FROM composer_entity WHERE artist_id = 'a-beet'",
+        )
+        .get_result::<Composer>(&mut connection)
+        .expect("composer facts kept");
+        assert_eq!(composer.birth_year, Some(1770));
     }
 
     fn facet_values(facets: &FocusFacets, key: &str) -> Vec<(String, i64)> {
