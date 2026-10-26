@@ -65,7 +65,7 @@ function OutputsFooter() {
       <Text style={styles.outputsNote}>
         {summary
           ? "Each output is its own zone. Bridges play bit-perfect and group sample-synced."
-          : "Run parson-bridge on the computer your DAC is plugged into (Linux or Raspberry Pi) and its outputs appear here as zones."}{" "}
+          : "Run parson-bridge on the computer your DAC is plugged into (Linux, Raspberry Pi, Windows or macOS) and its outputs appear here as zones."}{" "}
         Tested against simulated DACs and protocol-level fake devices, not yet
         on real hardware.
       </Text>

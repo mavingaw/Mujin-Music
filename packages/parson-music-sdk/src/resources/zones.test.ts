@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import api from "../core/http";
 import {
+  bridgeBackendLabel,
   zoneOutputsSummary,
   addBridge,
   getBridges,
@@ -797,4 +798,11 @@ test("library actions become zone commands within the queue limit", () => {
   expect(previewQueueEdit([], 0, queueOnZoneCommand(["z"], true))).toEqual([
     "z",
   ]);
+});
+
+test("bridge audio APIs read as the mode they play in", () => {
+  expect(bridgeBackendLabel("WASAPI")).toBe("WASAPI exclusive");
+  expect(bridgeBackendLabel("CoreAudio")).toBe("CoreAudio hog mode");
+  expect(bridgeBackendLabel("ALSA")).toBe("ALSA");
+  expect(bridgeBackendLabel(null)).toBeNull();
 });

@@ -684,8 +684,11 @@ impl Player {
     }
 
     /// Writes silence until the next frame written will be heard at the
-    /// start time, then starts. Late (the start already passed): skips the
-    /// frames that should have been heard by now.
+    /// start time, then starts. Late (the start already passed): a follower
+    /// skips the frames that should have been heard by now; the clock
+    /// master never does. Its timeline is the group's (followers track what
+    /// it reports it has heard), so it starts at once and keeps every
+    /// sample: a master a frame late must not lose that frame.
     fn prime(&mut self, sync: SyncStart) {
         let rate = f64::from(self.format.sample_rate);
         let frame_bytes = self.frame_bytes();
@@ -705,7 +708,7 @@ impl Player {
             self.silence_frames += frames;
             return;
         }
-        if gap_frames < 0.0 {
+        if gap_frames < 0.0 && !sync.master {
             let late = (-gap_frames) as u64;
             let mut pending = self.shared.lock();
             let skip = (late as usize * frame_bytes).min(pending.queue.len());

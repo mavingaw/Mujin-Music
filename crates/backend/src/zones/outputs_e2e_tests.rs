@@ -1457,6 +1457,29 @@ fn after_priming(bytes: &[u8], frame: usize) -> &[u8] {
     &bytes[first * frame..]
 }
 
+/// Where two captures part ways, in frames.
+fn describe_difference(actual: &[u8], expected: &[u8], frame: usize) -> String {
+    let first = actual
+        .chunks(frame)
+        .zip(expected.chunks(frame))
+        .position(|(a, b)| a != b);
+    let shifted = first.and_then(|index| {
+        (1..=4_410).find_map(|shift: usize| {
+            let a = actual.get(index * frame..)?;
+            let b = expected.get((index + shift) * frame..)?;
+            let n = a.len().min(b.len()).min(64 * frame);
+            (n > 0 && a[..n] == b[..n]).then(|| format!("{shift} frames dropped"))
+        })
+    });
+    format!(
+        "{} frames played, {} expected, first difference at frame {:?} ({})",
+        actual.len() / frame,
+        expected.len() / frame,
+        first,
+        shifted.unwrap_or_else(|| "not a simple drop".into())
+    )
+}
+
 #[actix_web::test]
 async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
     if !ffmpeg_available() {
@@ -1689,9 +1712,11 @@ async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
     // The clock master got every sample, after the start-up silence.
     let living_capture = living_dacs.capture("sim-usb-dac");
     let frame = 6;
+    let master_audio = after_priming(&living_capture.bytes, frame);
     assert!(
-        after_priming(&living_capture.bytes, frame) == raw_c.as_slice(),
-        "the clock master is bit-perfect"
+        master_audio == raw_c.as_slice(),
+        "the clock master is bit-perfect: {}",
+        describe_difference(master_audio, &raw_c, frame)
     );
     let kitchen_capture = kitchen_dacs.capture("sim-usb-dac");
     let kitchen_group = after_priming(&kitchen_capture.bytes[raw_a.len()..], frame);
@@ -1718,6 +1743,230 @@ async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
         service.zone(USER, kitchen_dac, None).is_none(),
         "a removed bridge's zones go"
     );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A bridge on another machine, with any audio backend.
+fn bridge_with(
+    name: &str,
+    backend: Arc<dyn crate::outputs::device::DeviceBackend>,
+) -> parson_bridge::endpoint::Endpoint {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    parson_bridge::endpoint::Endpoint::start(
+        listener,
+        Some(backend),
+        parson_bridge::endpoint::EndpointConfig {
+            bridge_id: format!("{name}-id"),
+            name: name.to_string(),
+            host: format!("{name}.local"),
+            clock_offset_us: 0,
+            note: None,
+        },
+    )
+    .expect("bridge endpoint")
+}
+
+#[actix_web::test]
+async fn dacs_on_windows_and_mac_bridges_are_bit_perfect_zones() {
+    use parson_bridge::audio::coreaudio::fake::{FakeHal, FakeHalDevice};
+    use parson_bridge::audio::coreaudio::{CoreAudioBackend, HalApi};
+    use parson_bridge::audio::wasapi::WasapiBackend;
+    use parson_bridge::audio::wasapi::fake::{FakeEndpoint, FakeWasapi};
+
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("parson-os-bridges-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let raw = raw_s24(96_000, 31);
+    let file = flac_from_raw(&directory, "hires", &raw, 96_000);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![song(
+            "song-hires",
+            &file,
+            1.0,
+            "flac",
+            96_000,
+            Some(24),
+        )]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+
+    // A Windows PC with a USB DAC (WASAPI) and a Mac with one (CoreAudio).
+    let guid = "0d0d0d0d-1111-4222-8333-444455556666";
+    let wasapi = Arc::new(WasapiBackend::new(FakeWasapi::new(
+        vec![FakeEndpoint::usb_dac(guid, "Topping E30 II")],
+        1.0,
+    )));
+    let windows = bridge_with("study-pc", wasapi.clone());
+    let hal = Arc::new(CoreAudioBackend::new(FakeHal::new(
+        vec![FakeHalDevice::usb_dac(
+            90,
+            "AppleUSBAudioEngine:Chord:Qutest:1",
+            "Qutest",
+        )],
+        1.0,
+    )));
+    let mac = bridge_with("studio-mac", hal.clone());
+    let hub = crate::outputs::bridge::BridgeHub::new("server-id".into(), "Test".into(), None);
+    for endpoint in [&windows, &mac] {
+        let added = hub
+            .add(&endpoint.address().to_string())
+            .expect("add bridge");
+        assert!(added.connected, "{added:?}");
+        assert_eq!(added.devices, 1);
+    }
+    let status = hub.status();
+    let backends: Vec<_> = status
+        .iter()
+        .map(|bridge| bridge.backend.clone().unwrap_or_default())
+        .collect();
+    assert!(backends.contains(&"WASAPI".to_string()), "{backends:?}");
+    assert!(backends.contains(&"CoreAudio".to_string()), "{backends:?}");
+    let service = ZoneService::new(None, None);
+    service.set_outputs(Arc::new(Outputs {
+        bridges: Some(hub.clone()),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+
+    let windows_zone = "bridge:study-pc-id:wasapi-0d0d0d0d111142228333444455556666";
+    let mac_zone = "bridge:studio-mac-id:coreaudio-appleusbaudioengine-chord-qutest-1";
+    let zones = service.list(USER, Some(&cache));
+    for (id, rate, mode) in [
+        (windows_zone, 384_000, "WASAPI exclusive mode"),
+        (mac_zone, 384_000, "hog mode"),
+    ] {
+        let zone = zones.iter().find(|zone| zone.id == id).unwrap_or_else(|| {
+            panic!(
+                "{id} in {:?}",
+                zones.iter().map(|zone| &zone.id).collect::<Vec<_>>()
+            )
+        });
+        assert_eq!(zone.kind, ZoneKind::Bridge);
+        assert_eq!(
+            zone.output.as_ref().map(|output| output.max_sample_rate),
+            Some(rate)
+        );
+        assert_eq!(zone.settings.volume_mode, VolumeMode::Hardware, "{id}");
+        assert!(zone.settings.supports.exclusive);
+        assert!(
+            zone.notes
+                .iter()
+                .any(|note| note.contains(mode) && note.contains("not yet on real hardware")),
+            "{:?}",
+            zone.notes
+        );
+    }
+
+    for zone_id in [windows_zone, mac_zone] {
+        service
+            .command(
+                USER,
+                zone_id,
+                ZoneCommand::Load {
+                    song_ids: ids(&["song-hires"]),
+                    current_position: 0,
+                    position_ms: 0,
+                    play: true,
+                },
+                Some(&cache),
+            )
+            .await
+            .expect("load");
+        assert!(
+            drive_until(&service, |service| zone(service, &cache, zone_id).status
+                == ZoneStatus::Playing)
+            .await
+        );
+        let stream = zone(&service, &cache, zone_id)
+            .output
+            .and_then(|output| output.stream)
+            .expect("signal path");
+        assert!(stream.bit_perfect, "{stream:?}");
+        assert!(
+            stream.output.starts_with("96 kHz/24-bit (S24_3LE)"),
+            "{stream:?}"
+        );
+        assert!(
+            drive_until(&service, |service| zone(service, &cache, zone_id).status
+                == ZoneStatus::Stopped)
+            .await,
+            "plays to the end"
+        );
+    }
+
+    // Windows: exclusive at exactly 96 kHz/24-bit, every sample unchanged.
+    let capture = wasapi
+        .api()
+        .capture(&format!("{{0.0.0.00000000}}.{{{guid}}}"));
+    let (format, mode, _) = capture.opened[0];
+    assert_eq!(mode, parson_bridge::audio::wasapi::ShareMode::Exclusive);
+    assert_eq!(
+        (format.sample_rate, format.container_bits, format.valid_bits),
+        (96_000, 24, 24)
+    );
+    assert!(
+        capture.bytes.starts_with(&raw),
+        "every sample reached the Windows DAC unchanged"
+    );
+    assert!(capture.bytes[raw.len()..].iter().all(|byte| *byte == 0));
+
+    // macOS: hogged, switched to 96 kHz, 24-bit integer physical format,
+    // and the DAC received every 24-bit sample exactly.
+    let mac_capture = hal.api().capture(90);
+    assert_eq!(mac_capture.runs[0], (24, 96_000.0));
+    // Parson lets go of the DAC at the end of the queue (the stream closes
+    // just after the zone reports it stopped).
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while hal.api().hog_owner(90) != Ok(-1) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(hal.api().hog_owner(90), Ok(-1), "hog mode released after");
+    let expected: Vec<i32> = raw
+        .chunks(3)
+        .map(|sample| i32::from_le_bytes([0, sample[0], sample[1], sample[2]]) >> 8)
+        .collect();
+    let first = mac_capture
+        .samples
+        .iter()
+        .position(|sample| *sample != 0)
+        .unwrap_or(0)
+        / 2
+        * 2;
+    assert!(
+        mac_capture.samples[first..].starts_with(&expected),
+        "every sample reached the Mac's DAC unchanged"
+    );
+
+    // Hardware volume in dB on both machines' DACs.
+    for zone_id in [windows_zone, mac_zone] {
+        service
+            .command(
+                USER,
+                zone_id,
+                ZoneCommand::SetVolume {
+                    volume: 50,
+                    member_id: None,
+                    above_comfort: false,
+                },
+                None,
+            )
+            .await
+            .expect("volume");
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        wasapi
+            .api()
+            .capture(&format!("{{0.0.0.00000000}}.{{{guid}}}"))
+            .volume_db
+            .is_some()
+    );
+    assert!(hal.api().capture(90).volume_db.is_some());
     let _ = std::fs::remove_dir_all(&directory);
 }
 

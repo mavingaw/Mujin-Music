@@ -254,7 +254,10 @@ export interface BridgeStatus {
   /** e.g. `linux aarch64`. */
   platform: string | null;
   version: string | null;
-  /** `ALSA`, `Simulated`, or null. */
+  /**
+   * The bridge's audio API: `ALSA` (Linux), `WASAPI` (Windows, exclusive
+   * mode), `CoreAudio` (macOS, hog mode), `Simulated`, or null.
+   */
   backend: string | null;
   devices: number;
   /** Bridge clock minus server clock, in microseconds. */
@@ -674,6 +677,29 @@ export function zoneKindLabel(kind: ZoneKind): string {
       return "AirPlay";
     case "linked":
       return "Linked zones";
+  }
+}
+
+/**
+ * How a bridge drives its DACs, for people: `WASAPI exclusive` on Windows,
+ * `CoreAudio hog mode` on macOS, `ALSA` on Linux.
+ */
+export function bridgeBackendLabel(
+  backend: string | null | undefined,
+): string | null {
+  switch (backend) {
+    case undefined:
+    case null:
+    case "":
+      return null;
+    case "WASAPI":
+      return "WASAPI exclusive";
+    case "CoreAudio":
+      return "CoreAudio hog mode";
+    case "Simulated":
+      return "simulated DACs";
+    default:
+      return backend;
   }
 }
 
