@@ -13,6 +13,7 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -27,6 +28,7 @@ from .const import (
     FALLBACK_POLL_SECONDS,
     RECONNECT_MAX_SECONDS,
     RECONNECT_MIN_SECONDS,
+    volume_request_signal,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -159,6 +161,14 @@ class MujinMusicCoordinator(DataUpdateCoordinator[ZoneSnapshot]):
                         # disconnected; "zones_changed" is the push itself.
                         if event.get("type") in ("ready", "zones_changed"):
                             self._schedule_refresh()
+                        elif event.get("type") == "volume_request":
+                            # For the zone's event entity (an automation
+                            # carries the change out).
+                            async_dispatcher_send(
+                                self.hass,
+                                volume_request_signal(self.config_entry.entry_id),
+                                event,
+                            )
                     elif message.type in (
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.ERROR,

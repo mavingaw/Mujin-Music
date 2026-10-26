@@ -22,6 +22,7 @@ import {
   type ZoneSettingsDraft,
   type ZoneStreamInfo,
   type ZoneStreamQuality,
+  type ZoneVolumeControl,
   type ZoneVolumeMode,
 } from "@parson/music-sdk";
 import {
@@ -362,6 +363,27 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
                   `${zone.volume?.device_min ?? 0}–${zone.volume?.device_max ?? 100} · reported by the device`}
               </Text>
             </View>
+          </Section>
+        ) : null}
+
+        {supports?.volume_control ? (
+          <Section title="Home Assistant">
+            <Text style={styles.label}>Volume handled by</Text>
+            <Chips
+              onSelect={(value) =>
+                update({ volume_control: value as ZoneVolumeControl })
+              }
+              options={[
+                { value: "parson", label: "Parson" },
+                { value: "home_assistant", label: "Home Assistant" },
+              ]}
+              selected={draft.volume_control}
+            />
+            <Text style={styles.note}>
+              {draft.volume_control === "home_assistant"
+                ? "Volume changes go to Home Assistant as events for an automation to carry out, such as an amplifier on an IR blaster. Parson leaves the audio at full level."
+                : "Parson sets the volume itself."}
+            </Text>
           </Section>
         ) : null}
 

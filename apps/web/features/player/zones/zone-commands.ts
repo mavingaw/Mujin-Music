@@ -29,6 +29,11 @@ export interface LocalZoneControls {
   moveQueueItem: (from: number, to: number) => void;
   removeQueueItem: (index: number) => void;
   clearUpcoming: () => void;
+  /**
+   * Inserts songs right after the current track (`next`) or at the end,
+   * keeping everything already queued.
+   */
+  addSongs: (songIds: string[], next: boolean) => Promise<void>;
   setRepeat: (mode: ZoneRepeatMode) => void;
   setShuffle: (enabled: boolean) => void;
 }
@@ -98,6 +103,10 @@ export async function applyZoneCommand(
       return;
     case "clear_upcoming":
       controls.clearUpcoming();
+      return;
+    case "add_to_queue":
+      if (command.song_ids.length)
+        await controls.addSongs(command.song_ids, command.next ?? false);
       return;
     case "set_repeat":
       controls.setRepeat(command.mode);

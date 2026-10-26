@@ -16,9 +16,9 @@ use crate::api::library::{
     remove_library_root, song_delivery, song_signal_path, stream_song,
 };
 use crate::api::{
-    album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages, genres,
-    home, imports, key_service, lyrics, metadata, outputs, playback, playlist, providers, search,
-    setup, song, user, works, zones,
+    album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
+    genres, home, imports, key_service, lyrics, metadata, outputs, playback, playlist, providers,
+    search, setup, song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;

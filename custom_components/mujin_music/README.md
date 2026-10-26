@@ -16,7 +16,8 @@ through the cloud, and music keeps the quality your server sends each zone.
    **Settings → Devices & services**. You can also add **Mujin Music** by hand
    with the server's address and port (1993 unless you changed it).
 3. Choose **Pair with a code**. Home Assistant shows six digits: enter them
-   in Mujin Music under **Settings → Home Assistant**. Home Assistant gets its
+   in Mujin Music under **Settings → Home Assistant → Approve Home Assistant**
+   and select **Approve**. Home Assistant gets its
    own revocable session for your account and never stores a password.
    Signing in with a username and password is available too.
 
@@ -32,9 +33,49 @@ through the cloud, and music keeps the quality your server sends each zone.
 | Transfer                                         | Pick **Play from …** as the source, or call `mujin_music.transfer`: the queue, track and position move to the other zone.                                                                                                           |
 | Media browser                                    | Albums, artists, playlists, genres, liked songs and radio stations, with artwork. Long lists are split A–Z. Hi-res albums show their format, e.g. `FLAC 24/96`.                                                                     |
 | Play media                                       | By browser id (`album:…`, `artist:…`, `playlist:…`, `genre:…`, `song:…`, `radio:…`) or by text: `media_content_type: artist` and `media_content_id: Miles Davis` plays the best match. Enqueue next, add and replace are supported. |
+| Turn on, turn off                                | Zones that hold a device (audio devices, Bridge players, UPnP, AirPlay) go to standby: playback stops and the device is released, the queue stays. Turn on wakes the zone; play resumes where it stopped.                           |
 | Search                                           | `media_player.search_media` searches artists, albums and songs.                                                                                                                                                                     |
 | Now playing                                      | Title, artist, album, duration, position and full-quality artwork.                                                                                                                                                                  |
 | Signal path                                      | `quality`, `bit_perfect`, `source_format`, `output_format` and `signal_path` attributes show what reaches the speaker.                                                                                                              |
+
+Text that matches nothing in the library fails with a clear "Nothing in
+the Mujin Music library matches …" message.
+
+## Volume on your amplifier (volume requests)
+
+Like Roon's volume control for Home Assistant: in the Mujin Music app open a
+zone's settings and set **Home Assistant → Volume handled by** to **Home
+Assistant**. The zone then plays at full level and every volume change made
+anywhere (the apps, the media player, a remote) goes out as an event instead.
+Its device gets an `event.<zone>_volume_request` entity whose event types
+are `volume_up`, `volume_down`, `volume_set`, `mute_on` and `mute_off`, with
+`level` (Mujin Music's running estimate, 0-100), `step` and `muted`.
+
+```yaml
+automation:
+  - alias: Hi-Fi volume on the amplifier
+    triggers:
+      - trigger: state
+        entity_id: event.hi_fi_volume_request
+    actions:
+      - choose:
+          - conditions: "{{ trigger.to_state.attributes.event_type == 'volume_up' }}"
+            sequence:
+              - action: remote.send_command
+                target:
+                  entity_id: remote.living_room_ir
+                data:
+                  device: amplifier
+                  command: volume_up
+          - conditions: "{{ trigger.to_state.attributes.event_type == 'volume_down' }}"
+            sequence:
+              - action: remote.send_command
+                target:
+                  entity_id: remote.living_room_ir
+                data:
+                  device: amplifier
+                  command: volume_down
+```
 
 Updates are pushed by the server the moment anything changes; a slow
 fallback poll only keeps positions honest if the event stream drops.

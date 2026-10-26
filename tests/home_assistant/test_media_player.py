@@ -45,17 +45,20 @@ from homeassistant.const import (
     SERVICE_MEDIA_STOP,
     SERVICE_REPEAT_SET,
     SERVICE_SHUFFLE_SET,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
     SERVICE_VOLUME_DOWN,
     SERVICE_VOLUME_MUTE,
     SERVICE_VOLUME_SET,
     SERVICE_VOLUME_UP,
     STATE_IDLE,
+    STATE_OFF,
     STATE_PAUSED,
     STATE_PLAYING,
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
@@ -281,6 +284,8 @@ async def test_play_media_by_id_search_and_enqueue(
         KITCHEN,
         **{ATTR_MEDIA_CONTENT_TYPE: "album", ATTR_MEDIA_CONTENT_ID: "album:album-nocturnes"},
     )
+    await settle(hass)
+    assert hass.states.get(KITCHEN).attributes["queue_size"] == 3
     await call(
         hass,
         SERVICE_PLAY_MEDIA,
@@ -291,6 +296,15 @@ async def test_play_media_by_id_search_and_enqueue(
             ATTR_MEDIA_ENQUEUE: MediaPlayerEnqueue.NEXT,
         },
     )
+    # Play next goes right after the playing track and keeps the rest.
+    await settle(hass)
+    assert fake_server.zones["sonos:RINCON_KITCHEN"]["queue"]["song_ids"] == [
+        "noc-1",
+        "noc-2",
+        "noc-2",
+        "noc-3",
+    ]
+    assert hass.states.get(KITCHEN).attributes["queue_size"] == 4
     await call(
         hass,
         SERVICE_PLAY_MEDIA,
@@ -316,13 +330,27 @@ async def test_play_media_by_id_search_and_enqueue(
     await settle(hass)
     assert hass.states.get(KITCHEN).state == STATE_PLAYING
 
-    with pytest.raises(HomeAssistantError, match="zone not found"):
+    # Text that matches nothing is a clear validation error, not a failure
+    # (and never "zone not found": the zone is fine).
+    with pytest.raises(ServiceValidationError) as missing:
         await call(
             hass,
             SERVICE_PLAY_MEDIA,
             KITCHEN,
             **{ATTR_MEDIA_CONTENT_TYPE: "music", ATTR_MEDIA_CONTENT_ID: "nothing like this"},
         )
+    assert missing.value.translation_key == "media_not_found"
+    assert missing.value.translation_placeholders == {"query": "nothing like this"}
+    assert "zone" not in str(missing.value).lower()
+    with pytest.raises(ServiceValidationError) as gone:
+        await call(
+            hass,
+            SERVICE_PLAY_MEDIA,
+            KITCHEN,
+            **{ATTR_MEDIA_CONTENT_TYPE: "album", ATTR_MEDIA_CONTENT_ID: "album:gone"},
+        )
+    assert gone.value.translation_key == "item_not_found"
+    assert hass.states.get(KITCHEN).state == STATE_PLAYING
     with pytest.raises(HomeAssistantError):
         await call(
             hass,
@@ -508,3 +536,83 @@ async def test_unload_closes_the_event_stream(
     assert await hass.config_entries.async_unload(config_entry.entry_id)
     await settle(hass)
     assert fake_server.sockets == []
+
+
+HIFI = "media_player.hi_fi"
+HIFI_VOLUME = "event.hi_fi_volume_request"
+
+
+async def test_turn_off_puts_a_zone_in_standby_and_turn_on_wakes_it(
+    hass: HomeAssistant, fake_server: FakeMujinServer, loaded_entry: MockConfigEntry
+) -> None:
+    features = MediaPlayerEntityFeature(hass.states.get(HIFI).attributes["supported_features"])
+    assert MediaPlayerEntityFeature.TURN_OFF in features
+    assert MediaPlayerEntityFeature.TURN_ON in features
+    await call(hass, SERVICE_TURN_OFF, HIFI)
+    await settle(hass)
+    assert hass.states.get(HIFI).state == STATE_OFF
+    await call(hass, SERVICE_TURN_ON, HIFI)
+    await settle(hass)
+    assert hass.states.get(HIFI).state == STATE_IDLE
+    assert fake_server.calls_to("/device:hifi-dac/commands") == [
+        {"command": "standby"},
+        {"command": "wake"},
+    ]
+    # Only zones that can release their device offer it.
+    studio = MediaPlayerEntityFeature(hass.states.get(STUDIO).attributes["supported_features"])
+    assert MediaPlayerEntityFeature.TURN_OFF not in studio
+    assert MediaPlayerEntityFeature.TURN_ON not in studio
+
+
+async def test_volume_handed_to_home_assistant_fires_volume_request_events(
+    hass: HomeAssistant, fake_server: FakeMujinServer, loaded_entry: MockConfigEntry
+) -> None:
+    # Only the zone that hands its volume over gets the event entity, on
+    # the same device as its media player.
+    assert hass.states.get("event.studio_volume_request") is None
+    state = hass.states.get(HIFI_VOLUME)
+    assert state is not None, sorted(hass.states.async_entity_ids())
+    assert state.attributes["event_types"] == [
+        "volume_up",
+        "volume_down",
+        "volume_set",
+        "mute_on",
+        "mute_off",
+    ]
+    registry = er.async_get(hass)
+    assert (
+        registry.async_get(HIFI_VOLUME).device_id
+        == registry.async_get(HIFI).device_id
+    )
+
+    fired: list[tuple[str, int, int]] = []
+
+    async def record(step: str) -> None:
+        await settle(hass)
+        event = hass.states.get(HIFI_VOLUME)
+        fired.append((event.attributes["event_type"], event.attributes["step"], event.attributes["level"]))
+        assert step == event.attributes["event_type"]
+
+    await call(hass, SERVICE_VOLUME_UP, HIFI)
+    await record("volume_up")
+    await call(hass, SERVICE_VOLUME_DOWN, HIFI)
+    await record("volume_down")
+    await call(hass, SERVICE_VOLUME_SET, HIFI, **{ATTR_MEDIA_VOLUME_LEVEL: 0.3})
+    await record("volume_set")
+    await call(hass, SERVICE_VOLUME_MUTE, HIFI, **{ATTR_MEDIA_VOLUME_MUTED: True})
+    await record("mute_on")
+    assert fired == [
+        ("volume_up", 4, 54),
+        ("volume_down", 4, 50),
+        ("volume_set", 0, 30),
+        ("mute_on", 0, 30),
+    ]
+    # The player shows Parson's running estimate.
+    assert hass.states.get(HIFI).attributes[ATTR_MEDIA_VOLUME_LEVEL] == 0.3
+
+    # Handing the volume back to Parson: the entity stays (for automations)
+    # but is unavailable.
+    fake_server.zones["device:hifi-dac"]["volume"]["control"] = "parson"
+    await fake_server.push()
+    await settle(hass)
+    assert hass.states.get(HIFI_VOLUME).state == STATE_UNAVAILABLE

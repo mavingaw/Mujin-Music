@@ -18,5 +18,12 @@
     "pause_all": {
       "service": "mdi:pause-circle"
     }
+  },
+  "entity": {
+    "event": {
+      "volume_request": {
+        "default": "mdi:volume-source"
+      }
+    }
   }
 }

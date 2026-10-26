@@ -2547,3 +2547,160 @@ async fn bridge_zone_carries_on_after_ungrouping_mid_track_and_stays_controllabl
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[actix_web::test]
+async fn audio_device_standby_releases_the_dac_and_play_wakes_it_where_it_stopped() {
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg not installed; skipping");
+        return;
+    }
+    let directory = std::env::temp_dir().join(format!("parson-standby-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let long = tone(&directory, "long", "flac", 44_100, 20.0);
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle
+        .set_ready(library(vec![song(
+            "song-long",
+            &long,
+            20.0,
+            "flac",
+            44_100,
+            Some(16),
+        )]))
+        .await;
+    let cache = lifecycle.cache().await.expect("cache");
+    // Real time, so the track is still playing when standby comes.
+    let backend = Arc::new(SimulatedBackend::with_default_devices(1.0));
+    let devices = Arc::new(DeviceManager::new(backend.clone(), None));
+    let service = ZoneService::new(None, None);
+    service.set_outputs(Arc::new(Outputs {
+        upnp: None,
+        devices: Some(devices),
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+    let dac = "device:sim-usb-dac";
+    assert!(zone(&service, &cache, dac).capabilities.standby);
+
+    service
+        .command(
+            USER,
+            dac,
+            ZoneCommand::Load {
+                song_ids: ids(&["song-long"]),
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("play");
+    assert!(
+        drive_until(&service, |service| {
+            let zone = zone(service, &cache, dac);
+            zone.status == ZoneStatus::Playing && zone.position_ms >= 500
+        })
+        .await
+    );
+    service
+        .command(USER, dac, ZoneCommand::Standby, Some(&cache))
+        .await
+        .expect("standby");
+    assert!(
+        drive_until(&service, |service| zone(service, &cache, dac).status
+            == ZoneStatus::Standby)
+        .await
+    );
+    // The device thread closes the stream right after; then nothing flows.
+    let mut parked = backend.capture("sim-usb-dac").bytes.len();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = backend.capture("sim-usb-dac").bytes.len();
+        if now == parked {
+            break;
+        }
+        parked = now;
+    }
+    for tick in 0..10 {
+        service.drive_hosted(10_000 + tick).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let standby = zone(&service, &cache, dac);
+    assert_eq!(standby.status, ZoneStatus::Standby, "stays off");
+    assert_eq!(standby.queue.song_ids, ids(&["song-long"]), "queue kept");
+    assert_eq!(
+        backend.capture("sim-usb-dac").bytes.len(),
+        parked,
+        "the DAC gets nothing in standby"
+    );
+
+    // Wake leaves standby without playing; play resumes the track.
+    service
+        .command(USER, dac, ZoneCommand::Wake, Some(&cache))
+        .await
+        .expect("wake");
+    assert_ne!(zone(&service, &cache, dac).status, ZoneStatus::Standby);
+    assert_ne!(zone(&service, &cache, dac).status, ZoneStatus::Playing);
+    service
+        .command(USER, dac, ZoneCommand::Standby, Some(&cache))
+        .await
+        .expect("standby again");
+    service
+        .command(USER, dac, ZoneCommand::Play, Some(&cache))
+        .await
+        .expect("play wakes the zone");
+    assert!(
+        drive_until(&service, |service| {
+            let zone = zone(service, &cache, dac);
+            zone.status == ZoneStatus::Playing && zone.position_ms >= 500
+        })
+        .await,
+        "plays again from where standby left it"
+    );
+    assert!(backend.capture("sim-usb-dac").bytes.len() > parked);
+
+    // Shared zones: Home Assistant volume requests go to every account.
+    service
+        .update_settings(
+            USER,
+            dac,
+            ZoneSettingsPatch {
+                volume_control: Some(VolumeControl::HomeAssistant),
+                ..ZoneSettingsPatch::default()
+            },
+            Viewer::default(),
+            Some(&cache),
+        )
+        .await
+        .expect("hand the volume to Home Assistant");
+    let mut events = service.subscribe();
+    service
+        .command(
+            USER,
+            dac,
+            ZoneCommand::AdjustVolume {
+                delta: -2,
+                member_id: None,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("volume down");
+    match events.try_recv() {
+        Ok(ZoneEvent::VolumeRequest { user_id, request }) => {
+            assert_eq!(user_id, None);
+            assert_eq!(
+                (request.zone_id.as_str(), request.action),
+                (dac, "volume_down")
+            );
+        }
+        other => panic!("expected a volume request, got {other:?}"),
+    }
+    assert_eq!(
+        backend.capture("sim-usb-dac").volume_db,
+        None,
+        "the DAC's own volume stays untouched"
+    );
+    std::fs::remove_dir_all(&directory).ok();
+}

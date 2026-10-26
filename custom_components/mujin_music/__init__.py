@@ -22,7 +22,7 @@ from .const import (
 )
 from .coordinator import MujinMusicConfigEntry, MujinMusicCoordinator
 
-PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER]
+PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.EVENT]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 

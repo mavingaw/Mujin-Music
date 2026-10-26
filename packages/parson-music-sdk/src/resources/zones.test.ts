@@ -21,6 +21,7 @@ import {
   zoneSettingsDraft,
   zoneSettingsPatch,
   zoneSettingsProblem,
+  zoneStatusLabel,
   zoneSliderMax,
   isEditableQueueItem,
   nextRepeatMode,
@@ -618,6 +619,23 @@ test("DSP summaries match the server and only changed DSP is saved", () => {
     volume_mode: "fixed",
     max_sample_rate: 96_000,
   });
+});
+
+test("Home Assistant volume control and standby read and save", () => {
+  const amp = zone({
+    id: "device:dac",
+    kind: "device",
+    status: "standby",
+    source: "parson",
+    settings: settingsView({ volume_control: "home_assistant" }),
+  });
+  expect(zoneStatusLabel(amp)).toBe("Standby");
+  const initial = zoneSettingsDraft(amp);
+  expect(initial.volume_control).toBe("home_assistant");
+  expect(
+    zoneSettingsPatch(initial, { ...initial, volume_control: "parson" }),
+  ).toEqual({ volume_control: "parson" });
+  expect(zoneSettingsDraft(zone({})).volume_control).toBe("parson");
 });
 
 test("pause all and output discovery call the zone API", async () => {

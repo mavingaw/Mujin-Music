@@ -429,6 +429,20 @@ impl ZoneService {
         };
         let need_cache = || cache.ok_or(ZoneError::Unsupported("library_not_ready"));
         let device = ZoneError::Device;
+        if matches!(
+            command,
+            ZoneCommand::Load { .. }
+                | ZoneCommand::Play
+                | ZoneCommand::PlayPause
+                | ZoneCommand::Next
+                | ZoneCommand::Previous
+                | ZoneCommand::Jump { .. }
+                | ZoneCommand::Wake
+        ) && self.lock().standby.remove(zone_id)
+        {
+            // Playing wakes the zone; it resumes where standby left it.
+            self.changed(None);
+        }
         let result = match command {
             ZoneCommand::Load {
                 song_ids,
@@ -517,6 +531,21 @@ impl ZoneService {
                 }
                 renderer.stop().await.map_err(device)
             }
+            ZoneCommand::Standby => {
+                // Stopping releases the device (a DAC can sleep, another app
+                // can use it); the queue and position stay for waking up.
+                let position = renderer.state().position_ms;
+                {
+                    let mut state = self.lock();
+                    if let Some(queue) = state.hosted.get_mut(zone_id) {
+                        queue.desired = Desired::Stopped;
+                        queue.resume_ms = position;
+                    }
+                    state.standby.insert(zone_id.to_string());
+                }
+                renderer.stop().await.map_err(device)
+            }
+            ZoneCommand::Wake => Ok(()),
             ZoneCommand::Seek { position_ms } => {
                 if let Some(queue) = self.lock().hosted.get_mut(zone_id) {
                     queue.resume_ms = position_ms;
@@ -898,6 +927,7 @@ fn hosted_zone_view(
             exclusive: info.exclusive_capable,
             volume_modes: info.volume_modes.clone(),
             max_format: true,
+            volume_control: true,
         },
         setting_notes,
     );
@@ -966,6 +996,7 @@ fn hosted_zone_view(
             group: !settings.private,
             transfer_target: renderer_state.reachable,
             sleep_timer: true,
+            standby: true,
         },
         sleep_timer: sleep_view(state, &id),
         settings: view_settings,

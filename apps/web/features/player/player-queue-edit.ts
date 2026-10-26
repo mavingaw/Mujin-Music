@@ -16,6 +16,19 @@ export function removeUpcomingItem<T>(
   return items.filter((_, position) => position !== index);
 }
 
+/**
+ * "Play next": `additions` go right after the current track and every item
+ * already queued keeps its place after them.
+ */
+export function insertAfterCurrent<T>(
+  items: readonly T[],
+  current: number,
+  additions: readonly T[],
+): T[] {
+  const at = Math.min(Math.max(0, current + 1), items.length);
+  return [...items.slice(0, at), ...additions, ...items.slice(at)];
+}
+
 /** Keeps history and the current track; drops everything after it. */
 export function clearUpcomingItems<T>(items: readonly T[], current: number) {
   return items.slice(0, Math.max(0, current + 1));

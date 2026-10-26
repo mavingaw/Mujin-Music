@@ -2,7 +2,8 @@
 
 It keeps zones in memory, applies commands the way the server does (enough
 for the integration to see the effect), checks bearer tokens, rotates
-single-use refresh tokens and pushes `zones_changed` over the event stream.
+single-use refresh tokens and pushes `zones_changed` over the event stream,
+plus `volume_request` for zones whose volume Home Assistant carries out.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ def _zone(
     status: str = "idle",
     volume: int = 30,
     song: dict[str, Any] | None = None,
+    standby: bool = False,
+    volume_control: str = "parson",
 ) -> dict[str, Any]:
     return {
         "id": zone_id,
@@ -55,6 +58,7 @@ def _zone(
             "device_min": 0,
             "device_max": 100,
             "step": 4,
+            "control": volume_control,
         },
         "group": None,
         "grouped_into": None,
@@ -70,6 +74,7 @@ def _zone(
             "group": True,
             "transfer_target": True,
             "sleep_timer": True,
+            "standby": standby,
         },
         "sleep_timer": None,
         "settings": {},
@@ -211,6 +216,15 @@ class FakeMujinServer:
             ),
             "sonos:RINCON_KITCHEN": _zone("sonos:RINCON_KITCHEN", "Kitchen", "sonos"),
             "sonos:RINCON_PATIO": _zone("sonos:RINCON_PATIO", "Patio", "sonos"),
+            # A DAC on the server feeding an amplifier Home Assistant controls.
+            "device:hifi-dac": _zone(
+                "device:hifi-dac",
+                "Hi-Fi",
+                "device",
+                volume=50,
+                standby=True,
+                volume_control="home_assistant",
+            ),
         }
         self.server: TestServer | None = None
 
@@ -270,10 +284,10 @@ class FakeMujinServer:
     def calls_to(self, suffix: str) -> list[Any]:
         return [body for _, path, body in self.calls if path.endswith(suffix)]
 
-    async def push(self) -> None:
+    async def push(self, event: dict[str, Any] | None = None) -> None:
         for socket in list(self.sockets):
             if not socket.closed:
-                await socket.send_json({"type": "zones_changed"})
+                await socket.send_json(event or {"type": "zones_changed"})
 
     # Routes --------------------------------------------------------------
 
@@ -366,7 +380,43 @@ class FakeMujinServer:
         target = zone
         if member := body.get("member_id"):
             target = next(m for m in zone["group"]["members"] if m["id"] == member)
-        if command == "play":
+        volume = target["volume"]
+        if volume.get("control") == "home_assistant" and command in (
+            "set_volume",
+            "adjust_volume",
+            "set_mute",
+        ):
+            # Like the server: nothing changes on the device, the request
+            # goes out as an event and the level is a running estimate.
+            step = 0
+            if command == "set_volume":
+                action, volume["level"] = "volume_set", body["volume"]
+            elif command == "adjust_volume":
+                action = "volume_up" if body["delta"] >= 0 else "volume_down"
+                step = abs(body["delta"])
+                volume["level"] = max(0, min(100, volume["level"] + body["delta"]))
+            else:
+                volume["muted"] = body["muted"]
+                action = "mute_on" if body["muted"] else "mute_off"
+            await self.push(
+                {
+                    "type": "volume_request",
+                    "zone_id": target["id"],
+                    "action": action,
+                    "step": step,
+                    "level": volume["level"],
+                    "muted": volume["muted"],
+                }
+            )
+            await self.push()
+            return web.json_response({"accepted": True}, status=202)
+        if command in ("standby", "wake") and not zone["capabilities"].get("standby"):
+            return web.json_response({"error": "zone_has_no_standby"}, status=409)
+        if command == "standby":
+            zone["status"] = "standby"
+        elif command == "wake":
+            zone["status"] = "stopped"
+        elif command == "play":
             zone["status"] = "playing"
         elif command == "pause":
             zone["status"] = "paused"
@@ -493,12 +543,25 @@ class FakeMujinServer:
         if not self._authorized(request):
             return self._unauthorized()
         body = await self._record(request)
-        if body.get("query") == "nothing like this":
+        zone = self.zones.get(request.match_info["zone_id"])
+        if zone is None:
             return web.json_response({"error": "zone_not_found"}, status=404)
-        zone = self.zones[request.match_info["zone_id"]]
-        zone["status"] = "playing"
-        zone["now_playing"] = dict(NOCTURNE)
-        zone["source"] = "parson"
+        if body.get("query") == "nothing like this":
+            return web.json_response({"error": "no_library_match"}, status=404)
+        if body.get("item") == "album:gone":
+            return web.json_response({"error": "item_not_found"}, status=404)
+        # The songs an item stands for, queued the way the server does.
+        songs = ["noc-2"] if body.get("item") == "song:noc-2" else ["noc-1", "noc-2", "noc-3"]
+        queue = zone["queue"]
+        action = body.get("action", "play")
+        if action in ("next", "add") and queue["song_ids"]:
+            at = queue["current_position"] + 1 if action == "next" else len(queue["song_ids"])
+            queue["song_ids"][at:at] = songs
+        else:
+            zone["queue"] = {"song_ids": songs, "current_position": 0}
+            zone["status"] = "playing"
+            zone["now_playing"] = dict(NOCTURNE)
+            zone["source"] = "parson"
         await self.push()
         return web.json_response(
             {
@@ -563,7 +626,7 @@ class FakeMujinServer:
             )
         item = request.query.get("item", "root")
         if item not in BROWSE:
-            return web.json_response({"error": "zone_not_found"}, status=404)
+            return web.json_response({"error": "item_not_found"}, status=404)
         page = BROWSE[item]
         return web.json_response({**page, "total": len(page["children"])})
 

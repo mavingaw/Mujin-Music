@@ -22,6 +22,7 @@ import {
   type ZoneDsp,
   type ZoneLevelingMode,
   type ZoneSettingsDraft,
+  type ZoneVolumeControl,
   type ZoneVolumeMode,
 } from "@parson/music-sdk";
 import { Lock, RotateCcw } from "lucide-react";
@@ -80,6 +81,9 @@ export function errorText(error: unknown, fallback: string): string {
     volume_mode_not_supported_here: "This zone cannot use that volume mode.",
     max_format_not_supported_here:
       "This zone does not take a maximum sample rate.",
+    volume_control_not_supported_here:
+      "This zone's volume cannot be handed to Home Assistant.",
+    zone_has_no_standby: "This zone has no standby.",
     fixed_volume:
       "This zone has fixed volume. Change it on the amplifier, or pick another volume mode in Device setup.",
   };
@@ -432,6 +436,35 @@ function ZoneSettingsForm({
                 </span>
               </div>
             </div>
+          </Section>
+        )}
+
+        {supports.volume_control && (
+          <Section title="Home Assistant">
+            <Row label="Volume handled by">
+              <Select
+                onValueChange={(value) =>
+                  update({ volume_control: value as ZoneVolumeControl })
+                }
+                value={draft.volume_control}
+              >
+                <SelectTrigger
+                  aria-label="Volume handled by"
+                  className="h-9 w-48"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="parson">Parson</SelectItem>
+                  <SelectItem value="home_assistant">Home Assistant</SelectItem>
+                </SelectContent>
+              </Select>
+            </Row>
+            <p className="text-[11px] leading-4 text-zinc-500">
+              {draft.volume_control === "home_assistant"
+                ? "Volume up, down, set and mute go to Home Assistant as events on this zone's volume request entity; an automation carries them out, for example on an amplifier with an IR blaster. Parson leaves the audio at full level."
+                : "Parson sets the volume itself. Hand it to Home Assistant when an amplifier Parson cannot reach should follow the volume controls."}
+            </p>
           </Section>
         )}
 

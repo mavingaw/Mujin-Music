@@ -98,6 +98,7 @@ import {
 } from "./radio-queue";
 import {
   clearUpcomingItems,
+  insertAfterCurrent,
   removeUpcomingItem as removeUpcomingQueueItem,
   shuffleUpcomingItems,
   unshuffleUpcomingItems,
@@ -391,10 +392,6 @@ export function usePlayerController() {
         return;
       }
       const additions = manualQueueItems(items);
-      const insertionIndex = Math.min(
-        index.current + 1,
-        queueRef.current.length,
-      );
       if (originalOrder.current) {
         const currentId = queueRef.current[index.current]?.song.id;
         const at =
@@ -407,11 +404,11 @@ export function usePlayerController() {
           ...originalOrder.current.slice(at),
         ];
       }
-      const next = [
-        ...queueRef.current.slice(0, insertionIndex),
-        ...additions,
-        ...queueRef.current.slice(insertionIndex),
-      ];
+      const next = insertAfterCurrent(
+        queueRef.current,
+        index.current,
+        additions,
+      );
       queueRef.current = next;
       persistedQueue.current = null;
       storeQueue(null);

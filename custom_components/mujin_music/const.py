@@ -45,3 +45,19 @@ ATTR_DESTINATION: Final = "destination"
 ATTR_MINUTES: Final = "minutes"
 
 SEARCH_KINDS: Final = ("artist", "album", "song", "playlist", "genre")
+
+# A zone whose volume Home Assistant carries out (set in the Mujin Music
+# app): the server sends each change as a `volume_request` event.
+VOLUME_CONTROL_HOME_ASSISTANT: Final = "home_assistant"
+VOLUME_REQUEST_EVENT_TYPES: Final = (
+    "volume_up",
+    "volume_down",
+    "volume_set",
+    "mute_on",
+    "mute_off",
+)
+
+
+def volume_request_signal(entry_id: str) -> str:
+    """Dispatcher signal for one server's volume requests."""
+    return f"{DOMAIN}_volume_request_{entry_id}"

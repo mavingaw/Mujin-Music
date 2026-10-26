@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
+import json
+from pathlib import Path
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -165,3 +167,20 @@ async def test_reauth_with_pairing_updates_tokens(
     assert config_entry.data[CONF_ACCESS_TOKEN] == fake_server.access_token
     await hass.async_block_till_done()
     assert await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+def test_pairing_points_to_the_screen_the_app_really_has() -> None:
+    """The pair step names Settings → Home Assistant and its Approve button,
+    which must exist in the app (the web app, also inside the desktop app)."""
+    repository = Path(__file__).resolve().parents[2]
+    integration = repository / "custom_components" / "mujin_music"
+    for strings in (integration / "strings.json", integration / "translations" / "en.json"):
+        description = json.loads(strings.read_text())["config"]["step"]["pair"]["description"]
+        assert "**Settings → Home Assistant**" in description
+        assert "**Approve Home Assistant**" in description
+        assert "**Approve**" in description
+    settings_page = (repository / "apps/web/app/(app)/settings/page.tsx").read_text()
+    assert '"home-assistant": "Home Assistant"' in settings_page
+    panel = (repository / "apps/web/features/settings/home-assistant-settings.tsx").read_text()
+    assert 'title="Approve Home Assistant"' in panel
+    assert '"Approve"' in panel

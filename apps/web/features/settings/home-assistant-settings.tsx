@@ -24,9 +24,11 @@ import {
   House,
   Library,
   Loader2,
+  Power,
   Radio,
   Speaker,
   TriangleAlert,
+  Volume2,
   Zap,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
@@ -62,6 +64,16 @@ const FEATURES: { icon: ReactNode; title: string; text: string }[] = [
     icon: <AudioWaveform className="h-4 w-4" />,
     title: "Signal path",
     text: "Format, output and a bit-perfect flag ride along as player attributes.",
+  },
+  {
+    icon: <Power className="h-4 w-4" />,
+    title: "Standby",
+    text: "Turning off a device zone stops it and lets the device go; turning on wakes it.",
+  },
+  {
+    icon: <Volume2 className="h-4 w-4" />,
+    title: "Volume on your amplifier",
+    text: "Set a zone's volume to be handled by Home Assistant: each change becomes an event an automation can send to an IR-controlled amplifier.",
   },
 ];
 

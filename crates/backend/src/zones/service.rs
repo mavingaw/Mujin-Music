@@ -50,6 +50,12 @@ pub enum ZoneEvent {
         seq: u64,
         command: ZoneCommand,
     },
+    /// A volume change for a zone whose volume Home Assistant controls.
+    /// `None` means every user (shared rooms and devices).
+    VolumeRequest {
+        user_id: Option<i32>,
+        request: VolumeRequest,
+    },
 }
 
 /// What a client reports about itself.
@@ -117,6 +123,8 @@ pub struct ZoneSettings {
     pub exclusive: bool,
     /// Server-driven zones: `None` uses the device's best mode.
     pub volume_mode: Option<VolumeMode>,
+    /// Who carries out volume changes.
+    pub volume_control: VolumeControl,
     /// Device setup: highest sample rate and bit depth to send.
     pub max_sample_rate: Option<u32>,
     pub max_bit_depth: Option<u8>,
@@ -138,6 +146,7 @@ impl Default for ZoneSettings {
             dsp: ZoneDsp::default(),
             exclusive: true,
             volume_mode: None,
+            volume_control: VolumeControl::Parson,
             max_sample_rate: None,
             max_bit_depth: None,
         }
@@ -205,6 +214,8 @@ pub struct ZoneSettingsPatch {
     pub exclusive: Option<bool>,
     #[serde(default)]
     pub volume_mode: Option<VolumeMode>,
+    #[serde(default)]
+    pub volume_control: Option<VolumeControl>,
     #[serde(default, deserialize_with = "nullable")]
     pub max_sample_rate: Option<Option<u32>>,
     #[serde(default, deserialize_with = "nullable")]
@@ -321,6 +332,9 @@ pub fn apply_settings_patch(
     if let Some(mode) = patch.volume_mode {
         next.volume_mode = Some(mode);
     }
+    if let Some(control) = patch.volume_control {
+        next.volume_control = control;
+    }
     if let Some(rate) = patch.max_sample_rate {
         if let Some(rate) = rate
             && !SAMPLE_RATE_CHOICES.contains(&rate)
@@ -404,6 +418,11 @@ struct State {
     hosted: HashMap<String, hosted::HostedQueue>,
     /// Last published view of each server-driven zone, to notice changes.
     hosted_seen: HashMap<String, String>,
+    /// Server-driven zones switched off with `standby`.
+    standby: std::collections::HashSet<String>,
+    /// Running volume estimate (level, muted) of zones whose volume Home
+    /// Assistant carries out.
+    delegated_volume: HashMap<String, (u8, bool)>,
 }
 
 /// Server-side zones.
@@ -874,6 +893,9 @@ impl ZoneService {
             }
         }
         zones.extend(self.hosted_views(&state, cache, now));
+        for zone in &mut zones {
+            apply_standby_and_volume_control(&state, zone);
+        }
         let mut linked: Vec<(&String, &LinkedGroup)> = state
             .linked
             .iter()
@@ -966,6 +988,7 @@ impl ZoneService {
                 group: !settings.private,
                 transfer_target: true,
                 sleep_timer: true,
+                standby: false,
             },
             sleep_timer: sleep_view(state, id),
             settings: settings_view(
@@ -1175,6 +1198,7 @@ impl ZoneService {
                 group: true,
                 transfer_target: true,
                 sleep_timer: true,
+                standby: false,
             },
             sleep_timer: sleep_view(state, &sonos_zone_id(&group.coordinator)),
             settings: settings_view(
@@ -1290,6 +1314,12 @@ impl ZoneService {
             }
             return first_error.map_or(Ok(()), Err);
         }
+        if let Some(result) = self.delegated_volume_command(user_id, zone_id, &command, cache) {
+            return result;
+        }
+        if matches!(command, ZoneCommand::Standby | ZoneCommand::Wake) && !hosted_zone_id(zone_id) {
+            return Err(ZoneError::Unsupported("zone_has_no_standby"));
+        }
         if let Some(uuid) = zone_id.strip_prefix("sonos:") {
             return self.sonos_command(user_id, uuid, command, cache).await;
         }
@@ -1302,6 +1332,94 @@ impl ZoneService {
             return self.queue_client_command(user_id, zone_id, command);
         }
         Err(ZoneError::NotFound)
+    }
+
+    /// Carries out a volume command for a zone whose volume Home Assistant
+    /// controls: Parson only updates its running estimate and sends the
+    /// request out as an event. `None` when the zone (or the group member
+    /// the command names) keeps its own volume control.
+    fn delegated_volume_command(
+        &self,
+        user_id: i32,
+        zone_id: &str,
+        command: &ZoneCommand,
+        cache: Option<&LibraryCache>,
+    ) -> Option<Result<(), ZoneError>> {
+        let target = command.member_id().unwrap_or(zone_id);
+        let (limits, control) = {
+            let state = self.lock();
+            let settings = state.settings.get(target)?;
+            (settings.limits(), settings.volume_control)
+        };
+        if control == VolumeControl::Parson
+            || !matches!(
+                command,
+                ZoneCommand::SetVolume { .. }
+                    | ZoneCommand::AdjustVolume { .. }
+                    | ZoneCommand::SetMute { .. }
+            )
+        {
+            return None;
+        }
+        let known = self.lock().delegated_volume.get(target).copied();
+        let (level, muted) = match known {
+            Some(current) => current,
+            None => match self
+                .list(user_id, cache)
+                .into_iter()
+                .find(|zone| zone.id == target)
+            {
+                Some(zone) => zone
+                    .volume
+                    .map_or((limits.clamp(50, false, false), false), |volume| {
+                        (volume.level, volume.muted)
+                    }),
+                None => return Some(Err(ZoneError::NotFound)),
+            },
+        };
+        let (action, step, level, muted) = match *command {
+            ZoneCommand::SetVolume {
+                volume,
+                above_comfort,
+                ..
+            } => (
+                "volume_set",
+                0,
+                limits.clamp(i16::from(volume), false, above_comfort),
+                muted,
+            ),
+            ZoneCommand::AdjustVolume { delta, .. } => (
+                if delta >= 0 {
+                    "volume_up"
+                } else {
+                    "volume_down"
+                },
+                delta.unsigned_abs(),
+                limits.clamp(i16::from(level) + i16::from(delta), true, true),
+                muted,
+            ),
+            ZoneCommand::SetMute { muted, .. } => {
+                (if muted { "mute_on" } else { "mute_off" }, 0, level, muted)
+            }
+            _ => return None,
+        };
+        self.lock()
+            .delegated_volume
+            .insert(target.to_string(), (level, muted));
+        // App zones belong to one account; rooms and devices are shared.
+        let scope = (!shared_zone(target)).then_some(user_id);
+        let _ = self.events.send(ZoneEvent::VolumeRequest {
+            user_id: scope,
+            request: VolumeRequest {
+                zone_id: target.to_string(),
+                action,
+                step,
+                level,
+                muted,
+            },
+        });
+        self.changed(scope);
+        Some(Ok(()))
     }
 
     /// Checks a queue edit against the client's last reported queue and
@@ -1419,6 +1537,9 @@ impl ZoneService {
         let zone_id = sonos_zone_id(&coordinator);
         let _ = user_id;
         match command {
+            ZoneCommand::Standby | ZoneCommand::Wake => {
+                Err(ZoneError::Unsupported("zone_has_no_standby"))
+            }
             ZoneCommand::Play => sonos
                 .transport(&coordinator, Transport::Play)
                 .await
@@ -2478,6 +2599,13 @@ impl ZoneService {
         if patch.touches_max_format() && !supports.max_format {
             return Err(ZoneError::Unsupported("max_format_not_supported_here"));
         }
+        if patch
+            .volume_control
+            .is_some_and(|control| control != VolumeControl::Parson)
+            && !supports.volume_control
+        {
+            return Err(ZoneError::Unsupported("volume_control_not_supported_here"));
+        }
         if patch.private.is_some() {
             if !supports.private {
                 return Err(ZoneError::Unsupported("only_parson_apps_can_be_private"));
@@ -2491,6 +2619,10 @@ impl ZoneService {
             let before = state.settings.get(zone_id).cloned().unwrap_or_default();
             let after = apply_settings_patch(&before, &patch, &default_name)?;
             state.settings.insert(zone_id.to_string(), after.clone());
+            if after.volume_control != before.volume_control {
+                // A fresh estimate starts from the zone's level next time.
+                state.delegated_volume.remove(zone_id);
+            }
             if after.private {
                 // A private zone leaves any linked group.
                 for group in state.linked.values_mut() {
@@ -3091,6 +3223,7 @@ fn linked_zone_view(state: &State, id: &str, group: &LinkedGroup, zones: &[Zone]
             group: false,
             transfer_target: true,
             sleep_timer: true,
+            standby: false,
         },
         sleep_timer: sleep_view(state, id),
         settings: settings_view(
@@ -3120,6 +3253,44 @@ fn zone_icon(settings: &ZoneSettings, kind: ZoneKind) -> String {
         .unwrap_or_else(|| default_zone_icon(kind).to_string())
 }
 
+/// Standby and Home Assistant volume control, which work the same on every
+/// kind of zone: the status says standby, and a delegated volume shows
+/// Parson's running estimate instead of a device reading.
+fn apply_standby_and_volume_control(state: &State, zone: &mut Zone) {
+    if state.standby.contains(&zone.id) {
+        zone.status = ZoneStatus::Standby;
+    }
+    zone.settings.supports.volume_control = zone.kind != ZoneKind::Linked;
+    let control = zone.settings.volume_control;
+    if control == VolumeControl::Parson {
+        return;
+    }
+    let limits = state
+        .settings
+        .get(&zone.id)
+        .map(ZoneSettings::limits)
+        .unwrap_or_default();
+    let (level, muted) = state
+        .delegated_volume
+        .get(&zone.id)
+        .copied()
+        .unwrap_or_else(|| delegated_start(zone, limits));
+    let mut volume = ZoneVolume::new(level, muted, limits);
+    volume.control = control;
+    zone.volume = Some(volume);
+    zone.capabilities.volume = true;
+    zone.capabilities.mute = true;
+}
+
+/// Where a delegated volume estimate starts: the zone's own level when it
+/// had one, else the middle of its allowed range.
+fn delegated_start(zone: &Zone, limits: VolumeLimits) -> (u8, bool) {
+    zone.volume.as_ref().map_or_else(
+        || (limits.clamp(50, false, false), false),
+        |volume| (volume.level, volume.muted),
+    )
+}
+
 fn settings_view(
     settings: &ZoneSettings,
     default_name: &str,
@@ -3138,6 +3309,7 @@ fn settings_view(
         dsp: settings.dsp,
         exclusive: settings.exclusive,
         volume_mode: settings.volume_mode.unwrap_or_default(),
+        volume_control: settings.volume_control,
         max_sample_rate: settings.max_sample_rate,
         max_bit_depth: settings.max_bit_depth,
         supports,
@@ -3277,6 +3449,8 @@ struct SettingRow {
     dsp: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
     output: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    volume_control: String,
 }
 
 /// Device setup of a server-driven zone, stored as JSON.
@@ -3296,7 +3470,7 @@ fn load_settings(
     let rows = diesel::sql_query(
         "SELECT zone_id, name, icon, crossfade_seconds, leveling, leveling_target_lufs,
                 leveling_adjustment_db, comfort_volume, safety_min_volume, safety_max_volume,
-                private, dsp, output
+                private, dsp, output, volume_control
          FROM zone_setting",
     )
     .load::<SettingRow>(connection)?;
@@ -3340,6 +3514,7 @@ fn load_settings(
                     dsp,
                     exclusive: output.exclusive.unwrap_or(true),
                     volume_mode: output.volume_mode,
+                    volume_control: VolumeControl::parse(&row.volume_control).unwrap_or_default(),
                     max_sample_rate: output
                         .max_sample_rate
                         .filter(|rate| SAMPLE_RATE_CHOICES.contains(rate)),
@@ -3362,8 +3537,8 @@ fn save_setting(
     diesel::sql_query(
         "INSERT INTO zone_setting (zone_id, name, icon, crossfade_seconds, leveling,
              leveling_target_lufs, leveling_adjustment_db, comfort_volume, safety_min_volume,
-             safety_max_volume, private, dsp, output, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             safety_max_volume, private, dsp, output, volume_control, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
          ON CONFLICT(zone_id) DO UPDATE SET name = excluded.name, icon = excluded.icon,
              crossfade_seconds = excluded.crossfade_seconds, leveling = excluded.leveling,
              leveling_target_lufs = excluded.leveling_target_lufs,
@@ -3372,6 +3547,7 @@ fn save_setting(
              safety_min_volume = excluded.safety_min_volume,
              safety_max_volume = excluded.safety_max_volume, private = excluded.private,
              dsp = excluded.dsp, output = excluded.output,
+             volume_control = excluded.volume_control,
              updated_at = CURRENT_TIMESTAMP",
     )
     .bind::<Text, _>(zone_id)
@@ -3399,6 +3575,7 @@ fn save_setting(
         })
         .ok(),
     )
+    .bind::<Text, _>(settings.volume_control.as_str())
     .execute(connection)?;
     Ok(())
 }

@@ -72,6 +72,9 @@ pub enum ZoneStatus {
     Stopped,
     Idle,
     Unavailable,
+    /// Switched off from a remote (Home Assistant's turn_off): playback
+    /// stopped and the device released; the queue stays for `wake`.
+    Standby,
 }
 
 impl ZoneStatus {
@@ -199,6 +202,53 @@ pub struct ZoneVolume {
     /// dB, a renderer's 0..30 steps).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_range: Option<DeviceVolumeRange>,
+    /// Who turns the volume. Anything but `parson` means the zone's volume
+    /// requests go out as events (for an amplifier on an IR blaster) and
+    /// `level` is Parson's running estimate, not a device reading.
+    pub control: VolumeControl,
+}
+
+/// Who carries out a zone's volume changes (Roon's volume control setting).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeControl {
+    /// Parson sets the device's volume (hardware, software or fixed).
+    #[default]
+    Parson,
+    /// Home Assistant: the server sends each volume request as an event
+    /// that a Home Assistant automation carries out.
+    HomeAssistant,
+}
+
+impl VolumeControl {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Parson => "parson",
+            Self::HomeAssistant => "home_assistant",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "parson" => Some(Self::Parson),
+            "home_assistant" => Some(Self::HomeAssistant),
+            _ => None,
+        }
+    }
+}
+
+/// A volume change for a zone whose volume is delegated: what the listener
+/// asked for, sent out as an event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct VolumeRequest {
+    pub zone_id: String,
+    /// `volume_up`, `volume_down`, `volume_set`, `mute_on` or `mute_off`.
+    pub action: &'static str,
+    /// Size of an up/down step on Parson's 0..=100 scale (0 otherwise).
+    pub step: u8,
+    /// Parson's estimate of the level after the change, 0..=100.
+    pub level: u8,
+    pub muted: bool,
 }
 
 /// A volume scale as the device reports it.
@@ -229,6 +279,7 @@ impl ZoneVolume {
             device_max: 100,
             step: 2,
             device_range: None,
+            control: VolumeControl::Parson,
         }
     }
 }
@@ -309,6 +360,8 @@ pub struct ZoneSettingsSupport {
     pub volume_modes: Vec<VolumeMode>,
     /// A maximum sample rate and bit depth can be set (device setup).
     pub max_format: bool,
+    /// The volume can be handed to Home Assistant.
+    pub volume_control: bool,
 }
 
 /// How a server-driven zone changes volume.
@@ -520,6 +573,7 @@ pub struct ZoneSettingsView {
     pub dsp: ZoneDsp,
     pub exclusive: bool,
     pub volume_mode: VolumeMode,
+    pub volume_control: VolumeControl,
     pub max_sample_rate: Option<u32>,
     pub max_bit_depth: Option<u8>,
     pub supports: ZoneSettingsSupport,
@@ -541,6 +595,7 @@ impl ZoneSettingsView {
             dsp: ZoneDsp::default(),
             exclusive: false,
             volume_mode: VolumeMode::Hardware,
+            volume_control: VolumeControl::Parson,
             max_sample_rate: None,
             max_bit_depth: None,
             supports: ZoneSettingsSupport::default(),
@@ -597,6 +652,8 @@ pub struct ZoneCapabilities {
     /// Can receive a transferred queue.
     pub transfer_target: bool,
     pub sleep_timer: bool,
+    /// Can be put in standby and woken (`standby`, `wake`).
+    pub standby: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -734,6 +791,10 @@ pub enum ZoneCommand {
     SetShuffle {
         enabled: bool,
     },
+    /// Stops playback and releases the device; the queue stays.
+    Standby,
+    /// Leaves standby (paused at the stored position, nothing plays).
+    Wake,
 }
 
 fn default_true() -> bool {
@@ -840,7 +901,11 @@ pub struct PlaybackSnapshot {
 /// Errors surfaced to API callers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZoneError {
+    /// The zone does not exist or is not visible to the caller.
     NotFound,
+    /// Something the request names (an album, a search) is not there; the
+    /// zone itself is fine. The code says what, e.g. `no_library_match`.
+    Missing(&'static str),
     Invalid(&'static str),
     Unsupported(&'static str),
     Device(String),
@@ -850,7 +915,9 @@ impl std::fmt::Display for ZoneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => formatter.write_str("zone_not_found"),
-            Self::Invalid(code) | Self::Unsupported(code) => formatter.write_str(code),
+            Self::Missing(code) | Self::Invalid(code) | Self::Unsupported(code) => {
+                formatter.write_str(code)
+            }
             Self::Device(message) => write!(formatter, "device error: {message}"),
         }
     }

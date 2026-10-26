@@ -108,6 +108,13 @@ export default function PlayerBar() {
   // A remote zone (another device, Sonos, a group) takes over the bar.
   const zones = useZones();
   const remote = zones.remoteZone;
+  // Volume goes through the zone when it is remote, or when this device's
+  // own zone hands its volume to Home Assistant.
+  const volumeZone =
+    remote ??
+    (zones.localZone?.volume?.control === "home_assistant"
+      ? zones.localZone
+      : null);
   const remoteSong = useZoneSong(remote);
   // An edit made from here shows at once, until the zone reports it.
   const [optimistic, setOptimistic] = useState<{
@@ -147,13 +154,13 @@ export default function PlayerBar() {
     : casting
       ? Boolean(cast.session?.playing)
       : isPlaying;
-  const effectiveVolume = remote
-    ? (remote.volume?.level ?? 0) / 100
+  const effectiveVolume = volumeZone
+    ? (volumeZone.volume?.level ?? 0) / 100
     : casting
       ? (cast.session?.volume ?? volume)
       : volume;
-  const effectiveMuted = remote
-    ? Boolean(remote.volume?.muted)
+  const effectiveMuted = volumeZone
+    ? Boolean(volumeZone.volume?.muted)
     : casting
       ? Boolean(cast.session?.muted)
       : muted;
@@ -257,13 +264,17 @@ export default function PlayerBar() {
           }
         }
       : handleTimeChange;
-  const changeVolume = remote
+  const sendVolume = (command: ZoneCommand) => {
+    if (!volumeZone) return;
+    void zones.send(volumeZone.id, command).catch(() => {});
+  };
+  const changeVolume = volumeZone
     ? (value: number | string) => {
         const level = Math.round(Number(value));
         if (Number.isFinite(level)) {
-          sendRemote({
+          sendVolume({
             command: "set_volume",
-            volume: Math.min(remote.volume?.max ?? 100, Math.max(0, level)),
+            volume: Math.min(volumeZone.volume?.max ?? 100, Math.max(0, level)),
           });
         }
       }
@@ -278,8 +289,9 @@ export default function PlayerBar() {
           }
         }
       : setAudioVolume;
-  const toggleOutputMute = remote
-    ? () => sendRemote({ command: "set_mute", muted: !remote.volume?.muted })
+  const toggleOutputMute = volumeZone
+    ? () =>
+        sendVolume({ command: "set_mute", muted: !volumeZone.volume?.muted })
     : casting
       ? () => cast.send({ command: "set_mute", muted: !cast.session?.muted })
       : toggleMute;
