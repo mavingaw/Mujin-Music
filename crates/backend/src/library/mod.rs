@@ -1,6 +1,7 @@
 pub mod artist_names;
 pub mod credits;
 pub(crate) mod discovery;
+pub mod focus;
 pub mod identity;
 pub mod indexer;
 pub mod normalize;

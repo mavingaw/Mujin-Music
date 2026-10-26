@@ -104,6 +104,11 @@ export function CreditsSection({
                 />
                 <Text numberOfLines={1} style={styles.person}>
                   {credit.name}
+                  {credit.credited_as?.length ? (
+                    <Text style={styles.creditedAs}>
+                      {`  as ${credit.credited_as.join(", ")}`}
+                    </Text>
+                  ) : null}
                 </Text>
               </Pressable>
             ))}
@@ -199,6 +204,7 @@ export function NoteBlock({
 }
 
 const styles = StyleSheet.create({
+  creditedAs: { color: palette.muted, fontSize: 13, fontWeight: "400" },
   block: { paddingHorizontal: 20, gap: 8 },
   body: { color: "#d4d4d8", fontSize: 15, lineHeight: 23 },
   placeholder: { color: palette.muted, fontSize: 15, lineHeight: 23 },

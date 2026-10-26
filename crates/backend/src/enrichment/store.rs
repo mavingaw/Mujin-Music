@@ -864,6 +864,126 @@ pub fn linked_artist_mbids(
     .collect())
 }
 
+/// A name a MusicBrainz person is known by.
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct AliasRow {
+    #[diesel(sql_type = Text)]
+    pub mbid: String,
+    #[diesel(sql_type = Text)]
+    pub normalized_name: String,
+    #[diesel(sql_type = Text)]
+    pub name: String,
+    /// `name` (their MusicBrainz name), `credit` (a release credits them so)
+    /// or `alias` (a MusicBrainz alias).
+    #[diesel(sql_type = Text)]
+    pub kind: String,
+}
+
+/// Remembers names a MusicBrainz person is known by. A person's own name
+/// replaces a weaker kind stored for the same spelling.
+pub fn save_aliases(connection: &mut SqliteConnection, aliases: &[AliasRow]) -> QueryResult<()> {
+    for alias in aliases {
+        if alias.normalized_name.is_empty() || alias.mbid.len() != 36 {
+            continue;
+        }
+        diesel::sql_query(
+            "INSERT INTO person_alias (mbid, normalized_name, name, kind) VALUES (?, ?, ?, ?)
+             ON CONFLICT(mbid, normalized_name) DO UPDATE SET
+                 name = CASE WHEN excluded.kind = 'name' THEN excluded.name ELSE person_alias.name END,
+                 kind = CASE WHEN excluded.kind = 'name' OR person_alias.kind = 'name'
+                             THEN 'name' ELSE person_alias.kind END",
+        )
+        .bind::<Text, _>(&alias.mbid)
+        .bind::<Text, _>(&alias.normalized_name)
+        .bind::<Text, _>(&alias.name)
+        .bind::<Text, _>(&alias.kind)
+        .execute(connection)?;
+    }
+    Ok(())
+}
+
+pub fn load_aliases(connection: &mut SqliteConnection) -> QueryResult<Vec<AliasRow>> {
+    diesel::sql_query(
+        "SELECT mbid, normalized_name, name, kind FROM person_alias ORDER BY mbid, normalized_name",
+    )
+    .load::<AliasRow>(connection)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct PersonLinkRow {
+    #[diesel(sql_type = Text)]
+    pub artist_id: String,
+    #[diesel(sql_type = Text)]
+    pub mbid: String,
+}
+
+/// Every local person with a MusicBrainz id: ids MusicBrainz releases
+/// linked, ids resolved for an artist page, and ids tagged on tracks with a
+/// single primary artist.
+pub fn person_links(connection: &mut SqliteConnection) -> QueryResult<Vec<PersonLinkRow>> {
+    diesel::sql_query(
+        "SELECT entity_id AS artist_id, external_id AS mbid FROM external_id
+         WHERE entity_type = 'artist' AND provider = 'musicbrainz' AND length(external_id) = 36
+         UNION
+         SELECT entity_id AS artist_id, musicbrainz_id AS mbid FROM editorial_profile
+         WHERE entity_type = 'artist' AND entity_id NOT LIKE 'mb:%'
+           AND length(musicbrainz_id) = 36
+         UNION
+         SELECT ta.artist_id AS artist_id, rfm.musicbrainz_artist_id AS mbid
+         FROM track_artist ta
+         JOIN track_file tf ON tf.track_id = ta.track_id
+         JOIN raw_file_metadata rfm ON rfm.file_id = tf.file_id
+         WHERE ta.role = 'primary' AND length(rfm.musicbrainz_artist_id) = 36
+           AND (SELECT count(*) FROM track_artist other
+                WHERE other.track_id = ta.track_id AND other.role = 'primary') = 1
+         LIMIT 50000",
+    )
+    .load::<PersonLinkRow>(connection)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, QueryableByName)]
+pub struct CreditNameRow {
+    #[diesel(sql_type = Text)]
+    pub album_id: String,
+    #[diesel(sql_type = Text)]
+    pub normalized_name: String,
+    #[diesel(sql_type = Text)]
+    pub mbid: String,
+}
+
+/// Which MusicBrainz person each name credited on an album is.
+pub fn credited_names(connection: &mut SqliteConnection) -> QueryResult<Vec<CreditNameRow>> {
+    diesel::sql_query(
+        "SELECT DISTINCT album_id, normalized_name, source_artist_id AS mbid
+         FROM enriched_credit WHERE length(source_artist_id) = 36 LIMIT 200000",
+    )
+    .load::<CreditNameRow>(connection)
+}
+
+/// External credits for any of several names or MusicBrainz ids.
+pub fn people_credits(
+    connection: &mut SqliteConnection,
+    normalized_names: &[String],
+    mbids: &[String],
+) -> QueryResult<Vec<CreditRow>> {
+    let mut rows: Vec<CreditRow> = Vec::new();
+    for name in normalized_names.iter().take(16) {
+        for row in person_credits(connection, Some(name), None)? {
+            if !rows.contains(&row) {
+                rows.push(row);
+            }
+        }
+    }
+    for mbid in mbids.iter().take(16) {
+        for row in person_credits(connection, None, Some(mbid))? {
+            if !rows.contains(&row) {
+                rows.push(row);
+            }
+        }
+    }
+    Ok(rows)
+}
+
 pub fn artist_name(
     connection: &mut SqliteConnection,
     artist_id: &str,
@@ -1279,6 +1399,90 @@ mod tests {
     use super::*;
     use crate::persistence::connection::migrated_memory_pool;
     use diesel::connection::SimpleConnection;
+
+    #[test]
+    fn aliases_keep_a_persons_own_name_over_a_credit() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        let mbid = "7a9b2c5a-4e7e-4b8c-9c7a-1d2e3f4a5b6c";
+        let alias = |name: &str, kind: &str| AliasRow {
+            mbid: mbid.into(),
+            normalized_name: crate::library::identity::normalize_artist_identity(name),
+            name: name.into(),
+            kind: kind.into(),
+        };
+        save_aliases(
+            &mut connection,
+            &[alias("Jonathan Davis", "credit"), alias("Q-Tip", "credit")],
+        )
+        .unwrap();
+        save_aliases(&mut connection, &[alias("Q-Tip", "name")]).unwrap();
+        // A later credit does not demote their own name.
+        save_aliases(&mut connection, &[alias("Q-Tip", "credit")]).unwrap();
+        let rows = load_aliases(&mut connection).unwrap();
+        let kinds = rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.kind.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec![("Jonathan Davis", "credit"), ("Q-Tip", "name")]);
+        // Bad ids are ignored.
+        save_aliases(
+            &mut connection,
+            &[AliasRow {
+                mbid: "nope".into(),
+                ..alias("X", "name")
+            }],
+        )
+        .unwrap();
+        assert_eq!(load_aliases(&mut connection).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn person_links_and_credited_names_come_from_every_source() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        let mbid = "7a9b2c5a-4e7e-4b8c-9c7a-1d2e3f4a5b6c";
+        link_artist_mbid(&mut connection, "artist-qtip", mbid).unwrap();
+        save_profile(
+            &mut connection,
+            "artist",
+            "tag-qtip",
+            &ProfileRow {
+                musicbrainz_id: Some(mbid.into()),
+                ..ProfileRow::default()
+            },
+        )
+        .unwrap();
+        replace_album_credits(
+            &mut connection,
+            "low-end",
+            "musicbrainz",
+            &[CreditRow {
+                album_id: "low-end".into(),
+                track_id: String::new(),
+                name: "Jonathan Davis".into(),
+                normalized_name: "jonathan davis".into(),
+                role: "producer".into(),
+                instrument: String::new(),
+                source: "musicbrainz".into(),
+                source_artist_id: Some(mbid.into()),
+            }],
+        )
+        .unwrap();
+        let mut links = person_links(&mut connection)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.artist_id)
+            .collect::<Vec<_>>();
+        links.sort();
+        assert_eq!(links, vec!["artist-qtip", "tag-qtip"]);
+        let names = credited_names(&mut connection).unwrap();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].normalized_name, "jonathan davis");
+        let found =
+            people_credits(&mut connection, &["jonathan davis".into()], &[mbid.into()]).unwrap();
+        assert_eq!(found.len(), 1, "one row found twice is listed once");
+    }
 
     #[test]
     fn settings_default_to_off_and_round_trip() {

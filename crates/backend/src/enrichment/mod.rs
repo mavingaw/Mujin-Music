@@ -10,6 +10,7 @@
 
 pub mod fetch;
 pub mod genres;
+pub mod identity;
 pub mod musicbrainz;
 pub mod store;
 pub mod wikimedia;

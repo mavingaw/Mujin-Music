@@ -1,13 +1,21 @@
 "use client";
 
 import {
+  focusQueryString,
   getAlbumAbout,
   getArtistAbout,
   getArtistCredits,
+  getArtistDiscography,
   isApiError,
   saveNote,
+  type FocusSelection,
 } from "@parson/music-sdk";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 
 const noRetryOnMissing = (failureCount: number, error: unknown) =>
@@ -42,6 +50,23 @@ export function useArtistCredits(
     queryFn: () => getArtistCredits(id!),
     enabled: Boolean(id) && enabled,
     retry: noRetryOnMissing,
+    staleTime: 60_000,
+  });
+}
+
+/** A person's discography narrowed by a Focus selection; the previous
+ * result stays on screen while a new selection loads. */
+export function useArtistDiscography(
+  id: string | null | undefined,
+  selection: FocusSelection,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["artist-discography", id, focusQueryString(selection)],
+    queryFn: () => getArtistDiscography(id!, selection),
+    enabled: Boolean(id) && enabled,
+    retry: noRetryOnMissing,
+    placeholderData: keepPreviousData,
     staleTime: 60_000,
   });
 }

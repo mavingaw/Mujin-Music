@@ -13,8 +13,8 @@ use tokio::sync::Notify;
 use super::fetch::{BoxError, Fetch, FetchResponse, HttpFetch, MAX_IMAGE_BYTES, MAX_JSON_BYTES};
 use super::musicbrainz as mb;
 use super::store::{
-    self, CreditRow, EditorialText, EnrichmentSettings, ImageRow, Outcome, ProfileRow, Stage, Task,
-    TrackWorkRow, WorkRow,
+    self, AliasRow, CreditRow, EditorialText, EnrichmentSettings, ImageRow, Outcome, ProfileRow,
+    Stage, Task, TrackWorkRow, WorkRow,
 };
 use super::wikimedia as wiki;
 use super::works::WorkInfo;
@@ -646,6 +646,7 @@ impl<F: Fetch> Enricher<F> {
             .take(MAX_WORKS_PER_ALBUM)
             .collect::<Vec<_>>();
         let people = credited_people(&release, &links);
+        let aliases = release_aliases(&release);
         let profile = ProfileRow {
             musicbrainz_id: Some(release.mbid.clone()),
             release_group_mbid: release.release_group_mbid.clone(),
@@ -674,6 +675,7 @@ impl<F: Fetch> Enricher<F> {
             let linked = profile.wikidata_id.is_some();
             store::save_profile(connection, "album", &album_id, &profile)?;
             store::replace_album_credits(connection, &album_id, "musicbrainz", &credits)?;
+            store::save_aliases(connection, &aliases)?;
             store::replace_album_works(connection, &album_id, &works, &work_links)?;
             store::replace_genre_links(connection, "album", &album_id, "musicbrainz", &genres)?;
             for (artist_id, mbid) in &links {
@@ -856,6 +858,7 @@ impl<F: Fetch> Enricher<F> {
                 "begin": profile.begin,
                 "end": profile.end,
                 "disambiguation": profile.disambiguation,
+                "aliases": profile.aliases,
                 COMMONS_IMAGE_KEY: profile.image_file,
                 WIKIPEDIA_KEY: wikipedia_link_json(&profile.wikipedia),
             })
@@ -864,9 +867,11 @@ impl<F: Fetch> Enricher<F> {
         let artist_id = artist_id.to_string();
         let genres = profile.genres.clone();
         let photo = profile.image_file.is_some() && settings.artist_images;
+        let aliases = artist_aliases(&profile);
         db(&self.pool, move |connection| {
             let linked = row.wikidata_id.is_some();
             store::save_profile(connection, "artist", &artist_id, &row)?;
+            store::save_aliases(connection, &aliases)?;
             store::replace_genre_links(connection, "artist", &artist_id, "musicbrainz", &genres)?;
             queue_text_stages(connection, "artist", &artist_id, linked)?;
             if photo {
@@ -1674,6 +1679,63 @@ pub fn match_tracks(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<(us
         .collect()
 }
 
+fn alias(mbid: &str, name: &str, kind: &str) -> AliasRow {
+    AliasRow {
+        mbid: mbid.to_string(),
+        normalized_name: normalize_artist_identity(name),
+        name: name.trim().to_string(),
+        kind: kind.to_string(),
+    }
+}
+
+/// The names a release knows its people by: each credited person's own
+/// MusicBrainz name and the name the release credits them as.
+fn release_aliases(release: &mb::ReleaseDetails) -> Vec<AliasRow> {
+    let mut aliases = Vec::new();
+    for (mbid, name) in &release.artists {
+        aliases.push(alias(mbid, name, "name"));
+    }
+    for credit in release
+        .credits
+        .iter()
+        .chain(release.tracks.iter().flat_map(|track| &track.credits))
+    {
+        let Some(mbid) = &credit.artist_mbid else {
+            continue;
+        };
+        if let Some(name) = &credit.artist_name {
+            aliases.push(alias(mbid, name, "name"));
+        }
+        aliases.push(alias(mbid, &credit.name, "credit"));
+    }
+    aliases.sort_by(|left, right| {
+        (&left.mbid, &left.normalized_name, left.kind != "name").cmp(&(
+            &right.mbid,
+            &right.normalized_name,
+            right.kind != "name",
+        ))
+    });
+    aliases.dedup_by(|later, earlier| {
+        later.mbid == earlier.mbid && later.normalized_name == earlier.normalized_name
+    });
+    aliases
+}
+
+/// A resolved person's own name and MusicBrainz aliases.
+fn artist_aliases(profile: &mb::ArtistProfile) -> Vec<AliasRow> {
+    let mut aliases = vec![alias(&profile.mbid, &profile.name, "name")];
+    for name in &profile.aliases {
+        let entry = alias(&profile.mbid, name, "alias");
+        if !aliases
+            .iter()
+            .any(|known| known.normalized_name == entry.normalized_name)
+        {
+            aliases.push(entry);
+        }
+    }
+    aliases
+}
+
 fn album_credit_rows(album: &AlbumInput, release: &mb::ReleaseDetails) -> Vec<CreditRow> {
     let row = |track_id: &str, credit: &mb::ExternalCredit| CreditRow {
         album_id: album.id.clone(),
@@ -2118,6 +2180,37 @@ mod tests {
                     Some("https://upload.wikimedia.org/wikipedia/en/1/10/Kind_of_Blue_cover.jpg"),
                 ),
             )
+    }
+
+    #[test]
+    fn a_release_teaches_the_names_its_people_are_credited_as() {
+        let qtip = "7a9b2c5a-4e7e-4b8c-9c7a-1d2e3f4a5b6c";
+        let release = mb::ReleaseDetails {
+            mbid: qtip.into(),
+            title: "The Low End Theory".into(),
+            date: None,
+            country: None,
+            barcode: None,
+            labels: Vec::new(),
+            release_group_mbid: None,
+            release_group_type: None,
+            first_release_date: None,
+            artists: Vec::new(),
+            credits: vec![mb::ExternalCredit {
+                name: "Jonathan Davis".into(),
+                artist_name: Some("Q-Tip".into()),
+                artist_mbid: Some(qtip.into()),
+                role: "producer".into(),
+                instrument: None,
+            }],
+            tracks: Vec::new(),
+        };
+        let aliases = release_aliases(&release);
+        let names = aliases
+            .iter()
+            .map(|alias| (alias.name.as_str(), alias.kind.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![("Jonathan Davis", "credit"), ("Q-Tip", "name")]);
     }
 
     #[tokio::test]

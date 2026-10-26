@@ -60,3 +60,19 @@ test("identify album searches, pins and clears through the admin routes", async 
   await clearAlbumIdentification("a/1");
   expect(del).toHaveBeenCalledWith("/metadata/identify/a%2F1");
 });
+
+test("work and discography reads send the Focus selection", async () => {
+  const get = spyOn(api, "get").mockResolvedValue(ok({ recordings: [] }));
+  await getWork("w", { conductor: ["mb:k"], bit_depth: ["24"] });
+  const { getArtistDiscography } = await import("./editorial");
+  await getArtistDiscography("beethoven", {
+    ensemble: ["po", "bp"],
+    quality: ["hires"],
+  });
+  await getArtistDiscography("beethoven");
+  expect(get.mock.calls.map((call) => call[0])).toEqual([
+    "/works/w?conductor=mb%3Ak&bit_depth=24",
+    "/artists/beethoven/discography?ensemble=po&ensemble=bp&quality=hires",
+    "/artists/beethoven/discography",
+  ]);
+});

@@ -293,8 +293,8 @@ const CODEC_NAMES: Record<string, string> = {
 };
 
 function formatRate(sampleRate: number) {
-  const khz = sampleRate / 1000;
-  return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
+  // 44.1, 88.2 and 22.05 kHz, never rounded to a rate that does not exist.
+  return `${Number((sampleRate / 1000).toFixed(2))} kHz`;
 }
 
 /** "FLAC 96 kHz 24-bit" or "MP3 320 kbps" for one file's properties. */

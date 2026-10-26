@@ -15,12 +15,20 @@ import { isExplicitSongTitle } from "@/features/library/song-presentation";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useSession } from "@/features/account/session-provider";
 import {
   useArtistAbout,
   useArtistCredits,
+  useArtistDiscography,
 } from "@/features/library/credits/use-editorial";
+import { ArtistDiscography } from "./artist-discography";
+import { useFocusSelection } from "@/features/library/focus/use-focus-selection";
+import {
+  FOCUS_GROUPS,
+  focusSelectionCount,
+  type FocusSelection,
+} from "@parson/music-sdk";
 import { ArtistCreditsPanel } from "./artist-credits";
 import { ArtistCompositionsPanel } from "./artist-compositions";
 import { useArtistWorks } from "@/features/library/works/use-works";
@@ -62,6 +70,13 @@ export default function ArtistDetails({
   const requestedTab = searchParams?.get("tab") as ArtistTab | null;
   const roleFilter = searchParams?.get("role") ?? null;
 
+  const [urlSelection, setSelection] = useFocusSelection({
+    tab: "discography",
+  });
+  const onDiscography = requestedTab === "discography" || !requestedTab;
+  // Focus facets live in the URL only on the Discography tab (the
+  // Compositions tab has its own form and period filters).
+  const selection: FocusSelection = onDiscography ? urlSelection : {};
   const artistQuery = useArtist(id, devArtist);
   const artistMissing =
     artistQuery.isError &&
@@ -70,6 +85,24 @@ export default function ArtistDetails({
   const artist = artistQuery.data ?? null;
   const aboutQuery = useArtistAbout(devArtist ? null : id);
   const about = aboutQuery.data;
+  // A person opened under another of their ids (a second spelling, their
+  // MusicBrainz id) moves to the one page that has everything.
+  const canonicalId =
+    about && id && about.artist_id !== id && about.requested_id === id
+      ? about.artist_id
+      : null;
+  useEffect(() => {
+    if (!canonicalId) return;
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    params.set("id", canonicalId);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [canonicalId, pathname, router, searchParams]);
+  const discographyQuery = useArtistDiscography(
+    devArtist || canonicalId ? null : id,
+    selection,
+  );
+  const discography = discographyQuery.data;
+  const focusActive = focusSelectionCount(selection) > 0;
   const hasRoles = Boolean(about?.roles.length);
   const creditsQuery = useArtistCredits(
     devArtist ? null : id,
@@ -135,7 +168,9 @@ export default function ArtistDetails({
     [artist, featuredAlbumIds, featuredAlbumsQuery.data],
   );
   const hasDiscography =
-    discographySections.length > 0 || featuredAppearances.length > 0;
+    discographySections.length > 0 ||
+    featuredAppearances.length > 0 ||
+    Boolean(discography?.focus.total);
   const tabs: { key: ArtistTab; label: string }[] = [
     about ? { key: "overview" as const, label: "Overview" } : null,
     hasDiscography || artist
@@ -148,17 +183,19 @@ export default function ArtistDetails({
       ? { key: "credits" as const, label: "Credits" }
       : null,
   ].filter((tab): tab is { key: ArtistTab; label: string } => Boolean(tab));
-  const defaultTab: ArtistTab = about?.biography
-    ? "overview"
-    : hasCompositions && !discographySections.length
-      ? "compositions"
-      : hasDiscography
-        ? "discography"
-        : hasRoles || artistMissing
-          ? "credits"
-          : about
-            ? "overview"
-            : "discography";
+  const defaultTab: ArtistTab = focusActive
+    ? "discography"
+    : about?.biography
+      ? "overview"
+      : hasCompositions && !discographySections.length
+        ? "compositions"
+        : hasDiscography
+          ? "discography"
+          : hasRoles || artistMissing
+            ? "credits"
+            : about
+              ? "overview"
+              : "discography";
   const activeTab =
     tabs.find((tab) => tab.key === requestedTab)?.key ?? defaultTab;
   const navigate = (tab: ArtistTab, role: string | null = null) => {
@@ -166,7 +203,9 @@ export default function ArtistDetails({
     params.set("tab", tab);
     if (role) params.set("role", role);
     else params.delete("role");
-    for (const facet of ["form", "period", "key"]) params.delete(facet);
+    for (const facet of ["form", "period", "key", ...FOCUS_GROUPS]) {
+      params.delete(facet);
+    }
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   };
 
@@ -268,6 +307,14 @@ export default function ArtistDetails({
                 {[subtitle, lifeSpan].filter(Boolean).join(" · ")}
               </p>
             )}
+            {about?.credited_as?.length ? (
+              <p className="mt-2 text-sm text-zinc-400">
+                Also credited as{" "}
+                <span className="text-zinc-200">
+                  {about.credited_as.join(", ")}
+                </span>
+              </p>
+            ) : null}
             <GenreChips className="mt-3" genres={about?.genres} />
             {!artistIconURL && about?.image && (
               <p className="mt-2 text-xs text-zinc-400">
@@ -370,7 +417,21 @@ export default function ArtistDetails({
             </p>
           ))}
 
-        {activeTab === "discography" && artist && (
+        {activeTab === "discography" && discography && (
+          <div className="space-y-12">
+            <ArtistDiscography
+              discography={discography}
+              loading={discographyQuery.isFetching}
+              onSelectionChange={setSelection}
+              selection={selection}
+            />
+            {!focusActive && featuredAppearances.length > 0 && (
+              <FeaturedAppearances appearances={featuredAppearances} />
+            )}
+          </div>
+        )}
+
+        {activeTab === "discography" && !discography && artist && (
           <div className="space-y-12">
             {discographySections.length > 0 && (
               <div className="space-y-12">
@@ -430,51 +491,7 @@ export default function ArtistDetails({
               </div>
             )}
             {featuredAppearances.length > 0 && (
-              <section>
-                <h3 className="mb-5 text-xl font-semibold text-white">
-                  Appears on
-                </h3>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {featuredAppearances.map(({ album, track }) => {
-                    const coverURL = getLibraryImageUrl(
-                      album.cover_url,
-                      getBaseURL,
-                    );
-                    return (
-                      <Link
-                        className="group flex min-w-0 items-center gap-4 rounded-lg p-2 transition-colors hover:bg-white/6"
-                        href={`/album?id=${album.id}`}
-                        key={`${album.id}-${track.id}`}
-                      >
-                        <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-white/4">
-                          {coverURL ? (
-                            <Image
-                              alt={album.name}
-                              className="object-cover transition-transform duration-300 group-hover:scale-105"
-                              fill
-                              sizes="64px"
-                              src={coverURL}
-                            />
-                          ) : (
-                            <AlbumArtFallback />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <h4 className="truncate text-sm font-semibold text-zinc-100">
-                            <SongTitle title={track.name} />
-                          </h4>
-                          <p className="mt-1 truncate text-sm text-zinc-400">
-                            {isExplicitSongTitle(track.name) && (
-                              <ExplicitBadge />
-                            )}
-                            {album.artist_object.name} · {album.name}
-                          </p>
-                        </div>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </section>
+              <FeaturedAppearances appearances={featuredAppearances} />
             )}
             {!hasDiscography && (
               <p className="text-sm text-zinc-500">
@@ -485,5 +502,54 @@ export default function ArtistDetails({
         )}
       </div>
     </div>
+  );
+}
+
+function FeaturedAppearances({
+  appearances,
+}: {
+  appearances: { album: LibraryAlbum; track: LibraryAlbum["songs"][number] }[];
+}) {
+  return (
+    <section>
+      <h3 className="mb-5 text-xl font-semibold text-white">
+        Tracks they appear on
+      </h3>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {appearances.map(({ album, track }) => {
+          const coverURL = getLibraryImageUrl(album.cover_url, getBaseURL);
+          return (
+            <Link
+              className="group flex min-w-0 items-center gap-4 rounded-lg p-2 transition-colors hover:bg-white/6"
+              href={`/album?id=${album.id}`}
+              key={`${album.id}-${track.id}`}
+            >
+              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-white/10 bg-white/4">
+                {coverURL ? (
+                  <Image
+                    alt={album.name}
+                    className="object-cover transition-transform duration-300 group-hover:scale-105"
+                    fill
+                    sizes="64px"
+                    src={coverURL}
+                  />
+                ) : (
+                  <AlbumArtFallback />
+                )}
+              </div>
+              <div className="min-w-0">
+                <h4 className="truncate text-sm font-semibold text-zinc-100">
+                  <SongTitle title={track.name} />
+                </h4>
+                <p className="mt-1 truncate text-sm text-zinc-400">
+                  {isExplicitSongTitle(track.name) && <ExplicitBadge />}
+                  {album.artist_object.name} · {album.name}
+                </p>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
   );
 }
