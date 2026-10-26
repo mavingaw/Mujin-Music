@@ -12,6 +12,8 @@ pub mod domain;
 pub mod enrichment;
 #[cfg(feature = "server")]
 pub mod http;
+#[cfg(feature = "server")]
+pub mod imports;
 pub mod library;
 #[cfg(feature = "server")]
 pub mod native_output;

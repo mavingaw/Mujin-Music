@@ -17,7 +17,8 @@ use crate::api::library::{
 };
 use crate::api::{
     album, album_sources, artist, cast, data, editorial, filesystem, focus, genre_pages, genres,
-    home, lyrics, metadata, outputs, playback, playlist, search, setup, song, user, works, zones,
+    home, imports, lyrics, metadata, outputs, playback, playlist, search, setup, song, user, works,
+    zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -111,6 +112,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(home::configure)
         .configure(lyrics::configure)
         .configure(works::configure)
+        .configure(imports::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -255,7 +257,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "airplay",
             "chromecast",
             "credits",
-            "works"
+            "works",
+            "imports"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (

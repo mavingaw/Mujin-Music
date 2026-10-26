@@ -13,11 +13,13 @@ import UpdateSettings from "@/features/settings/update-settings";
 import EnrichmentSettings from "@/features/settings/enrichment-settings";
 import MetadataSourcesSettings from "@/features/settings/metadata-sources-settings";
 import RadioSettings from "@/features/settings/radio-settings";
+import ConnectionsSettings from "@/features/imports/connections-settings";
 
 const settingsTabs = [
   "account",
   "playback",
   "outputs",
+  "connections",
   "library",
   "data",
   "users",
@@ -29,6 +31,7 @@ const labels: Record<SettingsTab, string> = {
   account: "Account",
   playback: "Playback",
   outputs: "Audio outputs",
+  connections: "Connections",
   library: "Library",
   data: "Data",
   users: "Users",
@@ -41,12 +44,12 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
   const availableTabs: readonly SettingsTab[] = isAdmin
     ? settingsTabs
-    : (["account", "playback", "outputs", "data"] as const);
+    : (["account", "playback", "outputs", "connections", "data"] as const);
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
     const allowed: readonly string[] = isAdmin
       ? settingsTabs
-      : ["account", "playback", "outputs", "data"];
+      : ["account", "playback", "outputs", "connections", "data"];
     if (requested && allowed.includes(requested)) {
       setActiveTab(requested as SettingsTab);
     }
@@ -91,6 +94,7 @@ export default function SettingsPage() {
             </>
           )}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
+          {activeTab === "connections" && <ConnectionsSettings />}
           {activeTab === "data" && <DataSettings isAdmin={isAdmin} />}
           {isAdmin && activeTab === "library" && (
             <>
