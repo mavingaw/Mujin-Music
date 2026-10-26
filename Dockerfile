@@ -30,10 +30,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
-COPY crates/backend ./crates/backend
-COPY crates/parson-core ./crates/parson-core
-COPY crates/windows-bridge ./crates/windows-bridge
-COPY crates/windows-server ./crates/windows-server
+# Every workspace member must be present for cargo to load the workspace.
+COPY crates ./crates
 COPY --from=web-builder /app/apps/web/out ./apps/web/out
 RUN cargo build --release -p parson-music
 
