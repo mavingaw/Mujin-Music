@@ -1,4 +1,6 @@
 import {
+  accountProof,
+  type AccountProofTone,
   checkStreamingConnection,
   formatLastSync,
   getSourcePreference,
@@ -99,6 +101,9 @@ export function StreamingServicesSettings() {
             </View>
             <Text style={styles.link}>{serviceAction(provider)}</Text>
           </Pressable>
+          {provider.status === "signed_in" ? (
+            <AccountProofLine provider={provider} />
+          ) : null}
           {open === provider.id ? <ServicePanel provider={provider} /> : null}
         </View>
       ))}
@@ -110,11 +115,35 @@ export function StreamingServicesSettings() {
       </Text>
       <Text style={styles.fine}>
         Built and tested against recorded TIDAL and Qobuz responses and media
-        rendered to match them, not live accounts. TIDAL clients are free to
-        register at developer.tidal.com; Qobuz issues app IDs on request. See
-        How to get credentials in the web app&apos;s Settings, Services. Check
-        connection after signing in is the first test against your real account.
+        rendered to match them. It has not yet been run against a live TIDAL or
+        Qobuz account, so full-length hi-res from the real services is unproven
+        until your own Check connection passes; only then does an account show
+        Verified. TIDAL clients are free to register at developer.tidal.com;
+        Qobuz issues app IDs on request. See How to get credentials in the web
+        app&apos;s Settings, Services.
       </Text>
+    </View>
+  );
+}
+
+const proofColors: Record<AccountProofTone, string> = {
+  verified: palette.success,
+  partial: "#fde68a",
+  failed: "#fda4af",
+  unproven: palette.muted,
+};
+
+/** Whether this account itself has streamed a whole lossless track. */
+function AccountProofLine({ provider }: { provider: StreamingProviderStatus }) {
+  const proof = accountProof(provider);
+  if (!proof) return null;
+  return (
+    <View accessible style={styles.proof}>
+      <Text style={[styles.proofLabel, { color: proofColors[proof.tone] }]}>
+        {proof.tone === "verified" ? "✓ " : ""}
+        {proof.label}
+      </Text>
+      <Text style={styles.fine}>{proof.detail}</Text>
     </View>
   );
 }
@@ -493,6 +522,8 @@ const styles = StyleSheet.create({
   subheading: { color: "white", fontWeight: "800", marginTop: 6 },
   body: { color: palette.secondary, lineHeight: 21 },
   fine: { color: palette.muted, fontSize: 12, lineHeight: 18 },
+  proof: { gap: 2, paddingHorizontal: 16, paddingBottom: 12 },
+  proofLabel: { fontSize: 13, fontWeight: "600", letterSpacing: 0.2 },
   sandbox: {
     color: "#fde68a",
     backgroundColor: "rgba(252,211,77,0.08)",

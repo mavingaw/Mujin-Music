@@ -50,6 +50,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSession } from "@/features/account/session-provider";
+import { AccountProofChip } from "./account-proof";
 import { CredentialsGuide } from "./credentials-guide";
 import { ServerCredentialsPanel } from "./server-credentials";
 import { FormatBadge, ProviderMark } from "./source-badge";
@@ -169,6 +170,11 @@ export default function ServicesSettings() {
                   {provider.plan ? ` · ${provider.plan}` : ""}
                 </p>
               )}
+              {provider.status === "signed_in" && (
+                <div className="mt-2">
+                  <AccountProofChip provider={provider} />
+                </div>
+              )}
             </div>
             <Button
               className="shrink-0 rounded-full px-5 sm:px-6"
@@ -204,14 +210,19 @@ export default function ServicesSettings() {
 
       <SourcePreferenceSetting />
 
-      <p className="text-xs leading-5 text-zinc-500">
-        Parson&apos;s TIDAL and Qobuz support was built and tested against
-        recorded service responses and hi-res media rendered to match them
-        (24/192 FLAC, TIDAL Max DASH, CD FLAC, AAC, MP3), not live accounts. Run
-        &quot;Check connection&quot; after signing in: it is the first test
-        against your real account, and it reports what the stream actually
-        delivered.
-      </p>
+      <div className="rounded-xl border border-dashed border-white/10 px-4 py-3.5 text-xs leading-5 text-zinc-500">
+        <p className="font-medium text-zinc-300">What has been tested</p>
+        <p className="mt-1">
+          Parson&apos;s TIDAL and Qobuz support was built and tested against
+          recorded service responses and hi-res media rendered to match them
+          (24/192 FLAC, TIDAL Max DASH, CD FLAC, AAC, MP3). It has not yet been
+          run against a live TIDAL or Qobuz account, so full-length hi-res from
+          the real services is unproven until your own check passes. Run Check
+          connection after signing in: an account shows{" "}
+          <span className="text-emerald-300">Verified</span> only once the real
+          service has sent it a whole track, lossless, in the announced format.
+        </p>
+      </div>
 
       {isAdmin && <ServerCredentialsPanel />}
 
@@ -1026,8 +1037,8 @@ function ConnectionCheckPanel({
         <div className="min-w-0">
           <p className="text-sm font-medium text-zinc-100">Check connection</p>
           <p className="text-xs leading-5 text-zinc-500">
-            Signs in, syncs favorites and plays the first seconds of a favorite
-            at your chosen quality.
+            Signs in, syncs favorites and reads a favorite at your chosen
+            quality: its format and its full length, so a preview fails.
           </p>
         </div>
         <Button
@@ -1042,8 +1053,15 @@ function ConnectionCheckPanel({
           ) : (
             <Stethoscope aria-hidden="true" className="h-4 w-4" />
           )}
-          {checking ? "Checking…" : check ? "Check again" : "Run check"}
+          {checking
+            ? "Checking…"
+            : check || provider.last_check
+              ? "Check again"
+              : "Run check"}
         </Button>
+      </div>
+      <div className="mt-3">
+        <AccountProofChip provider={provider} showDetail />
       </div>
       {check && (
         <ol aria-live="polite" className="mt-3 space-y-2">

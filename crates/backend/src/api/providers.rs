@@ -206,10 +206,36 @@ async fn start_tidal_browser_sign_in(
         Ok(id) => id,
         Err(response) => return response,
     };
+    let origins = server_origins(&request);
     respond(
-        hub.start_tidal_browser_sign_in(user_id, &body.redirect_uri)
+        hub.start_tidal_browser_sign_in(user_id, &body.redirect_uri, &origins)
             .await,
     )
+}
+
+/// The addresses this server answers on, for checking a redirect URI: the
+/// host the browser asked for (over http or https, since a TLS proxy may sit
+/// in front) and the configured public and development origins. The `Host`
+/// header is what the listener's own browser sent, so a page elsewhere
+/// cannot choose it.
+fn server_origins(request: &HttpRequest) -> Vec<String> {
+    let mut origins = crate::settings::allowed_origins();
+    let host = request
+        .headers()
+        .get(actix_web::http::header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| {
+            request
+                .uri()
+                .authority()
+                .map(|authority| authority.to_string())
+        });
+    if let Some(host) = host.filter(|host| !host.is_empty()) {
+        origins.push(format!("http://{host}"));
+        origins.push(format!("https://{host}"));
+    }
+    origins
 }
 
 #[derive(Deserialize)]
@@ -2940,6 +2966,26 @@ mod tests {
             )]
         );
 
+        // Settings keeps the result: this account itself is now proven.
+        let (_, listed) = call!(&app, test::TestRequest::get().uri("/providers")).await;
+        let qobuz = listed["providers"]
+            .as_array()
+            .and_then(|providers| providers.iter().find(|provider| provider["id"] == "qobuz"))
+            .expect("qobuz")
+            .clone();
+        let last = &qobuz["last_check"];
+        assert_eq!(last["verified"], true, "{last}");
+        assert_eq!(last["sandbox"], false);
+        assert_eq!(last["delivered"], "24/192 FLAC");
+        assert_eq!(last["full_length"], true);
+        assert_eq!(last["lossless"], true);
+        assert_eq!(last["failed_step"], Value::Null);
+        let tidal = listed["providers"]
+            .as_array()
+            .and_then(|providers| providers.iter().find(|provider| provider["id"] == "tidal"))
+            .expect("tidal");
+        assert_eq!(tidal["last_check"], Value::Null, "never checked");
+
         let (status, check) = call!(
             &app,
             test::TestRequest::post()
@@ -2981,6 +3027,28 @@ mod tests {
             .check_connection(1, ProviderId::Qobuz, None)
             .await
             .expect("check");
+        // A sandbox check is kept too, but never counts as proof.
+        let status = hub
+            .provider_status(1, ProviderId::Qobuz)
+            .await
+            .expect("status");
+        let last = status.last_check.expect("kept");
+        assert!(last.sandbox && !last.verified, "{last:?}");
+        // New credentials belong to another client: the proof is cleared.
+        hub.save_credentials(
+            1,
+            ProviderId::Qobuz,
+            Some("sandbox-2".into()),
+            Some("sandbox".into()),
+            false,
+        )
+        .await
+        .expect("new credentials");
+        let status = hub
+            .provider_status(1, ProviderId::Qobuz)
+            .await
+            .expect("status");
+        assert_eq!(status.last_check, None);
         let delivery = check.delivery.expect("delivery");
         assert!(delivery.sandbox);
         assert!(!delivery.matches_announced);
@@ -3103,6 +3171,16 @@ mod tests {
             .await
             .expect("check");
         assert!(!check.ok, "{:?}", check.steps);
+        let last = hub
+            .provider_status(1, ProviderId::Qobuz)
+            .await
+            .expect("status")
+            .last_check
+            .expect("kept");
+        assert!(!last.verified && !last.ok);
+        assert_eq!(last.failed_step.as_deref(), Some("stream"));
+        assert_eq!(last.full_length, Some(false));
+        assert!(last.detail.contains("a preview"), "{}", last.detail);
         let delivery = check.delivery.expect("delivery");
         assert_eq!(delivery.full_length, Some(false));
         assert_eq!(delivery.track_seconds, Some(274.0));
@@ -3344,21 +3422,40 @@ mod tests {
             "https://music.example.test/elsewhere",
             "https://music.example.test/settings/services/tidal-callback?next=x",
             "https:///settings/services/tidal-callback",
+            // Another host must never receive TIDAL's authorization code.
+            "https://attacker.example/settings/services/tidal-callback",
+            "https://music.example.test.attacker.example/settings/services/tidal-callback",
+            "https://user@music.example.test/settings/services/tidal-callback",
+            "https://music.example.test/x/settings/services/tidal-callback",
         ] {
             let (status, _) = call!(
                 &app,
                 test::TestRequest::post()
                     .uri("/providers/tidal/sign-in/browser")
+                    .insert_header(("host", "music.example.test"))
                     .set_json(json!({ "redirect_uri": redirect_uri })),
             )
             .await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{redirect_uri}");
         }
 
+        // The right path on a host the browser did not ask for is refused.
         let (status, body) = call!(
             &app,
             test::TestRequest::post()
                 .uri("/providers/tidal/sign-in/browser")
+                .insert_header(("host", "192.168.1.25:1993"))
+                .set_json(json!({ "redirect_uri": callback })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.to_string().contains("point at this server"), "{body}");
+
+        let (status, body) = call!(
+            &app,
+            test::TestRequest::post()
+                .uri("/providers/tidal/sign-in/browser")
+                .insert_header(("host", "music.example.test"))
                 .set_json(json!({ "redirect_uri": callback })),
         )
         .await;
@@ -3438,7 +3535,7 @@ mod tests {
             .expect("credentials");
         let callback = "http://127.0.0.1:1993/settings/services/tidal-callback";
         let sign_in = hub
-            .start_tidal_browser_sign_in(1, callback)
+            .start_tidal_browser_sign_in(1, callback, &["http://127.0.0.1:1993".to_string()])
             .await
             .expect("start");
         assert!(sign_in.sandbox);
@@ -3619,6 +3716,11 @@ mod tests {
             serde_json::to_string_pretty(check).unwrap_or_default()
         );
         assert!(check.ok, "{service} check failed: {:?}", check.steps);
+        let record = crate::providers::hub::AccountCheck::from_check(check);
+        assert!(
+            record.verified,
+            "{service}: not a full-length lossless stream in the announced format: {record:?}"
+        );
         let delivery = check.delivery.as_ref().expect("delivery");
         assert!(
             !delivery.sandbox,
@@ -3636,6 +3738,29 @@ mod tests {
             delivery.delivered_seconds,
             delivery.track_seconds
         );
+    }
+
+    /// Prints what a live run proved and, with `PARSON_LIVE_RESULT_DIR`,
+    /// writes it as `<service>.json` (no tokens or credentials, only the
+    /// account check), so the workflow keeps the record of each run.
+    fn record_live_result(service: &str, check: &crate::providers::hub::ConnectionCheck) {
+        let record = crate::providers::hub::AccountCheck::from_check(check);
+        let json = serde_json::to_string_pretty(&json!({
+            "service": service,
+            "plan": check.plan,
+            "check": record,
+        }))
+        .expect("json");
+        println!("{service} live result: {json}");
+        if let Some(dir) = live("PARSON_LIVE_RESULT_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).expect("result dir");
+            std::fs::write(
+                dir.join(format!("{}.json", service.to_ascii_lowercase())),
+                json,
+            )
+            .expect("write result");
+        }
     }
 
     /// End-to-end check against real accounts. No accounts exist in this
@@ -3691,6 +3816,7 @@ mod tests {
                 .check_connection(1, ProviderId::Qobuz, live("PARSON_LIVE_QOBUZ_TRACK"))
                 .await
                 .expect("qobuz check");
+            record_live_result("Qobuz", &check);
             assert_live_stream("Qobuz", &check);
             let delivered = check.delivery.and_then(|delivery| delivery.delivered);
             assert!(delivered.is_some_and(|format| format.lossless));
@@ -3743,6 +3869,7 @@ mod tests {
                 .check_connection(1, ProviderId::Tidal, live("PARSON_LIVE_TIDAL_TRACK"))
                 .await
                 .expect("tidal check");
+            record_live_result("TIDAL", &check);
             assert_live_stream("TIDAL", &check);
             let delivery = check.delivery.expect("delivery");
             if delivery.requested == crate::providers::StreamQuality::HiResMax
