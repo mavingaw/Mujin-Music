@@ -201,7 +201,7 @@ function main(args) {
 
   run("git", ["add", "--", ...files.keys(), "bun.lock"]);
   run("git", ["commit", "-m", `Release ${version}`]);
-  run("git", ["tag", "-a", `v${version}`, "-m", `Parson ${version}`]);
+  run("git", ["tag", "-a", `v${version}`, "-m", `Mujin Music ${version}`]);
   console.log(
     `Prepared v${version}. Publish with: git push origin HEAD --follow-tags`,
   );
