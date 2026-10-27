@@ -112,7 +112,7 @@ export default function LibraryToolsPage() {
             {toolViewLabels[item]}
             <CountPill count={counts[item] ?? 0} />
             {view === item && (
-              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-[linear-gradient(90deg,#7c4dff,#b26bff)]" />
+              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-[linear-gradient(90deg,var(--color-mujin-copper-pressed),var(--color-mujin-copper))]" />
             )}
           </button>
         ))}

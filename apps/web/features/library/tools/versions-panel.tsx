@@ -212,7 +212,7 @@ export function VersionGroupCard({
             className={cn(
               "group relative rounded-lg border p-2.5 transition-colors",
               album.preferred
-                ? "border-mujin-copper/45 bg-mujin-copper/[0.06] shadow-[0_0_24px_-12px_#b26bff]"
+                ? "border-mujin-copper/45 bg-mujin-copper/[0.06] shadow-[0_0_24px_-12px_var(--color-mujin-copper)]"
                 : "border-white/[0.06] bg-black/20",
               album.hidden && "opacity-60",
             )}
