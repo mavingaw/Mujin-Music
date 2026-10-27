@@ -113,6 +113,36 @@ free, open source and entirely on your own hardware.
 - **The Mujin Music identity**: the Ensō Signal logo (whose dot follows the
   quality light), the Mujin Copper accent, and the Jost, Inter and JetBrains
   Mono fonts.
+- **A gallery-style redesign**: large album art, a blurred-art Now Playing
+  with the quality light and Up next, album pages with release details,
+  credits, biographies and reviews (from MusicBrainz and Wikipedia when
+  online metadata is on), timed lyrics read from your files (embedded LRC,
+  ID3 SYLT/USLT or an `.lrc` beside the track), and a full-screen display
+  mode for TVs and tablets that follows a zone.
+- **A theme engine**: six presets (Mujin Dark, Mujin Light, Material You,
+  Frosted Glass, OLED Black and High Contrast), an accent picker that checks
+  every colour against WCAG contrast and corrects it, colour from the playing
+  album's artwork, corner radius, text size, density, reduced motion and
+  transparency, Now Playing layouts and Home rows. Material You follows
+  Android 12+ wallpaper colours on the phone; Frosted Glass uses Mica or
+  Acrylic on Windows and vibrancy on macOS in the desktop app, with a plain
+  fallback where the system has none. Appearance is saved to your profile and
+  reaches your other open sessions at once.
+
+![Home](images/home.png)
+
+![Now Playing in each theme preset](images/themes.png)
+
+| ![Now Playing](images/now-playing.png) | ![Signal path](images/signal-path.png) |
+| -------------------------------------- | -------------------------------------- |
+| ![Album](images/album.png)             | ![Zones](images/zones.png)             |
+| ![Focus](images/focus.png)             | ![Appearance](images/appearance.png)   |
+
+![Home, an album and Now Playing on a phone](images/phone.png)
+
+The library in these captures is a demo library with generated cover art and
+fictional artists.
+
 - **Windows installer** that adds Windows Firewall rules for private
   networks (so phones and speakers can reach the server) and shows Mujin
   Music in Windows' media controls and on the media keys.
@@ -188,12 +218,6 @@ The user guide is in [apps/site/content/docs](../apps/site/content/docs).
 
 These are being worked on and are **not** in the current code yet:
 
-- **A visual redesign**: a dark, gallery-style layout, a full-screen display
-  mode for TVs and tablets that follows a zone, and timed lyrics read from
-  your files.
-- **A theme engine**: Mujin Dark and Light, Material You (colours from album
-  art or your Android wallpaper), Frosted Glass, OLED Black and High
-  Contrast, with full appearance settings.
 - **FETCH**: finds better (lossless) versions of music you already have.
 - **Apollo**: a self-hosted AI enhancer.
 
@@ -242,8 +266,10 @@ affiliated with or endorsed by Roon Labs.
 
 ### Fonts
 
-Jost, Inter and JetBrains Mono, each under the SIL Open Font License 1.1. Each
-font folder in `apps/web/public/fonts` carries its `OFL.txt`.
+Jost, Inter and JetBrains Mono, and the fonts offered in Settings → Appearance
+(Fraunces, Atkinson Hyperlegible Next, IBM Plex Sans and Roboto Flex), each
+under the SIL Open Font License 1.1. Each font folder in
+`apps/web/public/fonts` carries its `OFL.txt`.
 
 ### Libraries
 
