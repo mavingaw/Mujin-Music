@@ -60,4 +60,28 @@ test("turning glass off, or asking for the impossible, restores an opaque window
   };
   assert.equal(applyWindowMaterial(broken, "mica", ["mica"]), null);
   assert.deepEqual(broken.calls, [["color", "#000000"]]);
+  // A failure after the material applied takes the material back off.
+  const half = fakeWindow();
+  half.setBackgroundColor = (value) => {
+    half.calls.push(["color", value]);
+    if (value === "#00000000") throw new Error("lost window");
+  };
+  assert.equal(applyWindowMaterial(half, "mica", ["mica", "acrylic"]), null);
+  assert.deepEqual(half.calls, [
+    ["material", "mica"],
+    ["color", "#00000000"],
+    ["material", "none"],
+    ["color", "#000000"],
+  ]);
+});
+
+test("an Electron without the material API stays opaque", () => {
+  const old = fakeWindow();
+  delete old.setBackgroundMaterial;
+  assert.equal(applyWindowMaterial(old, "mica", ["mica", "acrylic"]), null);
+  assert.deepEqual(old.calls, [["color", "#000000"]]);
+  const mac = fakeWindow();
+  delete mac.setVibrancy;
+  assert.equal(applyWindowMaterial(mac, "vibrancy", ["vibrancy"]), null);
+  assert.deepEqual(mac.calls, [["color", "#000000"]]);
 });

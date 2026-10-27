@@ -145,3 +145,22 @@ export function resolveMobileTheme(
     artworkColor: stored.artworkColor,
   });
 }
+
+/** Whether a zone socket message announces an appearance this phone lacks. */
+export function announcesNewAppearance(
+  raw: unknown,
+  revision: number,
+): boolean {
+  try {
+    const message = JSON.parse(String(raw)) as {
+      type?: string;
+      revision?: unknown;
+    };
+    if (message.type !== "appearance_changed") return false;
+    return (
+      typeof message.revision !== "number" || message.revision !== revision
+    );
+  } catch {
+    return false;
+  }
+}

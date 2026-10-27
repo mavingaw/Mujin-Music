@@ -1,6 +1,7 @@
 import {
   type Appearance,
   type ContrastCheck,
+  type FontChoice,
   type ResolvedTheme,
   type ThemeEnvironment,
   type ThemePreset,
@@ -8,6 +9,19 @@ import {
   themeVariables,
 } from "@parson/music-sdk";
 import type { CSSProperties } from "react";
+
+/**
+ * The face each font choice is previewed in on the Font picker. Every family
+ * here must have an @font-face in app/globals.css (font-faces.test.ts).
+ */
+export const FONT_SAMPLE_STACKS: Record<FontChoice, string> = {
+  mujin: '"Jost", sans-serif',
+  inter: '"Inter", sans-serif',
+  fraunces: '"Fraunces", serif',
+  atkinson: '"Atkinson Hyperlegible Next", sans-serif',
+  plex: '"IBM Plex Sans", sans-serif',
+  "roboto-flex": '"Roboto Flex", sans-serif',
+};
 
 /** Accent swatches: Mujin Copper first, then hues that hold up in every preset. */
 export const ACCENT_SWATCHES: { name: string; value: string | null }[] = [

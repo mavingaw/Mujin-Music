@@ -165,6 +165,37 @@ describe("presets", () => {
     expect(theme.colors.deep).toBe("#000000");
   });
 
+  test("Now Playing and album headers follow the preset's backdrop", () => {
+    const backdrop = (
+      preset: (typeof THEME_PRESETS)[number],
+      extra: Partial<typeof DEFAULT_APPEARANCE> = {},
+      environment: Partial<Parameters<typeof resolveTheme>[1]> = {},
+    ) => {
+      const theme = resolveTheme(
+        { ...DEFAULT_APPEARANCE, preset, ...extra },
+        { systemDark: true, ...environment },
+      );
+      expect(themeAttributes(theme)["data-backdrop"]).toBe(theme.backdrop);
+      return theme.backdrop;
+    };
+    // OLED Black keeps pixels off unless colour from artwork is on.
+    expect(backdrop("oled-black")).toBe("black");
+    expect(backdrop("oled-black", { accent_from_artwork: true })).toBe(
+      "artwork",
+    );
+    // Frosted Glass puts panels of glass over the blurred cover...
+    expect(backdrop("frosted-glass")).toBe("glass");
+    // ...and turns opaque when transparency is reduced.
+    expect(backdrop("frosted-glass", {}, { reducedTransparency: true })).toBe(
+      "artwork",
+    );
+    // High Contrast drops the art wash for the plain canvas.
+    expect(backdrop("high-contrast")).toBe("solid");
+    expect(backdrop("high-contrast", { color_scheme: "light" })).toBe("solid");
+    expect(backdrop("mujin-dark")).toBe("artwork");
+    expect(backdrop("material-you")).toBe("artwork");
+  });
+
   test("Material You builds a tonal scheme from the album art", () => {
     const art = argbFromHex("#1e88e5")!;
     const theme = resolveTheme(

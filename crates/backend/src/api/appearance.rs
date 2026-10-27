@@ -4,7 +4,12 @@
 //! device follows the profile to the others. The server normalises every
 //! value (unknown presets fall back, numbers are clamped, Home rows are
 //! de-duplicated) with the same rules as the SDK's `normalizeAppearance`.
+//!
+//! Every save is also announced on the zone event socket
+//! (`/zones/events`, `{"type":"appearance_changed","revision":N}`), so other
+//! open sessions of the same profile restyle at once instead of on reload.
 
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix_web::{HttpRequest, HttpResponse, get, put, web};
@@ -53,6 +58,35 @@ pub const HOME_ROWS: [&str; 10] = [
     "albums-you-might-like",
 ];
 const MAX_SETTINGS_BYTES: usize = 16 * 1024;
+const APPEARANCE_EVENT_BUFFER: usize = 64;
+
+/// A profile saved a new appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppearanceChange {
+    pub user_id: i32,
+    pub revision: i64,
+}
+
+static APPEARANCE_EVENTS: OnceLock<tokio::sync::broadcast::Sender<AppearanceChange>> =
+    OnceLock::new();
+
+fn appearance_events() -> &'static tokio::sync::broadcast::Sender<AppearanceChange> {
+    APPEARANCE_EVENTS.get_or_init(|| tokio::sync::broadcast::channel(APPEARANCE_EVENT_BUFFER).0)
+}
+
+fn notify_appearance_changed(change: AppearanceChange) {
+    let _ = appearance_events().send(change);
+}
+
+/// Subscribes to appearance saves (every profile; filter by `user_id`).
+pub fn subscribe_appearance_changes() -> tokio::sync::broadcast::Receiver<AppearanceChange> {
+    appearance_events().subscribe()
+}
+
+/// The zone socket message for a save.
+pub fn appearance_event_message(change: AppearanceChange) -> String {
+    serde_json::json!({"type": "appearance_changed", "revision": change.revision}).to_string()
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HomeRow {
@@ -352,7 +386,13 @@ pub async fn put_appearance(
     })
     .await
     {
-        Ok(Ok(Ok(record))) => HttpResponse::Ok().json(record),
+        Ok(Ok(Ok(record))) => {
+            notify_appearance_changed(AppearanceChange {
+                user_id,
+                revision: record.revision,
+            });
+            HttpResponse::Ok().json(record)
+        }
         Ok(Ok(Err(SaveError::Conflict(current)))) => {
             HttpResponse::Conflict().json(serde_json::json!({
                 "error": "appearance_conflict",
@@ -451,6 +491,64 @@ mod tests {
         assert!(appearance.home_rows[daily].visible);
         assert_eq!(normalize_hex(Some(&json!("red"))), None);
         assert_eq!(Appearance::default().preset, "mujin-dark");
+    }
+
+    #[actix_web::test]
+    async fn a_save_is_announced_to_the_profiles_other_sessions() {
+        let pool = pool();
+        pool.get()
+            .unwrap()
+            .batch_execute(
+                "INSERT INTO user (id, username, password, role) VALUES (41, 'kai', 'x', 'user');",
+            )
+            .unwrap();
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(web::Data::new(pool))
+                .service(put_appearance),
+        )
+        .await;
+        let mut events = subscribe_appearance_changes();
+        let save = |base: i64| {
+            as_user!(
+                actix_test::TestRequest::put()
+                    .uri("/me/appearance")
+                    .set_json(
+                        json!({"appearance": {"preset": "oled-black"}, "base_revision": base})
+                    ),
+                41
+            )
+        };
+        assert_eq!(
+            actix_test::call_service(&app, save(0)).await.status(),
+            StatusCode::OK
+        );
+        // A save that lost a race changes nothing, so nothing is announced.
+        assert_eq!(
+            actix_test::call_service(&app, save(0)).await.status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            actix_test::call_service(&app, save(1)).await.status(),
+            StatusCode::OK
+        );
+        // Other tests save too; keep only this profile's announcements.
+        let mut mine = Vec::new();
+        while let Ok(change) = events.try_recv() {
+            if change.user_id == 41 {
+                mine.push(change.revision);
+            }
+        }
+        assert_eq!(mine, vec![1, 2]);
+        let message: Value = serde_json::from_str(&appearance_event_message(AppearanceChange {
+            user_id: 41,
+            revision: 2,
+        }))
+        .unwrap();
+        assert_eq!(
+            message,
+            json!({"type": "appearance_changed", "revision": 2})
+        );
     }
 
     #[actix_web::test]

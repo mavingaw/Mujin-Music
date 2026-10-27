@@ -41,20 +41,12 @@ import { cn } from "@/lib/cn";
 import {
   ACCENT_SWATCHES,
   contrastGrade,
+  FONT_SAMPLE_STACKS,
   headlineChecks,
   previewStyle,
   syncLabel,
 } from "./appearance-model";
 import { useAppearance } from "./theme-provider";
-
-const FONT_SAMPLE_STACKS: Record<(typeof FONT_CHOICES)[number], string> = {
-  mujin: '"Jost", sans-serif',
-  inter: '"Inter", sans-serif',
-  fraunces: '"Fraunces", serif',
-  atkinson: '"Atkinson Hyperlegible Next", sans-serif',
-  plex: '"IBM Plex Sans", sans-serif',
-  "roboto-flex": '"Roboto Flex", sans-serif',
-};
 
 function Section({
   children,

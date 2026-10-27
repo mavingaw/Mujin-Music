@@ -6,6 +6,7 @@ import {
   THEME_PRESETS,
 } from "@parson/music-sdk";
 import {
+  announcesNewAppearance,
   argbFromAndroidColor,
   mobilePalette,
   mobileRadius,
@@ -86,5 +87,30 @@ describe("phone appearance", () => {
   test("washes follow the theme's text colour", () => {
     expect(tintOf({ text: "#f2eee6" }, 0.08)).toBe("rgba(242,238,230,0.08)");
     expect(withAlpha("#0a0a0b", 0.5)).toBe("rgba(10,10,11,0.5)");
+  });
+
+  test("the zone socket's appearance announcements trigger a re-read", () => {
+    const message = (value: object) => JSON.stringify(value);
+    expect(
+      announcesNewAppearance(
+        message({ type: "appearance_changed", revision: 5 }),
+        4,
+      ),
+    ).toBeTrue();
+    // Already showing that revision (this phone's own save).
+    expect(
+      announcesNewAppearance(
+        message({ type: "appearance_changed", revision: 5 }),
+        5,
+      ),
+    ).toBeFalse();
+    // A lagged socket sends no revision: re-read to be safe.
+    expect(
+      announcesNewAppearance(message({ type: "appearance_changed" }), 5),
+    ).toBeTrue();
+    expect(
+      announcesNewAppearance(message({ type: "zones_changed" }), 5),
+    ).toBeFalse();
+    expect(announcesNewAppearance("not json", 5)).toBeFalse();
   });
 });

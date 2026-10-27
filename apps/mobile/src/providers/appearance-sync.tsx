@@ -1,6 +1,8 @@
 import {
   type Appearance,
   getAppearance,
+  getFreshAuthorizationHeaders,
+  getZoneEventsURL,
   normalizeAppearance,
   saveAppearance,
   appearanceConflict,
@@ -14,6 +16,7 @@ import { AppState, Platform } from "react-native";
 
 import { storedAppearance } from "@/constants/colors";
 import {
+  announcesNewAppearance,
   APPEARANCE_STORE_KEY,
   serializeStoredAppearance,
   type StoredAppearance,
@@ -97,9 +100,17 @@ export async function coverSourceColor(
   }
 }
 
+/** React Native's WebSocket takes headers (the bearer token) as a third argument. */
+type NativeWebSocket = new (
+  url: string,
+  protocols: string[] | null,
+  options: { headers: Record<string, string> },
+) => WebSocket;
+
 /**
- * Keeps this phone's theme in step with the profile: on sign-in and when
- * the app returns to the foreground it reads the saved appearance; a change
+ * Keeps this phone's theme in step with the profile: on sign-in, when the
+ * app returns to the foreground, and the moment another device saves (the
+ * zone event socket announces it) it reads the saved appearance; a change
  * made on another device is stored and, when nothing is playing, applied
  * at once (otherwise on the next launch, so playback is never cut).
  * With colour from album art on, it remembers the playing cover's colour.
@@ -138,12 +149,71 @@ export function AppearanceSync() {
       }
     };
     void sync();
+
+    // Live: saves on other devices are announced on the zone socket.
+    let socket: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let delay = 2_000;
+    const reconnect = () => {
+      if (cancelled || retry) return;
+      retry = setTimeout(() => {
+        retry = null;
+        void connect();
+      }, delay);
+      delay = Math.min(delay * 2, 60_000);
+    };
+    const connect = async () => {
+      if (cancelled || socket || AppState.currentState !== "active") return;
+      let headers: Record<string, string> = {};
+      try {
+        headers = await getFreshAuthorizationHeaders();
+      } catch {
+        // Signed out or offline: try again later.
+      }
+      if (cancelled || socket) return;
+      try {
+        const Native = WebSocket as unknown as NativeWebSocket;
+        socket =
+          Platform.OS === "web"
+            ? new WebSocket(getZoneEventsURL())
+            : new Native(getZoneEventsURL(), null, { headers });
+      } catch {
+        reconnect();
+        return;
+      }
+      const opened = socket;
+      opened.onopen = () => {
+        delay = 2_000;
+      };
+      opened.onmessage = (event) => {
+        if (announcesNewAppearance(event.data, current.revision)) void sync();
+      };
+      opened.onerror = () => opened.close();
+      opened.onclose = () => {
+        if (socket === opened) socket = null;
+        reconnect();
+      };
+    };
+    void connect();
+
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void sync();
+      if (state === "active") {
+        void sync();
+        void connect();
+      } else {
+        // No socket in the background; the next foreground re-reads.
+        const open = socket;
+        socket = null;
+        open?.close();
+      }
     });
     return () => {
       cancelled = true;
       subscription.remove();
+      if (retry) clearTimeout(retry);
+      const open = socket;
+      socket = null;
+      open?.close();
     };
   }, [ready]);
 

@@ -28,6 +28,10 @@ import {
   desktopWindowMaterials,
   setDesktopWindowMaterial,
 } from "@/lib/desktop/bridge";
+import {
+  shouldFetchAnnounced,
+  subscribeAppearanceChanges,
+} from "./appearance-events";
 import { applyThemeToDocument } from "./apply-theme";
 import {
   buildThemeCache,
@@ -177,7 +181,16 @@ export function AppearanceProvider({
   const native = theme.glass.native;
   useEffect(() => {
     if (!nativeMaterials.length) return;
-    void setDesktopWindowMaterial(native);
+    let cancelled = false;
+    void setDesktopWindowMaterial(native).then((applied) => {
+      // The window could not show it (older Windows build, an Electron
+      // without the API, a failure): paint the blurred backdrop instead of
+      // leaving a page that expects a see-through window.
+      if (!cancelled && native && applied !== native) setNativeMaterials([]);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [native, nativeMaterials.length]);
 
   const adopt = useCallback((next: Appearance, nextRevision: number) => {
@@ -214,6 +227,22 @@ export function AppearanceProvider({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
+  }, [sync, userId]);
+
+  // Saves from the profile's other sessions, announced on the zone socket.
+  useEffect(() => {
+    if (!userId) return;
+    return subscribeAppearanceChanges((revision) => {
+      if (
+        shouldFetchAnnounced(
+          revision,
+          revisionRef.current,
+          Boolean(pending.current || saveTimer.current),
+        )
+      ) {
+        void sync();
+      }
+    });
   }, [sync, userId]);
 
   const flush = useCallback(async () => {
