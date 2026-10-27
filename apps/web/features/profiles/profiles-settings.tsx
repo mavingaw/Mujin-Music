@@ -221,7 +221,9 @@ function ProfileDialog({
               <>
                 <Input
                   autoComplete="new-password"
-                  className="mt-1 tracking-[0.4em]"
+                  // PIN spacing for entered digits only, so the
+                  // placeholder reads as a word.
+                  className={cn("mt-1", pin && "tracking-[0.4em]")}
                   inputMode="numeric"
                   maxLength={8}
                   onChange={(event) =>
