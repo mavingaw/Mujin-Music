@@ -32,7 +32,7 @@ export default function Home() {
             <Link href="/docs">Docs</Link>
             <a
               className="landing-github-icon"
-              href="https://github.com/mavingaw/parson-jin"
+              href="https://github.com/mavingaw/Mujin-Music"
               rel="noreferrer"
               target="_blank"
               aria-label="GitHub"
@@ -56,7 +56,7 @@ export default function Home() {
             <PlatformDownloadButton />
             <a
               className="landing-text-link"
-              href="https://github.com/mavingaw/parson-jin"
+              href="https://github.com/mavingaw/Mujin-Music"
               rel="noreferrer"
               target="_blank"
             >
@@ -142,7 +142,7 @@ export default function Home() {
           <nav>
             <Link href="/docs">Docs</Link>
             <a
-              href="https://github.com/mavingaw/parson-jin"
+              href="https://github.com/mavingaw/Mujin-Music"
               rel="noreferrer"
               target="_blank"
             >

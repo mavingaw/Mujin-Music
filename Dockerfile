@@ -41,7 +41,7 @@ WORKDIR /app
 LABEL org.opencontainers.image.title="Mujin Music" \
   org.opencontainers.image.description="Mujin Music server, based on Parson by ParsonLabs" \
   org.opencontainers.image.licenses="GPL-3.0-only" \
-  org.opencontainers.image.source="https://github.com/mavingaw/parson-jin"
+  org.opencontainers.image.source="https://github.com/mavingaw/Mujin-Music"
 
 RUN apt-get update \
   && apt-get upgrade -y \
