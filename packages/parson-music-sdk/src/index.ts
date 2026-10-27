@@ -22,6 +22,7 @@ export * from "./resources/auth";
 export * from "./resources/cast";
 export * from "./resources/control";
 export * from "./resources/data";
+export * from "./resources/displays";
 export * from "./resources/editorial";
 export * from "./resources/filesystem";
 export * from "./resources/focus";

@@ -29,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   Settings2,
+  Tv,
   SlidersHorizontal,
   Unlink,
   Volume2,
@@ -58,6 +59,7 @@ import { ZoneOutputsPanel } from "./zone-outputs";
 import { ZoneSettingsDialog } from "./zone-settings";
 import { QualityLight, ZoneSignalPathDialog } from "./zone-signal-path";
 import { useZones } from "./zones-provider";
+import { openZoneDisplay } from "@/features/display/display-links";
 
 const SLEEP_CHOICES = [15, 30, 45, 60, 90] as const;
 
@@ -823,6 +825,16 @@ function ZoneMenu({
         )}
         <DropdownMenuItem onSelect={() => onEdit()}>
           <Settings2 className="h-4 w-4" /> Zone settings
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() =>
+            void run(
+              () => openZoneDisplay({ id: zone.id, name: zone.name }),
+              "Could not open a display.",
+            )
+          }
+        >
+          <Tv className="h-4 w-4" /> Open as display
         </DropdownMenuItem>
         {zone.settings?.supports.dsp && (
           <DropdownMenuItem

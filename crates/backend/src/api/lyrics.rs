@@ -1324,11 +1324,27 @@ async fn find_lyrics(
     service: web::Data<LyricsService>,
     pool: web::Data<DbPool>,
 ) -> HttpResponse {
+    lyrics_for_song(
+        song_id.into_inner(),
+        lifecycle.get_ref(),
+        service.get_ref(),
+        pool.get_ref(),
+    )
+    .await
+}
+
+/// `GET /lyrics/{song}`'s answer for one song: from the file first, then
+/// LRCLIB when online metadata is on. Displays use it for the song they show.
+pub(crate) async fn lyrics_for_song(
+    song_id: String,
+    lifecycle: &LibraryLifecycle,
+    service: &LyricsService,
+    pool: &DbPool,
+) -> HttpResponse {
     let library = match lifecycle.cache().await {
         Ok(cache) => cache,
         Err(readiness) => return library_unavailable_response(readiness),
     };
-    let song_id = song_id.into_inner();
     let Some(song) = library.song(&song_id) else {
         return not_found("Song not found.", "song_not_found");
     };
@@ -1355,9 +1371,9 @@ async fn find_lyrics(
     }
 
     // 2. LRCLIB, when online metadata is on (cached answers are always used).
-    let allow_network = online_metadata_enabled(pool.get_ref()).await;
+    let allow_network = online_metadata_enabled(pool).await;
     let online = online_lyrics(
-        service.get_ref(),
+        service,
         &song_id,
         &song.name,
         &artist.name,

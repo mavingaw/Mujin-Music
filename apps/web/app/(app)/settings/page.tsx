@@ -9,6 +9,7 @@ import UserForm from "@/features/settings/user-form";
 import { useSession } from "@/features/account/session-provider";
 import { Suspense, useState } from "react";
 import AudioOutputSettings from "@/features/settings/audio-output-settings";
+import DisplaysSettings from "@/features/settings/displays-settings";
 import DataSettings from "@/features/settings/data-settings";
 import UpdateSettings from "@/features/settings/update-settings";
 import EnrichmentSettings from "@/features/settings/enrichment-settings";
@@ -28,6 +29,7 @@ const settingsTabs = [
   "scrobbling",
   "playback",
   "outputs",
+  "displays",
   "connections",
   "services",
   "library",
@@ -45,6 +47,7 @@ const labels: Record<SettingsTab, string> = {
   scrobbling: "Scrobbling",
   playback: "Playback",
   outputs: "Audio outputs",
+  displays: "Displays",
   connections: "Connections",
   services: "Services",
   library: "Library",
@@ -75,6 +78,7 @@ function SettingsContent() {
         "scrobbling",
         "playback",
         "outputs",
+        "displays",
         "connections",
         "services",
         "data",
@@ -141,6 +145,7 @@ function SettingsContent() {
           {activeTab === "profiles" && <ProfilesSettings />}
           {activeTab === "scrobbling" && <ScrobblingSettings />}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
+          {activeTab === "displays" && <DisplaysSettings />}
           {activeTab === "connections" && (
             <>
               <ConnectionsSettings />

@@ -24,7 +24,12 @@ export default function AppBootstrap({ children }: { children: ReactNode }) {
   const initializedAttempt = useRef<number | null>(null);
 
   useEffect(() => {
-    if (pathname.startsWith("/setup") || pathname.startsWith("/connect")) {
+    // A display screen holds a display key, never a session.
+    if (
+      pathname.startsWith("/setup") ||
+      pathname.startsWith("/connect") ||
+      pathname.startsWith("/display")
+    ) {
       setLoading(false);
       return;
     }

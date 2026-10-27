@@ -26,6 +26,9 @@ import { getLibraryImageUrl } from "@/lib/images/image-url";
 import { generatedCover } from "@/features/library/artwork/generated-cover";
 import { useNowPlayingFacts } from "./use-now-playing-facts";
 import { NowPlayingArtistBio } from "./now-playing-artist";
+import FavoriteButton from "@/features/library/favorite-button";
+import { openZoneDisplay } from "@/features/display/display-links";
+import { toast } from "sonner";
 import { useArtistAbout } from "@/features/library/credits/use-editorial";
 import PlayerQueue, { type QueueEditing } from "./player-queue";
 import { timelinePlaybackRate } from "./player-controls-state";
@@ -540,6 +543,17 @@ export default function PlayerBar() {
   const nextQueueItem = casting
     ? undefined
     : playerQueue[(remote ? remote.queue.current_position : currentIndex) + 1];
+  const upcomingStart =
+    (remote ? remote.queue.current_position : currentIndex) + 1;
+  const upNextItems = casting
+    ? []
+    : playerQueue.slice(upcomingStart, upcomingStart + 3).map((item) => ({
+        title: displaySongTitle(item.song.name || "Untitled"),
+        artist: item.artist.name || item.song.artist,
+        cover:
+          getLibraryImageUrl(item.album.cover_url, getBaseURL) ??
+          generatedCover(item.album.name || item.song.name, item.artist.name),
+      }));
   const upNext = nextQueueItem
     ? {
         title: displaySongTitle(nextQueueItem.song.name || "Untitled"),
@@ -711,6 +725,24 @@ export default function PlayerBar() {
           livePlaying={live ? livePlaying : null}
           details={nowPlayingDetails}
           upNext={upNext}
+          upNextItems={upNextItems}
+          favorite={
+            playingSongId && !live ? (
+              <FavoriteButton songId={playingSongId} songName={displayTitle} />
+            ) : null
+          }
+          shuffle={queueEditing?.shuffle ?? false}
+          onToggleShuffle={
+            queueEditing?.onShuffleChange
+              ? () => queueEditing.onShuffleChange?.(!queueEditing.shuffle)
+              : null
+          }
+          onOpenDisplay={() => {
+            const zone = remote ?? zones.localZone;
+            void openZoneDisplay(
+              zone ? { id: zone.id, name: zone.name } : null,
+            ).catch(() => toast.error("Could not open a display."));
+          }}
           artistBio={
             <NowPlayingArtistBio
               about={artistAbout}
