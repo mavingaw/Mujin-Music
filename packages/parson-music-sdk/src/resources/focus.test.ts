@@ -7,8 +7,15 @@ import {
   getFocusPerson,
   getFocusPage,
   reorderSavedFocuses,
+  bulkTag,
+  createSmartTag,
+  getTagCoverage,
+  tagChanges,
+  tagCheckState,
+  tagCountsSummary,
   tagItems,
   type FocusQuery,
+  type TagCheckState,
 } from "./focus";
 import {
   SORT_OPTIONS,
@@ -598,4 +605,77 @@ describe("facet columns", () => {
       facetSelectionSummary({ key: "credit", role: "performer" }, query),
     ).toBe("");
   });
+});
+
+test("smart tags are created from a focus", async () => {
+  const post = spyOn(api, "post").mockResolvedValue({
+    data: { id: 3, name: "Hi-res jazz" },
+    status: 201,
+    headers: new Headers(),
+  } as never);
+  const query: FocusQuery = {
+    entity: "albums",
+    filters: [{ facet: "quality", value: "hires" }],
+  };
+  await createSmartTag("  Hi-res jazz ", query, { color: "violet" });
+  expect(post).toHaveBeenCalledWith("/library/tags", {
+    name: "Hi-res jazz",
+    color: "violet",
+    query,
+    description: undefined,
+  });
+});
+
+test("bulk tagging batches items and merges coverage", async () => {
+  const post = spyOn(api, "post").mockImplementation(async (path) => {
+    if (String(path).endsWith("/assigned/bulk")) {
+      return { data: [{ tagId: 1, count: 2 }] } as never;
+    }
+    return { data: { added: 1, removed: 0, skipped: [9] } } as never;
+  });
+  const ids = Array.from({ length: 600 }, (_, index) => `al-${index}`);
+  const coverage = await getTagCoverage("album", ids);
+  expect(coverage.get(1)).toBe(4);
+  const outcome = await bulkTag("album", ids, { add: [1], remove: [2] });
+  expect(outcome).toEqual({ added: 2, removed: 0, skipped: [9] });
+  expect(post).toHaveBeenLastCalledWith("/library/tags/bulk", {
+    entity_type: "album",
+    entity_ids: ids.slice(500),
+    add: [1],
+    remove: [2],
+  });
+  post.mockClear();
+  expect(await bulkTag("album", ids, {})).toEqual({
+    added: 0,
+    removed: 0,
+    skipped: [],
+  });
+  expect(post).not.toHaveBeenCalled();
+});
+
+test("manage tags turns tri-state choices into changes", () => {
+  expect(tagCheckState(0, 3)).toBe("unchecked");
+  expect(tagCheckState(2, 3)).toBe("mixed");
+  expect(tagCheckState(3, 3)).toBe("checked");
+  const initial = new Map<number, TagCheckState>([
+    [1, "mixed"],
+    [2, "checked"],
+    [3, "unchecked"],
+    [4, "mixed"],
+  ]);
+  const desired = new Map<number, TagCheckState>([
+    [1, "checked"],
+    [2, "unchecked"],
+    [3, "unchecked"],
+    [4, "mixed"],
+    [5, "checked"],
+  ]);
+  expect(tagChanges(initial, desired)).toEqual({ add: [1, 5], remove: [2] });
+  expect(
+    tagCountsSummary({
+      item_count: 4,
+      counts: { album: 3, artist: 1, track: 0, work: 0, playlist: 0 },
+    }),
+  ).toBe("3 albums · 1 artist");
+  expect(tagCountsSummary({ item_count: 1 })).toBe("1 item");
 });

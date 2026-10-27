@@ -151,6 +151,11 @@ export interface PlaybackEvent {
   source?: string;
   position_seconds?: number;
   duration_seconds?: number;
+  /** The zone that played the track, for listening history. */
+  zone_id?: string;
+  zone_name?: string;
+  /** "Desktop app", "Chrome on macOS", "Android", ... */
+  device?: string;
 }
 
 export async function recordPlaybackEvent(

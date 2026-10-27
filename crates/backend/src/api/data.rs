@@ -214,6 +214,7 @@ struct PersonalDataExport {
     tags: Vec<serde_json::Value>,
     saved_focuses: Vec<serde_json::Value>,
     notes: Vec<serde_json::Value>,
+    listen_later: Vec<serde_json::Value>,
 }
 
 fn safe_backup_filename(value: &str) -> Option<&str> {
@@ -1329,7 +1330,9 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
             exported_at: Utc::now().to_rfc3339(),
             profile,
             listen_history: object_rows(
-                "SELECT json_object('song_id', song_id, 'listened_at', listened_at) AS value
+                "SELECT json_object('song_id', song_id, 'listened_at', listened_at,
+                  'title', title, 'artist', artist_name, 'album', album_name,
+                  'zone', zone_name, 'device', device, 'source', source) AS value
                  FROM listen_history_item WHERE user_id = ? ORDER BY id DESC",
                 &mut connection,
             )?,
@@ -1370,7 +1373,9 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
             )?,
             tags: object_rows(
                 "SELECT json_object('id', user_tag.id, 'name', user_tag.name,
-                  'created_at', user_tag.created_at,
+                  'created_at', user_tag.created_at, 'color', user_tag.color,
+                  'description', user_tag.description,
+                  'smart_focus', json(user_tag.query_json),
                   'items', json((
                     SELECT json_group_array(json_object(
                       'entity_type', user_tag_item.entity_type,
@@ -1392,6 +1397,12 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                 "SELECT json_object('entity_type', entity_type, 'entity_id', entity_id,
                   'body', body, 'updated_at', updated_at) AS value
                  FROM user_note WHERE user_id = ? ORDER BY updated_at DESC",
+                &mut connection,
+            )?,
+            listen_later: object_rows(
+                "SELECT json_object('entity_type', entity_type, 'entity_id', entity_id,
+                  'added_at', added_at) AS value
+                 FROM listen_later_item WHERE user_id = ? ORDER BY added_at DESC",
                 &mut connection,
             )?,
         })

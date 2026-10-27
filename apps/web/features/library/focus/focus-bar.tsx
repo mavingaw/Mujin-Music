@@ -38,12 +38,13 @@ import {
   Shuffle,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import SavedFocusMenu from "./saved-focus-menu";
 
 export default function FocusBar({
   bookmarks = true,
   canPlay,
+  extraActions,
   onCreateSmartPlaylist,
   onPlay,
   onTogglePanel,
@@ -54,6 +55,8 @@ export default function FocusBar({
   /** Scoped browsers (a composer, an album) have no bookmarks. */
   bookmarks?: boolean;
   canPlay: boolean;
+  /** More actions after "Create smart playlist" (tagging). */
+  extraActions?: ReactNode;
   onCreateSmartPlaylist: () => void;
   onPlay: (shuffle: boolean) => void;
   onTogglePanel: () => void;
@@ -142,6 +145,7 @@ export default function FocusBar({
             <span className="hidden md:inline">Create smart playlist</span>
           </button>
         )}
+        {extraActions}
 
         <div className="ml-auto flex items-center gap-1 [&>*]:shrink-0">
           {canPlay && (

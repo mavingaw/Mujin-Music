@@ -1365,7 +1365,7 @@ impl ZoneService {
             return self.sonos_command(user_id, uuid, command, cache).await;
         }
         if hosted_zone_id(zone_id) {
-            return self.hosted_command(zone_id, command, cache).await;
+            return self.hosted_command(user_id, zone_id, command, cache).await;
         }
         if zone_id.starts_with("client:") {
             let command = self.clamp_client_command(user_id, zone_id, command)?;

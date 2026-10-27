@@ -199,6 +199,11 @@ pub enum Criterion {
         tag_id: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// The focus a smart tag follows, filled in from the database by
+        /// [`crate::library::tags::with_smart_tags`] before the query runs.
+        /// Never read from or written to JSON.
+        #[serde(skip)]
+        smart: Option<Box<FocusQuery>>,
     },
     Source {
         root_id: i64,
@@ -619,6 +624,73 @@ fn album_tracks(albums: &Fragment) -> Fragment {
     tracks
 }
 
+/// The catalog entity type a smart tag's focus yields.
+pub fn tagged_entity_type(entity: FocusEntity) -> &'static str {
+    match entity {
+        FocusEntity::Albums => "album",
+        FocusEntity::Songs => "track",
+        FocusEntity::Artists | FocusEntity::Composers => "artist",
+        FocusEntity::Compositions => "work",
+    }
+}
+
+/// Members of one entity type on a tag: the items tagged by hand plus,
+/// for a smart tag, whatever its focus matches right now.
+pub(crate) fn tag_members(
+    tag_id: i64,
+    smart: Option<&FocusQuery>,
+    user_id: i32,
+    entity_type: &str,
+) -> Fragment {
+    let mut members = Fragment::new(format!(
+        "SELECT i.entity_id FROM user_tag_item i JOIN user_tag g ON g.id = i.tag_id \
+         WHERE g.user_id = ? AND i.tag_id = ? AND i.entity_type = '{entity_type}'"
+    ))
+    .int(i64::from(user_id))
+    .int(tag_id);
+    if let Some(query) = smart.filter(|query| tagged_entity_type(query.entity) == entity_type) {
+        members.push(&format!(
+            " UNION SELECT e.id FROM {} e WHERE ",
+            entity_table(query.entity)
+        ));
+        members.append(where_condition(query, user_id));
+    }
+    members
+}
+
+/// A tag matches the tracks it holds, the tracks of the albums, artists,
+/// works and playlists it holds, and, for a smart tag, the tracks of what
+/// its focus matches.
+fn tag_sets(tag_id: i64, smart: Option<&FocusQuery>, user_id: i32) -> CriterionSets {
+    let tag = |entity: &str| tag_members(tag_id, smart, user_id, entity);
+    let mut tracks = tag("track");
+    tracks.push(" UNION SELECT id FROM track_entity WHERE album_id IN (");
+    tracks.append(tag("album")).push(")");
+    tracks.push(
+        format!(
+            " UNION SELECT track_id FROM track_artist WHERE role IN {ARTIST_ROLES_SQL} AND artist_id IN ("
+        )
+        .as_str(),
+    );
+    tracks.append(tag("artist")).push(")");
+    tracks.push(
+        " UNION SELECT t.id FROM track_entity t JOIN album_artist aa ON aa.album_id = t.album_id \
+         WHERE aa.role = 'primary' AND aa.artist_id IN (",
+    );
+    tracks.append(tag("artist")).push(")");
+    tracks.push(" UNION ");
+    tracks.append(work_tracks(&tag("work")));
+    tracks.push(" UNION SELECT ps.b FROM _playlist_to_song ps WHERE CAST(ps.a AS TEXT) IN (");
+    tracks.append(tag("playlist")).push(")");
+    CriterionSets {
+        tracks,
+        albums: None,
+        artists: Some(tag("artist")),
+        works: None,
+        composers: None,
+    }
+}
+
 fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
     let user = i64::from(user_id);
     let tracks_only = CriterionSets::tracks;
@@ -736,35 +808,7 @@ fn criterion_sets(criterion: &Criterion, user_id: i32) -> CriterionSets {
             works: None,
             composers: None,
         },
-        Criterion::Tag { tag_id, .. } => {
-            let tag = |entity: &str| {
-                Fragment::new(format!(
-                    "SELECT i.entity_id FROM user_tag_item i JOIN user_tag g ON g.id = i.tag_id \
-                     WHERE g.user_id = ? AND i.tag_id = ? AND i.entity_type = '{entity}'"
-                ))
-                .int(user)
-                .int(*tag_id)
-            };
-            let mut tracks = tag("track");
-            tracks.push(" UNION SELECT id FROM track_entity WHERE album_id IN (");
-            tracks.append(tag("album")).push(")");
-            tracks.push(format!(
-                " UNION SELECT track_id FROM track_artist WHERE role IN {ARTIST_ROLES_SQL} AND artist_id IN ("
-            ).as_str());
-            tracks.append(tag("artist")).push(")");
-            tracks.push(
-                " UNION SELECT t.id FROM track_entity t JOIN album_artist aa ON aa.album_id = t.album_id \
-                 WHERE aa.role = 'primary' AND aa.artist_id IN (",
-            );
-            tracks.append(tag("artist")).push(")");
-            CriterionSets {
-                tracks,
-                albums: None,
-                artists: Some(tag("artist")),
-                works: None,
-                composers: None,
-            }
-        }
+        Criterion::Tag { tag_id, smart, .. } => tag_sets(*tag_id, smart.as_deref(), user_id),
         Criterion::Source { root_id, .. } => tracks_only(primary_file_tracks(
             Fragment::new("pfe.root_id = ?").int(*root_id),
         )),
@@ -1278,6 +1322,8 @@ pub fn focus_ids(
 ) -> Result<FocusIds, Box<dyn std::error::Error + Send + Sync>> {
     query.validate()?;
     crate::library::works::ensure_works(connection)?;
+    let resolved = crate::library::tags::with_smart_tags(connection, query, user_id)?;
+    let query = &resolved;
     let limit = limit.clamp(1, MAX_RESOLVED_IDS);
     let ids = select_sql(query, user_id, offset, limit)
         .into_query()
@@ -1475,6 +1521,7 @@ fn facet_branch(
     user_id: i32,
     search: Option<&str>,
     limit: usize,
+    smart_tags: &[(i64, FocusQuery)],
 ) -> Option<Fragment> {
     let user = i64::from(user_id);
     let by_count = "count DESC, label COLLATE NOCASE ASC";
@@ -1592,9 +1639,8 @@ fn facet_branch(
             limit,
             by_count,
         ),
-        "tag" => grouped_branch(
-            key,
-            Fragment::new(format!(
+        "tag" => {
+            let mut source = Fragment::new(format!(
                 "SELECT entity_id, g.id AS value, g.name AS label FROM ( \
                    SELECT ft.entity_id AS entity_id, i.tag_id AS tag_id FROM ft \
                    JOIN user_tag_item i ON i.entity_type = 'track' AND i.entity_id = ft.track_id \
@@ -1604,13 +1650,25 @@ fn facet_branch(
                    UNION SELECT ft.entity_id, i.tag_id FROM ft \
                    JOIN track_artist ita ON ita.track_id = ft.track_id AND ita.role IN {ARTIST_ROLES_SQL} \
                    JOIN user_tag_item i ON i.entity_type = 'artist' AND i.entity_id = ita.artist_id \
-                 ) tagged JOIN user_tag g ON g.id = tagged.tag_id WHERE g.user_id = ?"
-            ))
-            .int(user),
-            search,
-            limit,
-            by_count,
-        ),
+                   UNION SELECT ft.entity_id, i.tag_id FROM ft \
+                   JOIN library_track_work itw ON itw.track_id = ft.track_id \
+                   JOIN user_tag_item i ON i.entity_type = 'work' AND i.entity_id = itw.work_id \
+                   UNION SELECT ft.entity_id, i.tag_id FROM ft \
+                   JOIN _playlist_to_song ips ON ips.b = ft.track_id \
+                   JOIN user_tag_item i ON i.entity_type = 'playlist' AND i.entity_id = CAST(ips.a AS TEXT)"
+            ));
+            // Smart tags hold no rows; each one counts the focused entities
+            // whose tracks its focus matches now.
+            for (tag_id, smart) in smart_tags {
+                source.push(&format!(
+                    " UNION SELECT ft.entity_id, {tag_id} FROM ft WHERE ft.track_id IN ("
+                ));
+                source.append(tag_sets(*tag_id, Some(smart), user_id).tracks);
+                source.push(")");
+            }
+            source.push(" ) tagged JOIN user_tag g ON g.id = tagged.tag_id WHERE g.user_id = ?");
+            grouped_branch(key, source.int(user), search, limit, by_count)
+        }
         "source" => grouped_branch(
             key,
             Fragment::new(
@@ -1778,7 +1836,12 @@ pub fn facet_rank(entity: FocusEntity, key: &str) -> usize {
     }
 }
 
-pub fn facets_sql(query: &FocusQuery, user_id: i32, request: &FacetRequest) -> Fragment {
+pub fn facets_sql(
+    query: &FocusQuery,
+    user_id: i32,
+    request: &FacetRequest,
+    smart_tags: &[(i64, FocusQuery)],
+) -> Fragment {
     let entity = query.entity;
     let limit = request
         .limit
@@ -1806,7 +1869,7 @@ pub fn facets_sql(query: &FocusQuery, user_id: i32, request: &FacetRequest) -> F
         if !facet_applies(entity, key) {
             continue;
         }
-        if let Some(branch) = facet_branch(key, entity, user_id, search, limit) {
+        if let Some(branch) = facet_branch(key, entity, user_id, search, limit, smart_tags) {
             sql.push(" UNION ALL SELECT * FROM (");
             sql.append(branch);
             sql.push(")");
@@ -1926,7 +1989,16 @@ pub fn focus_facets(
     {
         return Err(invalid("The facet search is too long.").into());
     }
-    let rows = facets_sql(query, user_id, request)
+    let resolved = crate::library::tags::with_smart_tags(connection, query, user_id)?;
+    let query = &resolved;
+    let smart_tags = if facet_applies(query.entity, "tag")
+        && (request.only.is_empty() || request.only.iter().any(|only| only == "tag"))
+    {
+        crate::library::tags::resolved_smart_tags(connection, user_id)?
+    } else {
+        Vec::new()
+    };
+    let rows = facets_sql(query, user_id, request, &smart_tags)
         .into_query()
         .load::<FacetRow>(connection)?;
     let mut total = 0;
@@ -2408,7 +2480,7 @@ pub fn focus_compositions(
     user_id: i32,
 ) -> Result<FocusCompositions, Box<dyn std::error::Error + Send + Sync>> {
     crate::library::works::ensure_works(connection)?;
-    let mut songs = query.as_songs();
+    let mut songs = crate::library::tags::with_smart_tags(connection, query, user_id)?.as_songs();
     songs.sort = None;
     songs.direction = None;
     songs.validate()?;
@@ -2774,6 +2846,7 @@ mod tests {
             Criterion::Tag {
                 tag_id: 0,
                 name: None,
+                smart: None,
             },
             Criterion::AddedWithin { days: 0 },
         ] {
@@ -2979,7 +3052,8 @@ mod tests {
                     FocusEntity::Songs,
                     vec![include(Criterion::Tag {
                         tag_id: 1,
-                        name: None
+                        name: None,
+                        smart: None,
                     })]
                 )
             ),
@@ -2993,7 +3067,8 @@ mod tests {
                     FocusEntity::Songs,
                     vec![include(Criterion::Tag {
                         tag_id: 2,
-                        name: None
+                        name: None,
+                        smart: None,
                     })]
                 )
             )

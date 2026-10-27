@@ -500,6 +500,7 @@ mod tests {
                 source: Some("generated".into()),
                 position_seconds: Some(3.0),
                 duration_seconds: Some(200.0),
+                ..Default::default()
             },
             &cache,
             &pool,
