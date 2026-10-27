@@ -16,6 +16,9 @@ pub enum QualityTier {
     HiRes,
     /// Lossless at CD resolution.
     Lossless,
+    /// Made by the AI enhancer from a lossy copy: plausible restored
+    /// treble, never the original master, so never graded as lossless.
+    AiEnhanced,
     /// Lossy codecs (MP3, AAC, Vorbis, Opus...).
     Lossy,
     /// The file's stream could not be read.
@@ -28,6 +31,7 @@ impl QualityTier {
             Self::Dsd => 5,
             Self::HiRes => 4,
             Self::Lossless => 3,
+            Self::AiEnhanced => 2,
             Self::Lossy => 1,
             Self::Unknown => 0,
         }
@@ -38,6 +42,7 @@ impl QualityTier {
             Self::Dsd => "DSD",
             Self::HiRes => "Hi-Res lossless",
             Self::Lossless => "CD-quality lossless",
+            Self::AiEnhanced => "AI-enhanced",
             Self::Lossy => "Lossy",
             Self::Unknown => "Unknown",
         }

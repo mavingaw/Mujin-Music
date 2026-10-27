@@ -38,6 +38,7 @@ pub mod search;
 pub mod setup;
 pub mod song;
 pub mod tags;
+pub mod upgrade;
 pub mod user;
 pub mod works;
 pub mod zones;

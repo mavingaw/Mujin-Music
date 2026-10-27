@@ -19,7 +19,7 @@ use crate::api::{
     album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
     genres, home, imports, key_service, library_tools, listen_later, live_radio, lyrics, metadata,
     outputs, playback, playlist, profiles, providers, remote_access, scrobbling, search, setup,
-    song, user, works, zones,
+    song, upgrade, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -157,6 +157,13 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .configure(data::configure_admin),
         )
         .service(web::scope("/data").configure(data::configure_personal))
+        // Better versions: admins request and enhance; everyone sees status.
+        .service(
+            web::scope("/upgrades/admin")
+                .wrap(HttpAuthentication::with_fn(admin_guard))
+                .configure(upgrade::configure_admin),
+        )
+        .service(web::scope("/upgrades").configure(upgrade::configure_status))
         .configure(artist::configure)
         .configure(album::configure)
         .configure(song::configure)
@@ -338,7 +345,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "history",
             "profiles",
             "scrobbling",
-            "live_radio"
+            "live_radio",
+            "better_versions"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
@@ -447,7 +455,13 @@ pub async fn build_server_with_shutdown_timeout(
             .map_err(std::io::Error::other)?,
     );
     tokio::spawn(scrobble_hub.clone().into_inner().run());
+    let upgrade_service = web::Data::new(
+        crate::upgrade::UpgradeService::from_env(database.get_ref().clone())
+            .map_err(std::io::Error::other)?,
+    );
     let library = web::Data::from(local_app.library);
+    upgrade_service.set_library(library.clone());
+    tokio::spawn(upgrade_service.clone().into_inner().run());
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
             .map_err(|error| std::io::Error::other(format!("lyrics client: {error}")))?,
@@ -495,6 +509,7 @@ pub async fn build_server_with_shutdown_timeout(
             .app_data(zone_service.clone())
             .app_data(streaming_services.clone())
             .app_data(scrobble_hub.clone())
+            .app_data(upgrade_service.clone())
             .app_data(live_radio_service.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))

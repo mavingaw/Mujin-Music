@@ -10,6 +10,7 @@ use diesel::QueryResult;
 use diesel::sqlite::SqliteConnection;
 
 use super::duplicates::TrackFacts;
+use super::marks::{self, FileMarks, copy_rank, grade_marked};
 use super::quality::{Quality, grade};
 use super::store::{self, UserAlbumRow, UserAlbumTrackRow};
 use super::versions::{AlbumFacts, VersionChoice, group_versions};
@@ -32,6 +33,10 @@ pub struct ToolLayers {
     pub version_members: HashMap<String, Option<String>>,
     pub version_choices: HashMap<String, VersionChoice>,
     pub release_groups: HashMap<String, String>,
+    /// Copies of tracks where one copy is AI-enhanced or a fake lossless
+    /// file, by track id: Better versions decides which of them plays.
+    pub marked_copies: HashMap<String, Vec<PreferredFile>>,
+    pub marks: std::sync::Arc<FileMarks>,
 }
 
 impl ToolLayers {
@@ -70,6 +75,30 @@ impl ToolLayers {
                 (album, tracks)
             })
             .collect();
+        // Better versions' marks; tables may be missing on a database
+        // that has not been migrated yet, which simply means no marks.
+        let file_marks = marks::install(marks::load(connection).unwrap_or_default());
+        let mut marked_copies: HashMap<String, Vec<PreferredFile>> = HashMap::new();
+        if !file_marks.by_path.is_empty() {
+            let copies = store::multi_copy_tracks(connection)?;
+            let marked: HashSet<&str> = copies
+                .iter()
+                .filter(|copy| file_marks.get(&copy.path).is_some())
+                .map(|copy| copy.track_id.as_str())
+                .collect();
+            let marked: HashSet<String> = marked.into_iter().map(str::to_string).collect();
+            for copy in copies {
+                if marked.contains(&copy.track_id) {
+                    marked_copies
+                        .entry(copy.track_id.clone())
+                        .or_default()
+                        .push(PreferredFile {
+                            audio: copy.audio(),
+                            path: copy.path,
+                        });
+                }
+            }
+        }
         Ok(Self {
             hidden_paths,
             preferred_files,
@@ -77,12 +106,15 @@ impl ToolLayers {
             version_members: store::version_members(connection)?,
             version_choices: store::version_choices(connection)?,
             release_groups: store::release_groups(connection)?,
+            marked_copies,
+            marks: file_marks,
         })
     }
 
     pub fn is_empty(&self) -> bool {
         self.hidden_paths.is_empty()
             && self.preferred_files.is_empty()
+            && self.marked_copies.is_empty()
             && self.user_albums.is_empty()
             && !self
                 .version_choices
@@ -99,16 +131,48 @@ fn extension(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Quality of the file a song plays.
+/// Quality of the file a song plays, with Better versions' marks (an
+/// AI-enhanced copy is graded "AI-enhanced", a fake lossless file as the
+/// lossy copy it came from).
 pub fn song_quality(song: &Song) -> Quality {
-    grade(song.audio.as_ref(), &extension(&song.path))
+    song_quality_with(song, &marks::current())
+}
+
+/// [`song_quality`] with explicit marks.
+pub fn song_quality_with(song: &Song, marks: &FileMarks) -> Quality {
+    grade_marked(
+        song.audio.as_ref(),
+        &extension(&song.path),
+        marks.get(&song.path),
+    )
+}
+
+/// The copy that should play among `copies`: a genuine lossless copy, then
+/// an AI-enhanced one (when preferred), then the lossy original.
+pub fn best_marked_copy<'a>(
+    copies: &'a [PreferredFile],
+    marks: &FileMarks,
+) -> Option<&'a PreferredFile> {
+    copies.iter().max_by_key(|copy| {
+        copy_rank(
+            copy.audio.as_ref(),
+            &extension(&copy.path),
+            marks.get(&copy.path),
+            marks.prefer_enhanced,
+        )
+    })
 }
 
 /// Quality most of an album's tracks have, and whether they differ.
 pub fn album_quality(album: &Album) -> (Quality, bool) {
+    album_quality_with(album, &marks::current())
+}
+
+/// [`album_quality`] with explicit marks.
+pub fn album_quality_with(album: &Album, marks: &FileMarks) -> (Quality, bool) {
     let mut counts: HashMap<String, (usize, Quality)> = HashMap::new();
     for song in &album.songs {
-        let quality = song_quality(song);
+        let quality = song_quality_with(song, marks);
         counts
             .entry(quality.label.clone())
             .or_insert((0, quality))
@@ -187,8 +251,9 @@ pub fn apply(library: &mut Vec<Artist>, layers: &ToolLayers) -> HashSet<String> 
         .map(|artist| artist.id.clone())
         .collect();
 
-    // 1. The copy that plays.
-    if !layers.preferred_files.is_empty() {
+    // 1. The copy that plays: the user's choice, else Better versions'
+    // ranking where a copy is AI-enhanced or fake lossless.
+    if !layers.preferred_files.is_empty() || !layers.marked_copies.is_empty() {
         for song in library
             .iter_mut()
             .flat_map(|artist| artist.albums.iter_mut())
@@ -197,6 +262,13 @@ pub fn apply(library: &mut Vec<Artist>, layers: &ToolLayers) -> HashSet<String> 
             if let Some(preferred) = layers.preferred_files.get(&song.id) {
                 song.path = preferred.path.clone();
                 song.audio = preferred.audio.clone();
+            } else if let Some(best) = layers
+                .marked_copies
+                .get(&song.id)
+                .and_then(|copies| best_marked_copy(copies, &layers.marks))
+            {
+                song.path = best.path.clone();
+                song.audio = best.audio.clone();
             }
         }
     }

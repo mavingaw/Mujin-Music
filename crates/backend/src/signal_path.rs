@@ -966,6 +966,63 @@ pub struct NativeOutputTarget<'a> {
     pub processing: Option<&'a parson_output::dsp::ProcessingPlan>,
     /// A network player, reached over UPnP, OpenHome or AirPlay.
     pub network: Option<&'a parson_output::network::NetworkInfo>,
+    /// Real-time AI enhancement of this track, before the DSP chain.
+    pub ai_enhance: Option<&'a AiEnhanceStage>,
+}
+
+/// Stage id of real-time AI enhancement.
+pub const AI_ENHANCE_STAGE: &str = "native-ai-enhance";
+
+/// Real-time AI enhancement as the signal path describes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AiEnhanceStage {
+    /// e.g. `Apollo`.
+    pub model: String,
+    pub chunk_seconds: f64,
+    pub lookahead_chunks: usize,
+    pub realtime_factor: f64,
+}
+
+impl AiEnhanceStage {
+    pub fn stage(&self) -> SignalStage {
+        SignalStage {
+            id: AI_ENHANCE_STAGE,
+            kind: StageKind::Dsp,
+            title: format!("AI-enhanced ({})", self.model),
+            detail: format!(
+                "real time, {:.0} s chunks, {:.0} s ahead, {:.2}× real-time on the enhancer",
+                self.chunk_seconds,
+                self.chunk_seconds * self.lookahead_chunks as f64,
+                self.realtime_factor
+            ),
+            quality: Some(SignalQuality::Enhanced),
+            explanation: format!(
+                "You turned on AI enhance. The lossy track streams through {} on your enhancer worker ahead of the playhead; it generates plausible high frequencies the encoder threw away. It cannot recover the original master, so this is AI-enhanced audio, not lossless. Chunks are crossfaded, and if the worker falls behind the original plays instead, without a gap.",
+                self.model
+            ),
+        }
+    }
+}
+
+/// Marks a path whose file is an AI-enhanced copy (made by the enhancer
+/// worker): its source is "AI-enhanced", never lossless, however the FLAC
+/// container reads.
+pub fn mark_ai_enhanced_source(path: &mut ServerSignalPath, model: &str) {
+    if let Some(source) = path
+        .stages
+        .iter_mut()
+        .find(|stage| stage.kind == StageKind::Source)
+    {
+        source.title = "Source".into();
+        source.detail = format!("AI-enhanced ({model}) · {}", source.detail);
+        source.quality = Some(SignalQuality::Enhanced);
+        source.explanation = format!(
+            "A copy {model} made from a lossy file on your enhancer worker. The restored high frequencies are generated, plausible detail; the original master is not recovered, so this is AI-enhanced, not lossless. The original file is kept and is one click away."
+        );
+    }
+    path.source.lossless = Some(false);
+    path.source.high_res = false;
+    path.quality = overall(&path.stages);
 }
 
 fn plan_format_summary(plan: &parson_output::OutputPlan) -> String {
@@ -1083,6 +1140,9 @@ pub fn describe_native_leg(
             ),
         });
     }
+    if let Some(ai) = target.ai_enhance {
+        stages.push(ai.stage());
+    }
     let derived;
     let processing = match (target.processing, target.leveling) {
         (Some(processing), _) => Some(processing),
@@ -1111,6 +1171,9 @@ pub fn describe_native_leg(
     };
     let mut chain: Vec<&'static str> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+    if target.ai_enhance.is_some() {
+        chain.push(AI_ENHANCE_STAGE);
+    }
     if let Some(processing) = processing {
         stages.push(SignalStage {
             id: "native-float-in",
@@ -1737,24 +1800,45 @@ pub fn add_hardware_report(
 /// it can be no better than low quality: a byte-exact copy of an MP3 is
 /// still an MP3. Roon rates the rest of a path after a lossy file the same
 /// way.
+///
+/// Real-time AI enhancement starts a new generation: what it outputs is
+/// AI-enhanced audio (rated enhanced), and only a lossy stage after it
+/// makes the rest low quality again.
 pub fn carry_lossy_generation(stages: &mut [SignalStage]) {
-    let Some(first_lossy) = stages
-        .iter()
-        .position(|stage| stage.quality == Some(SignalQuality::LowQuality))
-    else {
-        return;
-    };
-    for stage in &mut stages[first_lossy + 1..] {
-        if stage.quality.is_some() {
-            stage.quality = Some(SignalQuality::LowQuality);
+    let start = generation_start(stages);
+    let carry = |stages: &mut [SignalStage]| {
+        let Some(first_lossy) = stages
+            .iter()
+            .position(|stage| stage.quality == Some(SignalQuality::LowQuality))
+        else {
+            return;
+        };
+        for stage in &mut stages[first_lossy + 1..] {
+            if stage.quality.is_some() {
+                stage.quality = Some(SignalQuality::LowQuality);
+            }
         }
-    }
+    };
+    let (before, after) = stages.split_at_mut(start);
+    carry(before);
+    carry(after);
+}
+
+/// Index of the last AI enhancement stage, or 0.
+fn generation_start(stages: &[SignalStage]) -> usize {
+    stages
+        .iter()
+        .rposition(|stage| stage.id == AI_ENHANCE_STAGE)
+        .unwrap_or(0)
 }
 
 /// Worst classified stage. A path whose source is unclassified cannot be
-/// called lossless, so it is capped at high quality.
+/// called lossless, so it is capped at high quality. With real-time AI
+/// enhancement the path is rated from the enhancement on: the source
+/// stage still says it is lossy, and the light says what you hear.
 pub fn overall(stages: &[SignalStage]) -> SignalQuality {
-    let worst = stages
+    let from_ai = generation_start(stages);
+    let worst = stages[from_ai..]
         .iter()
         .filter_map(|stage| stage.quality)
         .min()
@@ -2399,6 +2483,7 @@ mod tests {
         leveling: None,
         processing: None,
         network: None,
+        ai_enhance: None,
     };
 
     #[test]

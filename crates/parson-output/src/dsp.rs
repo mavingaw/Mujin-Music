@@ -266,6 +266,17 @@ pub struct ConvolutionSettings {
     pub filter_id: Option<String>,
 }
 
+/// "AI enhance in real time (experimental)": lossy tracks are streamed
+/// through the enhancer worker ahead of the playhead. The model
+/// invents plausible treble; it does not recover the original master.
+/// The server decides per track whether it can run (a lossy source at the
+/// model's rate, and a worker fast enough); this is only the wish.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AiEnhanceSettings {
+    pub enabled: bool,
+}
+
 /// One output's DSP chain, in the SDK's `DspSettings` shape.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -277,6 +288,8 @@ pub struct DspSettings {
     pub crossfeed: CrossfeedSettings,
     pub convolution: ConvolutionSettings,
     pub sample_rate: SampleRateSettings,
+    /// Older settings omit it: off.
+    pub ai_enhance: AiEnhanceSettings,
 }
 
 impl Default for DspSettings {
@@ -288,6 +301,7 @@ impl Default for DspSettings {
             crossfeed: CrossfeedSettings::default(),
             convolution: ConvolutionSettings::default(),
             sample_rate: SampleRateSettings::default(),
+            ai_enhance: AiEnhanceSettings::default(),
         }
     }
 }
@@ -371,6 +385,11 @@ impl DspSettings {
             RateMode::Source => Some(source_rate),
             RateMode::Fixed(rate) => Some(rate),
         }
+    }
+
+    /// AI enhancement was asked for (it runs only where the server can).
+    pub fn ai_enhance_requested(&self) -> bool {
+        self.enabled && self.ai_enhance.enabled
     }
 
     /// Any section that changes the samples.
@@ -532,6 +551,32 @@ pub fn plan_processing_with(
     settings: &OutputSettings,
     filter: Option<&ConvolutionFilter>,
 ) -> Option<ProcessingPlan> {
+    plan_processing_forced(
+        plan,
+        source,
+        dsp,
+        leveling_db,
+        caps,
+        settings,
+        filter,
+        false,
+    )
+}
+
+/// [`plan_processing_with`], forced into the float path when `force` is
+/// set even if no section processes: a stage before the chain (such as
+/// real-time AI enhancement) delivers float samples.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_processing_forced(
+    plan: &mut OutputPlan,
+    source: &SourceFormat,
+    dsp: &DspSettings,
+    leveling_db: Option<f64>,
+    caps: &DeviceCaps,
+    settings: &OutputSettings,
+    filter: Option<&ConvolutionFilter>,
+    force: bool,
+) -> Option<ProcessingPlan> {
     let leveling_db = leveling_db.filter(|gain| gain.is_finite() && gain.abs() >= 0.005);
     let wanted_filter = dsp.convolution_filter();
     let (convolve, convolution_skipped) = match (wanted_filter, filter) {
@@ -564,7 +609,8 @@ pub fn plan_processing_with(
     };
     let others =
         dsp.headroom_db().is_some() || !dsp.active_bands().is_empty() || dsp.crossfeed().is_some();
-    let processes = leveling_db.is_some() || others || rate_requested || convolve.is_some();
+    let processes =
+        force || leveling_db.is_some() || others || rate_requested || convolve.is_some();
     if !processes {
         return None;
     }
@@ -1482,6 +1528,18 @@ mod tests {
         assert_eq!(odd.sample_rate.mode, RateMode::Device);
         assert_eq!(odd.normalized().headroom.gain_db, -24.0);
         assert!(!DspSettings::default().processes());
+        // AI enhance is off in older settings, and is not itself a section
+        // of the chain (the server decides per track whether it runs).
+        let fresh: DspSettings = serde_json::from_str("{}").unwrap();
+        assert!(!fresh.ai_enhance.enabled);
+        let ai: DspSettings = serde_json::from_str(r#"{"aiEnhance":{"enabled":true}}"#).unwrap();
+        assert!(ai.ai_enhance_requested());
+        assert!(!ai.processes());
+        let bypassed = DspSettings {
+            enabled: false,
+            ..ai
+        };
+        assert!(!bypassed.ai_enhance_requested());
     }
 
     #[test]
