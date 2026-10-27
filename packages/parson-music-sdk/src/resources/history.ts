@@ -355,6 +355,11 @@ export function historySourceLabel(source?: string | null): string {
       return "Radio";
     case "zone":
       return "Remote";
+    // Listens imported from a scrobbling service (Settings > Scrobbling).
+    case "lastfm":
+      return "Imported from Last.fm";
+    case "listenbrainz":
+      return "Imported from ListenBrainz";
     case null:
     case undefined:
     case "unknown":
