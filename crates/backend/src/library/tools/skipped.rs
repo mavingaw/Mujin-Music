@@ -237,9 +237,10 @@ pub fn fix_for(reason: SkipReason, extension: &str, path: &str) -> Fix {
             command: None,
         },
         SkipReason::NoAudio => Fix {
-            summary: "The file has a music extension but no audio Mujin Music can measure. Check it \
+            summary:
+                "The file has a music extension but no audio Mujin Music can measure. Check it \
                       plays elsewhere, then read it again."
-                .into(),
+                    .into(),
             action: Some("rescan"),
             command: None,
         },
@@ -258,9 +259,10 @@ pub fn fix_for(reason: SkipReason, extension: &str, path: &str) -> Fix {
             command: Some(format!("chmod a+r {}", shell_quote(path))),
         },
         SkipReason::UnreadableFolder => Fix {
-            summary: "Mujin Music can't list this folder, so nothing inside it is in your library. \
+            summary:
+                "Mujin Music can't list this folder, so nothing inside it is in your library. \
                       Check its permissions and that the drive is connected."
-                .into(),
+                    .into(),
             action: Some("rescan"),
             command: Some(format!("chmod a+rx {}", shell_quote(path))),
         },

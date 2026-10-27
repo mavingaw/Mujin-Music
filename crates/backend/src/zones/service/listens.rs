@@ -18,6 +18,13 @@ use crate::scrobbling::{ScrobbleHub, rules};
 /// anything bigger is a seek.
 const MAX_LISTEN_STEP_MS: i64 = 15_000;
 
+/// A server-driven zone, by id and by the name the history shows.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ZoneLabel<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ListenProgress {
     serial: u64,
@@ -126,8 +133,7 @@ impl ZoneService {
     /// Records the listen of the track a server-driven zone is playing.
     pub(super) fn track_zone_listen(
         &self,
-        zone_id: &str,
-        zone_name: &str,
+        zone: ZoneLabel<'_>,
         serial: u64,
         song_id: &str,
         position_ms: i64,
@@ -137,6 +143,10 @@ impl ZoneService {
         let Some(cache) = cache else {
             return;
         };
+        let ZoneLabel {
+            id: zone_id,
+            name: zone_name,
+        } = zone;
         let duration = cache.song(song_id).map_or(0.0, |song| song.duration);
         let (events, listener, started_at) = {
             let mut state = self.lock();
@@ -270,17 +280,13 @@ mod tests {
         let service = ZoneService::new(None, Some(pool.clone()));
         service.set_scrobbling(hub);
         let zone = "upnp:living-room";
+        let label = ZoneLabel {
+            id: zone,
+            name: "Living Room",
+        };
 
         // Nobody started it: nothing is recorded.
-        service.track_zone_listen(
-            zone,
-            "Living Room",
-            1,
-            "song-lanterns",
-            0,
-            true,
-            Some(&cache),
-        );
+        service.track_zone_listen(label, 1, "song-lanterns", 0, true, Some(&cache));
         assert!(service.lock().zone_listens.is_empty());
 
         // Grace (profile 2) starts it from her phone.
@@ -296,8 +302,7 @@ mod tests {
         assert_eq!(service.zone_listener(zone), Some(2));
         for second in 0..=110 {
             service.track_zone_listen(
-                zone,
-                "Living Room",
+                label,
                 1,
                 "song-lanterns",
                 second * 1_000,
