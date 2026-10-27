@@ -5,7 +5,7 @@ description: Audio, artwork, lyrics, and playlist-file support.
 
 ## Audio formats
 
-Parson indexes these file extensions:
+Mujin Music indexes these file extensions:
 
 | Format             | Extensions | Notes                                             |
 | ------------------ | ---------- | ------------------------------------------------- |
@@ -18,18 +18,18 @@ Parson indexes these file extensions:
 | AIFF               | `.aiff`    | May require transcoding                           |
 | Apple Lossless     | `.alac`    | May require transcoding                           |
 
-Format detection uses the extension and validates the file while reading metadata. FFmpeg is required only when Parson must transcode for a client that cannot play the source directly.
+Format detection uses the extension and validates the file while reading metadata. FFmpeg is required only when Mujin Music must transcode for a client that cannot play the source directly.
 
 ## Artwork
 
-Parson reads embedded artwork and external `.jpg`, `.jpeg`, `.png`, and `.webp` images. It favors likely front-cover names and square, useful images near the album, while rejecting tiny icons and unsuitable wide booklet art. Common names such as `cover`, `folder`, `front`, and album-title images work well. Artwork in a release folder can serve tracks inside `CD 1` or `Disc 2` subfolders.
+Mujin Music reads embedded artwork and external `.jpg`, `.jpeg`, `.png`, and `.webp` images. It favors likely front-cover names and square, useful images near the album, while rejecting tiny icons and unsuitable wide booklet art. Common names such as `cover`, `folder`, `front`, and album-title images work well. Artwork in a release folder can serve tracks inside `CD 1` or `Disc 2` subfolders.
 
-You can upload a replacement album cover from the metadata editor. Parson stores generated and uploaded artwork in its data directory, never inside the music folder unless you put it there yourself.
+You can upload a replacement album cover from the metadata editor. Mujin Music stores generated and uploaded artwork in its data directory, never inside the music folder unless you put it there yourself.
 
 ## Lyrics
 
-Parson does **not** read embedded lyric tags or `.lrc` sidecar files. Lyrics come from LRCLIB and may be synced or plain; see [Lyrics](/docs/lyrics).
+Mujin Music does **not** read embedded lyric tags or `.lrc` sidecar files. Lyrics come from LRCLIB and may be synced or plain; see [Lyrics](/docs/lyrics).
 
 ## Playlist files
 
-Parson stores playlists in its database. Importing or exporting `.m3u`, `.m3u8`, `.pls`, or other playlist files is not currently supported. Back up playlists with the Parson data directory.
+Mujin Music stores playlists in its database. Importing or exporting `.m3u`, `.m3u8`, `.pls`, or other playlist files is not currently supported. Back up playlists with the Mujin Music data directory.

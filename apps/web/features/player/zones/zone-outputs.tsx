@@ -54,7 +54,7 @@ export function ZoneOutputsPanel() {
         toast.error(
           status.last_error
             ? `Saved, but not connected yet: ${status.last_error}`
-            : "Saved. Parson keeps trying to connect.",
+            : "Saved. Mujin Music keeps trying to connect.",
         );
       }
     } catch (error) {
@@ -184,7 +184,7 @@ export function ZoneOutputsPanel() {
         <p className="px-2 text-[11px] leading-4 text-zinc-500">
           {counts.airplayUnsupported.join(", ")}{" "}
           {counts.airplayUnsupported.length === 1 ? "speaks" : "speak"} only
-          AirPlay 2 with HomeKit pairing, which Parson does not do yet.
+          AirPlay 2 with HomeKit pairing, which Mujin Music does not do yet.
         </p>
       )}
       <p className="px-2 text-[11px] leading-4 text-zinc-600">

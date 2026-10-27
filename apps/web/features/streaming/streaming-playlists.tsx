@@ -147,14 +147,14 @@ export function StreamingPlaylistsSection({
       <p className="flex items-start gap-2 text-[13px] leading-5 text-zinc-500">
         <Lock aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         {name} playlists are read-only here; edit them in {name}. Save a copy to
-        keep one in Parson and edit it there: rename it, reorder, remove or add
-        tracks. Radios you keep appear here too.
+        keep one in Mujin Music and edit it there: rename it, reorder, remove or
+        add tracks. Radios you keep appear here too.
       </p>
       {saved.length > 0 && (
-        <PlaylistGrid title="Saved in Parson">
+        <PlaylistGrid title="Saved in Mujin Music">
           {saved.map((copy) => (
             <PlaylistTile
-              badge={copy.made_in_parson ? "Parson" : "Copy"}
+              badge={copy.made_in_parson ? "Mujin Music" : "Copy"}
               cover={copy.cover_url}
               href={playlistHref(copy.id, true)}
               key={copy.id}
@@ -227,7 +227,7 @@ function useCopyActions(id: string) {
         if (
           isEditedCopyConflict(error) &&
           window.confirm(
-            "You edited your copy in Parson. Replace your edits with the service playlist as it is now?",
+            "You edited your copy in Mujin Music. Replace your edits with the service playlist as it is now?",
           )
         ) {
           return saveStreamingPlaylistCopy(id, { replaceEdits: true });
@@ -388,7 +388,7 @@ function PlaylistView({
                 <>
                   <Copy aria-hidden="true" className="h-3 w-3" />{" "}
                   {madeInParson
-                    ? "Made in Parson"
+                    ? "Made in Mujin Music"
                     : copy.edited_at
                       ? "Edited copy"
                       : "Saved copy"}
@@ -459,7 +459,7 @@ function PlaylistView({
             ) : (
               <Copy aria-hidden="true" className="h-4 w-4" />
             )}
-            {savedAt ? "Update saved copy" : "Save a copy in Parson"}
+            {savedAt ? "Update saved copy" : "Save a copy in Mujin Music"}
           </button>
         )}
         {savedAt && (
@@ -553,9 +553,10 @@ function PlaylistView({
 }
 
 function copyFooter(copy: StreamingPlaylistCopy | null, name: string) {
-  if (!copy) return `Read from ${name}. Parson never changes this playlist.`;
+  if (!copy)
+    return `Read from ${name}. Mujin Music never changes this playlist.`;
   if (copy.made_in_parson) {
-    return `Made in Parson ${formatLastSync(copy.saved_at)} from ${name} tracks. It lives only in Parson; play it while signed in to ${name}.`;
+    return `Made in Mujin Music ${formatLastSync(copy.saved_at)} from ${name} tracks. It lives only in Mujin Music; play it while signed in to ${name}.`;
   }
   const edited = copy.edited_at
     ? ` You edited it ${formatLastSync(copy.edited_at)}; updating from ${name} asks before replacing your edits.`
@@ -699,7 +700,7 @@ function CopyEditor({
           Cancel
         </button>
         <p className="text-xs text-zinc-500">
-          Changes stay in Parson; the service playlist is not touched.
+          Changes stay in Mujin Music; the service playlist is not touched.
         </p>
       </div>
     </form>

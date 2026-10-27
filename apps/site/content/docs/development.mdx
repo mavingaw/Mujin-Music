@@ -1,9 +1,9 @@
 ---
 title: Development
-description: Build, test, contribute, release, and integrate with the open-source Parson codebase.
+description: Build, test, contribute, release, and integrate with the open-source Mujin Music codebase.
 ---
 
-Parson is open source under **GPL-3.0-only**. Source, issues, releases, and security reporting live in the [Parson repository](https://github.com/ParsonLabs/Parson).
+Mujin Music is open source under **GPL-3.0-only** and is based on [Parson](https://github.com/ParsonLabs/Parson) by ParsonLabs. Source, issues, releases, and security reporting live in the [Mujin Music repository](https://github.com/mavingaw/parson-jin).
 
 ## Build from source
 
@@ -33,7 +33,7 @@ Open `http://localhost:3000`. The embedded production API/UI origin is `http://l
 | `apps/desktop`              | Shared Linux, macOS, and Windows Electron shell and native packaging             |
 | `apps/mobile`               | Expo/React Native mobile client                                                  |
 | `packages/parson-music-sdk` | Typed TypeScript API client                                                      |
-| `apps/site`                 | The Parson website and documentation                                             |
+| `apps/site`                 | The Mujin Music website and documentation                                        |
 
 ## Tests
 
@@ -45,7 +45,7 @@ Keep product names, API ownership, request budgets, bounded collections, and loc
 
 ## Release process
 
-Parson follows Semantic Versioning. Maintainers build and verify platform artifacts, sign release packages, publish the differentiated container tag, and smoke-test fresh install, migration, discovery, streaming, and rollback paths.
+Mujin Music follows Semantic Versioning. Maintainers build and verify platform artifacts, sign release packages, publish the differentiated container tag, and smoke-test fresh install, migration, discovery, streaming, and rollback paths.
 
 ## API and protocol compatibility
 
@@ -54,8 +54,8 @@ Parson follows Semantic Versioning. Maintainers build and verify platform artifa
 - `/api/v1` remains a compatibility alias for existing clients.
 - `/.well-known/parson` exposes `protocolVersion` and capabilities for client negotiation.
 
-The TypeScript SDK is the practical API reference. Parson does not publish a separate OpenAPI specification. Clients should check the discovery protocol version and ignore unknown JSON fields for forward compatibility.
+The TypeScript SDK is the practical API reference. Mujin Music does not publish a separate OpenAPI specification. Clients should check the discovery protocol version and ignore unknown JSON fields for forward compatibility.
 
 ## Licensing
 
-Parson's original code is licensed `GPL-3.0-only`. Third-party dependencies and inherited template portions retain their own notices. Distributing modified binaries requires compliance with the GPL and applicable third-party terms.
+Mujin Music, like the Parson code it is based on, is licensed `GPL-3.0-only`. Third-party dependencies and inherited template portions retain their own notices. Distributing modified binaries requires compliance with the GPL and applicable third-party terms.

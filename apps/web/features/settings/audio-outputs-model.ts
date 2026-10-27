@@ -117,13 +117,13 @@ export function networkLimitsNote(endpoint: ZoneEndpoint) {
   const source = networkCapsSourceLabels[network.caps_source];
   switch (network.caps_source) {
     case "declared":
-      return `${source}: it lists the rates it takes, so Parson sends only those and converts the rest on the server.`;
+      return `${source}: it lists the rates it takes, so Mujin Music sends only those and converts the rest on the server.`;
     case "protocol":
       return `${source}: AirPlay 1 carries ALAC at 44.1kHz/16bit only, so higher-resolution files are converted on the server first, and the signal path shows it.`;
     case "known_model":
-      return `${source} for ${network.model ?? endpoint.name}; Parson converts anything above them on the server.`;
+      return `${source} for ${network.model ?? endpoint.name}; Mujin Music converts anything above them on the server.`;
     case "assumed":
-      return `${source}. It takes WAV but does not list rates, so Parson allows up to 192kHz/24bit. If a high-resolution track does not play, lower Max sample rate in the zone's settings.`;
+      return `${source}. It takes WAV but does not list rates, so Mujin Music allows up to 192kHz/24bit. If a high-resolution track does not play, lower Max sample rate in the zone's settings.`;
   }
 }
 
@@ -132,7 +132,7 @@ export function networkStreamNote(endpoint: ZoneEndpoint) {
   const network = endpoint.network;
   if (!network) return null;
   if (network.protocol === "air_play")
-    return "AirPlay 1 (RAOP): the server's chain output is sent as lossless ALAC frames over RTP, with timing and sync. Rated High quality at best: the receiver applies its own volume and Parson cannot see past it.";
+    return "AirPlay 1 (RAOP): the server's chain output is sent as lossless ALAC frames over RTP, with timing and sync. Rated High quality at best: the receiver applies its own volume and Mujin Music cannot see past it.";
   return `${network.stream_format}: the server runs its whole chain, DSP included, then serves the result losslessly and tells the player over ${network.protocol === "open_home" ? "OpenHome" : "UPnP AV"} to fetch it. Nothing on this computer mixes it.${network.reports_format ? " This player reports what it decodes, so the signal path can confirm the format." : ""}`;
 }
 

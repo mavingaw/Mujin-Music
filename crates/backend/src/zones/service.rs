@@ -980,7 +980,7 @@ impl ZoneService {
         let mut setting_notes = Vec::new();
         if !app_player {
             setting_notes.push(
-                "Crossfade and volume leveling run in the Parson web and desktop apps; the phone app plays tracks back to back at their own level."
+                "Crossfade and volume leveling run in the Mujin Music web and desktop apps; the phone app plays tracks back to back at their own level."
                     .to_string(),
             );
         }
@@ -1119,14 +1119,14 @@ impl ZoneService {
             && queue.song_ids.len() > queue.window_len
         {
             notes.push(format!(
-                "Sonos holds {} of the {} queued tracks at a time; Parson loads the next ones as playback moves on.",
+                "Sonos holds {} of the {} queued tracks at a time; Mujin Music loads the next ones as playback moves on.",
                 queue.window_len,
                 queue.song_ids.len()
             ));
         }
         if source == ZoneSource::External {
             notes.push(
-                "Another app is playing on this Sonos zone. Playing from Parson replaces it."
+                "Another app is playing on this Sonos zone. Playing from Mujin Music replaces it."
                     .to_string(),
             );
         }
@@ -1183,7 +1183,7 @@ impl ZoneService {
         ];
         if settings.leveling != LevelingMode::Off {
             setting_notes.push(
-                "Parson levels Sonos in the audio it serves (EBU R128, peaks kept under -1 dBTP), starting with the next track.".to_string(),
+                "Mujin Music levels Sonos in the audio it serves (EBU R128, peaks kept under -1 dBTP), starting with the next track.".to_string(),
             );
         }
         Zone {

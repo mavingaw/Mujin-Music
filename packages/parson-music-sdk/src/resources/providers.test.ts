@@ -600,7 +600,7 @@ describe("radio, credits and editable copies", () => {
   test("radio origins are named honestly", () => {
     expect(describeRadio("tidal", { origin: "service" })).toBe("TIDAL radio");
     expect(describeRadio("qobuz", { origin: "similar_artists" })).toBe(
-      "Parson radio from Qobuz similar artists",
+      "Mujin Music radio from Qobuz similar artists",
     );
   });
 
@@ -783,7 +783,7 @@ describe("sign-in with only a subscription", () => {
     server_credentials_source: "key_service",
     key_service: {
       url: "https://keys.parson.test",
-      issuer: "Parson",
+      issuer: "Mujin Music",
       offers: true,
       device_code: false,
       error: null,
@@ -794,7 +794,7 @@ describe("sign-in with only a subscription", () => {
     expect(streamingSignInPath(base)).toEqual({
       kind: "subscription",
       via: "key_service",
-      issuer: "Parson",
+      issuer: "Mujin Music",
     });
     expect(tidalSignInMethods(base)).toEqual({
       primary: "browser",

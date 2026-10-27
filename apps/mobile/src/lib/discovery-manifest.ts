@@ -18,13 +18,13 @@ export type ServerIdentity = {
 };
 
 export const SERVER_REPLACEMENT_WARNING =
-  "This address now belongs to a different Parson library.";
+  "This address now belongs to a different Mujin Music library.";
 
 const MAX_MANIFEST_BYTES = 64 * 1024;
 
 export function parseDiscoveryManifest(value: unknown): DiscoveryManifest {
   if (!value || typeof value !== "object")
-    throw new Error("This is not a compatible Parson library.");
+    throw new Error("This is not a compatible Mujin Music library.");
   const manifest = value as Partial<DiscoveryManifest>;
   if (
     manifest.protocol !== "parson" ||
@@ -35,7 +35,7 @@ export function parseDiscoveryManifest(value: unknown): DiscoveryManifest {
     typeof manifest.name !== "string" ||
     typeof manifest.serverVersion !== "string"
   ) {
-    throw new Error("This is not a compatible Parson library.");
+    throw new Error("This is not a compatible Mujin Music library.");
   }
   return manifest as DiscoveryManifest;
 }

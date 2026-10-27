@@ -9,11 +9,11 @@ export type ServiceSummary = {
 
 const MECHANISM: Record<string, { where: string; autostart: string }> = {
   "windows-tray": {
-    where: "Parson Server in the notification area",
+    where: "Mujin Music Server in the notification area",
     autostart: "Start with Windows",
   },
   "launch-agent": {
-    where: "Parson Server in the menu bar",
+    where: "Mujin Music Server in the menu bar",
     autostart: "Launch at startup",
   },
   "systemd-user": {
@@ -21,7 +21,7 @@ const MECHANISM: Record<string, { where: string; autostart: string }> = {
     autostart: "Start when you sign in",
   },
   "xdg-autostart": {
-    where: "Parson Server background app (XDG autostart)",
+    where: "Mujin Music Server background app (XDG autostart)",
     autostart: "Start when you sign in",
   },
 };
@@ -53,7 +53,7 @@ export function remoteRoleCopy(state: {
   localRunning?: boolean;
 }): string {
   if (state.localRunning) {
-    return `Your library, queue and zones come from ${state.name}. This computer also runs its own Parson server in the background for other devices.`;
+    return `Your library, queue and zones come from ${state.name}. This computer also runs its own Mujin Music server in the background for other devices.`;
   }
   return "No server runs on this computer. Your library, queue and zones live on that server and stay in sync with every other app.";
 }

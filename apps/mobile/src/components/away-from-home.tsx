@@ -74,7 +74,7 @@ export function AwayFromHome({
       {remote.length ? (
         <>
           <Text style={styles.caption}>
-            When your home network is out of reach, Parson switches to:
+            When your home network is out of reach, Mujin Music switches to:
           </Text>
           {remote.map((item) => {
             const check = checks[item];

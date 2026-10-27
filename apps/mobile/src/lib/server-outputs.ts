@@ -139,8 +139,8 @@ export function networkPlayerNote(endpoint: ZoneEndpoint) {
   if (!network) return null;
   return `${networkCapsSourceLabels[network.caps_source]}. ${
     network.protocol === "air_play"
-      ? "Tested against Parson's protocol-level AirPlay receiver, not yet a real AirPlay device."
-      : "Tested against Parson's protocol-level UPnP/OpenHome renderer, not yet a real streamer."
+      ? "Tested against Mujin Music's protocol-level AirPlay receiver, not yet a real AirPlay device."
+      : "Tested against Mujin Music's protocol-level UPnP/OpenHome renderer, not yet a real streamer."
   }`;
 }
 
@@ -214,7 +214,7 @@ export function serverDriverLine(
     return `Confirmed by the ${reporter}: ${path.hardwareReport}`;
   return reporter === "renderer"
     ? `Renderer: ${path.hardwareReport}, converted by the renderer`
-    : `Driver: ${path.hardwareReport}, converted after Parson`;
+    : `Driver: ${path.hardwareReport}, converted after Mujin Music`;
 }
 
 /**

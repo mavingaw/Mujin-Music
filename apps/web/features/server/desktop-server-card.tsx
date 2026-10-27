@@ -120,12 +120,12 @@ export default function DesktopServerCard() {
           >
             {remote
               ? `This app is a remote for ${state.name}`
-              : "This computer runs the Parson server"}
+              : "This computer runs the Mujin Music server"}
           </h2>
           <p className="mt-0.5 text-sm leading-5 text-zinc-500">
             {remote
               ? remoteCopy
-              : "It runs in the background, apart from this window. Close or quit Parson and your phones, browsers and other computers keep their library and zones."}
+              : "It runs in the background, apart from this window. Close or quit Mujin Music and your phones, browsers and other computers keep their library and zones."}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -283,8 +283,8 @@ export default function DesktopServerCard() {
                 </span>
                 , choose{" "}
                 <ArchiveRestore className="inline h-3.5 w-3.5 align-[-2px]" />{" "}
-                “Moving from another Parson server?” when it asks for the first
-                account, and pick this backup.
+                “Moving from another Mujin Music server?” when it asks for the
+                first account, and pick this backup.
               </p>
             </li>
           </ol>

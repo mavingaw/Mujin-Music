@@ -166,7 +166,10 @@ fn a_remote_dac_gets_every_sample_bit_perfect() {
     )
     .err()
     .expect("refused");
-    assert!(error.contains("in use by another Parson server"), "{error}");
+    assert!(
+        error.contains("in use by another Mujin Music server"),
+        "{error}"
+    );
     // The same server reconnecting (after a restart) takes over.
     let again = connect(&endpoint);
     assert_eq!(again.devices().len(), 1);

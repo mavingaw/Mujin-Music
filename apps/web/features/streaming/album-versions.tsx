@@ -196,9 +196,9 @@ export function SourcePreferenceSetting() {
         When an album is in more than one place
       </h3>
       <p className="mt-1 text-xs text-zinc-400">
-        Parson marks one copy to play when the same album is in your files, on
-        TIDAL or on Qobuz. Highest quality compares bit depth and sample rate;
-        ties go to your own files.
+        Mujin Music marks one copy to play when the same album is in your files,
+        on TIDAL or on Qobuz. Highest quality compares bit depth and sample
+        rate; ties go to your own files.
       </p>
       <div
         aria-label="Preferred source"

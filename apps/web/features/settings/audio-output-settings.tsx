@@ -71,7 +71,7 @@ function Toggle({
       aria-label={label}
       className={cn(
         "relative inline-flex h-5.5 w-9.5 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:opacity-40",
-        checked ? "bg-[#b26bff]" : "bg-zinc-700",
+        checked ? "bg-mujin-copper" : "bg-zinc-700",
       )}
       disabled={disabled}
       onClick={() => onChange(!checked)}
@@ -101,7 +101,7 @@ function FormatChip({
       className={cn(
         "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs tabular-nums",
         tone === "supported" &&
-          "border-[#b26bff]/35 bg-[#b26bff]/10 text-zinc-100",
+          "border-mujin-copper/35 bg-mujin-copper/10 text-zinc-100",
         tone === "capped" && "border-white/10 bg-white/3 text-zinc-500",
         tone === "unsupported" &&
           "border-red-500/35 bg-red-500/10 text-red-400",
@@ -205,7 +205,7 @@ function DeviceCard({
           className={cn(
             "h-8 rounded-full border px-3 text-xs font-medium transition-colors disabled:opacity-40",
             selected
-              ? "border-[#b26bff]/50 bg-[#b26bff]/15 text-[#d9b8ff]"
+              ? "border-mujin-copper/50 bg-mujin-copper/15 text-mujin-copper-hover"
               : "border-white/10 text-zinc-200 hover:bg-white/8",
           )}
           disabled={!device.formats}
@@ -250,7 +250,7 @@ function DeviceCard({
             <p className="text-xs leading-5 text-zinc-500">
               {exclusive
                 ? device.id.includes("alsa-pcm:")
-                  ? `${device.mode_label}: Parson turns ALSA's conversions off. This PCM comes from your ALSA configuration and may be a chain of plugins, so while it plays the signal path lists the chain libasound built and rates it.`
+                  ? `${device.mode_label}: Mujin Music turns ALSA's conversions off. This PCM comes from your ALSA configuration and may be a chain of plugins, so while it plays the signal path lists the chain libasound built and rates it.`
                   : `${device.mode_label}: no other program or system mixer touches the audio, and the device switches to each track's format.`
                 : `${device.mode_label}: the system may convert or mix the audio, so the path is rated High quality at best.`}
             </p>
@@ -452,7 +452,7 @@ function DeviceCard({
           ) : (
             <p className="text-xs text-red-400">
               {device.probe_error ??
-                "Parson could not read this device's formats."}
+                "Mujin Music could not read this device's formats."}
             </p>
           )}
         </section>
@@ -651,11 +651,11 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
           <h2 className="text-lg font-semibold text-white">Audio outputs</h2>
           <p className="mt-1 max-w-xl text-sm leading-6 text-zinc-400">
             Where the server plays itself: devices attached to the computer
-            running Parson (and to Parson Bridges), opened exclusively so the
-            file&apos;s samples reach the DAC unmodified, and network players it
-            streams to after its own DSP. Each is a zone: pick it in the zone
-            picker to play there. Browsers and phones can only play through the
-            system mixer in shared mode.
+            running Mujin Music (and to Mujin Bridges), opened exclusively so
+            the file&apos;s samples reach the DAC unmodified, and network
+            players it streams to after its own DSP. Each is a zone: pick it in
+            the zone picker to play there. Browsers and phones can only play
+            through the system mixer in shared mode.
           </p>
         </div>
         {isAdmin ? (
@@ -725,7 +725,7 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
               own format limits.
               {players.data?.discovery === false
                 ? " Discovery is off on this server (PARSON_NETWORK_DISCOVERY=0); add players by address."
-                : " Parson searches with SSDP and mDNS when you choose Find devices."}
+                : " Mujin Music searches with SSDP and mDNS when you choose Find devices."}
             </p>
             {network.length ? (
               <div className="space-y-4">{network.map(card)}</div>

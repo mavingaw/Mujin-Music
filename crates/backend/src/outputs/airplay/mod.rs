@@ -19,7 +19,7 @@ use super::device::{DeviceManager, Placement};
 use crate::zones::ZoneKind;
 
 pub const AIRPLAY_PREFIX: &str = "airplay:";
-pub const AIRPLAY_NOTE: &str = "AirPlay (RAOP, unencrypted) as AirPort Express, most AV receivers and shairport-sync speak it. Tested against a protocol-level fake receiver and ffmpeg's ALAC decoder, not yet against Apple hardware. AirPlay 2-only speakers (HomePod, Apple TV) need HomeKit pairing that Parson does not do yet.";
+pub const AIRPLAY_NOTE: &str = "AirPlay (RAOP, unencrypted) as AirPort Express, most AV receivers and shairport-sync speak it. Tested against a protocol-level fake receiver and ffmpeg's ALAC decoder, not yet against Apple hardware. AirPlay 2-only speakers (HomePod, Apple TV) need HomeKit pairing that Mujin Music does not do yet.";
 
 /// A receiver as the outputs status lists it.
 #[derive(Clone, Debug, PartialEq, Serialize)]

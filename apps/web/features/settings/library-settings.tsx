@@ -175,8 +175,8 @@ export default function LibrarySettings() {
             </h2>
             <p className="mt-1 text-sm text-zinc-500">
               {desktop
-                ? "Parson watches this folder for your music."
-                : "Folders mounted and available to Parson."}
+                ? "Mujin Music watches this folder for your music."
+                : "Folders mounted and available to Mujin Music."}
             </p>
           </div>
           <Button onClick={() => void changeFolder()}>
@@ -210,7 +210,7 @@ export default function LibrarySettings() {
                   {root.available === false ? (
                     <p className="mt-0.5 text-xs text-amber-200/80">
                       Not found on this server. Moved here from another
-                      computer? Show Parson where this music is now.
+                      computer? Show Mujin Music where this music is now.
                     </p>
                   ) : null}
                 </div>
@@ -297,9 +297,9 @@ export default function LibrarySettings() {
             <DialogTitle>Where is this music now?</DialogTitle>
             <DialogDescription>
               It used to be in {locatePath}. Choose the folder that holds it on
-              this server. Parson finds each track at the same place inside the
-              folder and moves playlists, favourites, history and edits over to
-              it.
+              this server. Mujin Music finds each track at the same place inside
+              the folder and moves playlists, favourites, history and edits over
+              to it.
             </DialogDescription>
           </DialogHeader>
           <LibraryFolderBrowser
@@ -329,8 +329,8 @@ export default function LibrarySettings() {
           <DialogHeader>
             <DialogTitle>Remove this music folder?</DialogTitle>
             <DialogDescription>
-              Parson will remove its indexed tracks from the library. Files on
-              disk will not be changed.
+              Mujin Music will remove its indexed tracks from the library. Files
+              on disk will not be changed.
             </DialogDescription>
           </DialogHeader>
           <p

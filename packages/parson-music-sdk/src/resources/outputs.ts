@@ -28,7 +28,7 @@ export const networkCapsSourceLabels: Record<NetworkCapsSource, string> = {
   declared: "Declared by the player",
   protocol: "Fixed by the protocol",
   known_model: "Maker's published limits",
-  assumed: "Assumed by Parson (the player does not say)",
+  assumed: "Assumed by Mujin Music (the player does not say)",
 };
 
 export type NetworkEndpointKind =

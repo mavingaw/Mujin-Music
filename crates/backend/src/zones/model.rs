@@ -72,7 +72,7 @@ impl ZoneKind {
             Self::Sonos => "Sonos room",
             Self::Upnp => "UPnP renderer",
             Self::Device => "Audio device",
-            Self::Bridge => "Parson Bridge device",
+            Self::Bridge => "Mujin Bridge device",
             Self::Airplay => "AirPlay receiver",
             Self::Linked => "Linked zones",
         }
@@ -829,11 +829,11 @@ pub fn device_dsp_support(
             available: false,
             reason: Some(match &device.probe_error {
                 Some(error) => format!(
-                    "Parson could not read the formats {} accepts ({error}), so it cannot run the DSP engine for it.",
+                    "Mujin Music could not read the formats {} accepts ({error}), so it cannot run the DSP engine for it.",
                     device.name
                 ),
                 None => format!(
-                    "Parson could not read the formats {} accepts, so it cannot run the DSP engine for it.",
+                    "Mujin Music could not read the formats {} accepts, so it cannot run the DSP engine for it.",
                     device.name
                 ),
             }),

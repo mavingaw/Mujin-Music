@@ -476,7 +476,7 @@ function SignalPathPanel({
               className="mt-0.5 text-[11px] leading-4 text-amber-300/90"
               data-kernel-emulator
             >
-              Test bench: Parson&apos;s kernel-ABI emulator answers for the
+              Test bench: Mujin Music&apos;s kernel-ABI emulator answers for the
               kernel here, so this proves the hw driver path, not a DAC.
             </p>
           ) : null}
@@ -486,8 +486,8 @@ function SignalPathPanel({
               data-network-verification
             >
               {network.protocol === "air_play"
-                ? "Tested against Parson's protocol-level AirPlay receiver, not yet a real AirPlay device."
-                : "Tested against Parson's protocol-level UPnP/OpenHome renderer, not yet a real streamer."}
+                ? "Tested against Mujin Music's protocol-level AirPlay receiver, not yet a real AirPlay device."
+                : "Tested against Mujin Music's protocol-level UPnP/OpenHome renderer, not yet a real streamer."}
             </p>
           ) : null}
           {path?.hardwareVerified !== null &&
@@ -504,12 +504,12 @@ function SignalPathPanel({
               }}
             >
               {path.hardwareVerified
-                ? `Confirmed by the ${reporter}: ${path.hardwareReport}, exactly the format Parson ${reporter === "renderer" ? "sends" : "opened"}.${
+                ? `Confirmed by the ${reporter}: ${path.hardwareReport}, exactly the format Mujin Music ${reporter === "renderer" ? "sends" : "opened"}.${
                     path.quality === "low_quality"
                       ? " The light is yellow because the file itself is lossy."
                       : ""
                   }`
-                : `${reporter === "renderer" ? "Renderer" : "Driver"} report: ${path.hardwareReport}, not the format Parson ${reporter === "renderer" ? "sends" : "opened"}: something below Parson converts the stream.`}
+                : `${reporter === "renderer" ? "Renderer" : "Driver"} report: ${path.hardwareReport}, not the format Mujin Music ${reporter === "renderer" ? "sends" : "opened"}: something below Mujin Music converts the stream.`}
             </p>
           ) : null}
           {path && !serverOutput && !casting ? (

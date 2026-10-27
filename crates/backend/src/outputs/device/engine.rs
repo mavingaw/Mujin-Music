@@ -685,9 +685,9 @@ fn stream_info(
             id: "software-volume",
             kind: StageKind::Dsp,
             title: "Software volume".into(),
-            detail: "Parson scales the samples".into(),
+            detail: "Mujin Music scales the samples".into(),
             quality: Some(SignalQuality::HighQuality),
-            explanation: "The zone's volume is set to Software, so Parson lowers the level by scaling every sample before the device. Set it to Hardware (the device's own control) or Fixed for a bit-perfect path.".into(),
+            explanation: "The zone's volume is set to Software, so Mujin Music lowers the level by scaling every sample before the device. Set it to Hardware (the device's own control) or Fixed for a bit-perfect path.".into(),
         });
     }
     if !added.is_empty() {

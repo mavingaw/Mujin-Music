@@ -4,7 +4,7 @@ import {
   serverConnectionTarget,
 } from "./server-connection";
 
-describe("Parson server origins", () => {
+describe("Mujin Music server origins", () => {
   test("uses the official port for plain local hostnames", () => {
     expect(normalizeServerOrigin("music-room.local")).toBe(
       "http://music-room.local:1993",

@@ -870,7 +870,7 @@ function ArtistsView({
     return (
       <LibraryMessage
         title="No artists yet"
-        body="Artists will appear after Parson indexes your collection."
+        body="Artists will appear after Mujin Music indexes your collection."
       />
     );
   }

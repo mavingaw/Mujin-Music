@@ -390,7 +390,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
           cause instanceof Error
             ? cause.message
             : "Could not reach that library.";
-        console.error("Could not connect to Parson library", cause);
+        console.error("Could not connect to Mujin Music library", cause);
         setError(message);
         await hydrateDownloads();
         setPhase(downloadedRecords().length ? "offline" : "discovering");

@@ -1,14 +1,14 @@
-# Parson Bridge
+# Mujin Bridge
 
-Parson Bridge turns the audio outputs of another computer into Parson zones.
+Mujin Bridge turns the audio outputs of another computer into Mujin Music zones.
 Run it on the machine your DAC is plugged into: a Raspberry Pi next to the
-hi-fi, a NAS, a desktop. The Parson server finds it on the local network
+hi-fi, a NAS, a desktop. The Mujin Music server finds it on the local network
 (DNS-SD `_parson-bridge._tcp`), or you add it by address in the zone picker
 (Zones > Bridges and network speakers > Add a bridge by address).
 
 ## How playback works
 
-- The Parson server decodes each track at the file's own sample rate and bit
+- The Mujin Music server decodes each track at the file's own sample rate and bit
   depth, applies the zone's settings (volume leveling, DSP, software volume,
   only when you turn them on), and sends the samples to the bridge as
   uncompressed PCM over TCP (port 1994).
@@ -32,7 +32,7 @@ parson-bridge --simulated       # two simulated DACs, for trying it out
 ```
 
 `packaging/parson-bridge.service` runs it as a systemd service. The
-machine's firewall must allow TCP 1994 from the Parson server (and UDP 5353
+machine's firewall must allow TCP 1994 from the Mujin Music server (and UDP 5353
 for discovery).
 
 ## Platforms and what is tested
@@ -57,7 +57,7 @@ for discovery).
 - Both are tested against protocol-level fakes of each audio stack (exact
   formats, buffer alignment, whole-buffer events and exclusive ownership
   for WASAPI; hog-mode toggling, asynchronous rate switching and the
-  float-to-integer conversion for CoreAudio), end to end through a Parson
+  float-to-integer conversion for CoreAudio), end to end through a Mujin Music
   server, and compile-checked for `x86_64-pc-windows-msvc` and
   `aarch64-apple-darwin`; not yet on a real Windows PC or Mac with a DAC.
 

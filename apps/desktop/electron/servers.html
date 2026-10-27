@@ -8,7 +8,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"
     />
-    <title>Choose your Parson server</title>
+    <title>Choose your Mujin Music server</title>
     <style>
       :root {
         --bg: #050505;
@@ -107,7 +107,7 @@
         margin: 0 auto 22px;
         border: 1px solid var(--line-strong);
         border-radius: 16px;
-        background: linear-gradient(180deg, #151515, #070707);
+        background: linear-gradient(180deg, #1a1a1d, #0a0a0b);
         box-shadow:
           0 18px 50px rgba(0, 0, 0, 0.55),
           inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -611,10 +611,24 @@
 
     <main>
       <div class="chooser">
-        <div class="mark" aria-hidden="true">P</div>
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 512 512" width="34" height="34" aria-hidden="true">
+            <path
+              d="M456.91 202.17A208 208 0 1 1 309.83 55.09L293.89 114.59A133.12 133.12 0 1 0 397.41 218.11Z"
+              fill="#F2EEE6"
+            />
+            <circle
+              class="mj-signal"
+              cx="382.12"
+              cy="129.88"
+              r="44.72"
+              fill="#D98B5F"
+            />
+          </svg>
+        </div>
         <h1 id="title">Where does your music live?</h1>
         <p class="lede">
-          The Parson server keeps your library, streams it bit-perfect and
+          The Mujin Music server keeps your library, streams it bit-perfect and
           drives every speaker in the house. Run it on this computer, or use
           this app as a remote for a server on your network.
         </p>
@@ -689,10 +703,11 @@
             <h2>Connect to a server on my network</h2>
             <ul>
               <li>
-                Use a Parson server on a NAS, a headless box or another computer
+                Use a Mujin Music server on a NAS, a headless box or another
+                computer
               </li>
               <li>This app becomes a remote and never starts a server</li>
-              <li>Sign in once per server; Parson remembers each one</li>
+              <li>Sign in once per server; Mujin Music remembers each one</li>
             </ul>
             <div class="spacer"></div>
             <div>
@@ -748,14 +763,14 @@
         </section>
         <footer>
           <span
-            >Parson finds servers automatically with Bonjour/mDNS on port
+            >Mujin Music finds servers automatically with Bonjour/mDNS on port
             5353.</span
           >
           <a
-            href="https://github.com/ParsonLabs/Parson/blob/main/docs/server.md"
+            href="https://github.com/mavingaw/parson-jin/blob/master/docs/server.md"
             target="_blank"
             rel="noreferrer"
-            >Run Parson headless on Linux, a NAS or Docker</a
+            >Run Mujin Music headless on Linux, a NAS or Docker</a
           >
         </footer>
       </div>
@@ -794,8 +809,8 @@
         <h1 id="reconnect-title">Reconnecting…</h1>
         <p class="status" id="reconnect-status"></p>
         <p class="hint" id="reconnect-hint">
-          Parson will pick up where you left off as soon as the server is back.
-          Check that it is switched on and connected to the same network.
+          Mujin Music will pick up where you left off as soon as the server is
+          back. Check that it is switched on and connected to the same network.
         </p>
         <div class="buttons">
           <button id="retry-now" type="button">Try now</button>
@@ -884,7 +899,7 @@
             container.append(
               el("p", {
                 class: "empty",
-                text: "No Parson servers found on this network yet. Make sure the server is running, then search again, or enter its address below.",
+                text: "No Mujin Music servers found on this network yet. Make sure the server is running, then search again, or enter its address below.",
               }),
             );
           }
@@ -989,7 +1004,7 @@
         );
         if (!local.available) {
           $("use-local").title =
-            "This copy of Parson was installed without the server.";
+            "This copy of Mujin Music was installed without the server.";
         }
         const banner = state.warning;
         $("banner").classList.toggle("show", Boolean(banner));
@@ -1028,8 +1043,8 @@
             ? `${lost}Checking now…`
             : `${lost}Trying again ${next > 0 ? `in ${next}s` : "now"} · attempt ${reconnect.attempt + 1}`;
         $("reconnect-hint").textContent = reconnect.local
-          ? "The Parson server on this computer isn’t answering. It runs in the background on its own; “Start server” asks it to start again."
-          : "Parson will pick up where you left off as soon as the server is back. Check that it is switched on and on the same network.";
+          ? "The Mujin Music server on this computer isn’t answering. It runs in the background on its own; “Start server” asks it to start again."
+          : "Mujin Music will pick up where you left off as soon as the server is back. Check that it is switched on and on the same network.";
       }
 
       async function refreshState() {
@@ -1090,7 +1105,9 @@
         event.preventDefault();
         const address = $("address").value.trim();
         if (!address) {
-          showManualError("Enter the address of the computer running Parson.");
+          showManualError(
+            "Enter the address of the computer running Mujin Music.",
+          );
           $("address").focus();
           return;
         }
@@ -1133,7 +1150,7 @@
 
       if (!servers) {
         document.body.textContent =
-          "Server selection is only available in Parson Desktop.";
+          "Server selection is only available in Mujin Music Desktop.";
       } else {
         servers.watch((next) => {
           state = next;

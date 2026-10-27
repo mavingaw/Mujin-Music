@@ -94,7 +94,7 @@ export function FileBrowserView({
                   Music folder unavailable
                 </p>
                 <p className="max-w-sm text-sm leading-6 text-zinc-400">
-                  Parson can’t open this folder. Reconnect its drive, check
+                  Mujin Music can’t open this folder. Reconnect its drive, check
                   permissions, or choose a different location.
                 </p>
                 <button

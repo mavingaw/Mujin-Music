@@ -111,7 +111,7 @@ pub struct NetworkInfo {
 }
 
 /// Said on every AirPlay device.
-pub const AIRPLAY_VERIFICATION: &str = "Built to the AirPlay 1 (RAOP) protocol and tested end to end against Parson's protocol-level fake receiver (RTSP, RTP audio, timing and sync, with the decoded ALAC compared sample for sample). Not yet tested with real AirPlay hardware. Receivers that require encryption, a password or pairing are listed but cannot be played to.";
+pub const AIRPLAY_VERIFICATION: &str = "Built to the AirPlay 1 (RAOP) protocol and tested end to end against Mujin Music's protocol-level fake receiver (RTSP, RTP audio, timing and sync, with the decoded ALAC compared sample for sample). Not yet tested with real AirPlay hardware. Receivers that require encryption, a password or pairing are listed but cannot be played to.";
 
 /// Track details a renderer can show while it plays.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

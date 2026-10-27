@@ -301,7 +301,7 @@ pub fn apply_staged_restore() -> std::io::Result<()> {
     if !staged.join("manifest.json").is_file() || !staged_music.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "the staged Parson restore is incomplete",
+            "the staged Mujin Music restore is incomplete",
         ));
     }
 
@@ -521,14 +521,14 @@ pub fn library_name() -> String {
     let name = host_setting("PARSON_LIBRARY_NAME")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Parson Library".to_string());
+        .unwrap_or_else(|| "Mujin Music Library".to_string());
     let sanitized = name
         .chars()
         .filter(|character| !character.is_control())
         .take(48)
         .collect::<String>();
     if sanitized.trim().is_empty() {
-        "Parson Library".to_string()
+        "Mujin Music Library".to_string()
     } else {
         sanitized
     }
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn host_file_settings_only_expose_allowed_keys() {
-        let file = "# written by Parson Desktop\n\
+        let file = "# written by Mujin Music Desktop\n\
                     PARSON_DESKTOP_INSTANCE_TOKEN = abc123\n\
                     PARSON_LOCAL_AUDIO=on\n\
                     PARSON_PORT=80\n\

@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
   title: "Settings",
-  description: "Manage your Parson account, playback, server, and library.",
+  description:
+    "Manage your Mujin Music account, playback, server, and library.",
 };
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {

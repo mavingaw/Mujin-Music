@@ -133,7 +133,8 @@ export default function LikedSongsDetails() {
             Liked Songs unavailable
           </h1>
           <p className="mt-2 text-sm text-zinc-500">
-            Parson could not load your saved songs. Your likes are still safe.
+            Mujin Music could not load your saved songs. Your likes are still
+            safe.
           </p>
           <div className="mt-5 flex justify-center gap-2">
             <Button onClick={() => void favorites.refetch()} variant="outline">

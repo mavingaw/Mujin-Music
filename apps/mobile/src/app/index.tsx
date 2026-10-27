@@ -99,25 +99,25 @@ export default function EntryScreen() {
         ? "Preparing your library"
         : session.phase === "setup"
           ? hostSetupRequired
-            ? "Finish setup on the Parson host"
+            ? "Finish setup on the Mujin Music host"
             : session.setupStatus?.account_setup_required
               ? "Create your account"
               : "Choose your music folder"
           : "Finding your library";
   const detail =
     session.phase === "indexing"
-      ? "Parson is indexing your music. This screen will update automatically."
+      ? "Mujin Music is indexing your music. This screen will update automatically."
       : session.phase === "setup"
         ? hostSetupRequired
-          ? "Create the administrator account and choose the music folder on the computer running Parson."
+          ? "Create the administrator account and choose the music folder on the computer running Mujin Music."
           : (session.setupStatus?.message ??
-            "Finish setting up this Parson library.")
+            "Finish setting up this Mujin Music library.")
         : session.phase === "login"
           ? passwordLogin
-            ? (session.libraryName ?? "Sign in to your Parson library")
+            ? (session.libraryName ?? "Sign in to your Mujin Music library")
             : session.savedAccounts.length && !session.pairing
-              ? `Continue on ${session.libraryName ?? "your Parson library"}.`
-              : `Connect to ${session.libraryName ?? "this Parson library"} without typing your account password.`
+              ? `Continue on ${session.libraryName ?? "your Mujin Music library"}.`
+              : `Connect to ${session.libraryName ?? "this Mujin Music library"} without typing your account password.`
           : "";
 
   return (
@@ -132,7 +132,7 @@ export default function EntryScreen() {
       >
         <View style={styles.content}>
           <Image
-            source={require("@/assets/images/parson-icon.png")}
+            source={require("@/assets/images/mujin-symbol.png")}
             style={styles.logo}
           />
           <Text style={styles.heading}>{heading}</Text>
@@ -172,8 +172,8 @@ export default function EntryScreen() {
             <View accessibilityRole="alert" style={styles.failureCard}>
               <Text style={styles.failureTitle}>Android can’t connect</Text>
               <Text style={styles.failureBody}>
-                Make sure the Parson host is running and this phone is on the
-                same Wi‑Fi network. Then check the address and try again.
+                Make sure the Mujin Music host is running and this phone is on
+                the same Wi‑Fi network. Then check the address and try again.
               </Text>
               <Text selectable style={styles.failureDetail}>
                 {session.error}
@@ -183,8 +183,8 @@ export default function EntryScreen() {
             <View accessibilityRole="alert" style={styles.failureCard}>
               <Text style={styles.failureTitle}>No playable music found</Text>
               <Text style={styles.failureBody}>
-                This folder doesn’t contain audio that Parson can play. Choose a
-                different folder with supported music files.
+                This folder doesn’t contain audio that Mujin Music can play.
+                Choose a different folder with supported music files.
               </Text>
             </View>
           ) : null}
@@ -277,7 +277,7 @@ export default function EntryScreen() {
                   <View style={styles.nearbySection}>
                     {session.savedAccounts.map((account) => (
                       <Pressable
-                        accessibilityHint="Switches to this saved Parson account"
+                        accessibilityHint="Switches to this saved Mujin Music account"
                         accessibilityRole="button"
                         disabled={busy}
                         key={account.key}
@@ -326,8 +326,8 @@ export default function EntryScreen() {
                     {session.pairing.code.replace(/^(\d{3})(\d{3})$/, "$1 $2")}
                   </Text>
                   <Text style={styles.pairingHelp}>
-                    In the Parson web app, open Settings → Connections, enter
-                    this code, and approve this phone.
+                    In the Mujin Music web app, open Settings → Connections,
+                    enter this code, and approve this phone.
                   </Text>
                   <ActivityIndicator
                     color="white"
@@ -448,7 +448,7 @@ export default function EntryScreen() {
                   label={
                     libraries.some((library) => library.nearby)
                       ? "Still looking for more…"
-                      : "Looking for Parson libraries on this Wi‑Fi…"
+                      : "Looking for Mujin Music libraries on this Wi‑Fi…"
                   }
                 />
               ) : null}

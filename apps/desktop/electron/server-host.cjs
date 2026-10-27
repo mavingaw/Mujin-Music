@@ -34,17 +34,17 @@ function shouldGiveUp(crashTimes, now = Date.now()) {
 function statusLabel(state) {
   switch (state.status) {
     case "running":
-      return `Parson Server — Running on port ${state.port ?? PORT}`;
+      return `Mujin Music Server — Running on port ${state.port ?? PORT}`;
     case "starting":
-      return "Parson Server — Starting…";
+      return "Mujin Music Server — Starting…";
     case "restarting":
-      return "Parson Server — Restarting after a problem…";
+      return "Mujin Music Server — Restarting after a problem…";
     case "failed":
-      return "Parson Server — Stopped after repeated errors";
+      return "Mujin Music Server — Stopped after repeated errors";
     case "stopping":
-      return "Parson Server — Stopping…";
+      return "Mujin Music Server — Stopping…";
     default:
-      return "Parson Server — Stopped";
+      return "Mujin Music Server — Stopped";
   }
 }
 
@@ -58,7 +58,7 @@ function hostMenuModel(state) {
   return [
     { label: statusLabel(state), enabled: false },
     { type: "separator" },
-    { label: "Open Parson", action: "open-app" },
+    { label: "Open Mujin Music", action: "open-app" },
     {
       label: "Connect a phone or another computer…",
       action: "open-connections",
@@ -80,13 +80,13 @@ function hostMenuModel(state) {
     },
     { label: "Open logs", action: "open-logs" },
     { type: "separator" },
-    { label: "Quit Parson Server", action: "quit" },
+    { label: "Quit Mujin Music Server", action: "quit" },
   ];
 }
 
 function tooltip(state) {
   return state.status === "running"
-    ? "Parson Server is running. Your phones and other computers can connect."
+    ? "Mujin Music Server is running. Your phones and other computers can connect."
     : statusLabel(state);
 }
 
@@ -100,7 +100,7 @@ function runServerHost({ electron, serverExecutable, service, iconPath }) {
     app.exit(0);
     return;
   }
-  app.setName("Parson Server");
+  app.setName("Mujin Music Server");
   app.dock?.hide();
 
   const pidFile = path.join(app.getPath("userData"), "server-host.pid");
@@ -156,7 +156,7 @@ function runServerHost({ electron, serverExecutable, service, iconPath }) {
     }
     const current = child;
     current.once("error", (error) => {
-      console.error("Parson server could not start", error);
+      console.error("Mujin Music server could not start", error);
     });
     current.once("exit", (code, signal) => {
       if (child === current) child = null;
@@ -164,7 +164,7 @@ function runServerHost({ electron, serverExecutable, service, iconPath }) {
         setStatus("stopped");
         return;
       }
-      console.error(`Parson server exited (${code ?? signal})`);
+      console.error(`Mujin Music server exited (${code ?? signal})`);
       crashes.push(Date.now());
       if (shouldGiveUp(crashes)) {
         setStatus("failed");
@@ -292,7 +292,7 @@ function runServerHost({ electron, serverExecutable, service, iconPath }) {
       tray = new Tray(image);
     } catch (error) {
       // No status area (a bare X session): the server still runs.
-      console.error("Parson Server has no status item", error);
+      console.error("Mujin Music Server has no status item", error);
     }
     try {
       state.autostart = Boolean((await service?.status())?.autostart);

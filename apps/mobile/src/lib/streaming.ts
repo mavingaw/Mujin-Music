@@ -183,7 +183,7 @@ export function subscriberSetupText(
       ? "approve the sign-in on TIDAL"
       : "enter your Qobuz email and password";
   const credential = provider === "tidal" ? "a TIDAL client" : "a Qobuz app";
-  return `With a ${name} subscription you only need to ${step}, once this server has ${credential}. It has none yet: ask the person who runs this Parson server to add one in Settings, Services, Server credentials on the web. ${name} does not issue credentials to Parson, and Parson never copies keys out of ${name}'s own apps.`;
+  return `With a ${name} subscription you only need to ${step}, once this server has ${credential}. It has none yet: ask the person who runs this Mujin Music server to add one in Settings, Services, Server credentials on the web. ${name} does not issue credentials to Mujin Music, and Mujin Music never copies keys out of ${name}'s own apps.`;
 }
 
 /** The line under a service's sign-in saying whose app it signs in through. */
@@ -213,7 +213,7 @@ export function tidalPhoneSignIn(provider: StreamingProviderStatus): {
   if (tidalSignInMethods(provider).primary === "browser") {
     return {
       canStart: false,
-      note: "TIDAL signs in on tidal.com for this server. Open Parson on the web or desktop, go to Settings, Services, TIDAL and choose Sign in with TIDAL. You only log in with your TIDAL account; afterwards this phone plays TIDAL too.",
+      note: "TIDAL signs in on tidal.com for this server. Open Mujin Music on the web or desktop, go to Settings, Services, TIDAL and choose Sign in with TIDAL. You only log in with your TIDAL account; afterwards this phone plays TIDAL too.",
     };
   }
   return { canStart: true, note: null };
@@ -226,14 +226,15 @@ export function keysNoticeText(providers: StreamingProviderStatus[]): string {
     return path.kind === "subscription" && path.via === "key_service";
   });
   if (viaService.length) {
-    const issuer = viaService[0]?.key_service?.issuer ?? "Parson's key service";
+    const issuer =
+      viaService[0]?.key_service?.issuer ?? "Mujin Music's key service";
     return `Sign in to ${viaService.map((provider) => provider.name).join(" and ")} with just your subscription: this server uses ${issuer}'s key service, which holds the licensed apps. It signs stream requests and relays TIDAL's sign-in, and never sees your password or session. Tokens are encrypted on your server and never stored on this phone.`;
   }
   const failing = providers.find(
     (provider) => provider.key_service?.error,
   )?.key_service;
   if (failing) {
-    return `Parson's key service (${failing.url}) is not answering, so your server owner's own apps are needed until it does. Tokens are encrypted on your server and never stored on this phone.`;
+    return `Mujin Music's key service (${failing.url}) is not answering, so your server owner's own apps are needed until it does. Tokens are encrypted on your server and never stored on this phone.`;
   }
-  return "This server has no key service. TIDAL and Qobuz license their APIs to apps, and neither has issued keys to Parson yet; Parson never extracts keys from their apps. Your server owner adds them once, then you only sign in. Tokens are encrypted on your server and never stored on this phone.";
+  return "This server has no key service. TIDAL and Qobuz license their APIs to apps, and neither has issued keys to Mujin Music yet; Mujin Music never extracts keys from their apps. Your server owner adds them once, then you only sign in. Tokens are encrypted on your server and never stored on this phone.";
 }

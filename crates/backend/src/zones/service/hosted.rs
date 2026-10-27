@@ -927,13 +927,13 @@ fn hosted_zone_view(
     };
     let parson = source == ZoneSource::Parson;
     let mut setting_notes = vec![if info.network {
-        "Leveling and DSP are applied to the audio Parson serves, from the next track. Either one means the renderer no longer gets the original file.".to_string()
+        "Leveling and DSP are applied to the audio Mujin Music serves, from the next track. Either one means the renderer no longer gets the original file.".to_string()
     } else {
         "Leveling, DSP and software volume change the samples, so the zone is no longer bit-perfect while they are on.".to_string()
     }];
     if is_device {
         setting_notes.push(
-            "Exclusive mode opens the device directly at each file's own sample rate and bit depth. Other apps cannot play on it while Parson does; Parson lets go when the queue ends."
+            "Exclusive mode opens the device directly at each file's own sample rate and bit depth. Other apps cannot play on it while Mujin Music does; Mujin Music lets go when the queue ends."
                 .to_string(),
         );
     }
@@ -956,7 +956,7 @@ fn hosted_zone_view(
     );
     view_settings.volume_mode = effective.volume_mode;
     let note = if info.kind == ZoneKind::Airplay {
-        "AirPlay carries 44.1 kHz/16-bit lossless (ALAC) by design. Parson decodes each file itself; 16-bit CD-quality files reach the receiver bit for bit, anything else is converted to 44.1 kHz/16-bit first.".to_string()
+        "AirPlay carries 44.1 kHz/16-bit lossless (ALAC) by design. Mujin Music decodes each file itself; 16-bit CD-quality files reach the receiver bit for bit, anything else is converted to 44.1 kHz/16-bit first.".to_string()
     } else if is_device {
         // Devices decode the file themselves: nothing is re-encoded.
         format!(
@@ -971,12 +971,13 @@ fn hosted_zone_view(
     notes.insert(0, note.clone());
     if fixed {
         notes.push(
-            "Fixed volume: Parson sends full-scale audio; set the level on your amplifier."
+            "Fixed volume: Mujin Music sends full-scale audio; set the level on your amplifier."
                 .to_string(),
         );
     }
     if source == ZoneSource::External {
-        notes.push("Another app is playing here. Playing from Parson replaces it.".to_string());
+        notes
+            .push("Another app is playing here. Playing from Mujin Music replaces it.".to_string());
     }
     let mut endpoints = renderer.endpoints(&effective.output);
     if let [endpoint] = endpoints.as_mut_slice() {
@@ -1109,11 +1110,11 @@ fn with_renderer_report(
     });
     if matches && decoding.lossless {
         stream.steps.push(format!(
-            "Renderer reports: decoding {decoded}, lossless, exactly what Parson sends"
+            "Renderer reports: decoding {decoded}, lossless, exactly what Mujin Music sends"
         ));
     } else {
         stream.steps.push(format!(
-            "Renderer reports: decoding {decoded}{}, not what Parson sends (the renderer converts it)",
+            "Renderer reports: decoding {decoded}{}, not what Mujin Music sends (the renderer converts it)",
             if decoding.lossless { ", lossless" } else { "" }
         ));
         stream.bit_perfect = false;

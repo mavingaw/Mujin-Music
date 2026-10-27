@@ -232,7 +232,7 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
         endpoints: Vec::new(),
         notes: vec![
             FormatLimits::CHROMECAST.note("Chromecast"),
-            "Chromecast playback is started from the Parson mobile app; Chromecast groups are made in Google Home and show up as their own zone.".to_string(),
+            "Chromecast playback is started from the Mujin Music mobile app; Chromecast groups are made in Google Home and show up as their own zone.".to_string(),
         ],
     }
 }

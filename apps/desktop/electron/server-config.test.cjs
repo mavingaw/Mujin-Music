@@ -252,7 +252,7 @@ function response(body, status = 200) {
   };
 }
 
-test("probing tells Parson, other services and dead addresses apart", async () => {
+test("probing tells Mujin Music, other services and dead addresses apart", async () => {
   const manifest = {
     protocol: "parson",
     product: "parson-music",
@@ -293,10 +293,13 @@ test("probing tells Parson, other services and dead addresses apart", async () =
     fetch: fetchWith(new Error("ECONNREFUSED")),
   });
   assert.equal(down.kind, "unreachable");
-  assert.match(probeMessage(down, living.origin), /No Parson server answered/);
+  assert.match(
+    probeMessage(down, living.origin),
+    /No Mujin Music server answered/,
+  );
   assert.match(
     probeMessage({ kind: "not-parson" }, living.origin),
-    /isn’t a Parson server/,
+    /isn’t a Mujin Music server/,
   );
 });
 
@@ -506,7 +509,11 @@ test("what a hostile server says about itself is cleaned before it is saved", ()
     servers: [...config.servers, { ...hostile, lastConnectedAt: -1 }],
   });
   assert.ok(Buffer.byteLength(saved) < 4096, "no unknown fields are written");
-  assert.doesNotMatch(saved, /forged\n|<script>|polluted|huge/);
+  assert.doesNotMatch(saved, /forged\n|polluted|huge/);
+  // A version is a version: markup in one is dropped, not stored.
+  for (const server of JSON.parse(saved).servers) {
+    assert.doesNotMatch(server.serverVersion, /[<>]/);
+  }
   assert.equal(JSON.parse(saved).localInstanceId, "this-pc");
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "parson-hostile-"));

@@ -37,9 +37,9 @@ fn get_asset(path: &str) -> Option<AssetFile> {
 
 #[cfg(test)]
 fn get_asset(path: &str) -> Option<AssetFile> {
-    const HTML: &[u8] = b"<!DOCTYPE html><html><body>Parson test export</body></html>";
+    const HTML: &[u8] = b"<!DOCTYPE html><html><body>Mujin Music test export</body></html>";
     const NOT_FOUND_HTML: &[u8] =
-        b"<!DOCTYPE html><html><body><h1>Page not found</h1><p>Parson</p></body></html>";
+        b"<!DOCTYPE html><html><body><h1>Page not found</h1><p>Mujin Music</p></body></html>";
     let data: &'static [u8] = match path {
         "404.html" => NOT_FOUND_HTML,
         "index.html"
@@ -146,12 +146,12 @@ fn not_found_response() -> HttpResponse {
         None => HttpResponse::NotFound()
             .content_type("text/html; charset=utf-8")
             .insert_header(CacheControl(vec![CacheDirective::NoStore]))
-            .body("<!DOCTYPE html><html><body><h1>Parson — Page not found</h1></body></html>"),
+            .body("<!DOCTYPE html><html><body><h1>Mujin Music — Page not found</h1></body></html>"),
     }
 }
 
 fn stale_bundle_response() -> HttpResponse {
-    const RECOVER: &str = r#"(()=>{const k="parson:stale-bundle-reload";if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,"1");location.reload()}else{console.error("Parson could not load the current application bundle")}})();"#;
+    const RECOVER: &str = r#"(()=>{const k="parson:stale-bundle-reload";if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,"1");location.reload()}else{console.error("Mujin Music could not load the current application bundle")}})();"#;
     HttpResponse::Ok()
         .content_type("application/javascript; charset=utf-8")
         .insert_header(CacheControl(vec![CacheDirective::NoStore]))
@@ -380,8 +380,8 @@ mod tests {
         let body = to_bytes(missing.into_body()).await.unwrap();
         assert!(body.starts_with(b"<!DOCTYPE html>"));
         assert!(
-            body.windows(b"Parson".len())
-                .any(|window| window == b"Parson")
+            body.windows(b"Mujin Music".len())
+                .any(|window| window == b"Mujin Music")
         );
         assert!(
             body.windows(b"Page not found".len())

@@ -97,7 +97,7 @@ pub fn untested_note(backend: &str) -> Option<String> {
                 .to_string(),
         ),
         "CoreAudio" => Some(
-            "CoreAudio hog mode: Parson takes the DAC for itself and switches it to the file's own rate and bit depth (16 and 24-bit arrive unchanged). Tested against a protocol-level fake of the macOS audio HAL, not yet on real hardware."
+            "CoreAudio hog mode: Mujin Music takes the DAC for itself and switches it to the file's own rate and bit depth (16 and 24-bit arrive unchanged). Tested against a protocol-level fake of the macOS audio HAL, not yet on real hardware."
                 .to_string(),
         ),
         _ => None,
@@ -191,7 +191,7 @@ impl Renderer for DeviceRenderer {
                 .join(" / ")
         )];
         if device.busy {
-            notes.push("Another app is using this device; Parson cannot open it exclusively until it lets go.".to_string());
+            notes.push("Another app is using this device; Mujin Music cannot open it exclusively until it lets go.".to_string());
         }
         notes.extend(self.placement.notes.iter().cloned());
         RendererInfo {

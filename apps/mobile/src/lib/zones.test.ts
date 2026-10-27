@@ -44,7 +44,7 @@ test("phones name themselves after the device", () => {
     "Alex's Pixel",
   );
   expect(mobileZoneName(null, "Pixel 9", "android")).toBe("Pixel 9 (Android)");
-  expect(mobileZoneName("  ", null, "ios")).toBe("Parson on iOS");
+  expect(mobileZoneName("  ", null, "ios")).toBe("Mujin Music on iOS");
 });
 
 test("remote commands drive the native player", async () => {

@@ -539,9 +539,9 @@ function Landing() {
         <h1 className="text-3xl font-semibold text-white">Import playlists</h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
           Bring playlists from Spotify, Apple Music, YouTube Music, Deezer or
-          any playlist file. Parson matches every track to music you own and
-          shows what it is unsure about. No audio is ever streamed from those
-          services.
+          any playlist file. Mujin Music matches every track to music you own
+          and shows what it is unsure about. No audio is ever streamed from
+          those services.
         </p>
       </header>
 

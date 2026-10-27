@@ -1574,7 +1574,7 @@ mod tests {
         assert_eq!(report.params.format, "S32_LE");
         assert!(
             !report.matches_stream,
-            "a conversion below Parson is caught"
+            "a conversion below Mujin Music is caught"
         );
         drop(shared);
     }

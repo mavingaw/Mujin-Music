@@ -200,20 +200,20 @@ export default function ServicesSettings() {
       <div className="rounded-xl border border-dashed border-white/10 px-4 py-3.5 text-xs leading-5 text-zinc-500">
         <p className="font-medium text-zinc-300">What has been tested</p>
         <p className="mt-1">
-          Parson&apos;s TIDAL and Qobuz support was built and tested against
-          recorded service responses and hi-res media rendered to match them
-          (24/192 FLAC, TIDAL Max DASH, CD FLAC, AAC, MP3). It has not yet been
-          run against a live TIDAL or Qobuz account, so full-length hi-res from
-          the real services is unproven until your own check passes. Run Check
-          connection after signing in: an account shows{" "}
+          Mujin Music&apos;s TIDAL and Qobuz support was built and tested
+          against recorded service responses and hi-res media rendered to match
+          them (24/192 FLAC, TIDAL Max DASH, CD FLAC, AAC, MP3). It has not yet
+          been run against a live TIDAL or Qobuz account, so full-length hi-res
+          from the real services is unproven until your own check passes. Run
+          Check connection after signing in: an account shows{" "}
           <span className="text-emerald-300">Verified</span> only once the real
           service has sent it a whole track, lossless, in the announced format.
         </p>
         <p className="mt-2">
-          Subscription-only sign-in through a Parson key service (Qobuz signing,
-          the TIDAL relay) was tested by running the key service&apos;s own code
-          against the same recorded replies. No key service holding real TIDAL
-          or Qobuz licences exists yet.
+          Subscription-only sign-in through a Mujin Music key service (Qobuz
+          signing, the TIDAL relay) was tested by running the key service&apos;s
+          own code against the same recorded replies. No key service holding
+          real TIDAL or Qobuz licences exists yet.
         </p>
       </div>
 
@@ -269,7 +269,7 @@ function KeysNotice({ providers }: { providers: StreamingProviderStatus[] }) {
     (provider) => provider.key_service,
   )?.key_service;
   if (viaService.length) {
-    const issuer = service?.issuer ?? "Parson";
+    const issuer = service?.issuer ?? "Mujin Music";
     const names = viaService.map((provider) => provider.name).join(" and ");
     return (
       <div className="flex gap-3 rounded-xl border border-emerald-300/15 bg-emerald-300/5 px-4 py-3.5 text-[13px] leading-5 text-zinc-300">
@@ -300,12 +300,12 @@ function KeysNotice({ providers }: { providers: StreamingProviderStatus[] }) {
       <p>
         <span className="font-medium text-zinc-200">
           {service
-            ? "Parson's key service is not answering."
+            ? "Mujin Music's key service is not answering."
             : "This server has no key service."}
         </span>{" "}
         {service?.error
           ? `${service.url} could not be read (${service.error}). Until it answers, `
-          : "TIDAL and Qobuz license their APIs to apps, not to listeners. A Parson key service holding those licences lets a subscriber sign in with nothing else, but this build names none: neither service has issued keys to Parson yet, and Parson never extracts keys from their apps. So "}
+          : "TIDAL and Qobuz license their APIs to apps, not to listeners. A Mujin Music key service holding those licences lets a subscriber sign in with nothing else, but this build names none: neither service has issued keys to Mujin Music yet, and Mujin Music never extracts keys from their apps. So "}
         your server owner adds a TIDAL client and a Qobuz app once; after that
         you only sign in to your own account. You can also bring your own.
         Credentials and sign-in tokens are encrypted on this server, used only
@@ -323,7 +323,7 @@ export function SandboxNotice({ compact = false }: { compact?: boolean }) {
         <span className="font-semibold">Sandbox mode.</span>{" "}
         {compact
           ? "Recorded TIDAL and Qobuz responses; tracks play a 30-second synthesized tone in the format each reply announces."
-          : "This server answers with recorded TIDAL and Qobuz responses instead of contacting the services. Tracks play a 30-second synthesized tone, rendered in the format each recorded reply announces (24/192 FLAC, TIDAL Max as DASH, CD FLAC, AAC, MP3) and streamed through the same proxy and format check as a real account. Sign-in goes through a simulated Parson key service, so it looks the way it does for a subscriber; any email and password work and no real account is used. Sandbox mode is off unless the server is started with PARSON_STREAMING_SANDBOX=1."}
+          : "This server answers with recorded TIDAL and Qobuz responses instead of contacting the services. Tracks play a 30-second synthesized tone, rendered in the format each recorded reply announces (24/192 FLAC, TIDAL Max as DASH, CD FLAC, AAC, MP3) and streamed through the same proxy and format check as a real account. Sign-in goes through a simulated Mujin Music key service, so it looks the way it does for a subscriber; any email and password work and no real account is used. Sandbox mode is off unless the server is started with PARSON_STREAMING_SANDBOX=1."}
       </p>
     </div>
   );
@@ -448,11 +448,12 @@ function SubscriberSetup({
       <p>
         {isAdmin
           ? `Add ${labels.server.replace("this server's", "a")} once under Server credentials, and everyone on this server connects by signing in: they ${labels.account}, nothing else.`
-          : `With a ${provider.name} subscription you only need to ${labels.account}, once this server has ${labels.server.replace("this server's", "a")}. It has none yet: ask the person who runs this Parson server to add one in Settings, Services, Server credentials.`}
+          : `With a ${provider.name} subscription you only need to ${labels.account}, once this server has ${labels.server.replace("this server's", "a")}. It has none yet: ask the person who runs this Mujin Music server to add one in Settings, Services, Server credentials.`}
       </p>
       <p className="rounded-lg border border-white/8 px-3 py-2.5 text-[13px] leading-5 text-zinc-500">
-        {provider.name} does not issue credentials to Parson, and Parson never
-        copies keys out of {provider.name}&apos;s own apps. {labels.source}
+        {provider.name} does not issue credentials to Mujin Music, and Mujin
+        Music never copies keys out of {provider.name}&apos;s own apps.{" "}
+        {labels.source}
       </p>
       <div className="flex flex-wrap items-center gap-3 pt-1">
         {isAdmin && (
@@ -545,8 +546,8 @@ function CredentialsStep({
       }}
     >
       <p className="text-sm leading-6 text-zinc-400">
-        {provider.name} does not issue Parson credentials, so you bring your
-        own. {labels.where}
+        {provider.name} does not issue Mujin Music credentials, so you bring
+        your own. {labels.where}
       </p>
       <label className="grid gap-2 text-sm text-zinc-300">
         {labels.id}
@@ -744,7 +745,7 @@ function TidalSignIn({
       <div className="space-y-5">
         <p className="text-sm leading-6 text-zinc-400">
           Open the TIDAL link on any device, sign in, and confirm this code.
-          Parson never sees your TIDAL password.
+          Mujin Music never sees your TIDAL password.
         </p>
         <div className="rounded-xl border border-white/10 bg-white/3 px-5 py-5 text-center">
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
@@ -788,8 +789,8 @@ function TidalSignIn({
     <div className="space-y-5">
       <p className="text-sm leading-6 text-zinc-400">
         {methods.primary === "browser"
-          ? "You log in on tidal.com and approve Parson, and TIDAL sends you straight back here. Your password never passes through this server."
-          : "TIDAL signs in with a one-time code: you approve Parson on TIDAL's own site, so your password never passes through this server."}
+          ? "You log in on tidal.com and approve Mujin Music, and TIDAL sends you straight back here. Your password never passes through this server."
+          : "TIDAL signs in with a one-time code: you approve Mujin Music on TIDAL's own site, so your password never passes through this server."}
       </p>
       {message && <p className="text-sm text-amber-200">{message}</p>}
       <div className="flex flex-wrap items-center gap-3">
@@ -882,8 +883,8 @@ function QobuzSignIn({
         />
       </label>
       <p className="text-xs leading-5 text-zinc-500">
-        Your password goes to Qobuz once to sign in and is never stored. Parson
-        keeps only the session token, encrypted.
+        Your password goes to Qobuz once to sign in and is never stored. Mujin
+        Music keeps only the session token, encrypted.
       </p>
       {message && <p className="text-sm text-amber-200">{message}</p>}
       <Button className="rounded-full px-6" disabled={saving} type="submit">
@@ -1028,7 +1029,7 @@ function AccountStep({
               (option) => option.id === provider.quality,
             )?.detail
           }
-          . If you limit streaming quality under Playback, Parson asks{" "}
+          . If you limit streaming quality under Playback, Mujin Music asks{" "}
           {provider.name} for its lossy tier instead.
         </p>
       </div>
@@ -1049,7 +1050,7 @@ function AccountStep({
             onClick={() => {
               if (
                 window.confirm(
-                  `Remove ${provider.name}? This forgets your credentials and removes its albums and tracks from your Parson library. Your ${provider.name} favorites are not changed.`,
+                  `Remove ${provider.name}? This forgets your credentials and removes its albums and tracks from your Mujin Music library. Your ${provider.name} favorites are not changed.`,
                 )
               ) {
                 void signOut(true);

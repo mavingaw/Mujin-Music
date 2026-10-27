@@ -42,7 +42,7 @@ fn ffi_result<T>(operation: impl FnOnce() -> Result<T, String>) -> Option<T> {
             None
         }
         Err(_) => {
-            set_last_error("The local Parson engine encountered an unexpected error.");
+            set_last_error("The local Mujin Music engine encountered an unexpected error.");
             None
         }
     }
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn parson_music_app_status_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let readiness = handle.runtime.block_on(handle.app.library.readiness());
             serde_json::to_string(&serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn parson_music_app_index_library(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let path = path
                 .as_ref()
                 .ok_or_else(|| "The library path is null.".to_string())?;
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn parson_music_app_catalog_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let catalog = handle
                 .runtime
                 .block_on(handle.app.catalog(offset, limit))
@@ -176,7 +176,7 @@ macro_rules! catalog_section_export {
                 ffi_result(|| {
                     let handle = app
                         .as_ref()
-                        .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                        .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
                     let catalog = handle
                         .runtime
                         .block_on(handle.app.$method(offset, limit))
@@ -211,7 +211,7 @@ pub unsafe extern "C" fn parson_music_app_artists_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let artists = handle
                 .runtime
                 .block_on(handle.app.artists(offset, limit))
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn parson_music_app_artist_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let artist_id = artist_id
                 .as_ref()
                 .ok_or_else(|| "The artist identifier is null.".to_string())?;
@@ -280,7 +280,7 @@ pub unsafe extern "C" fn parson_music_app_recommendations_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let seed = if seed_song_id.is_null() {
                 None
             } else {
@@ -320,7 +320,7 @@ pub unsafe extern "C" fn parson_music_app_search_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let query = query
                 .as_ref()
                 .ok_or_else(|| "The search query is null.".to_string())?;
@@ -355,7 +355,7 @@ pub unsafe extern "C" fn parson_music_app_album_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let album_id = album_id
                 .as_ref()
                 .ok_or_else(|| "The album identifier is null.".to_string())?;
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn parson_music_app_playlists_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let playlists = handle
                 .runtime
                 .block_on(handle.app.playlists())
@@ -419,7 +419,7 @@ pub unsafe extern "C" fn parson_music_app_create_playlist_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let name = name
                 .as_ref()
                 .ok_or_else(|| "The playlist name is null.".to_string())?;
@@ -454,7 +454,7 @@ pub unsafe extern "C" fn parson_music_app_playlist_json(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let playlist = handle
                 .runtime
                 .block_on(handle.app.playlist_detail(playlist_id))
@@ -484,7 +484,7 @@ pub unsafe extern "C" fn parson_music_app_add_playlist_song(
         ffi_result(|| {
             let handle = app
                 .as_ref()
-                .ok_or_else(|| "The Parson application handle is null.".to_string())?;
+                .ok_or_else(|| "The Mujin Music application handle is null.".to_string())?;
             let song_id = song_id
                 .as_ref()
                 .ok_or_else(|| "The song identifier is null.".to_string())?;

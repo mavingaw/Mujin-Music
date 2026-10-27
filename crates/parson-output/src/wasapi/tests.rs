@@ -244,7 +244,10 @@ fn one_stream_holds_the_device_and_lets_go_when_dropped() {
     };
     let stream = backend.open(&id, format, true).expect("first");
     let listed = backend.devices();
-    assert!(!listed[0].busy, "Parson's own stream is not another app");
+    assert!(
+        !listed[0].busy,
+        "Mujin Music's own stream is not another app"
+    );
     assert!(
         backend.open(&id, format, true).is_err(),
         "one exclusive client"

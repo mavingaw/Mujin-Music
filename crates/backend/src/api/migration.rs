@@ -268,7 +268,7 @@ fn resolve_chosen_folder(value: &str, data_dir: &Path, backups: &Path) -> Result
     let in_backups = folder.starts_with(resolved(backups));
     if folder.starts_with(resolved(data_dir)) && !in_backups {
         return Err(
-            "That folder belongs to Parson’s own data. Choose another drive or a NAS share."
+            "That folder belongs to Mujin Music’s own data. Choose another drive or a NAS share."
                 .to_string(),
         );
     }
@@ -292,14 +292,14 @@ fn validate_destination(value: &str, local_backups: &Path) -> Result<PathBuf, St
     let trimmed = value.trim();
     if same_directory(&path, local_backups) {
         return Err(
-            "That is the folder Parson already keeps its own backups in. Choose another drive or a NAS share."
+            "That is the folder Mujin Music already keeps its own backups in. Choose another drive or a NAS share."
                 .to_string(),
         );
     }
     let probe = path.join(format!(".parson-write-check-{}", Uuid::new_v4()));
     fs::write(&probe, b"parson")
         .and_then(|()| fs::remove_file(&probe))
-        .map_err(|error| format!("Parson can’t write to {trimmed}: {error}"))?;
+        .map_err(|error| format!("Mujin Music can’t write to {trimmed}: {error}"))?;
     Ok(path)
 }
 
@@ -392,7 +392,7 @@ fn read_backup_manifest(path: &Path) -> Result<serde_json::Value, String> {
         serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
     if manifest["format"] != "parson-private-backup" || manifest["version"] != BACKUP_FORMAT_VERSION
     {
-        return Err("this is not a supported Parson private backup".to_string());
+        return Err("this is not a supported Mujin Music private backup".to_string());
     }
     Ok(manifest)
 }
@@ -467,14 +467,14 @@ fn backup_file_from_request(value: &str) -> Result<PathBuf, String> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or("Choose a Parson backup file.")?;
+        .ok_or("Choose a Mujin Music backup file.")?;
     if !path.is_absolute() || safe_backup_filename(name).is_none() {
-        return Err("Choose a Parson backup file (parson-backup-….tar.zst).".to_string());
+        return Err("Choose a Mujin Music backup file (parson-backup-….tar.zst).".to_string());
     }
     let folder = path
         .parent()
         .and_then(Path::to_str)
-        .ok_or("Choose a Parson backup file.")?;
+        .ok_or("Choose a Mujin Music backup file.")?;
     let file = chosen_folder(folder)?.join(name);
     if !file.is_file() {
         return Err("That backup is no longer there.".to_string());
@@ -565,7 +565,7 @@ fn restarting_response() -> HttpResponse {
     HttpResponse::Accepted().json(serde_json::json!({
         "restart_required": false,
         "restarting": true,
-        "message": "Backup validated. Parson is restarting to restore it."
+        "message": "Backup validated. Mujin Music is restarting to restore it."
     }))
 }
 
@@ -641,7 +641,7 @@ async fn admin_restore_from_folder(request: web::Json<RestoreFromFolderRequest>)
     match stage_backup_from_folder(request.into_inner()).await {
         Ok(()) => HttpResponse::Accepted().json(serde_json::json!({
             "restart_required": true,
-            "message": "Backup validated. Restart Parson to apply it."
+            "message": "Backup validated. Restart Mujin Music to apply it."
         })),
         Err(response) => response,
     }
@@ -652,7 +652,7 @@ async fn admin_restart() -> HttpResponse {
     crate::server::request_restart();
     HttpResponse::Accepted().json(serde_json::json!({
         "restarting": true,
-        "message": "Parson is restarting."
+        "message": "Mujin Music is restarting."
     }))
 }
 

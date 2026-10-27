@@ -211,8 +211,8 @@ export default function RemoteAccessPanel() {
           ))}
           <li className="py-2.5 text-xs leading-5 text-zinc-500">
             Checked from this server, inside your home. That can’t prove an
-            address works from outside: confirm with the Parson app on mobile
-            data (Settings → Devices → Check from here).
+            address works from outside: confirm with the Mujin Music app on
+            mobile data (Settings → Devices → Check from here).
           </li>
         </ul>
       ) : null}
@@ -230,7 +230,7 @@ export default function RemoteAccessPanel() {
             <p className="mt-0.5 leading-5 text-zinc-500">
               {vpn?.length
                 ? `Found ${vpn.map((address) => address.origin.replace(/^https?:\/\//, "")).join(" and ")}. Phones signed in to the same VPN use it automatically. Nothing is open to the internet.`
-                : "Install Tailscale on this server and on your phone. Nothing is opened to the internet, the connection is encrypted, and Parson finds the address on its own."}
+                : "Install Tailscale on this server and on your phone. Nothing is opened to the internet, the connection is encrypted, and Mujin Music finds the address on its own."}
             </p>
           </div>
         </div>
@@ -356,7 +356,7 @@ export default function RemoteAccessPanel() {
         </form>
 
         <p className="text-xs leading-5 text-zinc-500">
-          The Parson app saves these addresses when it connects at home and
+          The Mujin Music app saves these addresses when it connects at home and
           switches to them by itself when your home network is out of reach. The
           check above runs from this server; the app runs it again from wherever
           you are.

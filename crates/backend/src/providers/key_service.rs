@@ -124,7 +124,7 @@ pub fn parse_manifest(body: &[u8]) -> Result<KeyServiceManifest, String> {
         serde_json::from_slice(body).map_err(|error| format!("unreadable reply: {error}"))?;
     if manifest.protocol != PROTOCOL_VERSION {
         return Err(format!(
-            "it speaks protocol {}, this Parson speaks {PROTOCOL_VERSION}",
+            "it speaks protocol {}, this Mujin Music speaks {PROTOCOL_VERSION}",
             manifest.protocol
         ));
     }
@@ -203,7 +203,7 @@ impl ServiceKeys {
         };
         let public_url = normalized_service_url(&read("PARSON_KEY_SERVICE_PUBLIC_URL")?)?;
         let keys = Self {
-            issuer: read("PARSON_KEY_SERVICE_ISSUER").unwrap_or_else(|| "Parson".into()),
+            issuer: read("PARSON_KEY_SERVICE_ISSUER").unwrap_or_else(|| "Mujin Music".into()),
             public_url,
             tidal_client_id: read("PARSON_KEY_SERVICE_TIDAL_CLIENT_ID"),
             tidal_device_code: read("PARSON_KEY_SERVICE_TIDAL_DEVICE_CODE")
@@ -306,8 +306,8 @@ pub fn relay_location(query: &[(String, String)]) -> Result<String, ServiceRefus
             .map(|(_, value)| value.as_str())
     };
     let state = value("state").ok_or(ServiceRefusal::Invalid("state is missing"))?;
-    let target =
-        relay_return_uri(state).ok_or(ServiceRefusal::Invalid("state names no Parson server"))?;
+    let target = relay_return_uri(state)
+        .ok_or(ServiceRefusal::Invalid("state names no Mujin Music server"))?;
     let mut parameters = vec![("state", state)];
     match (value("code"), value("error")) {
         (Some(code), _) if !code.is_empty() && code.len() <= 2048 => {
@@ -392,7 +392,7 @@ mod tests {
 
     fn keys() -> ServiceKeys {
         ServiceKeys {
-            issuer: "Parson".into(),
+            issuer: "Mujin Music".into(),
             public_url: "https://keys.parson.test".into(),
             tidal_client_id: Some("parson-tidal".into()),
             tidal_device_code: false,

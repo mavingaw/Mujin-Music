@@ -103,7 +103,7 @@ describe("web client leg", () => {
       "client-depth-out",
       "client-output",
     ]);
-    expect(path.stages[1]!.title).toBe("Parson desktop");
+    expect(path.stages[1]!.title).toBe("Mujin Music desktop");
     expect(path.stages[3]!.title).toBe("Slow: speed");
   });
 

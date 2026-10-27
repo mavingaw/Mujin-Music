@@ -104,7 +104,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <Link
             className="electron-titlebar-no-drag absolute left-0 flex h-10 w-10 shrink-0 select-none items-center justify-center md:hidden"
             href="/"
-            aria-label="Parson home"
+            aria-label="Mujin Music home"
             draggable={false}
             onClick={() =>
               window.dispatchEvent(new Event("parson:navigate-home"))

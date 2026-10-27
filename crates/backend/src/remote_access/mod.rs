@@ -640,10 +640,10 @@ impl Service {
                 };
                 let detail = match (address.kind, outcome) {
                     ("router", CheckOutcome::Unreachable) => format!(
-                        "{detail} Checked from the server through the router: some routers can’t loop a connection back to their own public address, so open the Parson app on mobile data to be sure."
+                        "{detail} Checked from the server through the router: some routers can’t loop a connection back to their own public address, so open the Mujin Music app on mobile data to be sure."
                     ),
                     ("vpn", CheckOutcome::Reachable) => "Answers on the VPN address. Phones and computers reach it away from home while they are connected to the same VPN.".to_string(),
-                    (_, CheckOutcome::Reachable) => "Leads to this server when called from the server itself. The server can’t test from outside your home, so this doesn’t prove it works there: open the Parson app on mobile data and use “Check from here”.".to_string(),
+                    (_, CheckOutcome::Reachable) => "Leads to this server when called from the server itself. The server can’t test from outside your home, so this doesn’t prove it works there: open the Mujin Music app on mobile data and use “Check from here”.".to_string(),
                     _ => detail,
                 };
                 path(
@@ -712,7 +712,7 @@ async fn check_address(
         return (
             CheckOutcome::NotParson,
             format!(
-                "Something answered with HTTP {}, but not Parson.",
+                "Something answered with HTTP {}, but not Mujin Music.",
                 response.status()
             ),
         );
@@ -720,20 +720,20 @@ async fn check_address(
     let Ok(manifest) = response.json::<serde_json::Value>().await else {
         return (
             CheckOutcome::NotParson,
-            "Something answered, but not Parson.".into(),
+            "Something answered, but not Mujin Music.".into(),
         );
     };
     if manifest["protocol"] != "parson" {
         return (
             CheckOutcome::NotParson,
-            "Something answered, but not Parson.".into(),
+            "Something answered, but not Mujin Music.".into(),
         );
     }
     if manifest["instanceId"].as_str() != Some(instance_id) {
         return (
             CheckOutcome::OtherServer,
             format!(
-                "This address reaches a different Parson server (“{}”).",
+                "This address reaches a different Mujin Music server (“{}”).",
                 manifest["name"].as_str().unwrap_or("another library")
             ),
         );

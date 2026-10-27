@@ -19,8 +19,8 @@ export function describeRouter(router: RouterState): RouterSummary {
         title: `Port ${router.external_port} forwarded by ${router.router_name ?? "your router"}`,
         detail: `Reachable at ${where}${router.internal_address ? `, forwarded to ${router.internal_address}` : ""}. ${
           router.lease_seconds === 0
-            ? "Your router only allows permanent forwards; Parson removes it when you switch this off."
-            : "Parson renews it while the server runs; it lapses on its own if the server stops."
+            ? "Your router only allows permanent forwards; Mujin Music removes it when you switch this off."
+            : "Mujin Music renews it while the server runs; it lapses on its own if the server stops."
         }`,
       };
     case "unreachable":
@@ -49,7 +49,8 @@ export function describeRouter(router: RouterState): RouterSummary {
       return {
         tone: "off",
         title: "Router port forwarding is off",
-        detail: "Parson can ask your router (UPnP) to forward a port to it.",
+        detail:
+          "Mujin Music can ask your router (UPnP) to forward a port to it.",
       };
   }
 }
@@ -69,7 +70,7 @@ export function outcomeLabel(result: PathCheck): string {
     case "other_server":
       return "Other server";
     case "not_parson":
-      return "Not Parson";
+      return "Not Mujin Music";
     default:
       return "No answer";
   }

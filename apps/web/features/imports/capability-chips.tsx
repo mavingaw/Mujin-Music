@@ -22,7 +22,7 @@ export default function CapabilityChips({
   );
   return (
     <ul
-      aria-label="What Parson can do with this service"
+      aria-label="What Mujin Music can do with this service"
       className="flex flex-wrap gap-1.5"
     >
       {ordered.map((grant) => (

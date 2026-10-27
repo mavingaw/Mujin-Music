@@ -78,7 +78,7 @@ function parsonResponse({
   ]);
 }
 
-test("queries ask for the Parson service by PTR", () => {
+test("queries ask for the Mujin Music service by PTR", () => {
   const query = encodeQuery();
   assert.equal(query.readUInt16BE(4), 1);
   const packet = decodePacket(

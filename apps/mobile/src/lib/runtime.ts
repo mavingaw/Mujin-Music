@@ -98,7 +98,7 @@ export function embeddedWebClientTarget(
 }
 
 export function apiUrl(path: string) {
-  if (!runtime.origin) throw new Error("No Parson library is connected.");
+  if (!runtime.origin) throw new Error("No Mujin Music library is connected.");
   return `${runtime.origin}/api/v1/${path.replace(/^\/+/, "")}`;
 }
 

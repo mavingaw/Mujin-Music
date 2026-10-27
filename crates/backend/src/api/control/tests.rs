@@ -213,7 +213,7 @@ fn registration(song_ids: Option<Vec<String>>) -> ClientRegistration {
     ClientRegistration {
         kind: ZoneKind::Desktop,
         name: "Listening Room".into(),
-        device: "Parson for Linux".into(),
+        device: "Mujin Music for Linux".into(),
         status: ZoneStatus::Playing,
         song_ids,
         current_position: 0,

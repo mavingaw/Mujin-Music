@@ -1560,7 +1560,7 @@ async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
     assert_eq!(dac_zone.ecosystem, "bridge");
     assert_eq!(
         dac_zone.device,
-        "kitchen · Parson Bridge · Simulated USB Audio 2.0 DAC"
+        "kitchen · Mujin Bridge · Simulated USB Audio 2.0 DAC"
     );
     assert_eq!(
         dac_zone
@@ -1606,7 +1606,7 @@ async fn bridge_zones_play_remote_dacs_bit_perfect_and_group_sample_synced() {
     assert!(stream.bit_perfect, "{stream:?}");
     assert_eq!(
         stream.output,
-        "96 kHz/24-bit (S24_3LE) to USB DAC (simulated) on kitchen via Parson Bridge, exclusive"
+        "96 kHz/24-bit (S24_3LE) to USB DAC (simulated) on kitchen via Mujin Bridge, exclusive"
     );
     assert!(
         drive_until(&service, |service| zone(service, &cache, kitchen_dac)
@@ -2065,7 +2065,7 @@ async fn airplay_zones_stream_lossless_alac_to_a_receiver_end_to_end() {
     let zones = service.list(USER, Some(&cache));
     assert!(
         !zones.iter().any(|zone| zone.name == "HomePod"),
-        "receivers Parson cannot play to are not zones"
+        "receivers Mujin Music cannot play to are not zones"
     );
     let speaker = zones
         .iter()
@@ -2894,7 +2894,7 @@ async fn openhome_renderers_play_gapless_from_their_playlist_and_report_what_the
     assert!(stream.bit_perfect, "{stream:?}");
     assert!(
         stream.steps.contains(
-            &"Renderer reports: decoding FLAC 96 kHz/24-bit, lossless, exactly what Parson sends"
+            &"Renderer reports: decoding FLAC 96 kHz/24-bit, lossless, exactly what Mujin Music sends"
                 .to_string()
         ),
         "{:?}",
@@ -3015,7 +3015,7 @@ async fn openhome_renderers_play_gapless_from_their_playlist_and_report_what_the
     assert_eq!(stream.quality, crate::zones::StreamQuality::High);
     assert!(
         stream.steps.iter().any(|step| step
-            == "Renderer reports: decoding FLAC 48 kHz/24-bit, lossless, not what Parson sends (the renderer converts it)"),
+            == "Renderer reports: decoding FLAC 48 kHz/24-bit, lossless, not what Mujin Music sends (the renderer converts it)"),
         "{:?}",
         stream.steps
     );

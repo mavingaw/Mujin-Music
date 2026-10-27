@@ -87,7 +87,7 @@ function Switch({
       aria-label={label}
       className={cn(
         "relative inline-flex h-5.5 w-9.5 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:opacity-40",
-        checked ? "bg-[#38b6ff]" : "bg-zinc-700",
+        checked ? "bg-quality-enhanced" : "bg-zinc-700",
       )}
       disabled={disabled}
       onClick={() => onChange(!checked)}
@@ -129,7 +129,9 @@ function Section({
     <section
       className={cn(
         "rounded-xl border px-4 py-3 transition-colors",
-        live ? "border-[#38b6ff]/30 bg-[#38b6ff]/4" : "border-white/8",
+        live
+          ? "border-quality-enhanced/30 bg-quality-enhanced/4"
+          : "border-white/8",
       )}
       data-dsp-section={title}
     >
@@ -230,7 +232,7 @@ function EqCurve({ settings }: { settings: DspSettings }) {
       <polyline
         fill="none"
         points={points.join(" ")}
-        stroke="#38b6ff"
+        stroke="#8FC3E0"
         strokeWidth={2}
         vectorEffect="non-scaling-stroke"
       />
@@ -259,7 +261,7 @@ function BandRow({
       <input
         aria-label={`${label} enabled`}
         checked={band.enabled}
-        className="h-4 w-4 accent-[#38b6ff]"
+        className="h-4 w-4 accent-quality-enhanced"
         onChange={(event) =>
           onChange({ ...band, enabled: event.target.checked })
         }
@@ -310,7 +312,7 @@ function BandRow({
       <label className="col-span-3 flex items-center gap-2 sm:col-span-1">
         <input
           aria-label={`${label} gain in decibels`}
-          className="h-1.5 w-full accent-[#38b6ff] disabled:opacity-30"
+          className="h-1.5 w-full accent-quality-enhanced disabled:opacity-30"
           disabled={!hasGain}
           max={12}
           min={-12}
@@ -387,7 +389,7 @@ export function panelAvailability(
     if (!target.supported)
       return {
         ...dspAvailability({ kind: "cast" }),
-        reason: `${target.name} plays what its own app sends, so Parson cannot process it.`,
+        reason: `${target.name} plays what its own app sends, so Mujin Music cannot process it.`,
         engine: "Not available on this zone",
       };
     return dspAvailability({
@@ -619,7 +621,7 @@ export function DspPanel({
                 <Server className="mt-px h-3 w-3 shrink-0" />
                 <span>
                   The server runs this chain itself, in 64-bit float, before{" "}
-                  {target.name}; nothing after Parson mixes or resamples it
+                  {target.name}; nothing after Mujin Music mixes or resamples it
                   again. Set the zone's device mode and format limits in its
                   zone settings or in{" "}
                   <a
@@ -658,7 +660,7 @@ export function DspPanel({
             <div className="flex items-center gap-3">
               <input
                 aria-label="Headroom adjustment in decibels"
-                className="h-1.5 flex-1 accent-[#38b6ff]"
+                className="h-1.5 flex-1 accent-quality-enhanced"
                 id={headroomId}
                 max={0}
                 min={-12}
@@ -700,7 +702,7 @@ export function DspPanel({
             description={
               serverRun
                 ? "The rate the server sends to the device. Its converter is a linear-phase 64-bit polyphase sinc that runs after the EQ and crossfeed; the device receives that rate with no further conversion."
-                : "The rate the processing graph runs at. Matching the source avoids a conversion; the device may still convert after Parson."
+                : "The rate the processing graph runs at. Matching the source avoids a conversion; the device may still convert after Mujin Music."
             }
             enabled={settings.sampleRate.enabled}
             masterOn={settings.enabled && !blocked}

@@ -76,9 +76,9 @@ export function StreamingServicesSettings() {
         <Text style={styles.sandbox}>
           Sandbox mode: recorded TIDAL and Qobuz responses, and 30-second
           synthesized tones rendered in each announced format (24/192 FLAC,
-          TIDAL Max DASH, CD, AAC). Sign-in goes through a simulated Parson key
-          service, as it would for a subscriber; any email and password work. No
-          real account is used.
+          TIDAL Max DASH, CD, AAC). Sign-in goes through a simulated Mujin Music
+          key service, as it would for a subscriber; any email and password
+          work. No real account is used.
         </Text>
       ) : null}
       {providers.data.providers.map((provider) => (

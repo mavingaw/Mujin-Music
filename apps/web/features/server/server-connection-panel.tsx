@@ -47,14 +47,15 @@ export default function ServerConnectionPanel() {
   }, [refreshDiscovery]);
 
   function connect(origin: string) {
-    if (!connectToServer(origin)) toast("Enter a valid Parson server address.");
+    if (!connectToServer(origin))
+      toast("Enter a valid Mujin Music server address.");
   }
 
   function connectManual(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const origin = normalizeServerOrigin(manualServer);
     if (!origin) {
-      toast("Enter a valid Parson server address.");
+      toast("Enter a valid Mujin Music server address.");
       return;
     }
     connect(origin);
@@ -93,9 +94,9 @@ export default function ServerConnectionPanel() {
               Pair a phone or tablet
             </h2>
             <p className="mt-1 text-sm leading-5 text-zinc-500">
-              Open the Parson app on your phone, choose this library (or scan
-              the QR code above), then enter the six-digit code it shows. The
-              phone signs in as your current account.
+              Open the Mujin Music app on your phone, choose this library (or
+              scan the QR code above), then enter the six-digit code it shows.
+              The phone signs in as your current account.
             </p>
           </div>
         </div>
@@ -182,7 +183,7 @@ export default function ServerConnectionPanel() {
             <p className="p-4 text-sm text-zinc-500">
               {discoveryState === "error"
                 ? "Nearby discovery is unavailable. You can still enter an address below."
-                : "No other Parson servers found on this network."}
+                : "No other Mujin Music servers found on this network."}
             </p>
           )}
         </div>
@@ -191,7 +192,7 @@ export default function ServerConnectionPanel() {
           onSubmit={connectManual}
         >
           <Input
-            aria-label="Parson device address"
+            aria-label="Mujin Music device address"
             onChange={(event) => setManualServer(event.target.value)}
             placeholder="Enter another library address"
             value={manualServer}

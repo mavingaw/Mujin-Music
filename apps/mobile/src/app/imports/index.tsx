@@ -153,7 +153,7 @@ export default function ImportsScreen() {
                 ? parsed
                   ? `${SERVICE_NAMES[parsed.service]} ${parsed.kind.replace("_", " ")}`
                   : "Not a supported playlist link"
-                : "Files and service sign-in: Settings › Connections in Parson on the web or desktop."}
+                : "Files and service sign-in: Settings › Connections in Mujin Music on the web or desktop."}
             </Text>
             <Pressable
               {...immediatePressFeedback}

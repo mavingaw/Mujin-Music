@@ -907,7 +907,7 @@ fn public_index_zip(index: &PublicLibraryIndex) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())?;
     archive
         .write_all(
-            b"Parson share-safe library index\n\nThis archive contains music metadata and audio characteristics only.\nIt excludes accounts, paths, filenames, server identity, playlists, favorites, and activity history.\n",
+            b"Mujin Music share-safe library index\n\nThis archive contains music metadata and audio characteristics only.\nIt excludes accounts, paths, filenames, server identity, playlists, favorites, and activity history.\n",
         )
         .map_err(|error| error.to_string())?;
     archive
@@ -956,7 +956,7 @@ fn validate_restore_database(path: &Path) -> Result<(), String> {
     .get_result::<CountRow>(&mut connection)
     .map_err(|error| error.to_string())?;
     if required.count != 3 {
-        return Err("the backup database is not a compatible Parson database".to_string());
+        return Err("the backup database is not a compatible Mujin Music database".to_string());
     }
     Ok(())
 }
@@ -1079,7 +1079,7 @@ pub(crate) fn validate_and_stage_restore(
             if manifest["format"] != "parson-private-backup"
                 || manifest["version"] != BACKUP_FORMAT_VERSION
             {
-                return Err("this is not a supported Parson private backup".to_string());
+                return Err("this is not a supported Mujin Music private backup".to_string());
             }
             backed_up_identity = manifest["instance_id"]
                 .as_str()
@@ -1241,17 +1241,17 @@ async fn reset_parson(pool: web::Data<DbPool>, body: web::Json<ResetRequest>) ->
     {
         Ok(Ok(())) => HttpResponse::Accepted().json(serde_json::json!({
             "restart_required": true,
-            "message": "Reset is ready. Restart Parson to finish."
+            "message": "Reset is ready. Restart Mujin Music to finish."
         })),
         Ok(Err(error)) => {
-            tracing::error!(%error, "Parson reset staging failed");
+            tracing::error!(%error, "Mujin Music reset staging failed");
             internal_server_error(
-                "Could not create the safety backup, so Parson was not reset.",
+                "Could not create the safety backup, so Mujin Music was not reset.",
                 "reset_failed",
             )
         }
         Err(error) => {
-            tracing::error!(%error, "Parson reset worker failed");
+            tracing::error!(%error, "Mujin Music reset worker failed");
             internal_server_error("Could not prepare the reset.", "reset_failed")
         }
     }
@@ -1335,7 +1335,7 @@ async fn restore_backup(multipart: Multipart, options: web::Query<RestoreOptions
     match stage_uploaded_backup(multipart, options.into_inner()).await {
         Ok(()) => HttpResponse::Accepted().json(serde_json::json!({
             "restart_required": true,
-            "message": "Backup validated. Restart Parson to apply it."
+            "message": "Backup validated. Restart Mujin Music to apply it."
         })),
         Err(response) => response,
     }

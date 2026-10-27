@@ -278,7 +278,7 @@ pub fn advertise(port: u16) -> Result<DiscoveryAdvertisement, String> {
         .register(service)
         .map_err(|error| error.to_string())?;
     ADVERTISING.store(true, Ordering::Relaxed);
-    tracing::info!(service = SERVICE_TYPE, %port, %name, "advertising Parson on the local network");
+    tracing::info!(service = SERVICE_TYPE, %port, %name, "advertising Mujin Music on the local network");
     Ok(DiscoveryAdvertisement { daemon, fullname })
 }
 
@@ -311,7 +311,7 @@ pub async fn discover_nearby(timeout: Duration) -> Result<Vec<DiscoveredServer>,
         let name = info
             .get_property_val_str("name")
             .filter(|value| !value.is_empty())
-            .unwrap_or("Parson Library");
+            .unwrap_or("Mujin Music Library");
         let Some(address) = info
             .get_addresses_v4()
             .into_iter()

@@ -87,7 +87,7 @@ export function clientZoneIdentity(
   if (desktop) {
     return {
       kind: "desktop",
-      name: platform ? `Parson on ${platform}` : "Parson desktop",
+      name: platform ? `Mujin Music on ${platform}` : "Mujin Music desktop",
       device: "Desktop app",
     };
   }

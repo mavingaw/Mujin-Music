@@ -659,7 +659,7 @@ mod tests {
         assert!(url.contains("scope=playlist-read-private%20"));
         assert!(
             !url.contains("streaming"),
-            "Parson never requests audio streaming"
+            "Mujin Music never requests audio streaming"
         );
     }
 

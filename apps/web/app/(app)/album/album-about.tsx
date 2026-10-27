@@ -396,7 +396,8 @@ export function AlbumAboutSection({
                 !unverified &&
                 about.enrichment.task?.status === "skipped" && (
                   <p className="rounded-md border border-white/8 bg-white/3 px-3 py-2.5 text-sm leading-6 text-zinc-400">
-                    Parson found no confident MusicBrainz match for this album
+                    Mujin Music found no confident MusicBrainz match for this
+                    album
                     {about.enrichment.task.last_error
                       ? ` (${about.enrichment.task.last_error})`
                       : ""}

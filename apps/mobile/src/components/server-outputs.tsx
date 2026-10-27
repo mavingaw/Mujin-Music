@@ -102,7 +102,7 @@ export function ServerOutputs({
     <View style={styles.section}>
       <Text style={styles.title}>Server outputs</Text>
       <Text style={styles.note}>
-        Play on a device attached to the computer running Parson, opened in
+        Play on a device attached to the computer running Mujin Music, opened in
         exclusive mode for a bit-perfect path, or on a network player (UPnP,
         OpenHome, AirPlay) the server streams to after its own DSP. The queue
         moves there and this phone becomes the remote.
@@ -348,7 +348,7 @@ const styles = StyleSheet.create({
     gap: 6,
     padding: 10,
     borderRadius: 12,
-    backgroundColor: "rgba(178,107,255,0.08)",
+    backgroundColor: "rgba(217,139,95,0.08)",
   },
   row: { flexDirection: "row", alignItems: "center", gap: 8 },
   sessionName: { flex: 1, color: "white", fontSize: 13, fontWeight: "600" },
@@ -371,7 +371,7 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.4 },
   chosen: {
     borderColor: signalQualityColors.lossless,
-    backgroundColor: "rgba(178,107,255,0.16)",
+    backgroundColor: "rgba(217,139,95,0.16)",
   },
   strategies: { gap: 6 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },

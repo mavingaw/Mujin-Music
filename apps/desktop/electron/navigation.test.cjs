@@ -5,7 +5,7 @@ const { isAllowedNavigation } = require("./navigation.cjs");
 
 const origin = "http://127.0.0.1:1993";
 
-test("allows only the exact Parson origin", () => {
+test("allows only the exact Mujin Music origin", () => {
   assert.equal(isAllowedNavigation(`${origin}/album?id=1`, origin), true);
   assert.equal(
     isAllowedNavigation("http://127.0.0.1:1993.attacker.example/", origin),

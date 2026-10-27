@@ -36,7 +36,7 @@ export function releaseMatchSummary(check: ReleaseMatchCheck) {
  */
 export const UNVERIFIED_MATCH_TEXT =
   "The closest MusicBrainz release does not line up with your files, so " +
-  "Parson kept your tags and did not use its cover, performers, works or " +
+  "Mujin Music kept your tags and did not use its cover, performers, works or " +
   "release type.";
 
 /** Evidence against first, then evidence for, then what could not be told. */

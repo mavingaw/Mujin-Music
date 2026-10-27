@@ -5,7 +5,8 @@ import TidalCallback from "@/features/streaming/tidal-callback";
 
 export const metadata: Metadata = {
   title: "TIDAL sign-in",
-  description: "Finishes signing in to TIDAL after approving Parson on TIDAL.",
+  description:
+    "Finishes signing in to TIDAL after approving Mujin Music on TIDAL.",
 };
 
 export default function TidalCallbackRoute() {

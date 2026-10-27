@@ -13,7 +13,7 @@ describe("serviceSummary", () => {
     ).toEqual({
       running: true,
       status: "Running in the background",
-      detail: "Parson Server in the menu bar",
+      detail: "Mujin Music Server in the menu bar",
       autostartLabel: "Launch at startup",
     });
     expect(
@@ -44,7 +44,7 @@ describe("serviceSummary", () => {
 
 test("the remote role card never hides this computer's own server", () => {
   expect(remoteRoleCopy({ name: "Studio NAS", localRunning: true })).toContain(
-    "This computer also runs its own Parson server",
+    "This computer also runs its own Mujin Music server",
   );
   expect(remoteRoleCopy({ name: "Studio NAS", localRunning: false })).toMatch(
     /^No server runs on this computer/,

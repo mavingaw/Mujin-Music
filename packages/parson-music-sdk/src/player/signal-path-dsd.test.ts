@@ -161,7 +161,7 @@ describe("DSD in the signal path", () => {
         stage({
           id: "native-transport",
           kind: "transport",
-          title: "studio-pc · Parson audio transport",
+          title: "studio-pc · Mujin Music audio transport",
           detail: "ALSA hw:1,0 exclusive",
         }),
         stage({

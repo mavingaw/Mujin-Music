@@ -190,7 +190,7 @@ export function catalogueStatusText(catalogue: ComposerWorks["catalogue"]) {
     default:
       return catalogue.complete
         ? null
-        : `MusicBrainz lists ${catalogue.musicbrainz_total.toLocaleString("en-US")} works (movements included); Parson shows the first 4,000.`;
+        : `MusicBrainz lists ${catalogue.musicbrainz_total.toLocaleString("en-US")} works (movements included); Mujin Music shows the first 4,000.`;
   }
 }
 

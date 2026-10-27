@@ -39,7 +39,7 @@ pub const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
 const SENDER: &str = "sender-parson";
 const RECEIVER: &str = "receiver-0";
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
-pub const CAST_NOTE: &str = "Played by the Parson server over Google Cast, so any Parson app can use it. Tested against a protocol-level fake Cast device, not yet on Google hardware. Tracks follow each other with a short gap (the Default Media Receiver is not gapless).";
+pub const CAST_NOTE: &str = "Played by the Mujin Music server over Google Cast, so any Mujin Music app can use it. Tested against a protocol-level fake Cast device, not yet on Google hardware. Tracks follow each other with a short gap (the Default Media Receiver is not gapless).";
 
 /// Chromecast devices present self-signed certificates (their identity is
 /// checked with the separate device-auth exchange, which media senders

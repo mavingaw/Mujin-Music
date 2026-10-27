@@ -606,7 +606,7 @@ async fn zone_http_api_lists_controls_and_validates() {
             .set_json(serde_json::json!({
                 "kind": "desktop",
                 "name": "Studio PC",
-                "device": "Parson for Windows",
+                "device": "Mujin Music for Windows",
                 "status": "playing",
                 "song_ids": ["song-1"],
                 "current_position": 0,
@@ -1415,7 +1415,7 @@ async fn sonos_signal_path_follows_the_playing_track_from_the_served_plan() {
             .output
             .expect("output")
             .stream
-            .expect("signal path while Parson plays")
+            .expect("signal path while Mujin Music plays")
     };
 
     // Hi-res FLAC: resampled into Sonos's 48 kHz ceiling, depth kept.
@@ -2459,7 +2459,7 @@ async fn home_assistant_volume_control_sends_requests_as_events_instead_of_chang
     while let Ok(event) = events.try_recv() {
         assert!(
             !matches!(event, ZoneEvent::VolumeRequest { .. }),
-            "no event once Parson controls the volume again"
+            "no event once Mujin Music controls the volume again"
         );
     }
 

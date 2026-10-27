@@ -30,7 +30,7 @@ export function formatBackupTime(value: string | null) {
 /** "Home Library · 20 Oct 2026, 08:00:05" */
 export function backupTitle(backup: FolderBackup) {
   const when = formatBackupTime(backup.created_at);
-  const name = backup.library_name ?? "Parson library";
+  const name = backup.library_name ?? "Mujin Music library";
   return when ? `${name} · ${when}` : name;
 }
 
@@ -38,7 +38,7 @@ export function backupTitle(backup: FolderBackup) {
 export function backupDetail(backup: FolderBackup) {
   return [
     formatBytes(backup.size_bytes),
-    backup.product_version ? `Parson ${backup.product_version}` : "",
+    backup.product_version ? `Mujin Music ${backup.product_version}` : "",
     backup.library_roots.length
       ? `music was in ${backup.library_roots.join(", ")}`
       : "",

@@ -120,7 +120,7 @@ pub fn parse_wav(bytes: &[u8]) -> Result<(ImpulseResponse, String), String> {
         }),
         _ => {
             return Err(format!(
-                "Parson reads 16/24/32-bit integer or 32/64-bit float WAV filters; this one is format {tag} at {bits} bits."
+                "Mujin Music reads 16/24/32-bit integer or 32/64-bit float WAV filters; this one is format {tag} at {bits} bits."
             ));
         }
     };
@@ -131,7 +131,7 @@ pub fn parse_wav(bytes: &[u8]) -> Result<(ImpulseResponse, String), String> {
     }
     if taps > MAX_TAPS {
         return Err(format!(
-            "The filter has {taps} taps; Parson accepts up to {MAX_TAPS}."
+            "The filter has {taps} taps; Mujin Music accepts up to {MAX_TAPS}."
         ));
     }
     let mut planar = vec![Vec::with_capacity(taps); channels];

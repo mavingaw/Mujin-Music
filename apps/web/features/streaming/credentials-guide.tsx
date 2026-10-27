@@ -22,9 +22,9 @@ export function CredentialsGuide() {
         <p>
           TIDAL and Qobuz license their APIs to apps, not to listeners. Apps
           that need only your password are licensed partners, or they reuse the
-          keys inside the services&apos; own apps. Parson does not reuse those
-          keys. Instead, whoever holds a licence runs a{" "}
-          <span className="text-zinc-200">Parson key service</span>: it
+          keys inside the services&apos; own apps. Mujin Music does not reuse
+          those keys. Instead, whoever holds a licence runs a{" "}
+          <span className="text-zinc-200">Mujin Music key service</span>: it
           publishes the licensed TIDAL client and Qobuz app ID, signs each Qobuz
           stream request so the Qobuz secret never leaves it, and relays
           TIDAL&apos;s sign-in back to your server. It never sees your password
@@ -32,13 +32,14 @@ export function CredentialsGuide() {
           nothing but their subscription.
         </p>
         <p className="mt-2">
-          Neither service has issued Parson a licence yet, so this build names
-          no key service, and until one exists somebody on this server adds a
-          TIDAL client and a Qobuz app once, as described below. A server that
-          holds keys can serve them to others: set PARSON_KEY_SERVICE_PUBLIC_URL
-          and the PARSON_KEY_SERVICE_TIDAL_CLIENT_ID or
-          PARSON_KEY_SERVICE_QOBUZ_APP_ID and _APP_SECRET variables there, and
-          PARSON_KEY_SERVICE_URL on each server that uses it.
+          Neither service has issued Mujin Music a licence yet, so this build
+          names no key service, and until one exists somebody on this server
+          adds a TIDAL client and a Qobuz app once, as described below. A server
+          that holds keys can serve them to others: set
+          PARSON_KEY_SERVICE_PUBLIC_URL and the
+          PARSON_KEY_SERVICE_TIDAL_CLIENT_ID or PARSON_KEY_SERVICE_QOBUZ_APP_ID
+          and _APP_SECRET variables there, and PARSON_KEY_SERVICE_URL on each
+          server that uses it.
         </p>
       </GuideSection>
       <GuideSection title="TIDAL: register your own client (free, self-service)">
@@ -62,7 +63,7 @@ export function CredentialsGuide() {
             </code>
           </li>
           <li>
-            Enable the scopes Parson asks for: user.read, collection.read,
+            Enable the scopes Mujin Music asks for: user.read, collection.read,
             collection.write, playlists.read, search.read and playback.
           </li>
           <li>
@@ -71,18 +72,18 @@ export function CredentialsGuide() {
             server).
           </li>
           <li>
-            Choose &quot;Sign in on tidal.com instead&quot; and approve Parson.
-            Then run Check connection.
+            Choose &quot;Sign in on tidal.com instead&quot; and approve Mujin
+            Music. Then run Check connection.
           </li>
         </ol>
         <p className="mt-2 text-zinc-500">
           TIDAL decides which clients may stream full tracks. Whether a
           self-registered client gets full-length hi-res playback has not been
-          verified: no TIDAL account was available while Parson&apos;s support
-          was built. Check connection tells you what your account actually
-          receives, and fails if it is a preview: it compares the length the
-          stream itself states with the track&apos;s length, and the format that
-          arrives with the one TIDAL announced.
+          verified: no TIDAL account was available while Mujin Music&apos;s
+          support was built. Check connection tells you what your account
+          actually receives, and fails if it is a preview: it compares the
+          length the stream itself states with the track&apos;s length, and the
+          format that arrives with the one TIDAL announced.
         </p>
       </GuideSection>
       <GuideSection title="Qobuz: ask Qobuz for an app ID and secret">
@@ -99,25 +100,25 @@ export function CredentialsGuide() {
               API documentation
             </a>
             , and ask for an app ID and app secret for personal use of your
-            subscription with Parson.
+            subscription with Mujin Music.
           </li>
           <li>
             Enter both under Qobuz, &quot;I have my own app ID&quot;, or under
             Server credentials.
           </li>
           <li>
-            Sign in with your Qobuz email and password. Parson sends the
+            Sign in with your Qobuz email and password. Mujin Music sends the
             password to Qobuz once and keeps only the session token.
           </li>
         </ol>
         <p className="mt-2 text-zinc-500">
-          Whether and how quickly Qobuz grants a key is up to Qobuz. Parson
+          Whether and how quickly Qobuz grants a key is up to Qobuz. Mujin Music
           never copies the keys built into Qobuz&apos;s own apps.
         </p>
       </GuideSection>
       <GuideSection title="Prove it with your account (for server owners)">
         <p>
-          Parson&apos;s source includes a test that signs in with your own
+          Mujin Music&apos;s source includes a test that signs in with your own
           accounts, syncs favorites and streams a favorite at the highest
           quality through this proxy. It fails unless the whole track arrives in
           the announced format. Run it once on your computer:

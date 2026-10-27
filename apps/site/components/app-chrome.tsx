@@ -43,7 +43,7 @@ const docsSections = [
     ],
   },
   {
-    title: "Use Parson",
+    title: "Use Mujin Music",
     links: [
       { href: "/docs/listening", label: "Listening" },
       { href: "/docs/lyrics", label: "Lyrics" },
@@ -129,15 +129,15 @@ export function AppChrome() {
 
   return (
     <>
-      <aside className="parson-app-rail" aria-label="Parson">
+      <aside className="parson-app-rail" aria-label="Mujin Music">
         <Link
           aria-describedby="rail-tip-home-logo"
-          aria-label="Parson documentation home"
+          aria-label="Mujin Music documentation home"
           className="parson-app-logo parson-tooltip-anchor"
           href="/docs"
         >
           <img alt="" aria-hidden="true" src="/icons/icon.svg" />
-          <RailTooltip id="rail-tip-home-logo">Parson docs</RailTooltip>
+          <RailTooltip id="rail-tip-home-logo">Mujin Music docs</RailTooltip>
         </Link>
         <nav className="parson-rail-nav">
           {railDestinations.map(({ href, label, icon: Icon }) => {
@@ -188,7 +188,7 @@ export function AppChrome() {
           type="button"
         >
           <Search aria-hidden="true" size={16} strokeWidth={1.8} />
-          <span>Search Parson docs</span>
+          <span>Search Mujin Music docs</span>
           <kbd>Ctrl K</kbd>
         </button>
       </header>
@@ -197,7 +197,7 @@ export function AppChrome() {
         <details key={pathname}>
           <summary>
             <Menu aria-hidden="true" size={18} />
-            <span>Parson Documentation</span>
+            <span>Mujin Music Documentation</span>
           </summary>
           <DocumentationLinks pathname={pathname} />
         </details>
