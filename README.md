@@ -9,7 +9,7 @@ Choose a folder. Start listening.
 
 ![Mujin Music](apps/site/public/screenshots/01-home.png)
 
-[Download](https://github.com/mavingaw/parson-jin/releases) ·
+[Download](https://github.com/mavingaw/Mujin-Music/releases) ·
 [Docs](apps/site/content/docs) ·
 [What Mujin Music adds](docs/mujin-music.md)
 
@@ -43,10 +43,10 @@ Desktop apps include everything needed to run your library.
 
 ## Download
 
-Get Windows, macOS and Linux packages from the [Releases page](https://github.com/mavingaw/parson-jin/releases).
+Get Windows, macOS and Linux packages from the [Releases page](https://github.com/mavingaw/Mujin-Music/releases).
 The Android APK is built by the [Android workflow](.github/workflows/android.yml).
 
-The server container is `ghcr.io/mavingaw/parson-jin:latest`. Versioned image tags are also published for pinned deployments.
+The server container is `ghcr.io/mavingaw/mujin-music:latest`. Versioned image tags are also published for pinned deployments.
 
 Build provenance is included with the release.
 
@@ -55,7 +55,7 @@ Build provenance is included with the release.
 ```yaml
 services:
   parson:
-    image: ghcr.io/mavingaw/parson-jin:latest
+    image: ghcr.io/mavingaw/mujin-music:latest
     network_mode: host
     volumes:
       - /path/to/parson-data:/Parson
@@ -109,7 +109,7 @@ bun --filter parson-music-web dev
 ## Security
 
 Report vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/mavingaw/parson-jin/security/advisories/new).
+[GitHub Security Advisories](https://github.com/mavingaw/Mujin-Music/security/advisories/new).
 
 Deployment guidance is in the
 [privacy and security documentation](apps/site/content/docs/accounts-privacy-security.mdx).

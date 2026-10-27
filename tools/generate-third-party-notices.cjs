@@ -22,7 +22,7 @@ their own licenses:
   its \`OFL.txt\`.
 
 The corresponding source and locked dependency manifests are available from
-the release tag at <https://github.com/mavingaw/parson-jin>. The upstream
+the release tag at <https://github.com/mavingaw/Mujin-Music>. The upstream
 Parson source is at <https://github.com/ParsonLabs/Parson>.
 `;
 

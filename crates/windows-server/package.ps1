@@ -68,7 +68,7 @@ $hash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerIn
 $size = (Get-Item -LiteralPath $executable).Length
 $manifest = [ordered]@{
     version = $Version
-    url = "https://github.com/mavingaw/parson-jin/releases/download/v$Version/ParsonMusicServer.exe"
+    url = "https://github.com/mavingaw/Mujin-Music/releases/download/v$Version/ParsonMusicServer.exe"
     sha256 = $hash
     size = $size
 } | ConvertTo-Json

@@ -119,7 +119,7 @@ export async function rateZoneTrack(
 
 /** The HACS custom repository that carries the Home Assistant integration. */
 export const HOME_ASSISTANT_REPOSITORY =
-  "https://github.com/mavingaw/parson-jin";
+  "https://github.com/mavingaw/Mujin-Music";
 export const HOME_ASSISTANT_DOMAIN = "mujin_music";
 
 export interface HomeAssistantConnection {

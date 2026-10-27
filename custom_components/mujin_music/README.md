@@ -9,7 +9,7 @@ through the cloud, and music keeps the quality your server sends each zone.
 ## Install
 
 1. In HACS open **⋮ → Custom repositories**, add
-   `https://github.com/mavingaw/parson-jin` as an **Integration**, download
+   `https://github.com/mavingaw/Mujin-Music` as an **Integration**, download
    **Mujin Music** and restart Home Assistant.
 2. Home Assistant finds the server by itself (it announces
    `_parson._tcp` on your network) and shows **Mujin Music discovered** under

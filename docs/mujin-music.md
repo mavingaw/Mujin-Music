@@ -162,7 +162,7 @@ model, working in Claude Code at the owner's direction; the commits say so.
 ## Install
 
 Builds are published on this repository's
-[Releases page](https://github.com/mavingaw/parson-jin/releases) when a
+[Releases page](https://github.com/mavingaw/Mujin-Music/releases) when a
 version is tagged.
 
 - **Windows**: run `Mujin-Music-Setup-<version>-<arch>.exe`. It installs the
@@ -175,7 +175,7 @@ version is tagged.
   [Android workflow](../.github/workflows/android.yml) and attached to each
   run as `mujin-music-android-arm64-v8a`. A 32-bit (`armeabi-v7a`) build can
   be started by hand from the Actions tab.
-- **Docker**: the server image is `ghcr.io/mavingaw/parson-jin`, published
+- **Docker**: the server image is `ghcr.io/mavingaw/mujin-music`, published
   for x86_64 and arm64 with each release.
 - **Server only**: Docker, systemd on Linux, or the Windows server. See the
   [server guide](server.md).
