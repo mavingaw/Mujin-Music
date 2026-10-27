@@ -388,3 +388,13 @@ html[data-window-controls] .app-titlebar-search {
     padding-inline: 2rem;
   }
 }
+
+/* Library tools: indeterminate job progress. */
+@keyframes tool-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}

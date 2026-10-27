@@ -238,6 +238,19 @@ impl LoudnessStore {
         Some(row.1)
     }
 
+    /// Drops the stored measurement so the next request measures again.
+    pub fn forget(&self, song_id: &str) {
+        self.lock().remove(song_id);
+        if let Some(pool) = &self.pool
+            && let Ok(mut connection) = pool.get()
+        {
+            use diesel::RunQueryDsl;
+            let _ = diesel::sql_query("DELETE FROM track_loudness WHERE song_id = ?")
+                .bind::<diesel::sql_types::Text, _>(song_id)
+                .execute(&mut connection);
+        }
+    }
+
     /// Measured loudness, measuring now when needed.
     pub async fn track(&self, song_id: &str, path: &Path) -> Option<Loudness> {
         if let Some(loudness) = self.cached(song_id, path) {

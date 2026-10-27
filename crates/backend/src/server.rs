@@ -17,8 +17,8 @@ use crate::api::library::{
 };
 use crate::api::{
     album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
-    genres, home, imports, key_service, listen_later, lyrics, metadata, outputs, playback,
-    playlist, providers, remote_access, search, setup, song, user, works, zones,
+    genres, home, imports, key_service, library_tools, listen_later, lyrics, metadata, outputs,
+    playback, playlist, providers, remote_access, search, setup, song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -98,6 +98,11 @@ fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
             web::scope("/listen-later")
                 .wrap(HttpAuthentication::with_fn(validator))
                 .configure(listen_later::configure),
+        )
+        .service(
+            web::scope("/tools")
+                .wrap(HttpAuthentication::with_fn(admin_guard))
+                .configure(library_tools::configure),
         )
         .service(
             web::scope("")

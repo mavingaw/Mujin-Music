@@ -15,4 +15,5 @@ pub mod search;
 pub mod state;
 pub mod storage;
 pub mod tags;
+pub mod tools;
 pub mod works;

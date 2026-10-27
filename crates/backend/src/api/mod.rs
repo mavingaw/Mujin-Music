@@ -18,6 +18,7 @@ pub mod image;
 pub mod imports;
 pub mod key_service;
 pub mod library;
+pub mod library_tools;
 pub mod listen_later;
 pub mod lyrics;
 pub mod metadata;
