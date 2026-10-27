@@ -74,6 +74,7 @@ import {
 import { usePageTitle } from "@/components/app/title-metadata";
 import { useFitText } from "@/features/library/use-fit-text";
 import { AlbumTrackList } from "./album-track-list";
+import { AlbumVersionsStrip } from "@/features/library/tools/album-versions-strip";
 import { AlbumAboutSection } from "./album-about";
 import { CreditsList } from "@/features/library/credits/credits-list";
 import { tagCreditsAsAbout } from "@/features/library/credits/credit-roles";
@@ -713,6 +714,7 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
         )}
 
         {subject && <AlbumVersions subject={subject} />}
+        <AlbumVersionsStrip albumId={album.id} />
       </div>
     </div>
   );

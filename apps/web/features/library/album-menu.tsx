@@ -29,6 +29,7 @@ import {
   CreateTagDialog,
   TagSubmenu,
 } from "@/features/library/focus/tag-submenu";
+import { LibraryToolsSubmenu } from "@/features/library/tools/library-tools-menu";
 
 type AlbumMenuProps = {
   album_id: string;
@@ -131,6 +132,7 @@ export default function AlbumMenu({
               </Link>
             </ContextMenuItem>
           )}
+          <LibraryToolsSubmenu scope={{ scope: "albums", ids: [album_id] }} />
         </ContextMenuContent>
       </ContextMenu>
       {createTagOpen && (
