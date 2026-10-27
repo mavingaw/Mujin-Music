@@ -173,8 +173,7 @@ impl Link {
                 *self
                     .devices
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                    devices.into_iter().map(WireDevice::into_device).collect();
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = received_devices(devices);
                 self.notify();
             }
             BridgeMessage::Opened { stream } => {
@@ -274,6 +273,23 @@ pub(crate) fn clean_bridge_text(text: &str) -> String {
         .collect()
 }
 
+/// The devices a bridge lists, as the server keeps them. Names and
+/// descriptions are cleaned like any bridge-supplied text. A device id is
+/// sent back to the bridge to open the device, so it is never rewritten: a
+/// device whose id is not already clean text is left out.
+fn received_devices(devices: Vec<WireDevice>) -> Vec<DeviceInfo> {
+    devices
+        .into_iter()
+        .filter(|device| clean_bridge_text(&device.id) == device.id)
+        .map(|device| {
+            let mut device = device.into_device();
+            device.name = clean_bridge_text(&device.name);
+            device.detail = clean_bridge_text(&device.detail);
+            device
+        })
+        .collect()
+}
+
 /// A connected Parson Bridge.
 #[derive(Clone)]
 pub struct RemoteBridge {
@@ -348,7 +364,7 @@ impl RemoteBridge {
                 note,
                 address,
             }),
-            devices: Mutex::new(devices.into_iter().map(WireDevice::into_device).collect()),
+            devices: Mutex::new(received_devices(devices)),
             clock: Mutex::new(ClockEstimator::default()),
             streams: Mutex::new(HashMap::new()),
             wake: Condvar::new(),

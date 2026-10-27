@@ -21,7 +21,7 @@ use crate::api::auth::{
 use crate::api::error::{bad_request, internal_server_error, not_found, unauthorized};
 use crate::api::song::{ResponseSong, SongInfo, fetch_song_info_from_cache};
 use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_response};
-use crate::library::storage::get_profile_picture_path;
+use crate::library::storage::profile_picture_file;
 use crate::persistence::connection::DbPool;
 use crate::persistence::models::{ListenHistoryItem, NewListenHistoryItem, User};
 use crate::persistence::schema::listen_history_item::dsl as lh_dsl;
@@ -314,7 +314,7 @@ async fn delete_user(
     match result {
         Ok(Ok(())) => {
             crate::api::auth::invalidate_image_session(target_id).await;
-            let avatar = get_profile_picture_path().join(format!("{target_id}.jpg"));
+            let avatar = profile_picture_file(target_id);
             if let Err(error) = tokio::fs::remove_file(avatar).await
                 && error.kind() != std::io::ErrorKind::NotFound
             {
@@ -1285,8 +1285,7 @@ async fn get_user_info_by_id(
 #[get("/{id}/avatar")]
 pub async fn get_profile_picture(path: web::Path<i32>) -> Result<impl Responder, Box<dyn Error>> {
     let user_id = path.into_inner();
-    let mut profile_picture_path = get_profile_picture_path();
-    profile_picture_path.push(format!("{}.jpg", user_id));
+    let profile_picture_path = profile_picture_file(user_id);
 
     match crate::api::image::read_file_bounded(&profile_picture_path, MAX_STORED_AVATAR_BYTES).await
     {
@@ -1336,8 +1335,7 @@ async fn upload_profile_picture(
             "avatar_owner_required",
         ));
     }
-    let mut profile_picture_path = get_profile_picture_path();
-    profile_picture_path.push(format!("{}.jpg", user_id));
+    let profile_picture_path = profile_picture_file(user_id);
     let mut uploaded = None;
     while let Some(item) = payload.next().await {
         let mut field = item?;

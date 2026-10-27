@@ -235,3 +235,27 @@ pub fn get_cover_art_path() -> PathBuf {
 pub fn get_profile_picture_path() -> PathBuf {
     data_path(&["Profile Pictures"])
 }
+
+/// The stored picture of one user or profile. The file is named after the
+/// numeric id, so it is always directly inside the profile picture folder.
+pub fn profile_picture_file(user_id: i32) -> PathBuf {
+    get_profile_picture_path().join(format!("{user_id}.jpg"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_profile_picture_is_always_a_file_directly_in_the_picture_folder() {
+        let folder = get_profile_picture_path();
+        for user_id in [i32::MIN, -1, 0, 7, i32::MAX] {
+            let file = profile_picture_file(user_id);
+            assert_eq!(file.parent(), Some(folder.as_path()), "{user_id}");
+            assert_eq!(
+                file.file_name().and_then(|name| name.to_str()),
+                Some(format!("{user_id}.jpg").as_str())
+            );
+        }
+    }
+}
