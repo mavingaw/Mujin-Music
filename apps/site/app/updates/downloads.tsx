@@ -211,7 +211,7 @@ export default function Downloads() {
           <span>Mujin Music · Your music. Instantly.</span>
           <div className={styles["footer-links"]}>
             <a href="/docs">Documentation</a>
-            <a href="https://github.com/mavingaw/parson-jin">GitHub</a>
+            <a href="https://github.com/mavingaw/Mujin-Music">GitHub</a>
           </div>
         </footer>
       </div>

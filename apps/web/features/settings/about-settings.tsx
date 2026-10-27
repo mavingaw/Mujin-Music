@@ -3,7 +3,7 @@ import ParsonBrandMark from "@/components/icons/parson-brand-mark";
 export const ATTRIBUTION = "Based on Parson by ParsonLabs";
 
 const links = [
-  ["Source code", "https://github.com/mavingaw/parson-jin"],
+  ["Source code", "https://github.com/mavingaw/Mujin-Music"],
   ["Parson (upstream project)", "https://github.com/ParsonLabs/Parson"],
   ["GNU GPL version 3", "https://www.gnu.org/licenses/gpl-3.0.html"],
 ] as const;
