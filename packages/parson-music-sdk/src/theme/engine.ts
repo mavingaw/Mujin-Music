@@ -91,6 +91,15 @@ export interface ContrastCheck {
 
 export type AccentSource = "brand" | "custom" | "artwork" | "system";
 
+/**
+ * What sits behind Now Playing and the album and artist headers:
+ * - `artwork`: the cover, blurred and tinted with its own colours;
+ * - `glass`: the blurred cover under translucent, blurred panels;
+ * - `black`: true #000 (OLED Black without colour from artwork);
+ * - `solid`: the plain canvas with opaque panels (High Contrast).
+ */
+export type ArtBackdrop = "artwork" | "glass" | "black" | "solid";
+
 export interface ResolvedTheme {
   preset: ThemePreset;
   label: string;
@@ -125,6 +134,7 @@ export interface ResolvedTheme {
   nowPlayingLayout: NowPlayingLayout;
   sidebar: SidebarMode;
   accentSource: AccentSource;
+  backdrop: ArtBackdrop;
   checks: ContrastCheck[];
 }
 
@@ -638,6 +648,24 @@ function shapeScale(appearance: Appearance): number {
   );
 }
 
+/** The backdrop a preset shows behind Now Playing and album headers. */
+export function artBackdropFor(
+  appearance: Pick<Appearance, "preset" | "accent_from_artwork">,
+  glassEnabled: boolean,
+): ArtBackdrop {
+  switch (appearance.preset) {
+    case "oled-black":
+      // Pixels stay off unless the person asked for the cover's colours.
+      return appearance.accent_from_artwork ? "artwork" : "black";
+    case "high-contrast":
+      return "solid";
+    case "frosted-glass":
+      return glassEnabled ? "glass" : "artwork";
+    default:
+      return "artwork";
+  }
+}
+
 /** Resolves an appearance (any shape) into the full theme. */
 export function resolveTheme(
   input: Appearance | unknown,
@@ -799,6 +827,7 @@ export function resolveTheme(
     nowPlayingLayout: appearance.now_playing_layout,
     sidebar: appearance.sidebar,
     accentSource,
+    backdrop: artBackdropFor(appearance, glassEnabled),
     checks: enforced.checks,
   };
 }

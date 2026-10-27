@@ -178,6 +178,7 @@ export function themeAttributes(
     "data-mode": theme.mode,
     "data-contrast": theme.contrast === "high" ? "high" : null,
     "data-glass": theme.glass.enabled ? "on" : null,
+    "data-backdrop": theme.backdrop,
     "data-native-material": theme.glass.native,
     "data-shape": theme.shape.material ? "material" : null,
     "data-density": theme.density,

@@ -59,7 +59,7 @@ import {
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
 import Link from "next/link";
-import { rgbString, type ArtworkPalette } from "./artwork-palette";
+import { nowPlayingScene, type NowPlayingScene } from "./now-playing-scene";
 import { useArtworkPalette } from "./use-artwork-palette";
 import { useOptionalAppearance } from "@/features/appearance/theme-provider";
 import { cn } from "@/lib/cn";
@@ -91,77 +91,89 @@ export interface UpNextItem {
 
 /**
  * Roon's blurred-art backdrop, warmed with the colour taken from the cover:
- * a soft glow behind the artwork, deepening to near-black at the edges.
+ * a soft glow behind the artwork, deepening to near-black at the edges. The
+ * theme decides how much of the cover shows (see `nowPlayingScene`): true
+ * black for OLED Black, the plain canvas for High Contrast, and a brighter
+ * blur under glass panels for Frosted Glass.
  */
 function NowPlayingBackdrop({
   cover,
-  dim,
   immersive,
-  light,
-  palette,
+  scene,
 }: {
   cover: string;
-  dim: boolean;
   /** Immersive layout: the cover itself fills the screen, sharp. */
   immersive: boolean;
-  /** A light theme: the art washes over paper instead of black. */
-  light: boolean;
-  palette: ArtworkPalette;
+  scene: NowPlayingScene;
 }) {
-  const shade = light ? undefined : rgbString(palette.deep);
-  const shadeAt = (alpha: number) =>
-    light
-      ? `rgb(var(--mj-canvas-rgb) / ${alpha})`
-      : rgbString(palette.deep, alpha);
   return (
     <div
       aria-hidden="true"
       className="fixed inset-0 overflow-hidden bg-mujin-deep"
-      data-np-backdrop={immersive ? "immersive" : "blur"}
-      style={{ backgroundColor: shade }}
+      data-np-backdrop={
+        scene.showArt ? (immersive ? "immersive" : "blur") : scene.backdrop
+      }
+      style={{ backgroundColor: scene.base }}
     >
-      {immersive ? (
-        <div className="absolute inset-0">
-          <Image
-            alt=""
-            className="object-cover object-center"
-            fill
-            priority
-            sizes="100vw"
-            src={cover}
-          />
-        </div>
-      ) : (
-        <div className="absolute -inset-[12%]">
-          <Image
-            alt=""
-            className={`scale-110 object-cover blur-[90px] saturate-[1.35] ${light ? "opacity-40" : "opacity-55"}`}
-            fill
-            sizes="40vw"
-            src={cover}
-          />
-        </div>
+      {scene.showArt &&
+        (immersive ? (
+          <div className="absolute inset-0">
+            <Image
+              alt=""
+              className="object-cover object-center"
+              fill
+              priority
+              sizes="100vw"
+              src={cover}
+            />
+          </div>
+        ) : (
+          <div className="absolute -inset-[12%]">
+            <Image
+              alt=""
+              className={cn(
+                "scale-110 object-cover blur-[90px] saturate-[1.35]",
+                scene.panels === "glass"
+                  ? "opacity-80"
+                  : scene.base
+                    ? "opacity-55"
+                    : "opacity-40",
+              )}
+              fill
+              sizes="40vw"
+              src={cover}
+            />
+          </div>
+        ))}
+      {scene.wash && (
+        <div
+          className="absolute inset-0 transition-opacity duration-500"
+          style={{ background: scene.wash }}
+        />
       )}
-      <div
-        className="absolute inset-0 transition-opacity duration-500"
-        style={{
-          background: immersive
-            ? `linear-gradient(to top, ${shadeAt(0.96)} 8%, ${shadeAt(0.7)} 38%, ${shadeAt(0.15)} 70%, ${shadeAt(0.35)} 100%), linear-gradient(to right, ${shadeAt(0.75)} 0%, transparent 55%)`
-            : `radial-gradient(70% 60% at 28% 45%, ${rgbString(palette.glow, light ? 0.18 : 0.28)}, transparent 70%), radial-gradient(120% 100% at 50% 110%, ${shadeAt(0.95)} 20%, transparent 70%)`,
-        }}
-      />
-      <div
-        className={`absolute inset-0 transition-colors duration-500 ${dim ? "bg-black/60" : immersive ? "bg-black/10" : "bg-black/35"}`}
-      />
-      {!immersive && (
+      {scene.dim && (
+        <div
+          className={`absolute inset-0 transition-colors duration-500 ${scene.dim}`}
+        />
+      )}
+      {scene.vignette && (
         <div
           className="absolute inset-0"
-          style={{
-            background: `radial-gradient(140% 100% at 50% 40%, transparent 45%, ${light ? "rgb(var(--mj-canvas-rgb) / 0.85)" : "rgba(5,5,6,0.85)"} 100%)`,
-          }}
+          style={{ background: scene.vignette }}
         />
       )}
     </div>
+  );
+}
+
+/** Phones: one line of album and year instead of the full stack. */
+function PhoneNowPlayingMeta({ details }: { details: NowPlayingDetails }) {
+  const parts = [details.albumName, details.year].filter(Boolean);
+  if (!parts.length) return null;
+  return (
+    <p className="mt-1 truncate text-[0.8125rem] text-mujin-text-tertiary md:hidden">
+      {parts.join(" · ")}
+    </p>
   );
 }
 
@@ -203,7 +215,7 @@ function NowPlayingFacts({
   if (details.label) rows.push({ label: "Label", value: details.label });
   if (!rows.length) return null;
   return (
-    <dl className="mt-6 grid max-w-md grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 border-t border-white/[0.08] pt-5 text-[0.8438rem] md:mt-8">
+    <dl className="mj-np-facts mt-6 hidden max-w-md grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 border-t border-white/[0.08] pt-5 text-[0.8438rem] md:mt-8 md:grid">
       {rows.map((row) => (
         <div className="contents" key={row.label}>
           <dt className="mj-eyebrow self-center text-[0.625rem]!">
@@ -355,8 +367,15 @@ export function FullscreenPlayer({
   const live = isLiveRadioId(songId);
   const palette = useArtworkPalette(cover);
   const appearance = useOptionalAppearance();
-  const layout = appearance?.appearance.now_playing_layout ?? "art-left";
-  const lightTheme = appearance?.theme.mode === "light";
+  const scene = nowPlayingScene({
+    backdrop: appearance?.theme.backdrop ?? "artwork",
+    dim: queueOpen,
+    layout: appearance?.appearance.now_playing_layout ?? "art-left",
+    light: appearance?.theme.mode === "light",
+    palette,
+  });
+  const layout = scene.layout;
+  const panels = scene.panels;
   const dragStart = useRef<number | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const [dragOffset, setDragOffset] = useState(0);
@@ -425,6 +444,7 @@ export function FullscreenPlayer({
         >
           <section
             aria-label="Fullscreen player"
+            data-np-scene={scene.backdrop}
             className="fixed inset-0 z-70 flex min-h-dvh flex-col overflow-hidden bg-black text-white motion-safe:animate-in motion-safe:slide-in-from-bottom motion-safe:duration-300 md:overflow-y-auto md:animate-none"
             role="dialog"
             style={{
@@ -445,10 +465,8 @@ export function FullscreenPlayer({
             ) : (
               <NowPlayingBackdrop
                 cover={cover}
-                dim={queueOpen}
                 immersive={layout === "immersive" && !queueOpen}
-                light={lightTheme}
-                palette={palette}
+                scene={scene}
               />
             )}
             <div
@@ -497,7 +515,7 @@ export function FullscreenPlayer({
                     <div
                       className="relative aspect-square w-full max-w-[300px] overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1"
                       style={{
-                        boxShadow: `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 40px 90px -36px ${rgbString(palette.glow, 0.55)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
+                        boxShadow: scene.coverShadow,
                       }}
                     >
                       <Image
@@ -586,7 +604,7 @@ export function FullscreenPlayer({
               ) : (
                 <div
                   className={cn(
-                    "mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col items-center justify-start gap-6 overflow-y-auto px-6 py-5 md:px-12 md:py-[clamp(16px,4dvh,48px)]",
+                    "mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col items-center justify-start gap-5 overflow-y-auto px-6 pb-6 pt-3 max-md:[mask-image:linear-gradient(to_bottom,black_calc(100%-20px),transparent)] md:gap-6 md:px-12 md:py-[clamp(16px,4dvh,48px)]",
                     layout === "art-left" &&
                       "md:grid md:grid-cols-2 md:content-center md:items-center md:gap-[clamp(32px,5vw,96px)]",
                     layout === "art-centred" &&
@@ -606,7 +624,7 @@ export function FullscreenPlayer({
                       layout === "immersive" && "hidden",
                     )}
                     style={{
-                      boxShadow: `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 50px 120px -40px ${rgbString(palette.glow, 0.55)}, 0 30px 60px -30px rgb(0 0 0 / 0.9)`,
+                      boxShadow: scene.coverShadow,
                     }}
                   >
                     {live ? (
@@ -633,6 +651,8 @@ export function FullscreenPlayer({
                   <div
                     className={cn(
                       "w-full min-w-0 max-w-[560px]",
+                      panels !== "plain" &&
+                        "mj-np-info md:rounded-[calc(14px*var(--mj-radius-scale,1))] md:p-8",
                       layout === "art-left" && "md:justify-self-start",
                       layout === "art-centred" &&
                         "md:max-w-[680px] [&_.mj-facts]:md:justify-center",
@@ -679,10 +699,16 @@ export function FullscreenPlayer({
                       )}
                     </div>
                     {details && !live && (
-                      <NowPlayingFacts details={details} onNavigate={onClose} />
+                      <>
+                        <PhoneNowPlayingMeta details={details} />
+                        <NowPlayingFacts
+                          details={details}
+                          onNavigate={onClose}
+                        />
+                      </>
                     )}
                     {(signalBadge || feedback || favorite) && (
-                      <div className="mt-6 flex min-w-0 flex-wrap items-center gap-3">
+                      <div className="mt-4 flex min-w-0 flex-wrap items-center gap-3 md:mt-6">
                         {signalBadge}
                         {feedback}
                         {favorite && !live && (
@@ -714,7 +740,7 @@ export function FullscreenPlayer({
                     {!live && upNextItems && upNextItems.length > 0 && (
                       <section
                         aria-label="Up next"
-                        className="mt-6 rounded-lg border border-white/[0.07] bg-black/25 backdrop-blur-md md:hidden"
+                        className="mj-np-card mt-5 rounded-lg border border-white/[0.07] bg-black/25 backdrop-blur-md md:hidden"
                       >
                         <button
                           className="flex w-full items-center justify-between px-3.5 pb-1 pt-3 text-left"
@@ -734,7 +760,17 @@ export function FullscreenPlayer({
                         </button>
                         <ol className="px-1.5 pb-1.5">
                           {upNextItems.slice(0, 3).map((item, index) => (
-                            <li key={`${index}-${item.title}`}>
+                            <li
+                              className={cn(
+                                // One row always fits above the transport;
+                                // taller phones show the next two as well.
+                                index === 1 &&
+                                  "[@media(max-height:979px)]:hidden",
+                                index === 2 &&
+                                  "[@media(max-height:1059px)]:hidden",
+                              )}
+                              key={`${index}-${item.title}`}
+                            >
                               <button
                                 className="flex w-full items-center gap-3 rounded-md p-2 text-left active:bg-white/[0.06]"
                                 onClick={onOpenQueue}
@@ -763,10 +799,12 @@ export function FullscreenPlayer({
                         </ol>
                       </section>
                     )}
-                    {!live && artistBio}
+                    {!live && artistBio && (
+                      <div className="hidden md:block">{artistBio}</div>
+                    )}
                     {upNext && !live && (
                       <button
-                        className="group mt-6 hidden w-full max-w-md items-center gap-3 rounded-lg border border-white/[0.07] bg-black/25 p-2.5 pr-4 text-left backdrop-blur-md transition-colors hover:border-white/15 hover:bg-black/35 md:flex"
+                        className="mj-np-card group mt-6 hidden w-full max-w-md items-center gap-3 rounded-lg border border-white/[0.07] bg-black/25 p-2.5 pr-4 text-left backdrop-blur-md transition-colors hover:border-white/15 hover:bg-black/35 md:flex"
                         onClick={onOpenQueue}
                         type="button"
                       >
@@ -797,7 +835,13 @@ export function FullscreenPlayer({
                 </div>
               )}
             </div>
-            <div className="relative z-20 mx-auto w-full max-w-[920px] shrink-0 px-6 pb-[max(20px,env(safe-area-inset-bottom))] pt-3 md:px-10 md:pb-8">
+            <div
+              className={cn(
+                "relative z-20 mx-auto w-full max-w-[920px] shrink-0 px-6 pb-[max(20px,env(safe-area-inset-bottom))] pt-3 md:px-10 md:pb-8",
+                panels !== "plain" &&
+                  "mj-np-transport max-md:rounded-t-[calc(18px*var(--mj-radius-scale,1))] md:mb-6 md:w-[calc(100%-48px)] md:rounded-[calc(18px*var(--mj-radius-scale,1))] md:pb-5 md:pt-4",
+              )}
+            >
               {showingMobileSubView && (
                 <p className="mb-3 truncate text-center text-xs text-zinc-500">
                   {title}

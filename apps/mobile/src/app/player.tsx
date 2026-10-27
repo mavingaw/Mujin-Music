@@ -75,13 +75,8 @@ import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { useZones } from "@/providers/zones-provider";
 import { SongRow } from "@/components/music-ui";
-import {
-  alpha,
-  fonts,
-  palette,
-  storedAppearance,
-  tint,
-} from "@/constants/colors";
+import { activeTheme, alpha, fonts, palette, tint } from "@/constants/colors";
+import { phoneNowPlayingScene } from "@/lib/now-playing-scene";
 
 import {
   playerAudioPresets,
@@ -119,14 +114,25 @@ import {
   immediatePressFeedback,
 } from "@/lib/press-feedback";
 
-/** Settings → Appearance → Now Playing: immersive shows the cover full-bleed. */
-const immersive =
-  storedAppearance.appearance.now_playing_layout === "immersive";
+/**
+ * The theme's Now Playing backdrop: the blurred cover, glass panels over it
+ * (Frosted Glass), true black (OLED Black) or the plain canvas (High
+ * Contrast). Settings → Appearance → Now Playing: immersive shows the cover
+ * full-bleed.
+ */
+const scene = phoneNowPlayingScene(
+  activeTheme,
+  palette,
+  StyleSheet.hairlineWidth,
+);
+const immersive = scene.immersive;
 /** Scrims over the cover: dark in dark themes, paper in light ones. */
 const scrim = (opacity: number) =>
   palette.mode === "light"
     ? alpha(palette.background, opacity)
-    : `rgba(5,5,6,${opacity})`;
+    : activeTheme.backdrop === "black"
+      ? `rgba(0,0,0,${opacity})`
+      : `rgba(5,5,6,${opacity})`;
 
 type Panel = "player" | "queue" | "lyrics";
 const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
@@ -1101,10 +1107,10 @@ export default function PlayerScreen() {
   return (
     <GestureDetector gesture={dragDownGesture}>
       <AnimatedLinearGradient
-        colors={[palette.surfaceStrong, palette.background, palette.deep]}
+        colors={scene.page}
         style={[styles.page, playerDragStyle]}
       >
-        {backdropUri ? (
+        {backdropUri && scene.showArt ? (
           <>
             <Image
               blurRadius={immersive ? 0 : 60}
@@ -1117,11 +1123,11 @@ export default function PlayerScreen() {
               style={styles.backdrop}
             />
             <LinearGradient
-              colors={
-                immersive
-                  ? [scrim(0.15), scrim(0.35), scrim(0.97)]
-                  : [scrim(0.25), scrim(0.7), scrim(0.96)]
-              }
+              colors={[
+                scrim(scene.scrims[0]),
+                scrim(scene.scrims[1]),
+                scrim(scene.scrims[2]),
+              ]}
               pointerEvents="none"
               style={StyleSheet.absoluteFill}
             />
@@ -1278,7 +1284,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    opacity: 0.5,
+    opacity: scene.artOpacity,
   },
   artist: { color: palette.secondary, fontSize: 16, marginTop: 5 },
   sliderHitbox: {
@@ -1314,11 +1320,9 @@ const styles = StyleSheet.create({
   },
   panelButtons: { flexDirection: "row", gap: 8 },
   upNext: {
+    ...scene.card,
     alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.25)",
-    borderColor: palette.border,
     borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     gap: 12,
     padding: 8,
@@ -1338,10 +1342,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   panelButton: {
+    ...scene.button,
     flex: 1,
     height: 46,
     borderRadius: 12,
-    backgroundColor: tint(0.1),
     alignItems: "center",
     justifyContent: "center",
   },

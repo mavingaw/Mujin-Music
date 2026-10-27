@@ -63,6 +63,7 @@ import { ShelfRow } from "@/features/library/home/home-sections";
 import { generatedCover } from "@/features/library/artwork/generated-cover";
 import { rgbString } from "@/features/player/artwork-palette";
 import { useArtworkPalette } from "@/features/player/use-artwork-palette";
+import { useOptionalAppearance } from "@/features/appearance/theme-provider";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import {
   DropdownMenu,
@@ -206,6 +207,9 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     [album?.cover_url],
   );
   const heroPalette = useArtworkPalette(albumCoverURL);
+  // OLED Black and High Contrast keep the cover's colour out of the page.
+  const backdrop = useOptionalAppearance()?.theme.backdrop ?? "artwork";
+  const artGlow = backdrop === "artwork" || backdrop === "glass";
   const artistIconURL = useMemo(
     () => getLibraryImageUrl(artist?.icon_url, getBaseURL),
     [artist?.icon_url],
@@ -322,7 +326,9 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           <div
             className="relative aspect-square w-full max-w-[300px] shrink-0 overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1 md:max-w-none"
             style={{
-              boxShadow: `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 40px 90px -36px ${rgbString(heroPalette.glow, 0.6)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
+              boxShadow: artGlow
+                ? `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 40px 90px -36px ${rgbString(heroPalette.glow, 0.6)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`
+                : "0 0 0 1px var(--color-mujin-border), 0 24px 50px -26px rgb(0 0 0 / 0.9)",
             }}
           >
             <Image
