@@ -2547,3 +2547,148 @@ async fn bridge_zone_carries_on_after_ungrouping_mid_track_and_stays_controllabl
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// Live radio on a server-driven zone: the renderer gets the signed relay
+/// URL with radio metadata and fetches the station through Parson (it never
+/// contacts the station), receiving the audio bit for bit without the ICY
+/// title blocks, while Parson reads the titles.
+#[actix_web::test]
+async fn upnp_renderers_play_live_radio_through_the_relay() {
+    use crate::live_radio::format::tests::mp3_frames;
+    use crate::live_radio::guard::fakes::{FakeFetch as StationFetch, FakeReply};
+
+    let station_id = "4d3c2b1a-0f1e-4d2c-9b8a-7a6b5c4d3e2f";
+    let mut station = crate::live_radio::store::tests::station(station_id, "Jazz Example");
+    station.stream_url = "https://radio.example/jazz".into();
+    station.favicon = Some("https://img.example/logo.png".into());
+    let audio = mp3_frames(128, 40);
+    let radio = crate::live_radio::tests::service(
+        StationFetch::default().with(
+            "https://radio.example/jazz",
+            FakeReply::ok("audio/mpeg", Vec::new())
+                .header("icy-metaint", "1000")
+                .chunked(vec![crate::live_radio::tests::icy_wire(
+                    &audio,
+                    &["Bill Evans - Peace Piece"],
+                )]),
+        ),
+    );
+    radio.remember(std::slice::from_ref(&station));
+    // Zones read station metadata from the process-wide service.
+    crate::live_radio::global().remember(std::slice::from_ref(&station));
+
+    let lifecycle = Arc::new(LibraryLifecycle::new());
+    lifecycle.set_ready(library(Vec::new())).await;
+    let cache = lifecycle.cache().await.expect("cache");
+    let renderer = FakeRenderer::start(FakeRendererSpec {
+        udn: "7a1c0b2d-3e4f-4a5b-8c6d-00a0feedbeef",
+        name: "Kitchen Streamer",
+        manufacturer: "Acme Audio",
+        model: "Stream 2",
+        sink: "http-get:*:audio/flac:*,http-get:*:audio/mpeg:*",
+        volume_max: 30,
+        gapless: true,
+    })
+    .await;
+    let controller = Arc::new(
+        UpnpController::new(UpnpConfig {
+            ssdp_targets: vec![renderer.ssdp_address],
+            static_locations: Vec::new(),
+            search_timeout: Duration::from_millis(400),
+        })
+        .expect("controller"),
+    );
+    let service = web::Data::new(ZoneService::new(None, None));
+    service.set_outputs(Arc::new(Outputs {
+        upnp: Some(controller.clone()),
+        devices: None,
+        ..Outputs::default()
+    }));
+    service.set_library(lifecycle.clone());
+    let server = {
+        let service = service.clone();
+        let lifecycle = web::Data::from(lifecycle.clone());
+        let radio = web::Data::from(radio.clone());
+        HttpServer::new(move || {
+            App::new()
+                .app_data(service.clone())
+                .app_data(lifecycle.clone())
+                .app_data(radio.clone())
+                .configure(crate::api::zones::configure_device_routes)
+        })
+        .workers(1)
+        .bind(("127.0.0.1", 0))
+        .expect("bind test server")
+    };
+    let port = server.addrs()[0].port();
+    let server = server.run();
+    let handle = server.handle();
+    actix_web::rt::spawn(server);
+    service.set_port(port);
+
+    assert_eq!(controller.discover().await.expect("discovery"), 1);
+    let zone_id = "upnp:7a1c0b2d-3e4f-4a5b-8c6d-00a0feedbeef";
+    let song_id = format!("radio:{station_id}");
+    service
+        .command(
+            USER,
+            zone_id,
+            ZoneCommand::Load {
+                song_ids: vec![song_id.clone()],
+                current_position: 0,
+                position_ms: 0,
+                play: true,
+            },
+            Some(&cache),
+        )
+        .await
+        .expect("load the station");
+    let state = renderer.snapshot();
+    assert!(
+        state.uri.contains("/api/v1/zones/render/radio"),
+        "{}",
+        state.uri
+    );
+    assert!(state.uri.contains(station_id));
+    assert!(
+        !state.uri.contains("radio.example"),
+        "the renderer never gets the station URL"
+    );
+    assert!(state.metadata.contains("<dc:title>Jazz Example</dc:title>"));
+    assert!(state.metadata.contains("Live radio"));
+    assert!(state.metadata.contains("audio/mpeg"));
+    assert!(state.next_uri.is_empty(), "a station has no next track");
+
+    assert!(renderer.wait_for(|state| !state.fetches.is_empty()).await);
+    let fetch = renderer.snapshot().fetches[0].clone();
+    assert_eq!(fetch.status, 200);
+    assert_eq!(fetch.content_type.as_deref(), Some("audio/mpeg"));
+    assert_eq!(fetch.bytes, audio.len(), "MP3 passes through untouched");
+    let heard = radio.now_playing(station_id);
+    assert_eq!(heard.title.expect("title").title.title, "Peace Piece");
+    assert_eq!(heard.format.expect("format").bitrate_kbps, Some(128));
+
+    let zone = zone(&service, &cache, zone_id);
+    assert_eq!(zone.queue.song_ids, vec![song_id]);
+    // The zone's signal path: lossy radio is low quality, sent untouched.
+    let stream = zone
+        .output
+        .as_ref()
+        .and_then(|output| output.stream.clone())
+        .expect("radio signal path");
+    assert_eq!(stream.quality, crate::zones::StreamQuality::Low);
+    assert!(
+        stream.source.starts_with("Live radio · MP3"),
+        "{}",
+        stream.source
+    );
+    assert!(stream.output.contains("untouched"), "{}", stream.output);
+    let now = zone.now_playing.expect("now playing");
+    assert_eq!(now.title, "Jazz Example");
+    assert_eq!(now.duration_ms, 0);
+    assert_eq!(
+        now.cover_url.as_deref(),
+        Some("/api/v1/live-radio/stations/4d3c2b1a-0f1e-4d2c-9b8a-7a6b5c4d3e2f/logo")
+    );
+    handle.stop(true).await;
+}

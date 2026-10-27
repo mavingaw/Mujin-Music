@@ -458,7 +458,7 @@ async fn create_session(
     if form
         .song_ids
         .iter()
-        .any(|song_id| cache.song(song_id).is_none())
+        .any(|song_id| crate::zones::service::zone_song(&cache, song_id).is_none())
     {
         return HttpResponse::BadRequest().json(serde_json::json!({"error": "invalid_cast_queue"}));
     }
@@ -1047,6 +1047,16 @@ pub(crate) async fn cast_media(
     if !matches!(allowed, Ok(Ok(true))) {
         return HttpResponse::Unauthorized()
             .json(serde_json::json!({"error": "cast_session_inactive"}));
+    }
+    if crate::live_radio::is_live_song_id(&song_id) {
+        return crate::api::live_radio::stream_station_to(
+            &request,
+            &song_id,
+            crate::live_radio::relay::Destination::Renderer(
+                crate::outputs::FormatLimits::CHROMECAST,
+            ),
+        )
+        .await;
     }
     stream_cast_compatible(&request, &song_id, &lifecycle).await
 }

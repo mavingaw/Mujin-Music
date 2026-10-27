@@ -50,6 +50,19 @@ impl HostedQueue {
     }
 }
 
+/// Where this server answers on the machine itself, for outputs that
+/// decode a relayed stream locally.
+fn loopback_origin(port: u16) -> String {
+    let bound = crate::settings::bind_address().unwrap_or_default();
+    match bound.parse::<std::net::IpAddr>() {
+        Ok(ip) if ip.is_unspecified() && ip.is_ipv6() => format!("http://[::1]:{port}"),
+        Ok(ip) if ip.is_unspecified() || ip.is_loopback() => format!("http://127.0.0.1:{port}"),
+        Ok(std::net::IpAddr::V6(ip)) => format!("http://[{ip}]:{port}"),
+        Ok(ip) => format!("http://{ip}:{port}"),
+        Err(_) => format!("http://127.0.0.1:{port}"),
+    }
+}
+
 /// What a signed render URL is signed for.
 pub fn render_scope(zone_id: &str) -> String {
     format!("render:{zone_id}")
@@ -201,6 +214,9 @@ impl ZoneService {
         let song_id = song_ids
             .get(index)
             .ok_or(ZoneError::Invalid("invalid_queue_position"))?;
+        if crate::live_radio::is_live_song_id(song_id) {
+            return self.radio_track_request(zone_id, renderer, song_id);
+        }
         let song = cache
             .song(song_id)
             .ok_or(ZoneError::Invalid("invalid_zone_queue"))?;
@@ -294,6 +310,109 @@ impl ZoneService {
             self.loudness
                 .measure_in_background(vec![(song_id.clone(), song.path.clone())]);
         }
+        Ok(request)
+    }
+
+    /// A live station for a renderer: network renderers fetch the signed
+    /// relay URL, which converts only what they cannot play; server-side
+    /// outputs (devices, bridges, AirPlay) decode the same relay over
+    /// loopback.
+    fn radio_track_request(
+        &self,
+        zone_id: &str,
+        renderer: &dyn Renderer,
+        song_id: &str,
+    ) -> Result<TrackRequest, ZoneError> {
+        let radio = crate::live_radio::global();
+        let song = radio
+            .zone_song(song_id)
+            .ok_or(ZoneError::Invalid("invalid_zone_queue"))?;
+        let station_id = crate::live_radio::station_id_from_song(song_id)
+            .ok_or(ZoneError::Invalid("invalid_zone_queue"))?;
+        let info = renderer.info();
+        let settings = self
+            .lock()
+            .settings
+            .get(zone_id)
+            .cloned()
+            .unwrap_or_default();
+        let effective = renderer_settings(&info, &settings);
+        let serial = self.track_serial.fetch_add(1, Ordering::Relaxed);
+        let expires = chrono::Utc::now().timestamp() + MEDIA_URL_LIFETIME_SECONDS;
+        let signature = crate::api::cast::sign_media_url(&render_scope(zone_id), song_id, expires);
+        let path = format!(
+            "{RENDER_MEDIA_PATH}{}/stream?zone={}&expires={expires}&signature={signature}",
+            crate::api::cast::encoded(song_id),
+            crate::api::cast::encoded(zone_id),
+        );
+        let mut request = TrackRequest {
+            serial,
+            song_id: song_id.to_string(),
+            path: String::new(),
+            duration_ms: 0,
+            source: source_format(&song),
+            uri: String::new(),
+            metadata: String::new(),
+            mime_type: String::new(),
+            title: song.name.clone(),
+            artist: song.artist.clone(),
+            album: "Live radio".into(),
+            art_uri: None,
+            gain_db: None,
+            dsp: settings.dsp,
+        };
+        if !info.network {
+            request.path = format!("{}{path}", loopback_origin(self.port()));
+            return Ok(request);
+        }
+        let origin = renderer
+            .media_origin(self.port())
+            .ok_or_else(|| ZoneError::Device("no network route to the renderer".into()))?;
+        let uri = format!("{origin}{path}");
+        let format = crate::live_radio::relay::SourceFormat {
+            container: crate::live_radio::format::Container::Unknown,
+            codec: song.audio.as_ref().and_then(|audio| audio.codec.clone()),
+            sample_rate: song.audio.as_ref().and_then(|audio| audio.sample_rate),
+            bit_depth: song.audio.as_ref().and_then(|audio| audio.bit_depth),
+            channels: None,
+            bitrate_kbps: None,
+            verified: false,
+        };
+        let mime_type = match crate::live_radio::relay::plan(
+            &format,
+            &crate::live_radio::relay::Destination::Renderer(effective.limits),
+        )
+        .output()
+        {
+            Some(output) => output.content_type(),
+            None => match format.codec.as_deref() {
+                Some("aac") => "audio/aac",
+                Some("flac") => "audio/flac",
+                _ => "audio/mpeg",
+            },
+        };
+        let art_uri = radio
+            .known(station_id)
+            .and_then(|station| station.favicon)
+            .map(|_| {
+                format!(
+                    "{origin}{}",
+                    crate::live_radio::station::logo_path(station_id)
+                )
+            });
+        request.metadata = crate::sonos::didl::render(&crate::sonos::didl::DidlTrack {
+            item_id: format!("parson:{song_id}"),
+            title: song.name.clone(),
+            artist: song.artist.clone(),
+            album: "Live radio".into(),
+            album_art_uri: art_uri.clone(),
+            duration_ms: 0,
+            uri: uri.clone(),
+            mime_type: mime_type.to_string(),
+        });
+        request.art_uri = art_uri;
+        request.mime_type = mime_type.to_string();
+        request.uri = uri;
         Ok(request)
     }
 
@@ -437,7 +556,10 @@ impl ZoneService {
                 play,
             } => {
                 let cache = need_cache()?;
-                if song_ids.iter().any(|song_id| cache.song(song_id).is_none()) {
+                if song_ids
+                    .iter()
+                    .any(|song_id| zone_song(cache, song_id).is_none())
+                {
                     return Err(ZoneError::Invalid("invalid_zone_queue"));
                 }
                 self.lock().hosted.insert(
@@ -992,6 +1114,9 @@ fn network_stream_info(
     renderer: &str,
     queue: &HostedQueue,
 ) -> Option<ZoneStreamInfo> {
+    if crate::live_radio::is_live_song_id(song_id) {
+        return radio_stream_info(song_id, limits, renderer);
+    }
     let song = cache.song(song_id)?;
     let leveling = sonos_leveling(settings, &queue.song_ids, queue.current, cache);
     Some(served_stream_info(

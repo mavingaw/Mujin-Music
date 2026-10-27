@@ -3,6 +3,7 @@
 import {
   buildSignalPath,
   getSongSignalPath,
+  isLiveRadioId,
   isStreamingId,
   type PlayerAudioPreset,
   type AudioProperties,
@@ -97,6 +98,9 @@ export function useSignalPath({
     enabled: Boolean(songId) && !isStreamingId(songId),
     retry: 1,
     staleTime: 60_000,
+    // A live station's format is read from its audio once it plays, so its
+    // path firms up from the directory's listing to what really arrives.
+    refetchInterval: isLiveRadioId(songId) ? 15_000 : false,
   });
   const desktop = typeof window !== "undefined" && hasDesktopBridge();
   const path = useMemo(() => {

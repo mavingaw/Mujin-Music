@@ -15,7 +15,9 @@ import PlayerQueue, { type QueueEditing } from "./player-queue";
 import { timelinePlaybackRate } from "./player-controls-state";
 import { useMediaSession } from "./use-media-session";
 import { useCastOutput } from "./use-cast-output";
-import { getSongInfo } from "@parson/music-sdk";
+import { getSongInfo, isLiveRadioId } from "@parson/music-sdk";
+import { liveArtistLine } from "@/features/live-radio/live-player";
+import { useLiveNowPlaying } from "@/features/live-radio/use-live-radio";
 import { useQuery } from "@tanstack/react-query";
 import {
   displaySongTitle,
@@ -158,8 +160,20 @@ export default function PlayerBar() {
       ? Boolean(cast.session?.muted)
       : muted;
   const remoteCover = remoteNow?.cover_url
-    ? `${getBaseURL()}/media/images/${encodeURIComponent(remoteNow.cover_url)}`
+    ? remoteNow.cover_url.startsWith("/api/")
+      ? // A live station's logo, relayed by the server.
+        `${getBaseURL()}${remoteNow.cover_url}`
+      : `${getBaseURL()}/media/images/${encodeURIComponent(remoteNow.cover_url)}`
     : defaultCover;
+  const playingSongId = remote
+    ? (remoteNow?.song_id ?? "")
+    : castItem?.song_id || song.id;
+  const live = isLiveRadioId(playingSongId);
+  // Titles of a live station come from its stream, polled while it plays.
+  const livePlaying = useLiveNowPlaying(
+    live ? playingSongId : null,
+    live && effectivePlaying,
+  ).data;
   const effectiveCover = remote
     ? remoteCover
     : castItem?.artwork_url || imageSrc || defaultCover;
@@ -174,16 +188,27 @@ export default function PlayerBar() {
       effectiveSong.artist_object.name ||
       effectiveSong.artist;
   const displayTitle = displaySongTitle(effectiveTitle);
-  const artistCredits = trackArtistCreditParts({
-    albumArtist: effectiveSong.artist_object.name || effectiveArtist,
-    albumArtistId: effectiveSong.artist_object.id || artist.id,
-    albumType: effectiveSong.album_object.primary_type,
-    contributingArtists: effectiveSong.contributing_artists ?? [],
-    contributingArtistIds: effectiveSong.contributing_artist_ids ?? [],
-    trackArtist: effectiveSong.artist || effectiveArtist,
-  }) ?? [
-    { id: effectiveSong.artist_object.id || artist.id, name: effectiveArtist },
-  ];
+  const liveLine = live
+    ? liveArtistLine(
+        livePlaying,
+        remote ? effectiveArtist : effectiveSong.artist,
+      )
+    : "";
+  const artistCredits = live
+    ? [{ name: liveLine }]
+    : (trackArtistCreditParts({
+        albumArtist: effectiveSong.artist_object.name || effectiveArtist,
+        albumArtistId: effectiveSong.artist_object.id || artist.id,
+        albumType: effectiveSong.album_object.primary_type,
+        contributingArtists: effectiveSong.contributing_artists ?? [],
+        contributingArtistIds: effectiveSong.contributing_artist_ids ?? [],
+        trackArtist: effectiveSong.artist || effectiveArtist,
+      }) ?? [
+        {
+          id: effectiveSong.artist_object.id || artist.id,
+          name: effectiveArtist,
+        },
+      ]);
   const displayArtist = artistCredits.map((credit) => credit.name).join(", ");
   const currentItem = casting || remote ? undefined : queue[currentIndex];
   const currentIsRadioPick =
@@ -357,10 +382,10 @@ export default function PlayerBar() {
   });
   useMediaSession({
     album: effectiveSong.album_object.name || album.name,
-    artist: effectiveArtist,
+    artist: live ? liveLine : effectiveArtist,
     artwork: cover,
-    currentTime: effectiveCurrentTime,
-    duration: effectiveDuration,
+    currentTime: live ? 0 : effectiveCurrentTime,
+    duration: live ? 0 : effectiveDuration,
     isPlaying: effectivePlaying,
     onNext: next,
     onPause: togglePlayback,
@@ -379,7 +404,7 @@ export default function PlayerBar() {
     retry: retryLyrics,
     scrollRef: lyricsScrollRef,
     timed: timedLyrics,
-  } = useLyrics(effectiveSong, effectiveCurrentTime, lyricsOpen);
+  } = useLyrics(effectiveSong, effectiveCurrentTime, lyricsOpen && !live);
   useFullscreenDismiss(fullscreenOpen, closeFullscreen);
   useEffect(() => {
     if (!lyricsOpen || fullscreenOpen) {
@@ -536,11 +561,12 @@ export default function PlayerBar() {
           songId={remote ? queueSongId : castItem?.song_id || song.id}
           title={displayTitle}
           explicit={isExplicitSongTitle(effectiveTitle)}
-          feedback={feedback}
+          feedback={live ? null : feedback}
           radioLabel={radioLabel}
           timedLyrics={timedLyrics}
           volume={effectiveVolume}
           zonePicker={<ZonePickerButton compact />}
+          livePlaying={live ? livePlaying : null}
         />
       )}
 
@@ -648,6 +674,7 @@ export default function PlayerBar() {
         zonePicker={<ZonePickerButton />}
         zoneLabel={remote ? remote.name : null}
         zoneSignal={remote ? <ZoneQualityLight compact zone={remote} /> : null}
+        livePlaying={live ? livePlaying : null}
       />
       {!casting && !fullscreenOpen && !queueOpen && <RadioNotices />}
       {handoffOpen && (

@@ -1,5 +1,7 @@
 import { getHomeEssentials } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
+import { ChevronRight, Radio } from "lucide-react-native";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -7,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -18,6 +21,29 @@ import {
   SongRow,
 } from "@/components/music-ui";
 import { layout, palette } from "@/constants/colors";
+
+function LiveRadioEntry() {
+  const router = useRouter();
+  return (
+    <Pressable
+      accessibilityLabel="Live Radio"
+      accessibilityRole="button"
+      onPress={() => router.push("/radio")}
+      style={styles.radioEntry}
+    >
+      <View style={styles.radioIcon}>
+        <Radio color="white" size={22} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.radioTitle}>Live Radio</Text>
+        <Text style={styles.radioSubtitle}>
+          Stations worldwide, lossless included
+        </Text>
+      </View>
+      <ChevronRight color={palette.secondary} size={20} />
+    </Pressable>
+  );
+}
 
 export default function HomeScreen() {
   const home = useQuery({
@@ -45,6 +71,7 @@ export default function HomeScreen() {
           }}
         >
           <PageTitle>Home</PageTitle>
+          <LiveRadioEntry />
           {home.isPending ? (
             <ActivityIndicator color="white" style={{ marginTop: 70 }} />
           ) : home.error ? (
@@ -82,6 +109,28 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  radioEntry: {
+    alignItems: "center",
+    backgroundColor: "rgba(244,63,94,0.12)",
+    borderColor: "rgba(244,63,94,0.25)",
+    borderRadius: layout.radius,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 6,
+    marginHorizontal: layout.horizontal,
+    padding: 14,
+  },
+  radioIcon: {
+    alignItems: "center",
+    backgroundColor: "#e11d48",
+    borderRadius: 12,
+    height: 42,
+    justifyContent: "center",
+    width: 42,
+  },
+  radioTitle: { color: palette.text, fontSize: 16, fontWeight: "700" },
+  radioSubtitle: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   error: { color: palette.secondary, textAlign: "center", marginTop: 80 },
   errorState: { alignItems: "center" },
   retry: { color: "white", fontWeight: "700", marginTop: 10 },

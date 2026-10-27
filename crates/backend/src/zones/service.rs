@@ -500,7 +500,205 @@ fn status_for(transport: TransportState, has_media: bool) -> ZoneStatus {
     }
 }
 
+/// A queued song: a library track, or a live radio station (`radio:<id>`)
+/// that Parson has seen.
+pub(crate) fn zone_song<'a>(
+    cache: &'a LibraryCache,
+    song_id: &str,
+) -> Option<std::borrow::Cow<'a, crate::domain::Song>> {
+    if crate::live_radio::is_live_song_id(song_id) {
+        return crate::live_radio::global()
+            .zone_song(song_id)
+            .map(std::borrow::Cow::Owned);
+    }
+    cache.song(song_id).map(std::borrow::Cow::Borrowed)
+}
+
+/// What a zone shows for a live station: the station, the title it is
+/// playing and its logo.
+pub(crate) fn radio_now_playing(song_id: &str) -> Option<ZoneNowPlaying> {
+    let station_id = crate::live_radio::station_id_from_song(song_id)?;
+    let radio = crate::live_radio::global();
+    let song = radio.zone_song(song_id)?;
+    let station = radio.known(station_id)?;
+    Some(ZoneNowPlaying {
+        song_id: Some(song.id),
+        title: song.name,
+        artist: song.artist,
+        album: "Live radio".into(),
+        album_id: None,
+        cover_url: station
+            .favicon
+            .as_ref()
+            .map(|_| crate::live_radio::station::logo_path(station_id)),
+        duration_ms: 0,
+    })
+}
+
+/// Signed media path, DIDL-Lite and the URI scheme Sonos needs for a live
+/// station: `x-rincon-mp3radio://` for MP3/AAC (Sonos then treats it as
+/// radio, with no track length), plain HTTP for lossless and Ogg streams.
+fn sonos_radio_track(
+    origin: &str,
+    media_key: &str,
+    song_id: &str,
+    expires: i64,
+) -> Option<(String, String)> {
+    let song = crate::live_radio::global().zone_song(song_id)?;
+    let station_id = crate::live_radio::station_id_from_song(song_id)?;
+    let signature =
+        crate::api::cast::sign_media_url(&zone_media_scope(media_key, None), song_id, expires);
+    let path = format!(
+        "{ZONE_MEDIA_PATH}{}/stream?zone={}&expires={expires}&signature={signature}",
+        crate::api::cast::encoded(song_id),
+        crate::api::cast::encoded(media_key),
+    );
+    let codec = song.audio.as_ref().and_then(|audio| audio.codec.clone());
+    let radio_scheme = matches!(codec.as_deref(), Some("mp3" | "aac") | None);
+    let uri = if radio_scheme {
+        format!(
+            "{}{path}",
+            origin
+                .replacen("http://", "x-rincon-mp3radio://", 1)
+                .replacen("https://", "x-rincon-mp3radio://", 1)
+        )
+    } else {
+        format!("{origin}{path}")
+    };
+    let mime_type = match codec.as_deref() {
+        Some("aac") => "audio/aac",
+        Some("flac") | Some("vorbis") | Some("opus") => "audio/flac",
+        _ => "audio/mpeg",
+    };
+    let art = crate::live_radio::global()
+        .known(station_id)
+        .and_then(|station| station.favicon)
+        .map(|_| {
+            format!(
+                "{origin}{}",
+                crate::live_radio::station::logo_path(station_id)
+            )
+        });
+    let metadata = crate::sonos::didl::render(&crate::sonos::didl::DidlTrack {
+        item_id: format!("parson:{song_id}"),
+        title: song.name.clone(),
+        artist: song.artist.clone(),
+        album: "Live radio".into(),
+        album_art_uri: art,
+        duration_ms: 0,
+        uri: uri.clone(),
+        mime_type: mime_type.to_string(),
+    });
+    Some((uri, metadata))
+}
+
+/// The path of a live station to a renderer, from the same plan the relay
+/// follows: the station's own bytes when the renderer plays them, a
+/// lossless decode when it cannot, MP3 only for MP3-only outputs.
+pub(crate) fn radio_stream_info(
+    song_id: &str,
+    limits: crate::outputs::FormatLimits,
+    target: &str,
+) -> Option<ZoneStreamInfo> {
+    use crate::live_radio::relay::{self, Delivery, Destination, Output};
+    let station_id = crate::live_radio::station_id_from_song(song_id)?;
+    let radio = crate::live_radio::global();
+    let station = radio.known(station_id)?;
+    let format = radio
+        .now_playing(station_id)
+        .format
+        .or_else(|| radio.verified(station_id))
+        .unwrap_or(relay::SourceFormat {
+            container: crate::live_radio::format::Container::Unknown,
+            codec: station
+                .codec
+                .as_deref()
+                .and_then(crate::live_radio::station::normalize_codec),
+            sample_rate: None,
+            bit_depth: None,
+            channels: None,
+            bitrate_kbps: station.bitrate_kbps,
+            verified: false,
+        });
+    let lossless = format
+        .codec
+        .as_deref()
+        .is_some_and(crate::live_radio::station::codec_is_lossless);
+    let codec = format
+        .codec
+        .as_deref()
+        .map(crate::live_radio::station::codec_label)
+        .unwrap_or_else(|| "Unknown format".into());
+    let mut source = format!("Live radio · {codec}");
+    if let Some(rate) = format.sample_rate {
+        source.push_str(&format!(" {}", crate::signal_path::format_rate(rate)));
+    }
+    if let Some(depth) = format.bit_depth {
+        source.push_str(&format!("/{depth}-bit"));
+    }
+    if !lossless && let Some(bitrate) = format.bitrate_kbps {
+        source.push_str(&format!(" {bitrate} kbps"));
+    }
+    if !format.verified {
+        source.push_str(" (as listed)");
+    }
+    let delivery = relay::plan(&format, &Destination::Renderer(limits));
+    let label = |output: Output| match output {
+        Output::Mp3 => "MP3",
+        Output::Adts => "AAC",
+        Output::Flac => "FLAC",
+        Output::Ogg => "Ogg",
+        Output::Wav => "WAV",
+    };
+    let (output, steps, converted) = match delivery {
+        Delivery::Original => (
+            format!("The station's own stream, untouched, to {target}"),
+            Vec::new(),
+            false,
+        ),
+        Delivery::Repackage { output } => (
+            format!("Same audio in a {} stream to {target}", label(output)),
+            vec!["HLS segments joined, no re-encode".to_string()],
+            false,
+        ),
+        Delivery::Convert {
+            output,
+            sample_rate,
+            bitrate_kbps,
+            ..
+        } => {
+            let mut steps = vec![match output {
+                Output::Mp3 => format!(
+                    "Re-encoded to MP3 {} kbps (this output plays MP3 only)",
+                    bitrate_kbps.unwrap_or(320)
+                ),
+                other => format!(
+                    "Decoded once to {} (no second lossy generation)",
+                    label(other)
+                ),
+            }];
+            if let Some(rate) = sample_rate {
+                steps.push(format!(
+                    "Sample rate conversion to {}",
+                    crate::signal_path::format_rate(rate)
+                ));
+            }
+            (format!("{} to {target}", label(output)), steps, true)
+        }
+    };
+    Some(ZoneStreamInfo {
+        source,
+        output,
+        bit_perfect: lossless && !converted,
+        steps,
+        quality: StreamQuality::rate(lossless, converted, false),
+    })
+}
+
 fn now_playing_for(cache: Option<&LibraryCache>, song_id: &str) -> Option<ZoneNowPlaying> {
+    if crate::live_radio::is_live_song_id(song_id) {
+        return radio_now_playing(song_id);
+    }
     let cache = cache?;
     let song = cache.song(song_id)?;
     let album = cache
@@ -1085,6 +1283,13 @@ impl ZoneService {
             .filter(|_| source == ZoneSource::Parson)
             .and_then(|(queue, cache)| {
                 let song_id = queue.song_ids.get(current_position)?;
+                if crate::live_radio::is_live_song_id(song_id) {
+                    return radio_stream_info(
+                        song_id,
+                        crate::outputs::FormatLimits::SONOS,
+                        &group.name,
+                    );
+                }
                 let song = cache.song(song_id)?;
                 let players: Vec<_> = group
                     .members
@@ -1927,7 +2132,10 @@ impl ZoneService {
         play: bool,
         cache: &LibraryCache,
     ) -> Result<(), ZoneError> {
-        if song_ids.iter().any(|song_id| cache.song(song_id).is_none()) {
+        if song_ids
+            .iter()
+            .any(|song_id| zone_song(cache, song_id).is_none())
+        {
             return Err(ZoneError::Invalid("invalid_zone_queue"));
         }
         let origin = sonos
@@ -3207,6 +3415,9 @@ fn sonos_track(
     expires: i64,
     leveling: Option<StreamLeveling>,
 ) -> Option<(String, String)> {
+    if crate::live_radio::is_live_song_id(song_id) {
+        return sonos_radio_track(origin, media_key, song_id, expires);
+    }
     let song = cache.song(song_id)?;
     let album = cache
         .song_map

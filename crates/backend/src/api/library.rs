@@ -2898,6 +2898,10 @@ pub(crate) async fn stream_song(
         return response;
     }
     let song_key = path.into_inner();
+    // Live radio stations stream through the same route as `radio:<id>`.
+    if crate::live_radio::is_live_song_id(&song_key) {
+        return crate::api::live_radio::stream_station(&req, &song_key).await;
+    }
     // TIDAL and Qobuz tracks share the stream route under provider-scoped ids.
     if let Some((provider, raw_id)) = crate::providers::parse_entity_id(&song_key) {
         return crate::api::providers::stream_provider_track(&req, provider, raw_id, query.bitrate)
@@ -2925,6 +2929,13 @@ async fn head_stream_song(
     }
     let audio_effect = query.audio_effect();
     let song_key = path.into_inner();
+    if crate::live_radio::is_live_song_id(&song_key) {
+        // A live stream has no length; the GET opens the station.
+        return HttpResponse::Ok()
+            .insert_header((header::ACCEPT_RANGES, "none"))
+            .insert_header((header::CACHE_CONTROL, "no-store"))
+            .finish();
+    }
     if crate::providers::parse_entity_id(&song_key).is_some() {
         // Resolving a streaming-service URL costs an API call, so HEAD only
         // confirms the route; the GET reports format and length.
@@ -3070,6 +3081,7 @@ pub struct SignalPathQuery {
 /// the same parameters as `/media/songs/{song}/stream`.
 #[get("/media/songs/{song}/signal-path")]
 pub async fn song_signal_path(
+    request: HttpRequest,
     path: web::Path<String>,
     query: web::Query<SignalPathQuery>,
     lifecycle: web::Data<LibraryLifecycle>,
@@ -3086,6 +3098,10 @@ pub async fn song_signal_path(
             StreamAudioEffect::None
         }
     });
+    if crate::live_radio::is_live_song_id(&path) {
+        let target = query.target.unwrap_or(StreamTarget::Direct);
+        return crate::api::live_radio::station_signal_path(&request, &path, target).await;
+    }
     let cache = match lifecycle.cache().await {
         Ok(cache) => cache,
         Err(readiness) => return library_unavailable_response(readiness),
