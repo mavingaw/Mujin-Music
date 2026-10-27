@@ -3,8 +3,8 @@
   "version": "1.0.1",
   "private": true,
   "license": "GPL-3.0-only",
-  "description": "Parson desktop client for Linux, macOS, and Windows",
-  "homepage": "https://github.com/ParsonLabs/Parson",
+  "description": "Mujin Music desktop client for Linux, macOS, and Windows",
+  "homepage": "https://github.com/mavingaw/parson-jin",
   "author": {
     "name": "ParsonLabs"
   },
@@ -16,12 +16,13 @@
     "desktop:test": "node --test electron/*.test.cjs"
   },
   "devDependencies": {
-    "electron": "44.7.0",
+    "electron": "44.9.1",
     "electron-builder": "26.15.3"
   },
   "build": {
-    "appId": "com.parsonlabs.parson",
-    "productName": "Parson",
+    "appId": "music.mujin.desktop",
+    "productName": "Mujin Music",
+    "copyright": "Mujin Music. Based on Parson by ParsonLabs. GPL-3.0-only.",
     "asar": true,
     "compression": "maximum",
     "electronLanguages": [
@@ -41,6 +42,13 @@
       "electron/backend-trust.cjs",
       "electron/failure-state.cjs",
       "electron/navigation.cjs",
+      "electron/mdns.cjs",
+      "electron/server-config.cjs",
+      "electron/server-monitor.cjs",
+      "electron/server-service.cjs",
+      "electron/server-host.cjs",
+      "electron/session-vault.cjs",
+      "electron/servers.html",
       "electron/preload.cjs",
       "electron/startup.html",
       "electron/startup-error.html",
@@ -61,7 +69,8 @@
         "to": ".",
         "filter": [
           "parson-music-server",
-          "parson-music-server.exe"
+          "parson-music-server.exe",
+          "ParsonMusicServer.exe"
         ]
       },
       {
@@ -79,7 +88,7 @@
       "icon": "../web/public/icons/icon-512.png",
       "maintainer": "ParsonLabs",
       "syncDesktopName": true,
-      "artifactName": "Parson_${version}_${arch}.${ext}"
+      "artifactName": "Mujin-Music-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [
@@ -87,7 +96,7 @@
         "portable"
       ],
       "icon": "../../crates/windows-server/parson.ico",
-      "executableName": "Parson",
+      "executableName": "Mujin Music",
       "signExts": [
         ".exe",
         ".dll",
@@ -100,7 +109,7 @@
         "zip"
       ],
       "category": "public.app-category.music",
-      "icon": "../web/public/icons/icon.svg",
+      "icon": "build/icon.icns",
       "hardenedRuntime": false,
       "notarize": false,
       "entitlements": "build/entitlements.mac.plist",
@@ -109,9 +118,9 @@
         "Contents/Resources/parson-music-server"
       ],
       "minimumSystemVersion": "13.0",
-      "artifactName": "Parson_${version}_${arch}.${ext}",
+      "artifactName": "Mujin-Music-${version}-${arch}.${ext}",
       "extendInfo": {
-        "NSLocalNetworkUsageDescription": "Parson uses your local network to serve your music library to your devices.",
+        "NSLocalNetworkUsageDescription": "Mujin Music uses your local network to serve your music library to your devices.",
         "NSBonjourServices": [
           "_parson._tcp"
         ]
@@ -122,17 +131,18 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Parson",
-      "artifactName": "Parson_${version}_${arch}-setup.${ext}"
+      "shortcutName": "Mujin Music",
+      "artifactName": "Mujin-Music-Setup-${version}-${arch}.${ext}",
+      "include": "build/installer.nsh"
     },
     "portable": {
-      "artifactName": "Parson_${version}_${arch}-portable.${ext}"
+      "artifactName": "Mujin-Music-${version}-${arch}-portable.${ext}"
     },
     "publish": [
       {
         "provider": "github",
-        "owner": "ParsonLabs",
-        "repo": "Parson",
+        "owner": "mavingaw",
+        "repo": "parson-jin",
         "releaseType": "release"
       }
     ]

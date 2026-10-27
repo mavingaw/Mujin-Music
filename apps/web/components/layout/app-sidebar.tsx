@@ -1,6 +1,18 @@
 "use client";
 
-import { Home, Library, Search, Settings } from "lucide-react";
+import {
+  AudioLines,
+  Clock,
+  Hash,
+  History,
+  Home,
+  Import,
+  Library,
+  Radio,
+  Search,
+  Settings,
+  Tags,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ParsonBrandMark from "@/components/icons/parson-brand-mark";
@@ -8,6 +20,13 @@ import ParsonBrandMark from "@/components/icons/parson-brand-mark";
 const navigation = [
   { href: "/", label: "Home", icon: Home },
   { href: "/library", label: "Library", icon: Library },
+  { href: "/genre", label: "Genres", icon: Tags },
+  { href: "/listen-later", label: "Listen Later", icon: Clock },
+  { href: "/tags", label: "Tags", icon: Hash },
+  { href: "/history", label: "History", icon: History },
+  { href: "/radio", label: "Live Radio", icon: Radio },
+  { href: "/imports", label: "Imports", icon: Import },
+  { href: "/streaming", label: "Streaming", icon: AudioLines },
 ];
 
 const mobileNavigation = [
@@ -37,13 +56,15 @@ export default function AppSidebar() {
         <div className="flex h-full flex-col px-4 md:items-center md:px-0">
           <Link
             href="/"
-            aria-label="Parson home"
+            aria-label="Mujin Music home"
             draggable={false}
             className="mt-3 flex h-12 select-none items-center gap-3 md:w-12 md:justify-center"
             onClick={() => handleNavigate("/")}
           >
-            <ParsonBrandMark className="h-16 w-16 shrink-0 text-white" />
-            <span className="text-base font-semibold md:hidden">Parson</span>
+            <ParsonBrandMark className="h-10 w-10 shrink-0" />
+            <span className="text-base font-semibold md:hidden">
+              Mujin Music
+            </span>
           </Link>
 
           <nav className="mt-2 flex w-full flex-col gap-2 md:items-center">

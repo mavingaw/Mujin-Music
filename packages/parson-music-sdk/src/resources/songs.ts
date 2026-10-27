@@ -5,6 +5,14 @@ import {
   LibraryMetadataPatch,
   LibraryMetadataResponse,
 } from "../domain/types";
+import {
+  type PlaybackCapabilities,
+  playbackCapabilityParams,
+} from "../player/formats";
+import type {
+  ServerSignalPath,
+  SignalStreamTarget,
+} from "../player/signal-path";
 import { replaceCachedAlbumInfo } from "./albums";
 import { replaceCachedArtistInfo } from "./artists";
 
@@ -222,4 +230,75 @@ export async function editLibraryMetadata(
   );
   clearSongInfoCacheForId(songId);
   return response.data;
+}
+
+export type SongSignalPathOptions = {
+  /** Streaming bitrate in kbps, 0 for the original file (as for streams). */
+  bitrate?: number;
+  /** Server DSP, as accepted by the stream endpoint. */
+  audioEffect?: string | null;
+  /**
+   * `cast` describes what a Cast receiver is sent. What the server plays
+   * itself (devices, bridges, network players) is a zone's
+   * `output.stream.signal_path`.
+   */
+  target?: Exclude<SignalStreamTarget, "native">;
+  /**
+   * What the player decodes, exactly as sent with its stream request, so
+   * the server describes the delivery it will actually make.
+   */
+  capabilities?: PlaybackCapabilities | null;
+};
+
+const signalPathCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<ServerSignalPath> }
+>();
+const SIGNAL_PATH_CACHE_TTL_MS = 60 * 1000;
+const MAX_SIGNAL_PATH_CACHE_ENTRIES = 64;
+
+/**
+ * Describes the server leg of the signal path for a stream requested with
+ * the same parameters: source format, DSP, conversions and transcoding.
+ */
+export function getSongSignalPath(
+  songId: string,
+  options: SongSignalPathOptions = {},
+): Promise<ServerSignalPath> {
+  const bitrate = options.bitrate ?? 0;
+  const target = options.target ?? "direct";
+  const capabilityParams =
+    target === "direct" ? playbackCapabilityParams(options.capabilities) : {};
+  const key = `${songId}:${bitrate}:${options.audioEffect ?? ""}:${target}:${new URLSearchParams(capabilityParams).toString()}`;
+  // Live stations change format as the server reads their audio: no cache.
+  const live = songId.startsWith("radio:");
+  const cached = live ? undefined : signalPathCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const params: Record<string, string | number> = {
+    ...capabilityParams,
+    bitrate,
+    target,
+  };
+  if (options.audioEffect) params.audio_effect = options.audioEffect;
+  const value = api
+    .get<ServerSignalPath>(
+      `/media/songs/${encodeURIComponent(songId)}/signal-path`,
+      { params },
+    )
+    .then((response) => response.data);
+  if (live) return value;
+  value.catch(() => signalPathCache.delete(key));
+  if (signalPathCache.size >= MAX_SIGNAL_PATH_CACHE_ENTRIES) {
+    const oldest = signalPathCache.keys().next().value;
+    if (oldest !== undefined) signalPathCache.delete(oldest);
+  }
+  signalPathCache.set(key, {
+    expiresAt: Date.now() + SIGNAL_PATH_CACHE_TTL_MS,
+    value,
+  });
+  return value;
+}
+
+export function clearCachedSignalPaths() {
+  signalPathCache.clear();
 }

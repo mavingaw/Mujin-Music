@@ -14,7 +14,14 @@ import {
   type LibraryRoot,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
-import { LogOut, Radio, Server, Trash2 } from "lucide-react-native";
+import {
+  Import,
+  LogOut,
+  Radio,
+  Server,
+  Trash2,
+  Wrench,
+} from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import {
@@ -29,14 +36,33 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AwayFromHome } from "@/components/away-from-home";
+import { LibraryList, SearchingIndicator } from "@/components/library-list";
 import { PageTitle, Screen } from "@/components/music-ui";
+import { StreamingServicesSettings } from "@/components/streaming-services";
+import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
+import { libraryRows, type LibraryRow } from "@/lib/known-libraries";
+import { ProfilesSettings } from "@/components/profiles";
+import { ScrobblingSettings } from "@/components/scrobbling";
 import { layout, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
+import { RadioSettingsRows } from "@/components/radio-ui";
 
-type Tab = "account" | "playback" | "devices" | "library" | "users";
+type Tab =
+  | "account"
+  | "profiles"
+  | "scrobbling"
+  | "playback"
+  | "services"
+  | "devices"
+  | "library"
+  | "users";
 const labels: Record<Tab, string> = {
   account: "Account",
+  profiles: "Profiles",
+  scrobbling: "Scrobbling",
   playback: "Playback",
+  services: "Services",
   devices: "Devices",
   library: "Library",
   users: "Users",
@@ -50,9 +76,40 @@ export default function SettingsScreen() {
     session.phase === "offline"
       ? ["account", "devices"]
       : admin
-        ? ["account", "playback", "devices", "library", "users"]
-        : ["account", "playback", "devices"];
+        ? [
+            "account",
+            "profiles",
+            "scrobbling",
+            "playback",
+            "services",
+            "devices",
+            "library",
+            "users",
+          ]
+        : [
+            "account",
+            "profiles",
+            "scrobbling",
+            "playback",
+            "services",
+            "devices",
+          ];
   const [tab, setTab] = useState<Tab>("account");
+  const nearbyLibraries = useLibraryDiscovery(
+    tab === "devices" && session.phase !== "offline",
+  );
+  const libraries = libraryRows({
+    known: session.knownLibraries,
+    nearby: nearbyLibraries.map((library) => ({
+      instanceId: library.manifest.instanceId,
+      origin: library.origin,
+      name: library.manifest.name,
+      identityAdoptedAt: library.manifest.identityAdoptedAt ?? 0,
+    })),
+    currentInstanceId: session.instanceId,
+    currentOrigin: session.origin,
+    accountInstanceIds: session.accountLibraryIds,
+  });
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const accountKey =
@@ -338,24 +395,48 @@ export default function SettingsScreen() {
                 usernamePassword={usernamePassword}
                 onUsernamePasswordChange={setUsernamePassword}
               />
+            ) : tab === "profiles" ? (
+              <ProfilesSettings />
+            ) : tab === "scrobbling" ? (
+              <ScrobblingSettings />
             ) : tab === "playback" ? (
               <PlaybackSettings
                 busy={busy}
                 onSave={saveQuality}
                 quality={quality}
               />
+            ) : tab === "services" ? (
+              <StreamingServicesSettings />
             ) : tab === "devices" ? (
-              <ServerSettings
-                busy={busy}
-                offline={session.phase === "offline"}
-                libraryName={session.libraryName}
-                onChange={() => leaveAuthenticatedApp(session.changeServer)}
-                onRetry={session.retry}
-                origin={session.origin}
-              />
+              <>
+                <ServerSettings
+                  busy={busy}
+                  offline={session.phase === "offline"}
+                  libraries={libraries}
+                  onForget={(row) => void session.forgetLibrary(row.instanceId)}
+                  onSwitch={(row) =>
+                    leaveAuthenticatedApp(async () => {
+                      await session.switchLibrary(row.origin);
+                    })
+                  }
+                  searching={nearbyLibraries.length === 0}
+                  onChange={() => leaveAuthenticatedApp(session.changeServer)}
+                  onOpenImports={() => router.push("/imports")}
+                  onRetry={session.retry}
+                  origin={session.origin}
+                />
+                <AwayFromHome
+                  library={session.knownLibraries.find(
+                    (library) => library.instanceId === session.instanceId,
+                  )}
+                  origin={session.origin}
+                  route={session.connectionRoute}
+                />
+              </>
             ) : tab === "library" ? (
               <LibrarySettings
                 busy={busy}
+                onOpenTools={() => router.push("/library-tools")}
                 onIndex={indexFolder}
                 onPathChange={setLibraryPath}
                 onRefresh={refreshLibrary}
@@ -603,6 +684,7 @@ function PlaybackSettings({
           </Text>
         </Pressable>
       ))}
+      <RadioSettingsRows />
     </>
   );
 }
@@ -610,31 +692,56 @@ function PlaybackSettings({
 function ServerSettings({
   busy,
   offline,
-  libraryName,
+  libraries,
   onChange,
+  onForget,
+  onOpenImports,
   onRetry,
+  onSwitch,
   origin,
+  searching,
 }: {
   busy: boolean;
   offline: boolean;
-  libraryName: string | null;
+  libraries: LibraryRow[];
   onChange: () => Promise<void>;
+  onForget: (row: LibraryRow) => void;
+  onOpenImports: () => void;
   onRetry: () => Promise<void>;
+  onSwitch: (row: LibraryRow) => Promise<void>;
   origin: string | null;
+  searching: boolean;
 }) {
   return (
     <>
-      <View style={styles.card}>
-        <View style={styles.icon}>
-          <Radio color="white" size={21} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.label}>{libraryName}</Text>
-          <Text numberOfLines={1} style={styles.value}>
+      <Text style={styles.heading}>Libraries</Text>
+      <Text style={styles.value}>
+        Each Mujin Music server is a library. Switch between them here; this
+        phone stays signed in to each one.
+      </Text>
+      <View style={{ marginTop: 14 }}>
+        <LibraryList
+          busy={busy}
+          onForget={onForget}
+          onSelect={(row) => {
+            if (!row.current) void onSwitch(row);
+          }}
+          rows={libraries}
+        />
+      </View>
+      {searching && !offline ? (
+        <SearchingIndicator label="Looking for other libraries nearby…" />
+      ) : null}
+      {!libraries.length && origin ? (
+        <View style={styles.card}>
+          <View style={styles.icon}>
+            <Radio color="white" size={21} />
+          </View>
+          <Text numberOfLines={1} style={[styles.value, { flex: 1 }]}>
             {origin}
           </Text>
         </View>
-      </View>
+      ) : null}
       {offline ? (
         <Pressable
           accessibilityRole="button"
@@ -652,8 +759,20 @@ function ServerSettings({
         onPress={() => void onChange()}
       >
         <Server color="white" size={21} />
-        <Text style={styles.actionText}>Change server</Text>
+        <Text style={styles.actionText}>Add another library</Text>
       </Pressable>
+      {offline ? null : (
+        <Pressable
+          accessibilityHint="Spotify, Apple Music, YouTube Music, Deezer and playlist files"
+          accessibilityRole="button"
+          disabled={busy}
+          style={[styles.action, busy && styles.disabled]}
+          onPress={onOpenImports}
+        >
+          <Import color="white" size={21} />
+          <Text style={styles.actionText}>Import playlists</Text>
+        </Pressable>
+      )}
     </>
   );
 }
@@ -661,6 +780,7 @@ function ServerSettings({
 function LibrarySettings({
   busy,
   onIndex,
+  onOpenTools,
   onPathChange,
   onRefresh,
   onRemove,
@@ -669,6 +789,7 @@ function LibrarySettings({
 }: {
   busy: boolean;
   onIndex: () => Promise<void>;
+  onOpenTools: () => void;
   onPathChange: (value: string) => void;
   onRefresh: () => Promise<void>;
   onRemove: (root: LibraryRoot) => void;
@@ -721,6 +842,14 @@ function LibrarySettings({
       >
         <Radio color="white" size={21} />
         <Text style={styles.actionText}>Check for changes</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        style={styles.action}
+        onPress={onOpenTools}
+      >
+        <Wrench color="white" size={21} />
+        <Text style={styles.actionText}>Library tools</Text>
       </Pressable>
     </>
   );

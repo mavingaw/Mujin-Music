@@ -1,11 +1,18 @@
 "use client";
 
-import { recordPlaybackEvent, type PlaybackEventType } from "@parson/music-sdk";
+import {
+  isLiveRadioId,
+  isStreamingId,
+  recordPlaybackEvent,
+  type PlaybackEventType,
+} from "@parson/music-sdk";
 import type { LibrarySong } from "@parson/music-sdk/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, type MutableRefObject } from "react";
 import type { PlaybackTelemetry } from "./player-effects";
 import type { QueueOrigin } from "./player-model";
+import { hasDesktopBridge } from "@/lib/desktop/bridge";
+import { localZoneForHistory, readOrCreateDeviceId } from "./zones/zone-device";
 
 function createSessionId() {
   if (typeof crypto !== "undefined") {
@@ -46,11 +53,27 @@ export function usePlaybackTelemetry({
     lastUpdateMs: 0,
     seeking: false,
   });
+  const zone = useRef<ReturnType<typeof localZoneForHistory> | null>(null);
   const send = useCallback(
     (eventType: PlaybackEventType, position?: number, duration?: number) => {
       const song = activeSong.current;
-      if (!song.id || !userId) return;
+      // Listening history and recommendations cover the local library.
+      if (
+        !song.id ||
+        !userId ||
+        isStreamingId(song.id) ||
+        isLiveRadioId(song.id)
+      )
+        return;
+      if (!zone.current && typeof window !== "undefined") {
+        zone.current = localZoneForHistory(
+          readOrCreateDeviceId(),
+          navigator.userAgent,
+          hasDesktopBridge(),
+        );
+      }
       void recordPlaybackEvent({
+        ...(eventType === "qualified_play" ? zone.current : null),
         event_key: `${sessionId.current}:${song.id}:${eventType}:${Date.now()}`,
         song_id: song.id,
         event_type: eventType,
@@ -77,5 +100,28 @@ export function usePlaybackTelemetry({
     },
     [activeSong, audio, currentOrigin, persistedQueue, queryClient, userId],
   );
-  return { sendPlaybackEvent: send, telemetry };
+  /** Records feedback about any song (a Radio pick that has not played). */
+  const sendSongEvent = useCallback(
+    (songId: string, eventType: PlaybackEventType) => {
+      if (!songId || !userId) return Promise.resolve();
+      return recordPlaybackEvent({
+        event_key: `${sessionId.current}:${songId}:${eventType}:${Date.now()}`,
+        song_id: songId,
+        event_type: eventType,
+        session_id: sessionId.current,
+        source: "generated",
+      })
+        .then(() => {
+          void queryClient
+            .invalidateQueries({
+              queryKey: ["library", "feed"],
+              refetchType: "none",
+            })
+            .catch(() => {});
+        })
+        .catch(() => {});
+    },
+    [queryClient, userId],
+  );
+  return { sendPlaybackEvent: send, sendSongEvent, telemetry };
 }

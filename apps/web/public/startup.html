@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="color-scheme" content="dark" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Parson</title>
+    <title>Mujin Music</title>
     <style>
       html,
       body {
@@ -12,7 +12,7 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: #000;
+        background: #0a0a0b;
       }
       body {
         display: grid;
@@ -25,11 +25,12 @@
         width: 42px;
         height: 42px;
         place-items: center;
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(242, 238, 230, 0.12);
         border-radius: 12px;
-        background: #080808;
-        font-size: 20px;
-        font-weight: 700;
+        background: #111113;
+      }
+      /* Only the signal light moves; the ring stays still. */
+      .mark .mj-signal {
         animation: breathe 900ms ease-in-out infinite alternate;
       }
       @keyframes breathe {
@@ -38,13 +39,27 @@
         }
       }
       @media (prefers-reduced-motion: reduce) {
-        .mark {
+        .mark .mj-signal {
           animation: none;
         }
       }
     </style>
   </head>
   <body>
-    <div class="mark" aria-label="Parson is starting">P</div>
+    <div class="mark" role="img" aria-label="Mujin Music is starting">
+      <svg viewBox="0 0 512 512" width="28" height="28" aria-hidden="true">
+        <path
+          d="M456.91 202.17A208 208 0 1 1 309.83 55.09L293.89 114.59A133.12 133.12 0 1 0 397.41 218.11Z"
+          fill="#F2EEE6"
+        />
+        <circle
+          class="mj-signal"
+          cx="382.12"
+          cy="129.88"
+          r="44.72"
+          fill="#D98B5F"
+        />
+      </svg>
+    </div>
   </body>
 </html>

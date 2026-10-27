@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import {
   getFavoriteSongDetails,
   removeFavoriteSong,
@@ -28,7 +28,7 @@ type FavoriteCursor =
   { before_added_at: string; before_song_id: string } | undefined;
 
 export default function LikedSongsDetails() {
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const queryClient = useQueryClient();
   const favorites = useInfiniteQuery({
     queryKey: favoriteDetailsKey,
@@ -87,24 +87,18 @@ export default function LikedSongsDetails() {
   const playFrom = (index: number) => {
     const selected = songs[index];
     if (!selected) return;
-    player.setQueue(
+    if (playback.currentSongId === selected.id) {
+      void playback.togglePlayPause();
+      return;
+    }
+    void playback.playQueue(
       songs.map((song) => ({
         song,
         artist: song.artist_object,
         album: song.album_object,
       })),
+      index,
     );
-    player.setCurrentSongIndex(index);
-    if (player.song.id === selected.id) {
-      player.togglePlayPause();
-      return;
-    }
-    player.setSongCallback(
-      selected,
-      selected.artist_object,
-      selected.album_object,
-    );
-    player.playAudioSource();
   };
 
   const shuffle = () => {
@@ -112,21 +106,13 @@ export default function LikedSongsDetails() {
     const firstIndex = order[0];
     if (firstIndex === undefined) return;
     const shuffled = order.map((index) => songs[index]!);
-    const selected = shuffled[0]!;
-    player.setQueue(
+    void playback.playQueue(
       shuffled.map((song) => ({
         song,
         artist: song.artist_object,
         album: song.album_object,
       })),
     );
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(
-      selected,
-      selected.artist_object,
-      selected.album_object,
-    );
-    player.playAudioSource();
   };
 
   if (favorites.isPending) {
@@ -147,7 +133,8 @@ export default function LikedSongsDetails() {
             Liked Songs unavailable
           </h1>
           <p className="mt-2 text-sm text-zinc-500">
-            Parson could not load your saved songs. Your likes are still safe.
+            Mujin Music could not load your saved songs. Your likes are still
+            safe.
           </p>
           <div className="mt-5 flex justify-center gap-2">
             <Button onClick={() => void favorites.refetch()} variant="outline">
@@ -210,10 +197,10 @@ export default function LikedSongsDetails() {
         />
       </div>
       <PlaylistTracks
-        activeSongId={player.song.id}
+        activeSongId={playback.currentSongId ?? undefined}
         emptyBody="Use the heart in the player or any song menu to keep music you love close."
         emptyTitle="Songs you love, all in one place"
-        isPlaying={player.isPlaying}
+        isPlaying={playback.isPlaying}
         onPlay={playFrom}
         onRemove={(songId) => remove.mutate(songId)}
         removeLabel="Remove from Liked Songs"

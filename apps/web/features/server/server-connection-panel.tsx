@@ -47,14 +47,15 @@ export default function ServerConnectionPanel() {
   }, [refreshDiscovery]);
 
   function connect(origin: string) {
-    if (!connectToServer(origin)) toast("Enter a valid Parson server address.");
+    if (!connectToServer(origin))
+      toast("Enter a valid Mujin Music server address.");
   }
 
   function connectManual(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const origin = normalizeServerOrigin(manualServer);
     if (!origin) {
-      toast("Enter a valid Parson server address.");
+      toast("Enter a valid Mujin Music server address.");
       return;
     }
     connect(origin);
@@ -83,18 +84,19 @@ export default function ServerConnectionPanel() {
   return (
     <section className="space-y-5">
       <form
-        className="rounded-lg border border-white/10 p-4"
+        className="rounded-2xl border border-white/10 bg-white/[0.02] p-5"
         onSubmit={approvePairing}
       >
         <div className="flex items-start gap-3">
           <Smartphone className="mt-0.5 h-5 w-5 text-zinc-400" />
           <div>
             <h2 className="text-sm font-medium text-zinc-200">
-              Pair an mobile device
+              Pair a phone or tablet
             </h2>
             <p className="mt-1 text-sm leading-5 text-zinc-500">
-              Open Parson on your device, choose this library, then enter the
-              code shown there. The phone will use your current account.
+              Open the Mujin Music app on your phone, choose this library (or
+              scan the QR code above), then enter the six-digit code it shows.
+              The phone signs in as your current account.
             </p>
           </div>
         </div>
@@ -128,17 +130,18 @@ export default function ServerConnectionPanel() {
           </Button>
         </div>
       </form>
-      <div className="overflow-hidden rounded-lg border border-white/10">
+      <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
         <div className="flex items-center justify-between gap-3">
           <h2 className="px-4 py-3 text-sm font-medium text-zinc-200">
-            Nearby libraries
+            Other servers nearby
           </h2>
           <Button
             aria-label="Look for nearby devices"
-            className="mr-2"
+            className="mr-2 rounded-full"
             disabled={discoveryState === "loading"}
             onClick={() => void refreshDiscovery()}
             size="sm"
+            variant="ghost"
           >
             {discoveryState === "loading" ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -180,7 +183,7 @@ export default function ServerConnectionPanel() {
             <p className="p-4 text-sm text-zinc-500">
               {discoveryState === "error"
                 ? "Nearby discovery is unavailable. You can still enter an address below."
-                : "No other Parson devices found."}
+                : "No other Mujin Music servers found on this network."}
             </p>
           )}
         </div>
@@ -189,7 +192,7 @@ export default function ServerConnectionPanel() {
           onSubmit={connectManual}
         >
           <Input
-            aria-label="Parson device address"
+            aria-label="Mujin Music device address"
             onChange={(event) => setManualServer(event.target.value)}
             placeholder="Enter another library address"
             value={manualServer}

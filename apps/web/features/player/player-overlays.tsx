@@ -2,9 +2,20 @@
 
 import { ExplicitBadge } from "@/features/library/song-title";
 import { ArtistCreditLinks } from "@/features/library/artist-credit-links";
+import { DeliveredFormat } from "@/features/streaming/delivered-format";
+import { SourceBadge } from "@/features/streaming/source-badge";
+import {
+  isLiveRadioId,
+  liveTitleText,
+  parseStreamingId,
+  type LiveNowPlaying,
+} from "@parson/music-sdk";
+import { LiveTimeline } from "@/features/live-radio/live-player";
+import { LiveBadge, StationArtwork } from "@/features/live-radio/station-ui";
 import type { TrackArtistCreditPart } from "@/features/library/track-artist-credit";
 
 import Image from "next/image";
+import { defaultCover } from "@/lib/images/default-cover";
 import {
   ChevronDown,
   AudioLines,
@@ -12,17 +23,24 @@ import {
   ListMusic,
   MicVocal,
   Minimize2,
+  Radio,
 } from "lucide-react";
 import {
   memo,
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
 import type { Player } from "./player-api";
-import { PlayerQueueList } from "./player-queue";
+import {
+  PlayerQueueList,
+  QueueToolbar,
+  type QueueEditing,
+} from "./player-queue";
+import { repeatModeLabel, type ZoneRepeatMode } from "@parson/music-sdk";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
   ActionButton,
@@ -53,6 +71,8 @@ export function FullscreenPlayer({
   readPosition,
   isPlaying,
   looping,
+  repeatMode,
+  queueEditing,
   lyricsOpen,
   lyricsFallback,
   lyricsFailed,
@@ -79,12 +99,17 @@ export function FullscreenPlayer({
   playbackRate,
   queue,
   queueOpen,
+  signalBadge,
   slowedReverb,
   songId,
   title,
   explicit,
+  feedback,
+  radioLabel,
   timedLyrics,
   volume,
+  zonePicker,
+  livePlaying,
 }: {
   activeLine: number;
   activeLineRef: RefObject<HTMLElement | null>;
@@ -97,6 +122,8 @@ export function FullscreenPlayer({
   readPosition?: () => number;
   isPlaying: boolean;
   looping: boolean;
+  repeatMode?: ZoneRepeatMode;
+  queueEditing?: QueueEditing;
   lyricsOpen: boolean;
   lyricsFallback?: string | null;
   lyricsFailed: boolean;
@@ -127,9 +154,20 @@ export function FullscreenPlayer({
   songId: string;
   title: string;
   explicit: boolean;
+  /** Thumbs up / down for the current track. */
+  feedback?: ReactNode;
+  /** "Radio · Playing X radio" when the current track is a Radio pick. */
+  radioLabel?: string | null;
+  /** Signal path pill shown under the artist. */
+  signalBadge?: ReactNode;
   timedLyrics: TimedLyric[];
   volume: number;
+  /** Zone picker; on phones this is where zones are reached. */
+  zonePicker?: ReactNode;
+  /** What a live station is playing, when one plays. */
+  livePlaying?: LiveNowPlaying | null;
 }) {
+  const live = isLiveRadioId(songId);
   const dragStart = useRef<number | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const [dragOffset, setDragOffset] = useState(0);
@@ -139,6 +177,7 @@ export function FullscreenPlayer({
       ? "Queue"
       : "Now playing";
   const showingMobileSubView = lyricsOpen || queueOpen;
+  const streamingSource = parseStreamingId(songId);
 
   const beginDrag = (event: PointerEvent<HTMLDivElement>) => {
     dragStart.current = event.clientY;
@@ -270,12 +309,21 @@ export function FullscreenPlayer({
                 </div>
               ) : queueOpen ? (
                 <div className="mx-auto min-h-0 w-full max-w-160 flex-1 overflow-y-auto px-4 pt-4 md:pt-16">
-                  <h2 className="mb-4 text-base font-semibold text-zinc-200">
-                    Queue
-                  </h2>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <h2 className="text-base font-semibold text-zinc-200">
+                      Queue
+                    </h2>
+                    {queueEditing && (
+                      <QueueToolbar
+                        editing={queueEditing}
+                        length={queue.length}
+                      />
+                    )}
+                  </div>
                   {queue.length ? (
                     <PlayerQueueList
                       currentSongId={songId}
+                      editing={queueEditing}
                       onReorder={onReorderQueue}
                       onSelect={onSelectQueueItem}
                       queue={queue}
@@ -287,15 +335,38 @@ export function FullscreenPlayer({
               ) : (
                 <div className="mx-auto flex min-h-0 w-full max-w-225 flex-1 flex-col items-center justify-start gap-6 overflow-y-auto px-6 py-5 md:grid md:grid-cols-2 md:content-center md:gap-12 md:py-[clamp(16px,4dvh,48px)]">
                   <div className="relative mx-auto aspect-square w-full max-w-[min(62vw,280px,max(88px,calc(100dvh-340px)))] shrink-0 overflow-hidden rounded-[18px] border border-white/8 bg-[#111] md:max-w-[min(340px,calc(100dvh-176px))]">
-                    <Image
-                      alt={title}
-                      className="object-cover"
-                      fill
-                      sizes="340px"
-                      src={cover}
-                    />
+                    {live ? (
+                      <StationArtwork
+                        className="absolute inset-0 h-full w-full"
+                        rounded="rounded-[18px]"
+                        sizes="340px"
+                        station={{
+                          name: title,
+                          logo_url: cover === defaultCover ? null : cover,
+                        }}
+                      />
+                    ) : (
+                      <Image
+                        alt={title}
+                        className="object-cover"
+                        fill
+                        sizes="340px"
+                        src={cover}
+                      />
+                    )}
                   </div>
                   <div className="w-full min-w-0 max-w-95">
+                    {live && (
+                      <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-rose-300/90">
+                        <LiveBadge /> Live radio
+                      </p>
+                    )}
+                    {radioLabel && (
+                      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-sky-300/90">
+                        <Radio aria-hidden="true" className="h-3.5 w-3.5" />
+                        <span className="truncate">{radioLabel}</span>
+                      </p>
+                    )}
                     <h1
                       className="wrap-break-word text-2xl font-semibold leading-tight tracking-tight md:text-[32px]"
                       title={title}
@@ -309,6 +380,33 @@ export function FullscreenPlayer({
                         onNavigate={onClose}
                       />
                     </p>
+                    {signalBadge ? (
+                      <div className="mt-4 flex min-w-0">{signalBadge}</div>
+                    ) : null}
+                    {feedback && <div className="mt-4 flex">{feedback}</div>}
+                    {live && (livePlaying?.history.length ?? 0) > 0 && (
+                      <div className="mt-6">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+                          Earlier on {title}
+                        </p>
+                        <ol className="mt-2 space-y-1 text-sm text-zinc-400">
+                          {livePlaying!.history.slice(0, 4).map((item) => (
+                            <li
+                              className="truncate"
+                              key={`${item.at}-${item.raw}`}
+                            >
+                              {liveTitleText(item)}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                    {streamingSource && (
+                      <div className="mt-4 flex items-center gap-2.5">
+                        <SourceBadge provider={streamingSource.provider} />
+                        <DeliveredFormat songId={songId} />
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -319,18 +417,28 @@ export function FullscreenPlayer({
                   {title}
                 </p>
               )}
-              <Timeline
-                className="mb-3 flex w-full"
-                currentTime={currentTime}
-                duration={duration}
-                isPlaying={isPlaying}
-                readPosition={readPosition}
-                onChange={onSeek}
-                playbackRate={playbackRate}
-              />
+              {live ? (
+                <LiveTimeline
+                  className="mb-3 flex w-full"
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
+                  playing={livePlaying}
+                />
+              ) : (
+                <Timeline
+                  className="mb-3 flex w-full"
+                  currentTime={currentTime}
+                  duration={duration}
+                  isPlaying={isPlaying}
+                  readPosition={readPosition}
+                  onChange={onSeek}
+                  playbackRate={playbackRate}
+                />
+              )}
               <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
                 <button
                   aria-label="Lyrics"
+                  disabled={live}
                   aria-pressed={lyricsOpen}
                   className={`flex h-9 w-fit items-center gap-2 rounded-full px-3 text-xs transition-colors ${lyricsOpen ? "bg-white/8 text-white" : "text-zinc-500 hover:bg-white/4 hover:text-zinc-200"}`}
                   onClick={onOpenLyrics}
@@ -354,6 +462,7 @@ export function FullscreenPlayer({
                   >
                     <AudioLines className="h-4 w-4" />
                   </ActionButton>
+                  {zonePicker}
                   <div className="hidden sm:block">
                     <VolumeControl
                       muted={muted}
@@ -370,10 +479,12 @@ export function FullscreenPlayer({
                       {queueOpen ? "Now playing" : "Queue"}
                     </DropdownMenuItem>
                     <DropdownMenuCheckboxItem
-                      checked={looping}
+                      checked={
+                        (repeatMode ?? (looping ? "one" : "off")) !== "off"
+                      }
                       onCheckedChange={onToggleLoop}
                     >
-                      Repeat
+                      {repeatModeLabel(repeatMode ?? (looping ? "one" : "off"))}
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel>Sound</DropdownMenuLabel>

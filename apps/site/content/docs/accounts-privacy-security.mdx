@@ -1,6 +1,6 @@
 ---
 title: Accounts, privacy, and security
-description: Permissions, passwords, sessions, external requests, and Parson's security boundary.
+description: Permissions, passwords, sessions, external requests, and Mujin Music's security boundary.
 ---
 
 ## Accounts and permissions
@@ -9,9 +9,9 @@ The first account is an **administrator**. Administrators can create additional 
 
 ## Passwords and reset
 
-Passwords are salted and hashed with Argon2. Parson never stores the original password. A signed-in user can change their password by providing the current one; doing so revokes existing sessions.
+Passwords are salted and hashed with Argon2. Mujin Music never stores the original password. A signed-in user can change their password by providing the current one; doing so revokes existing sessions.
 
-There is no email-based or built-in forgotten-password reset because there is no Parson cloud identity. An administrator should create a replacement account, or an operator can recover the database using documented administrative tooling when available. Do not edit password hashes by hand.
+There is no email-based or built-in forgotten-password reset because there is no Mujin Music cloud identity. An administrator should create a replacement account, or an operator can recover the database using documented administrative tooling when available. Do not edit password hashes by hand.
 
 ## Sessions and devices
 
@@ -21,19 +21,20 @@ Access and refresh tokens are signed with the private key in `Secrets\session.ke
 
 ### What stays local
 
-Music files, file paths, tags, artwork, accounts, password hashes, sessions, playlists, likes, history, recommendations, queues, search indexes, and diagnostics stay on the Parson host or in the connected browser's local state.
+Music files, file paths, tags, artwork, accounts, password hashes, sessions, playlists, likes, history, recommendations, queues, search indexes, and diagnostics stay on the Mujin Music host or in the connected browser's local state.
 
-### External requests Parson may make
+### External requests Mujin Music may make
 
 - Opening uncached lyrics sends track title, artist, album, and duration to `lrclib.net`.
 - Choosing **Check and install updates** contacts the official GitHub release endpoint, unless an operator configured a custom update manifest.
 - Google Cast uses Google's Cast infrastructure when you choose a Cast target.
+- **Online metadata** is off by default. When an administrator turns it on in **Settings → Library**, the server sends album titles, artist names and MusicBrainz ids to `musicbrainz.org` (at most one request a second), `wikidata.org` (including the Wikidata Query Service at `query.wikidata.org`), `wikipedia.org`, `commons.wikimedia.org` and `coverartarchive.org` to add credits, biographies, album background and reviews, influences and followers, freely licensed artist photos, and front covers for albums that have no artwork of their own. Nothing about your listening, accounts or files is sent. Wikipedia text is shown with its article link and CC BY-SA license.
 
-Parson has **no usage analytics, telemetry upload, or automatic crash-reporting service**. The term “playback telemetry” in source code means local listening events used for your history and recommendations; those events are not sent to ParsonLabs.
+Mujin Music has **no usage analytics, telemetry upload, or automatic crash-reporting service**. The term “playback telemetry” in source code means local listening events used for your history and recommendations; those events are not sent to the Mujin Music maintainers or to ParsonLabs (the upstream Parson project).
 
-### What ParsonLabs can see
+### What the Mujin Music maintainers can see
 
-ParsonLabs cannot browse your library, accounts, history, or logs through a built-in service. It can see ordinary download traffic to infrastructure it operates and information you deliberately include in a support request or vulnerability report. LRCLIB, GitHub, your VPN/proxy provider, and Cast infrastructure have their own network visibility.
+The Mujin Music maintainers (like ParsonLabs upstream) cannot browse your library, accounts, history, or logs through a built-in service. It can see ordinary download traffic to infrastructure it operates and information you deliberately include in a support request or vulnerability report. LRCLIB, GitHub, MusicBrainz, the Wikimedia Foundation, your VPN/proxy provider, and Cast infrastructure have their own network visibility.
 
 ## Security updates and vulnerabilities
 

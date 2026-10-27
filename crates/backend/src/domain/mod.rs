@@ -38,6 +38,100 @@ pub struct Song {
     pub track_number: u16,
     pub path: String,
     pub duration: f64,
+    /// Technical properties of the primary file, when the indexer read them.
+    #[serde(default)]
+    pub audio: Option<AudioProperties>,
+    /// Contributor credits (composer, producer, performer, ...) from tags.
+    #[serde(default)]
+    pub credits: Vec<Credit>,
+    #[serde(default)]
+    pub isrc: Option<String>,
+    /// Record label tagged on the primary file.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// ReplayGain loudness tags of the primary file.
+    #[serde(default)]
+    pub loudness: Option<Loudness>,
+}
+
+/// ReplayGain loudness tags. Gains are in dB relative to the ReplayGain 2.0
+/// reference (-18 LUFS); peaks are linear sample peaks (1.0 = full scale).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Loudness {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_gain_db: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_peak: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_gain_db: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_peak: Option<f32>,
+}
+
+// Parsed values are always finite, so equality is total.
+impl Eq for Loudness {}
+
+impl Loudness {
+    pub fn is_empty(&self) -> bool {
+        self.track_gain_db.is_none() && self.album_gain_db.is_none()
+    }
+
+    /// `Some(self)` when a gain is present.
+    pub fn non_empty(self) -> Option<Self> {
+        (!self.is_empty()).then_some(self)
+    }
+}
+
+/// Technical properties of an audio file, as read from its stream headers.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioProperties {
+    /// Codec, e.g. `flac`, `alac`, `aac`, `mp3`, `vorbis`, `opus`, `pcm`.
+    pub codec: Option<String>,
+    /// Container, e.g. `flac`, `mp4`, `mp3`, `ogg`, `wav`, `aiff`.
+    pub container: Option<String>,
+    /// Sample rate in Hz.
+    pub sample_rate: Option<u32>,
+    /// Bits per sample for lossless and PCM codecs.
+    pub bit_depth: Option<u8>,
+    pub channels: Option<u8>,
+    /// Average audio bitrate in kbps.
+    pub bitrate_kbps: Option<u32>,
+    /// Whether the codec is lossless (`None` when the codec is unknown).
+    pub lossless: Option<bool>,
+}
+
+impl AudioProperties {
+    pub fn is_empty(&self) -> bool {
+        self.codec.is_none()
+            && self.container.is_none()
+            && self.sample_rate.is_none()
+            && self.bit_depth.is_none()
+            && self.channels.is_none()
+            && self.bitrate_kbps.is_none()
+    }
+}
+
+/// Whether a codec name reported in [`AudioProperties::codec`] is lossless.
+pub fn codec_is_lossless(codec: &str) -> Option<bool> {
+    match codec {
+        "flac" | "alac" | "pcm" | "pcm_float" | "wavpack" | "ape" | "tta" | "tak" | "dsd"
+        | "dst" | "wma_lossless" | "truehd" | "mlp" => Some(true),
+        "mp3" | "aac" | "vorbis" | "opus" | "speex" | "musepack" | "ac3" | "eac3" | "wma"
+        | "wma_pro" | "dts" => Some(false),
+        _ => None,
+    }
+}
+
+/// A contributor credit on a track.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Credit {
+    pub artist_id: String,
+    pub name: String,
+    /// Canonical role, e.g. `composer`, `conductor`, `producer`, `performer`.
+    pub role: String,
+    /// Instrument for `performer` credits, lower case, when tagged.
+    #[serde(default)]
+    pub instrument: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -14,16 +14,17 @@ function routeTitle(pathname: string, query: string) {
   if (pathname === "/library") return "Library";
   if (pathname === "/album") return "Album";
   if (pathname === "/artist") return "Artist";
+  if (pathname === "/genre") return "Genres";
   if (pathname === "/profile") return "Profile";
   if (pathname === "/login") return "Log in";
   if (pathname === "/connect") return "Choose a library";
-  if (pathname === "/setup") return "Set up Parson";
+  if (pathname === "/setup") return "Set up Mujin Music";
   if (pathname === "/settings") return "Settings";
   if (pathname === "/search") {
     const term = new URLSearchParams(query).get("q")?.trim();
     return term ? `Search: ${term}` : "Search";
   }
-  return "Parson";
+  return "Mujin Music";
 }
 
 export function usePageTitle(title?: string | null) {

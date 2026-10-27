@@ -3,7 +3,7 @@ title: Troubleshooting
 description: Find the symptom, try the quick fix, then inspect only what matters.
 ---
 
-## Parson cannot find my music
+## Mujin Music cannot find my music
 
 **Cause →** The selected path is wrong, unreadable by the Windows account, excluded, or contains no supported extensions.
 
@@ -15,7 +15,7 @@ description: Find the symptom, try the quick fix, then inspect only what matters
 
 **Cause →** Album-title or album-artist tags disagree, or one group has an edition qualifier that correctly makes it a separate release.
 
-**Quick fix →** Compare **Album** and **Album artist** across the tracks, correct the outlier in Parson's metadata editor or your tagger, then refresh.
+**Quick fix →** Compare **Album** and **Album artist** across the tracks, correct the outlier in Mujin Music's metadata editor or your tagger, then refresh.
 
 **Deeper diagnostics →** Compare disc numbers, release dates, MusicBrainz release IDs, normalized spelling, and folder boundaries. Keep true deluxe/remastered editions distinct.
 
@@ -57,9 +57,9 @@ description: Find the symptom, try the quick fix, then inspect only what matters
 
 **Quick fix →** Verify title, artist, album, and duration, then try later.
 
-**Deeper diagnostics →** Check host access to `lrclib.net` and server logs for `lyrics_not_found`, `lyrics_provider_unavailable`, or capacity errors. Inspect `Cache\Lyrics\lyrics.db` only with Parson stopped.
+**Deeper diagnostics →** Check host access to `lrclib.net` and server logs for `lyrics_not_found`, `lyrics_provider_unavailable`, or capacity errors. Inspect `Cache\Lyrics\lyrics.db` only with Mujin Music stopped.
 
-## Another device cannot open Parson
+## Another device cannot open Mujin Music
 
 **Cause →** Devices are on different networks, the hostname does not resolve, client isolation is enabled, or a firewall blocks port `1993`.
 
@@ -73,17 +73,17 @@ description: Find the symptom, try the quick fix, then inspect only what matters
 
 **Quick fix →** Wake the host, verify the VPN/proxy, and open the configured HTTPS origin in a browser.
 
-**Deeper diagnostics →** Test `/health` and `/health/ready`, inspect proxy and Parson logs, confirm `PARSON_PUBLIC_URL`, certificate validity, forwarded host, WebSocket upgrades, and firewall rules.
+**Deeper diagnostics →** Test `/health` and `/health/ready`, inspect proxy and Mujin Music logs, confirm `PARSON_PUBLIC_URL`, certificate validity, forwarded host, WebSocket upgrades, and firewall rules.
 
 ## Scan appears stuck
 
 **Cause →** A large cold scan, slow/network storage, an in-progress copy, a difficult file, or database contention can make a phase look quiet.
 
-**Quick fix →** Leave Parson running and check whether the file count or phase changes. Do not repeatedly restart a healthy scan.
+**Quick fix →** Leave Mujin Music running and check whether the file count or phase changes. Do not repeatedly restart a healthy scan.
 
 **Deeper diagnostics →** Inspect scan events and logs for enumeration, parsing, database staging, commit, inference, artwork, and export timings. Look for one unreadable file or an unavailable root.
 
-## Parson uses too much memory or CPU
+## Mujin Music uses too much memory or CPU
 
 **Cause →** Initial parsing, artwork processing, transcoding, or a very large search/catalog build is active.
 
@@ -95,14 +95,14 @@ description: Find the symptom, try the quick fix, then inspect only what matters
 
 **Cause →** The embedded server is still starting, Electron failed to load the product surface, or static assets from different versions are mixed.
 
-**Quick fix →** Exit Parson from the notification area, start it again, and open `http://127.0.0.1:1993` in a browser.
+**Quick fix →** Exit Mujin Music from the notification area, start it again, and open `http://127.0.0.1:1993` in a browser.
 
 **Deeper diagnostics →** Check `Logs`, `/health/ready`, free disk space, and antivirus quarantine. Reinstall the same version without deleting the data directory.
 
 ## The library folder is offline
 
-**Cause →** An external drive, mapped share, NAS, or its credentials are unavailable to the account running Parson.
+**Cause →** An external drive, mapped share, NAS, or its credentials are unavailable to the account running Mujin Music.
 
 **Quick fix →** Reconnect the drive/share using the same path and refresh that root.
 
-**Deeper diagnostics →** Verify drive letter or UNC mapping after sign-in, service-account permissions, sleep behavior, and network availability. Parson preserves the prior catalog, but those tracks cannot stream until the source returns.
+**Deeper diagnostics →** Verify drive letter or UNC mapping after sign-in, service-account permissions, sleep behavior, and network availability. Mujin Music preserves the prior catalog, but those tracks cannot stream until the source returns.

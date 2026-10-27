@@ -28,7 +28,7 @@ macro_rules! stable_identifier {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
                 {
-                    return Err("Parson IDs must be non-empty URL-safe strings");
+                    return Err("Mujin Music IDs must be non-empty URL-safe strings");
                 }
                 Ok(Self(value))
             }

@@ -12,7 +12,7 @@ import {
 function updateMessage(state: DesktopUpdateState) {
   switch (state.status) {
     case "ready":
-      return `Parson ${state.availableVersion} is ready`;
+      return `Mujin Music ${state.availableVersion} is ready`;
     case "downloading": {
       const progress = state.percent == null ? "" : ` · ${state.percent}%`;
       return `Downloading ${state.availableVersion}${progress}`;
@@ -22,7 +22,7 @@ function updateMessage(state: DesktopUpdateState) {
     case "current":
       return "Up to date";
     default:
-      return state.message || `Parson ${state.version}`;
+      return state.message || `Mujin Music ${state.version}`;
   }
 }
 
@@ -70,7 +70,7 @@ export default function UpdateSettings() {
         setState(next);
       }
     } catch {
-      setError("Could not update Parson. Try again.");
+      setError("Could not update Mujin Music. Try again.");
     } finally {
       setBusy(false);
     }

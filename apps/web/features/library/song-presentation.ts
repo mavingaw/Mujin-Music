@@ -1,5 +1,7 @@
+// The credit after "feat." starts with a non-space, so the spaces before it
+// can only be matched one way (no backtracking on long runs of spaces).
 const featuredArtistQualifier =
-  /[\[(] *(?:feat(?:uring)?\.?|ft\.?) +[^()[\]]+[)\]]/giu;
+  /[\[(] *(?:feat(?:uring)?\.?|ft\.?) +[^()[\]\s][^()[\]]*[)\]]/giu;
 const explicitQualifier =
   /[\[(] *explicit(?: +(?:ver\.?|version|edit))? *[)\]]/giu;
 

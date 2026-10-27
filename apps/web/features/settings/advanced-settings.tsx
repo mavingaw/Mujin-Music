@@ -10,7 +10,7 @@ export default function AdvancedSettings() {
   const rows = [
     ["Port", origin?.port || (origin?.protocol === "https:" ? "443" : "80")],
     ["Network interface", origin?.hostname || "—"],
-    ["Database location", "Managed by Parson"],
+    ["Database location", "Managed by Mujin Music"],
     ["Cache", "Managed automatically"],
   ];
 

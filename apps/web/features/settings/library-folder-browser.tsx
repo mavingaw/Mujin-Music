@@ -15,15 +15,19 @@ interface Directory {
 export function LibraryFolderBrowser({
   busy,
   initialDirectory,
+  fallbackDirectories = [],
   onCancel,
   onSelect,
 }: {
   busy: boolean;
   initialDirectory: string;
+  /** Tried in order when the folder before it can't be listed. */
+  fallbackDirectories?: string[];
   onCancel: () => void;
   onSelect: (path: string) => void;
 }) {
   const [currentDirectory, setCurrentDirectory] = useState(initialDirectory);
+  const startChain = useRef([initialDirectory, ...fallbackDirectories]);
   const [directories, setDirectories] = useState<Directory[]>([]);
   const [directoryError, setDirectoryError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -41,6 +45,13 @@ export function LibraryFolderBrowser({
         setDirectoryError(false);
       } catch {
         if (requestId !== request.current) return;
+        const chain = startChain.current;
+        const position = chain.indexOf(path);
+        if (position >= 0 && position < chain.length - 1) {
+          // The starting folder is gone: open the next one up instead.
+          setCurrentDirectory(chain[position + 1] ?? "/");
+          return;
+        }
         setDirectories([]);
         setDirectoryError(true);
       } finally {

@@ -62,7 +62,7 @@ export function CastOutputButton({ menuItem = false }: { menuItem?: boolean }) {
                     {session.receiver_name}
                   </div>
                   <div className="text-xs capitalize text-emerald-300/70">
-                    {session.status} · controlled by Parson
+                    {session.status} · controlled by Mujin Music
                   </div>
                 </div>
                 <button

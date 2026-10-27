@@ -1,0 +1,1634 @@
+//! Zone data model shared by the HTTP API and the zone service.
+
+use serde::{Deserialize, Serialize};
+
+/// Most songs a zone queue carries.
+pub const MAX_ZONE_QUEUE_ITEMS: usize = 500;
+/// Most tracks mapped onto a Sonos queue at once (a window around the
+/// current position; the rest follows when the window is reloaded).
+pub const MAX_SONOS_QUEUE_ITEMS: usize = 100;
+/// Roon parity: a sleep timer that expires near the end of a track lets the
+/// track finish when it has at most this much left.
+pub const SLEEP_FINISH_TRACK_WINDOW_MS: i64 = 5 * 60 * 1_000;
+
+pub const LINKED_SYNC_NOTE: &str = "Linked zones start together and follow the same controls, but they are not sample-synced: expect small timing differences between rooms.";
+pub const SONOS_SYNC_NOTE: &str =
+    "Native Sonos group: the rooms play sample-synced, coordinated by the first room.";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneKind {
+    Web,
+    Desktop,
+    Mobile,
+    Chromecast,
+    Sonos,
+    /// A UPnP/DLNA media renderer on the network.
+    Upnp,
+    /// An audio output (USB DAC, built-in, HDMI) of the machine running the
+    /// Parson server, normally the desktop app's own computer.
+    Device,
+    /// An audio output of another machine running Parson Bridge.
+    Bridge,
+    /// An AirPlay receiver (RAOP).
+    Airplay,
+    Linked,
+}
+
+impl ZoneKind {
+    /// Zones only group natively within one ecosystem.
+    pub fn ecosystem(self) -> &'static str {
+        match self {
+            Self::Web | Self::Desktop | Self::Mobile => "parson",
+            Self::Chromecast => "chromecast",
+            Self::Sonos => "sonos",
+            Self::Upnp => "upnp",
+            Self::Device => "device",
+            Self::Bridge => "bridge",
+            Self::Airplay => "airplay",
+            Self::Linked => "linked",
+        }
+    }
+
+    /// Zones whose queue the server holds and plays track by track.
+    pub fn is_hosted(self) -> bool {
+        matches!(
+            self,
+            Self::Upnp | Self::Device | Self::Bridge | Self::Airplay
+        )
+    }
+
+    pub fn is_client(self) -> bool {
+        matches!(self, Self::Web | Self::Desktop | Self::Mobile)
+    }
+
+    /// What the zone is, in words, e.g. `Sonos room`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Web => "Web browser",
+            Self::Desktop => "Desktop app",
+            Self::Mobile => "Phone",
+            Self::Chromecast => "Chromecast",
+            Self::Sonos => "Sonos room",
+            Self::Upnp => "UPnP renderer",
+            Self::Device => "Audio device",
+            Self::Bridge => "Mujin Bridge device",
+            Self::Airplay => "AirPlay receiver",
+            Self::Linked => "Linked zones",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneStatus {
+    Playing,
+    Paused,
+    Buffering,
+    Stopped,
+    Idle,
+    Unavailable,
+    /// Switched off from a remote (Home Assistant's turn_off): playback
+    /// stopped and the device released; the queue stays for `wake`.
+    Standby,
+}
+
+impl ZoneStatus {
+    pub fn is_playing(self) -> bool {
+        matches!(self, Self::Playing | Self::Buffering)
+    }
+}
+
+/// What is playing on a zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneSource {
+    /// Nothing queued.
+    None,
+    /// A Parson queue.
+    Parson,
+    /// Something another app started (for example the Sonos app).
+    External,
+}
+
+/// Repeat mode of a zone queue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    /// Start the queue again after the last track.
+    All,
+    /// Repeat the current track.
+    One,
+}
+
+impl RepeatMode {
+    /// Sonos AVTransport `PlayMode` for this repeat mode. Parson shuffles
+    /// its own queue (so Sonos and Parson agree on the order), so shuffle
+    /// modes are never sent.
+    pub fn sonos_play_mode(self) -> &'static str {
+        match self {
+            Self::Off => "NORMAL",
+            Self::All => "REPEAT_ALL",
+            Self::One => "REPEAT_ONE",
+        }
+    }
+
+    /// Repeat mode and whether Sonos itself shuffles, from a `PlayMode`.
+    pub fn from_sonos_play_mode(mode: &str) -> (Self, bool) {
+        match mode {
+            "REPEAT_ALL" => (Self::All, false),
+            "REPEAT_ONE" => (Self::One, false),
+            "SHUFFLE" => (Self::All, true),
+            "SHUFFLE_NOREPEAT" => (Self::Off, true),
+            "SHUFFLE_REPEAT_ONE" => (Self::One, true),
+            _ => (Self::Off, false),
+        }
+    }
+}
+
+/// Per-zone volume limits (Roon's Volume Limits): a soft comfort limit the
+/// slider stops at (the +/- buttons may go past it) and a hard safety range
+/// nothing can leave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VolumeLimits {
+    pub comfort: Option<u8>,
+    pub safety_min: Option<u8>,
+    pub safety_max: Option<u8>,
+}
+
+impl VolumeLimits {
+    pub fn min(self) -> u8 {
+        self.safety_min.unwrap_or(0).min(100)
+    }
+
+    pub fn max(self) -> u8 {
+        self.safety_max.unwrap_or(100).min(100).max(self.min())
+    }
+
+    /// Where an absolute (slider) change stops.
+    pub fn slider_max(self) -> u8 {
+        self.comfort
+            .map(|comfort| comfort.clamp(self.min(), self.max()))
+            .unwrap_or_else(|| self.max())
+    }
+
+    /// Clamps a requested level. `step` requests (the +/- buttons, relative
+    /// changes) may pass the comfort limit; absolute ones stop at it unless
+    /// `above_comfort` allows it. The safety range always applies.
+    pub fn clamp(self, requested: i16, step: bool, above_comfort: bool) -> u8 {
+        let ceiling = if step || above_comfort {
+            self.max()
+        } else {
+            self.slider_max()
+        };
+        requested.clamp(i16::from(self.min()), i16::from(ceiling)) as u8
+    }
+
+    /// The level to move to when the current level is outside the safety
+    /// range (after the limits were tightened).
+    pub fn enforce(self, level: u8) -> Option<u8> {
+        if level > self.max() {
+            Some(self.max())
+        } else if level < self.min() {
+            Some(self.min())
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneVolume {
+    /// 0..=100.
+    pub level: u8,
+    pub muted: bool,
+    /// Hard safety minimum (0 when unset).
+    pub min: u8,
+    /// Hard safety maximum (100 when unset).
+    pub max: u8,
+    /// Soft comfort limit: volume sliders stop here, +/- may go past it.
+    pub comfort: Option<u8>,
+    /// The range the device itself reports (read-only).
+    pub device_min: u8,
+    pub device_max: u8,
+    pub step: u8,
+    /// The device's own volume scale, when it reports one (a DAC's mixer in
+    /// dB, a renderer's 0..30 steps).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_range: Option<DeviceVolumeRange>,
+    /// Who turns the volume. Anything but `parson` means the zone's volume
+    /// requests go out as events (for an amplifier on an IR blaster) and
+    /// `level` is Parson's running estimate, not a device reading.
+    pub control: VolumeControl,
+}
+
+/// Who carries out a zone's volume changes (Roon's volume control setting).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeControl {
+    /// Parson sets the device's volume (hardware, software or fixed).
+    #[default]
+    Parson,
+    /// Home Assistant: the server sends each volume request as an event
+    /// that a Home Assistant automation carries out.
+    HomeAssistant,
+}
+
+impl VolumeControl {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Parson => "parson",
+            Self::HomeAssistant => "home_assistant",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "parson" => Some(Self::Parson),
+            "home_assistant" => Some(Self::HomeAssistant),
+            _ => None,
+        }
+    }
+}
+
+/// A volume change for a zone whose volume is delegated: what the listener
+/// asked for, sent out as an event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct VolumeRequest {
+    pub zone_id: String,
+    /// `volume_up`, `volume_down`, `volume_set`, `mute_on` or `mute_off`.
+    pub action: &'static str,
+    /// Size of an up/down step on Parson's 0..=100 scale (0 otherwise).
+    pub step: u8,
+    /// Parson's estimate of the level after the change, 0..=100.
+    pub level: u8,
+    pub muted: bool,
+}
+
+/// A volume scale as the device reports it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeviceVolumeRange {
+    pub min: f32,
+    pub max: f32,
+    pub step: f32,
+    /// `dB` or `steps`.
+    pub unit: &'static str,
+    /// The device changes its own gain (a DAC mixer, a renderer's
+    /// amplifier), so the samples Parson sends stay untouched.
+    pub hardware: bool,
+    /// The device's current value on this scale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<f32>,
+}
+
+impl ZoneVolume {
+    pub fn new(level: u8, muted: bool, limits: VolumeLimits) -> Self {
+        Self {
+            level: level.min(100),
+            muted,
+            min: limits.min(),
+            max: limits.max(),
+            comfort: limits.comfort.map(|_| limits.slider_max()),
+            device_min: 0,
+            device_max: 100,
+            step: 2,
+            device_range: None,
+            control: VolumeControl::Parson,
+        }
+    }
+}
+
+/// Roon's volume leveling modes. `Auto` levels by album while an album plays
+/// in order and by track otherwise.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LevelingMode {
+    #[default]
+    Off,
+    Auto,
+    Track,
+    Album,
+}
+
+impl LevelingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Track => "track",
+            Self::Album => "album",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "auto" => Some(Self::Auto),
+            "track" => Some(Self::Track),
+            "album" => Some(Self::Album),
+            _ => None,
+        }
+    }
+}
+
+/// Icons a zone can wear (names shared with the web and mobile apps).
+pub const ZONE_ICONS: &[&str] = &[
+    "speaker",
+    "headphones",
+    "monitor",
+    "laptop",
+    "phone",
+    "tablet",
+    "tv",
+    "radio",
+    "turntable",
+    "amplifier",
+    "car",
+    "bed",
+    "sofa",
+    "kitchen",
+    "office",
+    "garden",
+    "music",
+];
+
+pub const CROSSFADE_MAX_SECONDS: u8 = 12;
+pub const LEVELING_TARGET_RANGE: std::ops::RangeInclusive<i8> = -30..=-5;
+pub const LEVELING_ADJUSTMENT_RANGE: std::ops::RangeInclusive<i8> = -12..=12;
+/// ReplayGain 2.0 reference loudness.
+pub const DEFAULT_LEVELING_TARGET_LUFS: i8 = -18;
+
+/// Which settings a zone can take.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ZoneSettingsSupport {
+    pub crossfade: bool,
+    pub leveling: bool,
+    pub volume_limits: bool,
+    /// Only Parson apps can be private (they belong to one device).
+    pub private: bool,
+    /// Per-zone DSP (headroom, parametric EQ, crossfeed, convolution).
+    pub dsp: bool,
+    /// How DSD reaches the device can be chosen (device setup).
+    pub dsd: bool,
+    /// Exclusive (bit-perfect) access to an audio device.
+    pub exclusive: bool,
+    /// Volume modes this zone can use; empty when fixed by the device.
+    pub volume_modes: Vec<VolumeMode>,
+    /// A maximum sample rate and bit depth can be set (device setup).
+    pub max_format: bool,
+    /// The volume can be handed to Home Assistant.
+    pub volume_control: bool,
+}
+
+/// How a server-driven zone changes volume.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeMode {
+    /// The device's own volume control (a DAC mixer or the renderer's
+    /// amplifier): samples stay bit-perfect.
+    #[default]
+    Hardware,
+    /// Parson scales the samples: works everywhere, not bit-perfect.
+    Software,
+    /// No volume control: bit-perfect, set the volume on the amplifier.
+    Fixed,
+}
+
+impl VolumeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hardware => "hardware",
+            Self::Software => "software",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hardware" => Some(Self::Hardware),
+            "software" => Some(Self::Software),
+            "fixed" => Some(Self::Fixed),
+            _ => None,
+        }
+    }
+}
+
+/// Sample rates a maximum can be set to.
+pub const SAMPLE_RATE_CHOICES: &[u32] = &[
+    44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000,
+];
+pub const BIT_DEPTH_CHOICES: &[u8] = &[16, 24, 32];
+pub const DSD_RATE_CHOICES: &[u32] = &parson_output::DSD_RATES;
+
+/// A zone's DSP chain: the server runs it for every zone it plays (devices,
+/// bridges, AirPlay, and the streams it serves to UPnP renderers, Sonos and
+/// Cast), and the web and desktop apps run the same settings for their own
+/// zone.
+pub use parson_output::DsdStrategy;
+pub use parson_output::dsp::DspSettings;
+
+/// Short description of a DSP chain for signal paths, e.g. `Headroom
+/// −3.0 dB, EQ 2 bands, Crossfeed (medium)`; empty when nothing processes.
+pub fn dsp_summary(dsp: &DspSettings) -> String {
+    let mut parts = Vec::new();
+    if let Some(headroom) = dsp.headroom_db() {
+        parts.push(format!(
+            "Headroom {}",
+            parson_output::dsp::format_db(headroom)
+        ));
+    }
+    let bands = dsp.active_bands();
+    if !bands.is_empty() {
+        parts.push(format!(
+            "EQ {}",
+            bands
+                .iter()
+                .map(parson_output::dsp::EqBand::describe)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if let Some(strength) = dsp.crossfeed() {
+        parts.push(format!("Crossfeed ({})", strength.label().to_lowercase()));
+    }
+    if dsp.convolution_filter().is_some() {
+        parts.push("Convolution".to_string());
+    }
+    parts.join(", ")
+}
+
+/// What a zone can play natively, and what happens to everything else.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneOutputInfo {
+    pub max_sample_rate: u32,
+    pub max_bit_depth: u8,
+    /// Formats played as-is, e.g. `FLAC`, `MP3`.
+    pub formats: Vec<&'static str>,
+    /// "Plays up to X kHz/Y-bit, converts the rest" in words.
+    pub note: String,
+    /// Device zones: exclusive (bit-perfect) access.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclusive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_mode: Option<VolumeMode>,
+    /// The track playing now, from file to device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<ZoneStreamInfo>,
+}
+
+/// The signal path of the playing track.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneStreamInfo {
+    /// e.g. `FLAC 96 kHz/24-bit`.
+    pub source: String,
+    /// e.g. `96 kHz/24-bit to Topping E30 (exclusive)`.
+    pub output: String,
+    /// Nothing between the file and the device changed a sample.
+    pub bit_perfect: bool,
+    /// Processing on the way, in the order it happens, e.g.
+    /// `Sample rate conversion 96 kHz to 48 kHz`, `Volume leveling -6.4 dB`.
+    pub steps: Vec<String>,
+    /// Roon-style rating of the whole path.
+    pub quality: StreamQuality,
+    /// Every stage from the file to the device, as the server's pipeline
+    /// describes it (zones the server decodes for).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_path: Option<crate::signal_path::ServerSignalPath>,
+}
+
+/// How much of the original reaches the output, worst stage first: a lossy
+/// file anywhere makes the path `Low`; a conversion the output needs (rate,
+/// bit depth, software volume) makes it `High`; processing the listener
+/// asked for (leveling, DSP) makes it `Enhanced`; otherwise `Lossless`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamQuality {
+    Lossless,
+    Enhanced,
+    High,
+    Low,
+}
+
+impl StreamQuality {
+    pub fn rate(lossless_source: bool, converted: bool, enhanced: bool) -> Self {
+        if !lossless_source {
+            Self::Low
+        } else if converted {
+            Self::High
+        } else if enhanced {
+            Self::Enhanced
+        } else {
+            Self::Lossless
+        }
+    }
+}
+
+/// A zone's settings as clients show them.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneSettingsView {
+    /// The name the device or group gives itself.
+    pub default_name: String,
+    /// Whether `Zone::name` is a custom name.
+    pub custom_name: bool,
+    /// Custom icon; `None` uses the device's icon.
+    pub icon: Option<String>,
+    pub crossfade_seconds: u8,
+    pub leveling: LevelingMode,
+    pub leveling_target_lufs: i8,
+    pub leveling_adjustment_db: i8,
+    pub private: bool,
+    pub dsp: DspSettings,
+    pub exclusive: bool,
+    pub volume_mode: VolumeMode,
+    pub volume_control: VolumeControl,
+    pub max_sample_rate: Option<u32>,
+    pub max_bit_depth: Option<u8>,
+    /// How DSD files reach the device (Roon's DSD Playback Strategy).
+    pub dsd_strategy: DsdStrategy,
+    /// Highest DSD rate sent as DSD; above it DSD is converted to PCM.
+    pub max_dsd_rate: Option<u32>,
+    pub supports: ZoneSettingsSupport,
+    /// How the settings apply on this kind of zone.
+    pub notes: Vec<String>,
+}
+
+impl ZoneSettingsView {
+    pub fn unsupported(default_name: &str) -> Self {
+        Self {
+            default_name: default_name.to_string(),
+            custom_name: false,
+            icon: None,
+            crossfade_seconds: 0,
+            leveling: LevelingMode::Off,
+            leveling_target_lufs: DEFAULT_LEVELING_TARGET_LUFS,
+            leveling_adjustment_db: 0,
+            private: false,
+            dsp: DspSettings::default(),
+            exclusive: false,
+            volume_mode: VolumeMode::Hardware,
+            volume_control: VolumeControl::Parson,
+            max_sample_rate: None,
+            max_bit_depth: None,
+            dsd_strategy: DsdStrategy::Auto,
+            max_dsd_rate: None,
+            supports: ZoneSettingsSupport::default(),
+            notes: Vec::new(),
+        }
+    }
+}
+
+/// The icon a zone of `kind` shows by default.
+pub fn default_zone_icon(kind: ZoneKind) -> &'static str {
+    match kind {
+        ZoneKind::Web => "monitor",
+        ZoneKind::Desktop => "laptop",
+        ZoneKind::Mobile => "phone",
+        ZoneKind::Chromecast => "tv",
+        ZoneKind::Sonos => "speaker",
+        ZoneKind::Upnp => "radio",
+        ZoneKind::Device | ZoneKind::Bridge => "amplifier",
+        ZoneKind::Airplay => "speaker",
+        ZoneKind::Linked => "music",
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneGroupMember {
+    pub id: String,
+    pub name: String,
+    pub kind: ZoneKind,
+    pub volume: Option<ZoneVolume>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneGroupInfo {
+    pub id: String,
+    /// True only for ecosystem-native groups (Sonos) that play sample-synced.
+    pub synced: bool,
+    pub sync_note: &'static str,
+    pub members: Vec<ZoneGroupMember>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ZoneCapabilities {
+    pub transport: bool,
+    pub seek: bool,
+    pub volume: bool,
+    pub mute: bool,
+    /// Lists the queue.
+    pub queue: bool,
+    /// Reorders, removes and clears upcoming queue items.
+    pub queue_edit: bool,
+    pub repeat: bool,
+    pub shuffle: bool,
+    pub group: bool,
+    /// Can receive a transferred queue.
+    pub transfer_target: bool,
+    pub sleep_timer: bool,
+    /// Can be put in standby and woken (`standby`, `wake`).
+    pub standby: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneNowPlaying {
+    pub song_id: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_id: Option<String>,
+    pub cover_url: Option<String>,
+    pub duration_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneQueue {
+    pub song_ids: Vec<String>,
+    pub current_position: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneSleepTimer {
+    pub ends_at_ms: i64,
+    /// The timer ran out mid-track and is letting the track finish.
+    pub finishing_track: bool,
+    /// The timer ran out and the zone is fading out before it pauses.
+    pub fading: bool,
+}
+
+/// A place music plays: a Parson app, a Chromecast session, a Sonos group or
+/// a linked group of zones.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Zone {
+    pub id: String,
+    pub kind: ZoneKind,
+    pub ecosystem: &'static str,
+    pub name: String,
+    /// Icon name from [`ZONE_ICONS`]: the custom icon or the kind's default.
+    pub icon: String,
+    /// Device description, e.g. "Sonos Play:5" or "Chrome on macOS".
+    pub device: String,
+    pub status: ZoneStatus,
+    pub source: ZoneSource,
+    pub now_playing: Option<ZoneNowPlaying>,
+    pub queue: ZoneQueue,
+    pub repeat: RepeatMode,
+    pub shuffle: bool,
+    pub position_ms: i64,
+    pub duration_ms: i64,
+    pub volume: Option<ZoneVolume>,
+    pub group: Option<ZoneGroupInfo>,
+    /// The linked group this zone currently belongs to.
+    pub grouped_into: Option<String>,
+    pub capabilities: ZoneCapabilities,
+    pub sleep_timer: Option<ZoneSleepTimer>,
+    pub settings: ZoneSettingsView,
+    /// Format limits and the signal path of the playing track.
+    pub output: Option<ZoneOutputInfo>,
+    /// The physical outputs the zone plays through (Roon's endpoints): one
+    /// DAC or player, or every member of a group.
+    pub endpoints: Vec<ZoneEndpoint>,
+    /// Format limits or other facts worth showing, e.g. Sonos conversions.
+    pub notes: Vec<String>,
+}
+
+/// What the server's DSP chain can do for an endpoint.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct DspSupport {
+    /// The chain can run: the output's formats are known.
+    pub available: bool,
+    /// Why it cannot, when it cannot.
+    pub reason: Option<String>,
+    /// e.g. `Parson DSP, 64-bit float`.
+    pub engine: &'static str,
+    /// The output plays stereo, which crossfeed needs.
+    pub crossfeed: bool,
+    /// Fixed DSP sample rates the output accepts as configured.
+    pub sample_rates: Vec<u32>,
+    /// Depth the chain dithers to.
+    pub output_bits: Option<u8>,
+}
+
+/// One physical output of a zone: a DAC on this machine or a bridge, an
+/// AirPlay receiver, a UPnP or OpenHome player, a Sonos room, a phone.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ZoneEndpoint {
+    /// The zone the endpoint plays as on its own (a group member's id).
+    pub id: String,
+    pub name: String,
+    /// e.g. `USB · hw:1,0` or `Linn Klimax DS`.
+    pub detail: String,
+    /// The audio API or protocol, e.g. `ALSA`, `AirPlay`, `OpenHome`.
+    pub driver: Option<String>,
+    /// e.g. `ALSA hw:1,0 exclusive`, following the zone's Exclusive Mode.
+    pub mode_label: Option<String>,
+    /// How the driver addresses it, e.g. `hw:1,0` or `192.168.1.40:7000`.
+    pub address: Option<String>,
+    pub exclusive_capable: bool,
+    /// Why its formats could not be read, e.g. another app holds it.
+    pub probe_error: Option<String>,
+    /// Every standard rate, depth and DSD rate, supported or not, and
+    /// whether the zone's device setup allows it.
+    pub formats: Option<parson_output::FormatSupport>,
+    /// Sample containers it accepts, e.g. `24-bit packed`.
+    pub sample_formats: Vec<&'static str>,
+    pub channels: Option<(u8, u8)>,
+    /// Native DSD containers the driver accepts, e.g. `DSD_U32_BE`.
+    pub dsd_formats: Vec<&'static str>,
+    /// What the kernel reports about the hardware (USB id and speed).
+    pub hardware: Option<parson_output::procfs::HardwareInfo>,
+    /// A network player's protocol, address, identity and what it has been
+    /// tested against.
+    pub network: Option<parson_output::network::NetworkInfo>,
+    /// The server's DSP chain for this endpoint.
+    pub dsp_support: Option<DspSupport>,
+    /// The endpoint's own volume (a group member's, or the zone's).
+    pub volume: Option<ZoneVolume>,
+    /// The endpoint has its own picture (`GET /zones/{id}/icon`).
+    pub has_icon: bool,
+}
+
+impl ZoneEndpoint {
+    /// An endpoint known only by name (an app, a Sonos room, a Cast device).
+    pub fn named(id: &str, name: &str, detail: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            detail: detail.to_string(),
+            driver: None,
+            mode_label: None,
+            address: None,
+            exclusive_capable: false,
+            probe_error: None,
+            formats: None,
+            sample_formats: Vec::new(),
+            channels: None,
+            dsd_formats: Vec::new(),
+            hardware: None,
+            network: None,
+            dsp_support: None,
+            volume: None,
+            has_icon: false,
+        }
+    }
+
+    /// A device the server opens itself, under the zone's device setup.
+    pub fn for_device(
+        id: &str,
+        device: &parson_output::DeviceInfo,
+        settings: &parson_output::OutputSettings,
+    ) -> Self {
+        let caps = device.caps.as_ref();
+        Self {
+            id: id.to_string(),
+            name: device.name.clone(),
+            detail: device.detail.clone(),
+            driver: Some(device.driver.name().to_string()),
+            mode_label: Some(device.mode_label(settings.exclusive)),
+            address: device.address.clone(),
+            exclusive_capable: device.exclusive_capable,
+            probe_error: device.probe_error.clone(),
+            formats: caps.map(|caps| parson_output::format_support(caps, settings)),
+            sample_formats: caps
+                .map(|caps| {
+                    caps.sample_formats
+                        .iter()
+                        .map(|format| format.label())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            channels: caps.map(|caps| (caps.min_channels, caps.max_channels)),
+            dsd_formats: caps
+                .map(|caps| {
+                    caps.dsd_formats
+                        .iter()
+                        .map(|format| format.label())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            hardware: device.hardware.clone(),
+            has_icon: device
+                .network
+                .as_ref()
+                .is_some_and(|network| network.icon_url.is_some()),
+            network: device.network.clone(),
+            dsp_support: Some(device_dsp_support(device, settings)),
+            volume: None,
+        }
+    }
+}
+
+/// What the DSP chain can do on `device` under `settings`.
+pub fn device_dsp_support(
+    device: &parson_output::DeviceInfo,
+    settings: &parson_output::OutputSettings,
+) -> DspSupport {
+    let Some(caps) = device.caps.as_ref() else {
+        return DspSupport {
+            available: false,
+            reason: Some(match &device.probe_error {
+                Some(error) => format!(
+                    "Mujin Music could not read the formats {} accepts ({error}), so it cannot run the DSP engine for it.",
+                    device.name
+                ),
+                None => format!(
+                    "Mujin Music could not read the formats {} accepts, so it cannot run the DSP engine for it.",
+                    device.name
+                ),
+            }),
+            engine: crate::signal_path::SERVER_DSP_ENGINE,
+            crossfeed: false,
+            sample_rates: Vec::new(),
+            output_bits: None,
+        };
+    };
+    DspSupport {
+        available: true,
+        reason: None,
+        engine: crate::signal_path::SERVER_DSP_ENGINE,
+        crossfeed: caps.min_channels <= 2 && caps.max_channels >= 2,
+        sample_rates: parson_output::dsp::selectable_rates(caps, settings),
+        output_bits: caps
+            .bit_depths()
+            .into_iter()
+            .filter(|bits| settings.max_bit_depth.is_none_or(|max| *bits <= max))
+            .max(),
+    }
+}
+
+/// What the DSP chain does for a renderer Parson streams to: it runs on
+/// the server before the encoder, at the renderer's own format.
+pub fn served_dsp_support() -> DspSupport {
+    DspSupport {
+        available: true,
+        reason: None,
+        engine: crate::signal_path::SERVER_DSP_ENGINE,
+        crossfeed: true,
+        sample_rates: Vec::new(),
+        output_bits: None,
+    }
+}
+
+/// A remote-control command for a zone.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum ZoneCommand {
+    Play,
+    Pause,
+    PlayPause,
+    Stop,
+    Next,
+    Previous,
+    Seek {
+        position_ms: i64,
+    },
+    Jump {
+        queue_position: usize,
+    },
+    /// An absolute (slider) change: stops at the comfort limit.
+    SetVolume {
+        volume: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member_id: Option<String>,
+        /// Server-internal: a step or a restore that may pass the comfort
+        /// limit (never accepted from or sent to clients).
+        #[serde(skip)]
+        above_comfort: bool,
+    },
+    /// A +/- step: may pass the comfort limit, never the safety limits.
+    AdjustVolume {
+        delta: i8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member_id: Option<String>,
+    },
+    SetMute {
+        muted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member_id: Option<String>,
+    },
+    Load {
+        song_ids: Vec<String>,
+        #[serde(default)]
+        current_position: usize,
+        #[serde(default)]
+        position_ms: i64,
+        #[serde(default = "default_true")]
+        play: bool,
+    },
+    /// Moves an upcoming item. `song_id`, when given, must be the song at
+    /// `from`, so an edit made against a stale queue is refused.
+    MoveQueueItem {
+        from: usize,
+        to: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        song_id: Option<String>,
+    },
+    /// Removes one upcoming item.
+    RemoveQueueItem {
+        queue_position: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        song_id: Option<String>,
+    },
+    /// Removes everything after the current track.
+    ClearUpcoming,
+    /// Adds songs right after the current track (`next`, "Play next") or at
+    /// the end ("Add to queue"). On a zone with no queue it starts them.
+    AddToQueue {
+        song_ids: Vec<String>,
+        #[serde(default)]
+        next: bool,
+    },
+    SetRepeat {
+        mode: RepeatMode,
+    },
+    /// Shuffles the upcoming items; turning it off restores their order.
+    SetShuffle {
+        enabled: bool,
+    },
+    /// Stops playback and releases the device; the queue stays.
+    Standby,
+    /// Leaves standby (paused at the stored position, nothing plays).
+    Wake,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl ZoneCommand {
+    /// Rejects out-of-range arguments before anything reaches a device.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Seek { position_ms } if *position_ms < 0 => Err("invalid_seek_position"),
+            Self::SetVolume { volume, .. } if *volume > 100 => Err("invalid_volume"),
+            Self::Load {
+                song_ids,
+                current_position,
+                position_ms,
+                ..
+            } => {
+                if song_ids.is_empty() || song_ids.len() > MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_length")
+                } else if *current_position >= song_ids.len() {
+                    Err("invalid_queue_position")
+                } else if *position_ms < 0 {
+                    Err("invalid_seek_position")
+                } else if song_ids.iter().any(|id| id.is_empty() || id.len() > 256) {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::AddToQueue { song_ids, .. } => {
+                if song_ids.is_empty() || song_ids.len() > MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_length")
+                } else if song_ids.iter().any(|id| id.is_empty() || id.len() > 256) {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::MoveQueueItem { from, to, song_id } => {
+                if from == to {
+                    Err("invalid_queue_move")
+                } else if *from >= MAX_ZONE_QUEUE_ITEMS || *to >= MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_position")
+                } else if song_id
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > 256)
+                {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::RemoveQueueItem {
+                queue_position,
+                song_id,
+            } => {
+                if *queue_position >= MAX_ZONE_QUEUE_ITEMS {
+                    Err("invalid_queue_position")
+                } else if song_id
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > 256)
+                {
+                    Err("invalid_song_id")
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Commands that change the order or content of the queue.
+    pub fn is_queue_edit(&self) -> bool {
+        matches!(
+            self,
+            Self::MoveQueueItem { .. }
+                | Self::RemoveQueueItem { .. }
+                | Self::ClearUpcoming
+                | Self::AddToQueue { .. }
+                | Self::SetShuffle { .. }
+        )
+    }
+
+    pub fn member_id(&self) -> Option<&str> {
+        match self {
+            Self::SetVolume { member_id, .. }
+            | Self::AdjustVolume { member_id, .. }
+            | Self::SetMute { member_id, .. } => member_id.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+/// What a transfer carries from one zone to another.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaybackSnapshot {
+    pub song_ids: Vec<String>,
+    pub current_position: usize,
+    pub position_ms: i64,
+    pub playing: bool,
+}
+
+/// Errors surfaced to API callers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneError {
+    /// The zone does not exist or is not visible to the caller.
+    NotFound,
+    /// Something the request names (an album, a search) is not there; the
+    /// zone itself is fine. The code says what, e.g. `no_library_match`.
+    Missing(&'static str),
+    Invalid(&'static str),
+    Unsupported(&'static str),
+    Device(String),
+}
+
+impl std::fmt::Display for ZoneError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => formatter.write_str("zone_not_found"),
+            Self::Missing(code) | Self::Invalid(code) | Self::Unsupported(code) => {
+                formatter.write_str(code)
+            }
+            Self::Device(message) => write!(formatter, "device error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for ZoneError {}
+
+/// A queue edit applied to `song_ids`, as the Sonos driver needs to mirror
+/// it: which absolute positions changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QueueEdit {
+    Moved {
+        from: usize,
+        to: usize,
+    },
+    Removed {
+        position: usize,
+    },
+    /// `count` songs were inserted at `position` (play next, add to queue).
+    Inserted {
+        position: usize,
+        count: usize,
+    },
+    /// Everything after `current` changed (clear, shuffle, unshuffle).
+    UpcomingReplaced,
+    Unchanged,
+}
+
+/// Applies a queue-editing command to `song_ids` with the current track at
+/// `current`. Only upcoming items (after `current`) can move or be removed,
+/// as in Roon: the playing track and history stay put. `original` keeps the
+/// unshuffled order while shuffle is on.
+pub fn apply_queue_edit(
+    song_ids: &mut Vec<String>,
+    current: usize,
+    shuffle: &mut bool,
+    original: &mut Option<Vec<String>>,
+    command: &ZoneCommand,
+    random: &mut dyn FnMut(usize) -> usize,
+) -> Result<QueueEdit, ZoneError> {
+    let guard = |position: usize, song_id: &Option<String>| -> Result<(), ZoneError> {
+        match (song_ids.get(position), song_id) {
+            (None, _) => Err(ZoneError::Invalid("invalid_queue_position")),
+            (Some(found), Some(expected)) if found != expected => {
+                Err(ZoneError::Invalid("queue_changed"))
+            }
+            _ => Ok(()),
+        }
+    };
+    match command {
+        ZoneCommand::MoveQueueItem { from, to, song_id } => {
+            guard(*from, song_id)?;
+            if *to >= song_ids.len() {
+                return Err(ZoneError::Invalid("invalid_queue_position"));
+            }
+            if *from <= current || *to <= current {
+                return Err(ZoneError::Invalid("only_upcoming_items_move"));
+            }
+            let item = song_ids.remove(*from);
+            song_ids.insert(*to, item);
+            Ok(QueueEdit::Moved {
+                from: *from,
+                to: *to,
+            })
+        }
+        ZoneCommand::RemoveQueueItem {
+            queue_position,
+            song_id,
+        } => {
+            guard(*queue_position, song_id)?;
+            if *queue_position <= current {
+                return Err(ZoneError::Invalid("only_upcoming_items_remove"));
+            }
+            let removed = song_ids.remove(*queue_position);
+            forget_one(original, &removed, song_ids);
+            Ok(QueueEdit::Removed {
+                position: *queue_position,
+            })
+        }
+        ZoneCommand::AddToQueue {
+            song_ids: added,
+            next,
+        } => {
+            if song_ids.len() + added.len() > MAX_ZONE_QUEUE_ITEMS {
+                return Err(ZoneError::Invalid("queue_full"));
+            }
+            let position = if *next && !song_ids.is_empty() {
+                (current + 1).min(song_ids.len())
+            } else {
+                song_ids.len()
+            };
+            song_ids.splice(position..position, added.iter().cloned());
+            if let Some(order) = original {
+                // Turning shuffle off keeps them where they were added.
+                let at = if *next {
+                    song_ids
+                        .get(current)
+                        .and_then(|playing| order.iter().position(|id| id == playing))
+                        .map_or(order.len(), |index| index + 1)
+                } else {
+                    order.len()
+                };
+                order.splice(at..at, added.iter().cloned());
+            }
+            Ok(QueueEdit::Inserted {
+                position,
+                count: added.len(),
+            })
+        }
+        ZoneCommand::ClearUpcoming => {
+            if current + 1 >= song_ids.len() {
+                return Ok(QueueEdit::Unchanged);
+            }
+            song_ids.truncate(current + 1);
+            if let Some(original) = original {
+                // Keep only what is still queued, in original order.
+                let mut kept = song_ids.clone();
+                original.retain(|id| match kept.iter().position(|k| k == id) {
+                    Some(index) => {
+                        kept.remove(index);
+                        true
+                    }
+                    None => false,
+                });
+            }
+            Ok(QueueEdit::UpcomingReplaced)
+        }
+        ZoneCommand::SetShuffle { enabled } => {
+            if *enabled == *shuffle {
+                return Ok(QueueEdit::Unchanged);
+            }
+            *shuffle = *enabled;
+            let start = (current + 1).min(song_ids.len());
+            if *enabled {
+                *original = Some(song_ids.clone());
+                let upcoming = &mut song_ids[start..];
+                for index in (1..upcoming.len()).rev() {
+                    let target = random(index + 1).min(index);
+                    upcoming.swap(index, target);
+                }
+            } else if let Some(order) = original.take() {
+                // Upcoming items go back to their original relative order.
+                let rank = |id: &String, used: &mut [bool]| -> usize {
+                    order
+                        .iter()
+                        .enumerate()
+                        .position(|(index, candidate)| candidate == id && !used[index])
+                        .inspect(|&index| used[index] = true)
+                        .unwrap_or(usize::MAX)
+                };
+                let mut used = vec![false; order.len()];
+                // History and the current track claim their original slots first.
+                for id in &song_ids[..start] {
+                    rank(id, &mut used);
+                }
+                let mut upcoming: Vec<(usize, usize, String)> = song_ids[start..]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, id)| (rank(id, &mut used), index, id.clone()))
+                    .collect();
+                upcoming.sort();
+                song_ids.truncate(start);
+                song_ids.extend(upcoming.into_iter().map(|(_, _, id)| id));
+            }
+            Ok(QueueEdit::UpcomingReplaced)
+        }
+        _ => Ok(QueueEdit::Unchanged),
+    }
+}
+
+/// Drops one occurrence of `removed` from the unshuffled order, so turning
+/// shuffle off does not bring a removed song back.
+fn forget_one(original: &mut Option<Vec<String>>, removed: &str, remaining: &[String]) {
+    let Some(order) = original else {
+        return;
+    };
+    let still_queued = remaining.iter().filter(|id| *id == removed).count();
+    let in_order = order.iter().filter(|id| *id == removed).count();
+    if in_order > still_queued
+        && let Some(index) = order.iter().rposition(|id| id == removed)
+    {
+        order.remove(index);
+    }
+}
+
+/// Extrapolates a reported position to `now_ms` while playing.
+pub fn extrapolate_position(
+    position_ms: i64,
+    reported_at_ms: i64,
+    now_ms: i64,
+    playing: bool,
+    duration_ms: i64,
+) -> i64 {
+    let position = if playing {
+        position_ms + (now_ms - reported_at_ms).max(0)
+    } else {
+        position_ms
+    };
+    if duration_ms > 0 {
+        position.clamp(0, duration_ms)
+    } else {
+        position.max(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAX_ZONE_QUEUE_ITEMS, QueueEdit, RepeatMode, VolumeLimits, ZoneCommand, ZoneError,
+        ZoneVolume, apply_queue_edit, extrapolate_position,
+    };
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn play_next_goes_after_the_current_track_and_add_to_queue_at_the_end() {
+        let mut queue = ids(&["a", "b", "c"]);
+        let mut shuffle = false;
+        let mut original = None;
+        let mut random = |_: usize| 0;
+        let add = |song_ids: &[&str], next: bool| ZoneCommand::AddToQueue {
+            song_ids: ids(song_ids),
+            next,
+        };
+        assert_eq!(
+            apply_queue_edit(
+                &mut queue,
+                1,
+                &mut shuffle,
+                &mut original,
+                &add(&["x", "y"], true),
+                &mut random
+            ),
+            Ok(QueueEdit::Inserted {
+                position: 2,
+                count: 2
+            })
+        );
+        assert_eq!(queue, ids(&["a", "b", "x", "y", "c"]));
+        assert_eq!(
+            apply_queue_edit(
+                &mut queue,
+                1,
+                &mut shuffle,
+                &mut original,
+                &add(&["z"], false),
+                &mut random
+            ),
+            Ok(QueueEdit::Inserted {
+                position: 5,
+                count: 1
+            })
+        );
+        assert_eq!(queue, ids(&["a", "b", "x", "y", "c", "z"]));
+        // While shuffled, the unshuffled order gets them in the same place.
+        let mut queue = ids(&["a", "c", "b"]);
+        let mut shuffle = true;
+        let mut original = Some(ids(&["a", "b", "c"]));
+        apply_queue_edit(
+            &mut queue,
+            0,
+            &mut shuffle,
+            &mut original,
+            &add(&["n"], true),
+            &mut random,
+        )
+        .expect("play next while shuffled");
+        assert_eq!(queue, ids(&["a", "n", "c", "b"]));
+        assert_eq!(original, Some(ids(&["a", "n", "b", "c"])));
+        // Never past the queue limit.
+        let mut full = vec!["s".to_string(); MAX_ZONE_QUEUE_ITEMS];
+        assert_eq!(
+            apply_queue_edit(
+                &mut full,
+                0,
+                &mut false,
+                &mut None,
+                &add(&["one-too-many"], false),
+                &mut random
+            ),
+            Err(ZoneError::Invalid("queue_full"))
+        );
+        assert_eq!(
+            add(&[], true).validate(),
+            Err("invalid_queue_length"),
+            "nothing to add"
+        );
+        let parsed: ZoneCommand =
+            serde_json::from_str(r#"{"command":"add_to_queue","song_ids":["a"]}"#).expect("json");
+        assert_eq!(parsed, add(&["a"], false), "add to the end by default");
+    }
+
+    #[test]
+    fn queue_edits_touch_only_upcoming_items_and_guard_stale_queues() {
+        let mut queue = ids(&["a", "b", "c", "d", "e"]);
+        let mut shuffle = false;
+        let mut original = None;
+        let mut random = |_: usize| 0;
+        let mut edit = |queue: &mut Vec<String>, command: ZoneCommand| {
+            apply_queue_edit(queue, 1, &mut shuffle, &mut original, &command, &mut random)
+        };
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::MoveQueueItem {
+                    from: 4,
+                    to: 2,
+                    song_id: Some("e".into())
+                }
+            ),
+            Ok(QueueEdit::Moved { from: 4, to: 2 })
+        );
+        assert_eq!(queue, ids(&["a", "b", "e", "c", "d"]));
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::MoveQueueItem {
+                    from: 1,
+                    to: 3,
+                    song_id: None
+                }
+            ),
+            Err(ZoneError::Invalid("only_upcoming_items_move"))
+        );
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 3,
+                    song_id: Some("d".into())
+                }
+            ),
+            Err(ZoneError::Invalid("queue_changed")),
+            "a remote acting on an old queue must not remove the wrong song"
+        );
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 3,
+                    song_id: Some("c".into())
+                }
+            ),
+            Ok(QueueEdit::Removed { position: 3 })
+        );
+        assert_eq!(queue, ids(&["a", "b", "e", "d"]));
+        assert_eq!(
+            edit(
+                &mut queue,
+                ZoneCommand::RemoveQueueItem {
+                    queue_position: 1,
+                    song_id: None
+                }
+            ),
+            Err(ZoneError::Invalid("only_upcoming_items_remove"))
+        );
+        assert_eq!(
+            edit(&mut queue, ZoneCommand::ClearUpcoming),
+            Ok(QueueEdit::UpcomingReplaced)
+        );
+        assert_eq!(queue, ids(&["a", "b"]));
+        assert_eq!(
+            edit(&mut queue, ZoneCommand::ClearUpcoming),
+            Ok(QueueEdit::Unchanged)
+        );
+    }
+
+    #[test]
+    fn shuffle_keeps_history_and_current_and_unshuffle_restores_order() {
+        let mut queue = ids(&["a", "b", "c", "d", "e", "f"]);
+        let mut shuffle = false;
+        let mut original = None;
+        // Deterministic "random": always swap with the first upcoming item.
+        let mut random = |_: usize| 0;
+        apply_queue_edit(
+            &mut queue,
+            1,
+            &mut shuffle,
+            &mut original,
+            &ZoneCommand::SetShuffle { enabled: true },
+            &mut random,
+        )
+        .expect("shuffle");
+        assert!(shuffle);
+        assert_eq!(&queue[..2], &ids(&["a", "b"])[..]);
+        assert_ne!(queue, ids(&["a", "b", "c", "d", "e", "f"]));
+        let mut sorted = queue.clone();
+        sorted.sort();
+        assert_eq!(sorted, ids(&["a", "b", "c", "d", "e", "f"]));
+        // Remove one shuffled item, then unshuffle: it stays gone.
+        let removed = queue[3].clone();
+        apply_queue_edit(
+            &mut queue,
+            1,
+            &mut shuffle,
+            &mut original,
+            &ZoneCommand::RemoveQueueItem {
+                queue_position: 3,
+                song_id: Some(removed.clone()),
+            },
+            &mut random,
+        )
+        .expect("remove");
+        apply_queue_edit(
+            &mut queue,
+            1,
+            &mut shuffle,
+            &mut original,
+            &ZoneCommand::SetShuffle { enabled: false },
+            &mut random,
+        )
+        .expect("unshuffle");
+        assert!(!shuffle);
+        assert!(original.is_none());
+        let expected: Vec<String> = ids(&["a", "b", "c", "d", "e", "f"])
+            .into_iter()
+            .filter(|id| *id != removed)
+            .collect();
+        assert_eq!(queue, expected);
+    }
+
+    #[test]
+    fn sonos_play_modes_map_to_repeat_and_shuffle() {
+        assert_eq!(RepeatMode::All.sonos_play_mode(), "REPEAT_ALL");
+        assert_eq!(
+            RepeatMode::from_sonos_play_mode("SHUFFLE_REPEAT_ONE"),
+            (RepeatMode::One, true)
+        );
+        assert_eq!(
+            RepeatMode::from_sonos_play_mode("NORMAL"),
+            (RepeatMode::Off, false)
+        );
+        let parsed: ZoneCommand =
+            serde_json::from_value(serde_json::json!({"command": "set_repeat", "mode": "one"}))
+                .expect("set_repeat");
+        assert_eq!(
+            parsed,
+            ZoneCommand::SetRepeat {
+                mode: RepeatMode::One
+            }
+        );
+        assert_eq!(
+            ZoneCommand::MoveQueueItem {
+                from: 3,
+                to: 3,
+                song_id: None
+            }
+            .validate(),
+            Err("invalid_queue_move")
+        );
+    }
+
+    #[test]
+    fn commands_parse_from_tagged_json_and_validate() {
+        let load: ZoneCommand = serde_json::from_value(serde_json::json!({
+            "command": "load",
+            "song_ids": ["a", "b"],
+            "current_position": 1,
+            "position_ms": 42_000
+        }))
+        .expect("load");
+        assert_eq!(
+            load,
+            ZoneCommand::Load {
+                song_ids: vec!["a".into(), "b".into()],
+                current_position: 1,
+                position_ms: 42_000,
+                play: true
+            }
+        );
+        assert!(load.validate().is_ok());
+        let bad_position = ZoneCommand::Load {
+            song_ids: vec!["a".into()],
+            current_position: 1,
+            position_ms: 0,
+            play: true,
+        };
+        assert_eq!(bad_position.validate(), Err("invalid_queue_position"));
+        assert_eq!(
+            ZoneCommand::SetVolume {
+                volume: 101,
+                member_id: None,
+                above_comfort: false,
+            }
+            .validate(),
+            Err("invalid_volume")
+        );
+        assert!(
+            serde_json::from_value::<ZoneCommand>(serde_json::json!({"command": "explode"}))
+                .is_err()
+        );
+        let volume = serde_json::to_value(ZoneCommand::SetVolume {
+            volume: 30,
+            member_id: None,
+            above_comfort: true,
+        })
+        .expect("serialize");
+        assert_eq!(
+            volume,
+            serde_json::json!({"command": "set_volume", "volume": 30}),
+            "the server-internal comfort override never reaches clients"
+        );
+        // ...and cannot be set by them either.
+        let parsed: ZoneCommand = serde_json::from_value(serde_json::json!({
+            "command": "set_volume",
+            "volume": 30,
+            "above_comfort": true
+        }))
+        .expect("parse");
+        assert_eq!(
+            parsed,
+            ZoneCommand::SetVolume {
+                volume: 30,
+                member_id: None,
+                above_comfort: false,
+            }
+        );
+    }
+
+    #[test]
+    fn comfort_limit_stops_sliders_but_not_steps_and_safety_always_holds() {
+        let limits = VolumeLimits {
+            comfort: Some(40),
+            safety_min: Some(10),
+            safety_max: Some(70),
+        };
+        // The slider stops at the comfort limit...
+        assert_eq!(limits.clamp(90, false, false), 40);
+        // ...the +/- buttons may pass it, up to the safety maximum.
+        assert_eq!(limits.clamp(55, true, false), 55);
+        assert_eq!(limits.clamp(90, true, false), 70);
+        // The safety minimum holds both ways.
+        assert_eq!(limits.clamp(2, false, false), 10);
+        assert_eq!(limits.clamp(-5, true, false), 10);
+        // Tightened limits pull an out-of-range level back in.
+        assert_eq!(limits.enforce(85), Some(70));
+        assert_eq!(limits.enforce(5), Some(10));
+        assert_eq!(limits.enforce(50), None);
+        let volume = ZoneVolume::new(50, false, limits);
+        assert_eq!(
+            (volume.min, volume.max, volume.comfort, volume.device_max),
+            (10, 70, Some(40), 100)
+        );
+        // No limits: the whole device range, no comfort stop.
+        let open = VolumeLimits::default();
+        assert_eq!(open.clamp(100, false, false), 100);
+        assert_eq!(ZoneVolume::new(5, false, open).comfort, None);
+    }
+
+    #[test]
+    fn positions_extrapolate_only_while_playing_and_clamp_to_duration() {
+        assert_eq!(extrapolate_position(1_000, 0, 500, true, 10_000), 1_500);
+        assert_eq!(extrapolate_position(1_000, 0, 500, false, 10_000), 1_000);
+        assert_eq!(extrapolate_position(9_000, 0, 5_000, true, 10_000), 10_000);
+        assert_eq!(extrapolate_position(1_000, 900, 500, true, 0), 1_000);
+    }
+}

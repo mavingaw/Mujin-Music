@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import InteractiveProductDemo from "../../components/interactive-product-demo";
 
 export const metadata: Metadata = {
-  title: "Parson product showcase",
+  title: "Mujin Music product showcase",
   robots: { follow: false, index: false },
 };
 

@@ -1,5 +1,7 @@
 import {
+  applyPlaybackCapabilities,
   configureApiRuntime,
+  type PlaybackCapabilities,
   getFreshAuthorizationHeaders,
   refreshToken as refreshTokenRequest,
   signImagePath,
@@ -96,7 +98,7 @@ export function embeddedWebClientTarget(
 }
 
 export function apiUrl(path: string) {
-  if (!runtime.origin) throw new Error("No Parson library is connected.");
+  if (!runtime.origin) throw new Error("No Mujin Music library is connected.");
   return `${runtime.origin}/api/v1/${path.replace(/^\/+/, "")}`;
 }
 
@@ -115,7 +117,7 @@ export function imageUrl(path?: string | null) {
     normalized.includes("snf.png?")
   )
     return null;
-  if (/^https?:\/\//i.test(image)) return image;
+  if (/^(https?:\/\/|data:image\/)/i.test(image)) return image;
   return `${runtime.origin}/media/images/${encodeURIComponent(image)}`;
 }
 
@@ -152,11 +154,25 @@ export async function lockScreenArtworkUrl(path?: string | null) {
   return applyImageSignature(uri, signed.expiresAt, signed.signature);
 }
 
-export function streamUrl(songId: string, bitrate = 0) {
+/**
+ * Media stream URL. With `capabilities` the server converts formats this
+ * device cannot decode (losslessly where it can); without them it sends the
+ * original file.
+ */
+export function streamUrl(
+  songId: string,
+  bitrate = 0,
+  capabilities: PlaybackCapabilities | null = null,
+  play: string | null = null,
+) {
   const url = new URL(
     apiUrl(`media/songs/${encodeURIComponent(songId)}/stream`),
   );
   url.searchParams.set("bitrate", String(bitrate));
+  applyPlaybackCapabilities(url, capabilities);
+  // TIDAL and Qobuz plays carry an id so the player can ask what exactly
+  // this stream delivered.
+  if (play) url.searchParams.set("play", play);
   return url.toString();
 }
 

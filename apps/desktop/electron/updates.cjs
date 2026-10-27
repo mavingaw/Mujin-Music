@@ -8,7 +8,7 @@ function updateSupport({ packaged, platform, environment, macSigned }) {
     return "Download a new portable release to update.";
   }
   if (platform === "linux" && !environment.APPIMAGE) {
-    return "Update Parson through your package manager.";
+    return "Update Mujin Music through your package manager.";
   }
   if (platform === "darwin" && !macSigned) {
     return "Download the latest release to update this unsigned build.";
@@ -28,7 +28,7 @@ function createUpdates({
     status: unsupported ? "manual" : "idle",
     version,
     message: unsupported || "",
-    releaseUrl: "https://github.com/ParsonLabs/Parson/releases/latest",
+    releaseUrl: "https://github.com/mavingaw/parson-jin/releases/latest",
   };
   let checking = null;
   let installing = false;

@@ -14,6 +14,63 @@ import {
   type AudioPresetId,
 } from "./audio-presets";
 import { canPromotePreloadedMedia } from "./gapless-playback";
+import {
+  activeConvolutionFilter,
+  createDspChain,
+  defaultDspSettings,
+  dspNeedsGraph,
+  getConvolutionFilterFile,
+  requestedContextSampleRate,
+  type DspAudioContext,
+  type DspSettings,
+} from "@parson/music-sdk";
+import { crossfadeGains, leveledVolume } from "./crossfade";
+
+const CROSSFADE_TICK_MS = 50;
+
+type Crossfade = {
+  outgoing: HTMLAudioElement;
+  /** The outgoing element's audio graph, closed when the fade ends. */
+  outgoingGraph: AudioGraph | null;
+  startVolume: number;
+  startedAt: number;
+  seconds: number;
+  timer: ReturnType<typeof setInterval>;
+};
+
+type SinkTarget = { setSinkId?: (sinkId: string) => Promise<void> };
+
+function audioContextConstructor() {
+  if (typeof window === "undefined") return null;
+  return (
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext ||
+    null
+  );
+}
+
+/**
+ * The output device's own rate: a context created without a rate runs at
+ * it. `sinkId` targets a chosen device where the browser supports it.
+ */
+export async function probeDeviceSampleRate(
+  sinkId: string,
+): Promise<number | null> {
+  const Constructor = audioContextConstructor();
+  if (!Constructor) return null;
+  try {
+    const context = new Constructor(
+      sinkId ? ({ sinkId } as AudioContextOptions) : undefined,
+    );
+    const rate = context.sampleRate;
+    await context.close().catch(() => {});
+    return Number.isFinite(rate) && rate > 0 ? rate : null;
+  } catch {
+    return null;
+  }
+}
+import { startedStream } from "@/lib/api/stream-url";
 
 const PLAYBACK_START_TIMEOUT_MS = 12_000;
 
@@ -29,16 +86,77 @@ export function useAudioEngine() {
   const resumeOnReconnect = useRef(false);
   const backgroundWasPlaying = useRef(false);
   const volumeRef = useRef(1);
+  // Linear volume-leveling gain from the track's ReplayGain tags, folded
+  // into the element volume.
+  const levelingGainRef = useRef(1);
+  /**
+   * Leveling factor from the zone's measured loudness (zone setting). When
+   * the zone levels, it replaces the tag-based gain; `null` when it does not.
+   */
+  const zoneLevelFactor = useRef<number | null>(null);
+  /** Zone crossfade time in seconds (0: off). */
+  const crossfadeSeconds = useRef(0);
+  /** The next source change should crossfade instead of cutting. */
+  const crossfadeArmed = useRef(false);
+  const crossfade = useRef<Crossfade | null>(null);
   const mutedRef = useRef(false);
   const recovered = useRef(false);
   const presetRef = useRef<AudioPreset>(audioPresets[0]!);
   const [audioVersion, setAudioVersion] = useState(0);
+  // The stream now playing and how many times its first frame has been
+  // decoded, so the signal path re-reads what this stream delivered.
+  const [stream, setStream] = useState({ url: "", frames: 0 });
   const [audioPreset, setAudioPresetState] =
     useState<AudioPresetId>("original");
   const [isPlaying, setIsPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  const [graphSampleRate, setGraphSampleRate] = useState<number | null>(null);
+  // Convolution filters decoded for the graph, keyed `id@rate` (a
+  // ConvolverNode needs a buffer at its context's rate).
+  const impulses = useRef(new Map<string, AudioBuffer>());
+  const impulseLoading = useRef(new Set<string>());
+  const [loadedImpulse, setLoadedImpulse] = useState<string | null>(null);
+  const dspRef = useRef<DspSettings>(defaultDspSettings());
+  const sourceRateRef = useRef<number | null>(null);
+  const sinkIdRef = useRef("");
+  const [activeSinkId, setActiveSinkId] = useState("");
+  const [deviceSampleRate, setDeviceSampleRate] = useState<number | null>(null);
+  const needsGraph = useCallback(
+    () =>
+      presetRef.current.wet > 0 ||
+      dspNeedsGraph(dspRef.current, sourceRateRef.current),
+    [],
+  );
+  const wantedRate = useCallback(
+    () => requestedContextSampleRate(dspRef.current, sourceRateRef.current),
+    [],
+  );
+  const elementVolume = useCallback(
+    () =>
+      leveledVolume(
+        volumeRef.current,
+        zoneLevelFactor.current ?? levelingGainRef.current,
+      ),
+    [],
+  );
+
+  /** Ends a running crossfade now: the outgoing track stops. */
+  const finishCrossfade = useCallback(() => {
+    const fade = crossfade.current;
+    if (!fade) return;
+    crossfade.current = null;
+    clearInterval(fade.timer);
+    fade.outgoing.pause();
+    fade.outgoing.removeAttribute("src");
+    fade.outgoing.load();
+    if (fade.outgoingGraph) {
+      fade.outgoingGraph.chain.dispose();
+      void fade.outgoingGraph.context.close().catch(() => {});
+    }
+    if (audio.current) audio.current.volume = elementVolume();
+  }, [elementVolume]);
 
   const discardPreloadedAudio = useCallback(() => {
     const element = preloadedAudio.current;
@@ -49,14 +167,17 @@ export function useAudioEngine() {
     preloadedSource.current = "";
   }, []);
 
-  const configureAudioElement = useCallback((element: HTMLAudioElement) => {
-    element.crossOrigin = "anonymous";
-    element.volume = volumeRef.current;
-    element.muted = mutedRef.current;
-    setPitchPreservation(element, presetRef.current.preservePitch);
-    element.defaultPlaybackRate = presetRef.current.rate;
-    element.playbackRate = presetRef.current.rate;
-  }, []);
+  const configureAudioElement = useCallback(
+    (element: HTMLAudioElement) => {
+      element.crossOrigin = "anonymous";
+      element.volume = elementVolume();
+      element.muted = mutedRef.current;
+      setPitchPreservation(element, presetRef.current.preservePitch);
+      element.defaultPlaybackRate = presetRef.current.rate;
+      element.playbackRate = presetRef.current.rate;
+    },
+    [elementVolume],
+  );
 
   const preloadAudioSource = useCallback(
     (next: string | null) => {
@@ -68,6 +189,9 @@ export function useAudioEngine() {
       discardPreloadedAudio();
       const element = createAudioElement();
       configureAudioElement(element);
+      const sinkTarget = element as HTMLAudioElement & SinkTarget;
+      if (sinkIdRef.current && sinkTarget.setSinkId)
+        void sinkTarget.setSinkId(sinkIdRef.current).catch(() => {});
       element.preload = "auto";
       element.src = next;
       element.load();
@@ -96,43 +220,138 @@ export function useAudioEngine() {
     setAudioVersion((version) => version + 1);
   }, [configureAudioElement]);
 
+  /**
+   * Fetches and decodes the chosen convolution filter for the graph's
+   * rate, then rewires the chain with it.
+   */
+  const loadImpulse = useCallback((settings: DspSettings) => {
+    const id = activeConvolutionFilter(settings);
+    const current = graph.current;
+    if (!id || !current) return;
+    const key = `${id}@${current.context.sampleRate}`;
+    if (impulses.current.has(key)) {
+      setLoadedImpulse(id);
+      return;
+    }
+    if (impulseLoading.current.has(key)) return;
+    impulseLoading.current.add(key);
+    void getConvolutionFilterFile(id)
+      .then((data) => current.context.decodeAudioData(data))
+      .then((buffer) => {
+        impulses.current.set(key, buffer);
+        if (graph.current === current) {
+          current.chain.update(dspRef.current);
+          setLoadedImpulse(id);
+        }
+      })
+      .catch((cause) => {
+        console.error("Unable to load the convolution filter", cause);
+      })
+      .finally(() => impulseLoading.current.delete(key));
+  }, []);
+
   const ensureAudioGraph = useCallback(() => {
     recoverAudioElement();
     const element = audio.current;
     if (!element || graph.current || typeof window === "undefined")
       return graph.current;
-    const Constructor =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
+    const Constructor = audioContextConstructor();
     if (!Constructor) return null;
     try {
-      const context = new Constructor();
+      const rate = wantedRate();
+      let context: AudioContext;
+      try {
+        context = rate
+          ? new Constructor({ sampleRate: rate })
+          : new Constructor();
+      } catch {
+        // Rates outside the browser's range fall back to the device rate.
+        context = new Constructor();
+      }
+      const sinkId = sinkIdRef.current;
+      const sinkContext = context as AudioContext & SinkTarget;
+      if (sinkId && sinkContext.setSinkId)
+        void sinkContext.setSinkId(sinkId).catch(() => {});
       const mediaSource = context.createMediaElementSource(element);
+      const chain = createDspChain(
+        context as unknown as DspAudioContext,
+        dspRef.current,
+        {
+          impulse: (id) =>
+            impulses.current.get(`${id}@${context.sampleRate}`) ?? null,
+        },
+      );
+      const chainOutput = chain.output as unknown as AudioNode;
       const dryGain = context.createGain();
       const wetGain = context.createGain();
       const convolver = context.createConvolver();
       convolver.buffer = buildReverbImpulse(context);
-      mediaSource.connect(dryGain);
+      mediaSource.connect(chain.input as unknown as AudioNode);
+      chainOutput.connect(dryGain);
       convolver.connect(wetGain);
       dryGain.connect(context.destination);
       wetGain.connect(context.destination);
       dryGain.gain.value = 1;
       wetGain.gain.value = 0;
       graph.current = {
+        chain,
         convolver,
         context,
         dryGain,
+        requestedRate: rate,
         source: mediaSource,
         wetConnected: false,
         wetGain,
       };
+      setGraphSampleRate(context.sampleRate);
+      loadImpulse(dspRef.current);
     } catch (cause) {
-      console.error("Unable to initialize slowed reverb audio graph", cause);
+      console.error("Unable to initialize the audio processing graph", cause);
       return null;
     }
     return graph.current;
-  }, [recoverAudioElement]);
+  }, [loadImpulse, recoverAudioElement, wantedRate]);
+
+  /** Closes the graph; the element cannot be reused, so it is replaced. */
+  const dropAudioGraph = useCallback(
+    (keepPosition = true) => {
+      const current = graph.current;
+      if (!current) return false;
+      current.chain.dispose();
+      void current.context.close().catch(() => {});
+      graph.current = null;
+      setGraphSampleRate(null);
+      const element = audio.current;
+      const replacement = createAudioElement();
+      configureAudioElement(replacement);
+      const sinkTarget = replacement as HTMLAudioElement & SinkTarget;
+      if (sinkIdRef.current && sinkTarget.setSinkId)
+        void sinkTarget.setSinkId(sinkIdRef.current).catch(() => {});
+      const resumeAt = keepPosition ? (element?.currentTime ?? 0) : 0;
+      if (element) {
+        element.pause();
+        element.removeAttribute("src");
+        element.load();
+      }
+      if (source.current) {
+        replacement.addEventListener(
+          "loadedmetadata",
+          () => {
+            try {
+              if (resumeAt > 0) replacement.currentTime = resumeAt;
+            } catch {}
+          },
+          { once: true },
+        );
+        replacement.src = source.current;
+      }
+      audio.current = replacement;
+      recovered.current = true;
+      setAudioVersion((version) => version + 1);
+      return true;
+    },
+    [configureAudioElement],
+  );
 
   const applyPreset = useCallback(
     (preset: AudioPreset) => {
@@ -142,14 +361,15 @@ export function useAudioEngine() {
       element.defaultPlaybackRate = preset.rate;
       element.playbackRate = preset.rate;
       const audioGraph =
-        graph.current ?? (preset.wet > 0 ? ensureAudioGraph() : null);
+        graph.current ?? (needsGraph() ? ensureAudioGraph() : null);
       if (!audioGraph) return;
+      const chainOutput = audioGraph.chain.output as unknown as AudioNode;
       if (preset.wet > 0 && !audioGraph.wetConnected) {
-        audioGraph.source.connect(audioGraph.convolver);
+        chainOutput.connect(audioGraph.convolver);
         audioGraph.wetConnected = true;
       } else if (preset.wet <= 0 && audioGraph.wetConnected) {
         try {
-          audioGraph.source.disconnect(audioGraph.convolver);
+          chainOutput.disconnect(audioGraph.convolver);
         } catch {}
         audioGraph.wetConnected = false;
       }
@@ -157,16 +377,26 @@ export function useAudioEngine() {
       audioGraph.wetGain.gain.setTargetAtTime(preset.wet, now, 0.025);
       audioGraph.dryGain.gain.setTargetAtTime(preset.dry, now, 0.025);
     },
-    [ensureAudioGraph],
+    [ensureAudioGraph, needsGraph],
   );
 
   const setAudioSource = useCallback(
-    (next: string) => {
+    (next: string, sourceSampleRate?: number | null) => {
       playbackAttempt.current += 1;
       setIsPlaying(false);
       setError(null);
       source.current = next;
+      sourceRateRef.current = sourceSampleRate ?? null;
+      const armed = crossfadeArmed.current;
+      crossfadeArmed.current = false;
+      // Any running fade ends before the source changes again.
+      finishCrossfade();
+      startedStream(next);
+      setStream({ url: next, frames: 0 });
       if (!audio.current) return;
+      // "Match source" needs a context at this track's rate.
+      if (graph.current && graph.current.requestedRate !== wantedRate())
+        dropAudioGraph(false);
 
       const prepared = preloadedAudio.current;
       if (
@@ -178,12 +408,46 @@ export function useAudioEngine() {
         preloadedAudio.current = null;
         preloadedSource.current = "";
         configureAudioElement(prepared);
-        previous.pause();
-        previous.removeAttribute("src");
-        previous.load();
-        if (graph.current) {
-          void graph.current.context.close().catch(() => {});
-          graph.current = null;
+        const previousGraph = graph.current;
+        graph.current = null;
+        setGraphSampleRate(null);
+        const remaining =
+          Number.isFinite(previous.duration) && previous.duration > 0
+            ? previous.duration - previous.currentTime
+            : 0;
+        const seconds = Math.min(crossfadeSeconds.current, remaining);
+        if (armed && !previous.paused && seconds > 0.2) {
+          // Crossfade: the outgoing track keeps playing and fades out
+          // while the new one fades in (equal power).
+          prepared.volume = 0;
+          crossfade.current = {
+            outgoing: previous,
+            outgoingGraph: previousGraph,
+            startVolume: previous.volume,
+            startedAt: performance.now(),
+            seconds,
+            timer: setInterval(() => {
+              const current = crossfade.current;
+              if (!current) return;
+              const progress =
+                (performance.now() - current.startedAt) /
+                (current.seconds * 1000);
+              const gains = crossfadeGains(progress);
+              current.outgoing.volume = current.startVolume * gains.outgoing;
+              if (audio.current) {
+                audio.current.volume = elementVolume() * gains.incoming;
+              }
+              if (progress >= 1) finishCrossfade();
+            }, CROSSFADE_TICK_MS),
+          };
+        } else {
+          previous.pause();
+          previous.removeAttribute("src");
+          previous.load();
+          if (previousGraph) {
+            previousGraph.chain.dispose();
+            void previousGraph.context.close().catch(() => {});
+          }
         }
         setAudioVersion((version) => version + 1);
         return;
@@ -193,8 +457,37 @@ export function useAudioEngine() {
       configureAudioElement(audio.current);
       audio.current.src = next;
     },
-    [configureAudioElement, discardPreloadedAudio],
+    [
+      configureAudioElement,
+      discardPreloadedAudio,
+      dropAudioGraph,
+      elementVolume,
+      finishCrossfade,
+      wantedRate,
+    ],
   );
+
+  /**
+   * Asks the next source change to crossfade. Only when a crossfade time is
+   * set and the next track is already buffered (else it would stall).
+   */
+  const armCrossfade = useCallback(() => {
+    const prepared = preloadedAudio.current;
+    if (
+      crossfadeSeconds.current <= 0 ||
+      crossfade.current ||
+      !prepared ||
+      !canPromotePreloadedMedia(
+        prepared,
+        preloadedSource.current,
+        preloadedSource.current,
+      )
+    ) {
+      return false;
+    }
+    crossfadeArmed.current = true;
+    return true;
+  }, []);
 
   const playAudioSource = useCallback(() => {
     recoverAudioElement();
@@ -260,25 +553,133 @@ export function useAudioEngine() {
       .finally(() => window.clearTimeout(startTimeout));
   }, [applyPreset, recoverAudioElement]);
 
-  const setAudioVolume = useCallback((value: number | string) => {
-    const next = boundedVolume(value);
-    if (next === null) return;
-    if (audio.current) audio.current.volume = next;
-    if (preloadedAudio.current) preloadedAudio.current.volume = next;
-    volumeRef.current = next;
-    setVolume(next);
-    if (next > 0) {
-      mutedRef.current = false;
-      if (audio.current) audio.current.muted = false;
-      if (preloadedAudio.current) preloadedAudio.current.muted = false;
-      setMuted(false);
+  /** Rebuilds the playback path after a graph change, keeping position. */
+  const resetAudioGraph = useCallback(() => {
+    const wasPlaying = Boolean(audio.current && !audio.current.paused);
+    if (!dropAudioGraph()) return;
+    if (wasPlaying) playAudioSource();
+    else if (needsGraph()) applyPreset(presetRef.current);
+  }, [applyPreset, dropAudioGraph, needsGraph, playAudioSource]);
+
+  /** Applies DSP settings: rewires the chain or rebuilds the graph. */
+  const setDspSettings = useCallback(
+    (settings: DspSettings) => {
+      dspRef.current = settings;
+      const current = graph.current;
+      if (current) {
+        if (!needsGraph() || current.requestedRate !== wantedRate()) {
+          resetAudioGraph();
+          return;
+        }
+        current.chain.update(settings);
+        loadImpulse(settings);
+        return;
+      }
+      if (needsGraph() && audio.current && !audio.current.paused) {
+        const created = ensureAudioGraph();
+        if (created?.context.state === "suspended")
+          void created.context.resume().catch(() => {});
+        applyPreset(presetRef.current);
+      }
+    },
+    [
+      applyPreset,
+      ensureAudioGraph,
+      loadImpulse,
+      needsGraph,
+      resetAudioGraph,
+      wantedRate,
+    ],
+  );
+
+  /** Routes playback to an output device; `""` is the system default. */
+  const setOutputDevice = useCallback(async (sinkId: string) => {
+    sinkIdRef.current = sinkId;
+    const targets: SinkTarget[] = [
+      audio.current,
+      preloadedAudio.current,
+      graph.current?.context,
+    ].filter(Boolean) as SinkTarget[];
+    let applied = sinkId;
+    for (const target of targets) {
+      if (!target.setSinkId) continue;
+      try {
+        await target.setSinkId(sinkId);
+      } catch {
+        // The device went away or is not allowed: use the default.
+        applied = "";
+        await target.setSinkId("").catch(() => {});
+      }
     }
+    if (!targets.some((target) => target.setSinkId)) applied = "";
+    setActiveSinkId(applied);
+    setDeviceSampleRate(await probeDeviceSampleRate(applied));
   }, []);
+
+  const reapplyOutputDevice = useCallback(
+    () => setOutputDevice(sinkIdRef.current),
+    [setOutputDevice],
+  );
+
+  /**
+   * Zone settings for this device: crossfade time and the zone's leveling
+   * factor (`null` when the zone does not level). The zone's DSP chain
+   * arrives through `setDspSettings`.
+   */
+  const setOutputSettings = useCallback(
+    ({
+      crossfadeSeconds: seconds,
+      levelingFactor: factor,
+    }: {
+      crossfadeSeconds: number;
+      levelingFactor: number | null;
+    }) => {
+      crossfadeSeconds.current = Math.max(0, seconds);
+      zoneLevelFactor.current =
+        factor !== null && Number.isFinite(factor) && factor > 0
+          ? factor
+          : null;
+      if (audio.current && !crossfade.current) {
+        audio.current.volume = elementVolume();
+      }
+    },
+    [elementVolume],
+  );
+
+  const setAudioVolume = useCallback(
+    (value: number | string) => {
+      const next = boundedVolume(value);
+      if (next === null) return;
+      volumeRef.current = next;
+      if (audio.current && !crossfade.current)
+        audio.current.volume = elementVolume();
+      if (preloadedAudio.current)
+        preloadedAudio.current.volume = elementVolume();
+      setVolume(next);
+      if (next > 0) {
+        mutedRef.current = false;
+        if (audio.current) audio.current.muted = false;
+        if (preloadedAudio.current) preloadedAudio.current.muted = false;
+        setMuted(false);
+      }
+    },
+    [elementVolume],
+  );
+  /** Applies a linear volume-leveling gain to the playing element. */
+  const setLevelingGain = useCallback(
+    (gain: number) => {
+      levelingGainRef.current = Number.isFinite(gain) && gain > 0 ? gain : 1;
+      if (audio.current && !crossfade.current)
+        audio.current.volume = elementVolume();
+    },
+    [elementVolume],
+  );
   const toggleMute = useCallback(() => {
     if (!audio.current) return;
     audio.current.muted = !audio.current.muted;
     mutedRef.current = audio.current.muted;
     if (preloadedAudio.current) preloadedAudio.current.muted = mutedRef.current;
+    if (crossfade.current) crossfade.current.outgoing.muted = mutedRef.current;
     setMuted(audio.current.muted);
   }, []);
   const setAudioPreset = useCallback(
@@ -286,12 +687,17 @@ export function useAudioEngine() {
       const preset = getAudioPreset(id);
       presetRef.current = preset;
       setAudioPresetState(preset.id);
+      if (graph.current && !needsGraph()) {
+        // Nothing needs the graph: go back to the element's direct path.
+        resetAudioGraph();
+        return;
+      }
       applyPreset(preset);
       if (preloadedAudio.current) configureAudioElement(preloadedAudio.current);
       if (graph.current?.context.state === "suspended")
         void graph.current.context.resume().catch(() => {});
     },
-    [applyPreset, configureAudioElement],
+    [applyPreset, configureAudioElement, needsGraph, resetAudioGraph],
   );
   const toggleSlowedReverb = useCallback(
     () =>
@@ -309,26 +715,52 @@ export function useAudioEngine() {
   }, [audioPreset]);
 
   useEffect(() => discardPreloadedAudio, [discardPreloadedAudio]);
+  useEffect(() => finishCrossfade, [finishCrossfade]);
+
+  useEffect(() => {
+    const element = audio.current;
+    if (!element) return;
+    const firstFrame = () =>
+      setStream((current) =>
+        current.url === source.current
+          ? { ...current, frames: current.frames + 1 }
+          : { url: source.current, frames: 1 },
+      );
+    element.addEventListener("loadeddata", firstFrame);
+    return () => element.removeEventListener("loadeddata", firstFrame);
+  }, [audioVersion]);
 
   return {
+    activeSinkId,
+    armCrossfade,
     audio,
     audioPreset,
     audioVersion,
     backgroundWasPlaying,
     error,
+    finishCrossfade,
     graph,
+    deviceSampleRate,
+    graphSampleRate,
     isPlaying,
+    loadedImpulse,
     muted,
     playAudioSource,
     preloadAudioSource,
+    reapplyOutputDevice,
     resumeOnReconnect,
     setAudioPreset,
+    setDspSettings,
+    setOutputDevice,
+    setOutputSettings,
     setAudioSource,
     setError,
     setIsPlaying,
     setAudioVolume,
+    setLevelingGain,
     slowedReverb: audioPreset !== "original",
     source,
+    stream,
     toggleMute,
     toggleSlowedReverb,
     volume,

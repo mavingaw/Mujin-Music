@@ -13,9 +13,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { validPasswordLength } from "@parson/music-sdk";
 
+import { LibraryList, SearchingIndicator } from "@/components/library-list";
 import { palette } from "@/constants/colors";
 import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
 import { SERVER_REPLACEMENT_WARNING } from "@/lib/discovery-manifest";
+import { libraryRows } from "@/lib/known-libraries";
 import { useSession } from "@/providers/session-provider";
 
 export default function EntryScreen() {
@@ -31,6 +33,7 @@ export default function EntryScreen() {
     null,
   );
   const pairingStartedFor = useRef<string | null>(null);
+  const [connectingOrigin, setConnectingOrigin] = useState<string | null>(null);
   const passwordLogin = passwordLoginOrigin === session.origin;
   const serverValue = serverEdited ? server : (session.origin ?? server);
   useEffect(() => {
@@ -47,6 +50,21 @@ export default function EntryScreen() {
     void session.startPairing();
   }, [passwordLogin, session]);
   if (session.phase === "ready" || session.phase === "offline") return null;
+
+  const libraries = libraryRows({
+    known: session.knownLibraries,
+    nearby: nearbyLibraries.map((library) => ({
+      instanceId: library.manifest.instanceId,
+      origin: library.origin,
+      name: library.manifest.name,
+    })),
+    currentInstanceId: null,
+    accountInstanceIds: session.accountLibraryIds,
+  });
+  const openLibrary = (origin: string) => {
+    setConnectingOrigin(origin);
+    void session.switchLibrary(origin).finally(() => setConnectingOrigin(null));
+  };
 
   const busy =
     session.phase === "loading" ||
@@ -81,25 +99,25 @@ export default function EntryScreen() {
         ? "Preparing your library"
         : session.phase === "setup"
           ? hostSetupRequired
-            ? "Finish setup on the Parson host"
+            ? "Finish setup on the Mujin Music host"
             : session.setupStatus?.account_setup_required
               ? "Create your account"
               : "Choose your music folder"
           : "Finding your library";
   const detail =
     session.phase === "indexing"
-      ? "Parson is indexing your music. This screen will update automatically."
+      ? "Mujin Music is indexing your music. This screen will update automatically."
       : session.phase === "setup"
         ? hostSetupRequired
-          ? "Create the administrator account and choose the music folder on the computer running Parson."
+          ? "Create the administrator account and choose the music folder on the computer running Mujin Music."
           : (session.setupStatus?.message ??
-            "Finish setting up this Parson library.")
+            "Finish setting up this Mujin Music library.")
         : session.phase === "login"
           ? passwordLogin
-            ? (session.libraryName ?? "Sign in to your Parson library")
+            ? (session.libraryName ?? "Sign in to your Mujin Music library")
             : session.savedAccounts.length && !session.pairing
-              ? `Continue on ${session.libraryName ?? "your Parson library"}.`
-              : `Connect to ${session.libraryName ?? "this Parson library"} without typing your account password.`
+              ? `Continue on ${session.libraryName ?? "your Mujin Music library"}.`
+              : `Connect to ${session.libraryName ?? "this Mujin Music library"} without typing your account password.`
           : "";
 
   return (
@@ -114,7 +132,7 @@ export default function EntryScreen() {
       >
         <View style={styles.content}>
           <Image
-            source={require("@/assets/images/parson-icon.png")}
+            source={require("@/assets/images/mujin-symbol.png")}
             style={styles.logo}
           />
           <Text style={styles.heading}>{heading}</Text>
@@ -154,8 +172,8 @@ export default function EntryScreen() {
             <View accessibilityRole="alert" style={styles.failureCard}>
               <Text style={styles.failureTitle}>Android can’t connect</Text>
               <Text style={styles.failureBody}>
-                Make sure the Parson host is running and this phone is on the
-                same Wi‑Fi network. Then check the address and try again.
+                Make sure the Mujin Music host is running and this phone is on
+                the same Wi‑Fi network. Then check the address and try again.
               </Text>
               <Text selectable style={styles.failureDetail}>
                 {session.error}
@@ -165,8 +183,8 @@ export default function EntryScreen() {
             <View accessibilityRole="alert" style={styles.failureCard}>
               <Text style={styles.failureTitle}>No playable music found</Text>
               <Text style={styles.failureBody}>
-                This folder doesn’t contain audio that Parson can play. Choose a
-                different folder with supported music files.
+                This folder doesn’t contain audio that Mujin Music can play.
+                Choose a different folder with supported music files.
               </Text>
             </View>
           ) : null}
@@ -259,7 +277,7 @@ export default function EntryScreen() {
                   <View style={styles.nearbySection}>
                     {session.savedAccounts.map((account) => (
                       <Pressable
-                        accessibilityHint="Switches to this saved Parson account"
+                        accessibilityHint="Switches to this saved Mujin Music account"
                         accessibilityRole="button"
                         disabled={busy}
                         key={account.key}
@@ -308,8 +326,8 @@ export default function EntryScreen() {
                     {session.pairing.code.replace(/^(\d{3})(\d{3})$/, "$1 $2")}
                   </Text>
                   <Text style={styles.pairingHelp}>
-                    In the Parson web app, open Settings → Connections, enter
-                    this code, and approve this phone.
+                    In the Mujin Music web app, open Settings → Connections,
+                    enter this code, and approve this phone.
                   </Text>
                   <ActivityIndicator
                     color="white"
@@ -407,37 +425,32 @@ export default function EntryScreen() {
             session.phase === "connecting" ||
             session.phase === "loading" ? (
             <View style={styles.form}>
-              {nearbyLibraries.length ? (
+              {libraries.length ? (
                 <View style={styles.nearbySection}>
-                  <Text style={styles.sectionLabel}>Nearby</Text>
-                  {nearbyLibraries.map((library) => (
-                    <Pressable
-                      accessibilityHint="Connects to this Parson library"
-                      accessibilityRole="button"
-                      disabled={busy}
-                      key={library.manifest.instanceId}
-                      style={({ pressed }) => [
-                        styles.libraryCard,
-                        pressed && styles.libraryCardPressed,
-                        busy && styles.disabledPrimary,
-                      ]}
-                      onPress={() =>
-                        void session.connect(library.origin, library.manifest)
-                      }
-                    >
-                      <Text style={styles.libraryName}>
-                        {library.manifest.name}
-                      </Text>
-                      <Text selectable style={styles.libraryAddress}>
-                        {library.origin}
-                      </Text>
-                    </Pressable>
-                  ))}
+                  <Text style={styles.sectionLabel}>
+                    {libraries.some((library) => library.known)
+                      ? "Your libraries"
+                      : "Nearby"}
+                  </Text>
+                  <LibraryList
+                    busy={busy}
+                    connectingOrigin={connectingOrigin}
+                    onForget={(row) =>
+                      void session.forgetLibrary(row.instanceId)
+                    }
+                    onSelect={(row) => openLibrary(row.origin)}
+                    rows={libraries}
+                  />
                 </View>
-              ) : session.phase === "discovering" ? (
-                <Text style={styles.discoveryStatus}>
-                  Looking for Parson libraries nearby…
-                </Text>
+              ) : null}
+              {session.phase === "discovering" ? (
+                <SearchingIndicator
+                  label={
+                    libraries.some((library) => library.nearby)
+                      ? "Still looking for more…"
+                      : "Looking for Mujin Music libraries on this Wi‑Fi…"
+                  }
+                />
               ) : null}
               <Text style={styles.sectionLabel}>Manual address</Text>
               <TextInput

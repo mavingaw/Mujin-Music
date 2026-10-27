@@ -1,15 +1,40 @@
 import {
+  createDspChain,
   createPlaybackQueue,
+  defaultDspSettings,
+  defaultRadioSettings,
   fillReverbImpulseChannel,
+  getRadioPicks,
+  getRadioSettings,
+  isLiveRadioId,
+  isStreamingId,
+  newPlayId,
+  playIdFromStreamUrl,
+  radioExhaustedNotice,
+  radioPicksExhaustedNotice,
+  radioQueueHistory,
+  radioSeedParams,
+  radioSkipReasonEvent,
+  shouldContinueWithRadio,
+  updateRadioSettings,
+  type RadioSeed,
+  type RadioSettings,
+  type RadioSkipReasonId,
+  type ResolvedRadioSeed,
   getPlayerAudioPreset,
   playerAudioPresets,
   recordPlaybackEvent,
   reverbImpulseLength,
+  type DspAudioContext,
+  type DspChain,
+  type DspSettings,
   type LibrarySong,
   type PlaybackEventType,
   type PlayerAudioPresetId,
+  type VolumeLevelingMode,
 } from "@parson/music-sdk";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Device from "expo-device";
 import * as Haptics from "expo-haptics";
 import {
   createAudioPlayer,
@@ -48,9 +73,11 @@ import {
   lockScreenArtworkUrl,
   streamUrl,
 } from "@/lib/runtime";
+import { devicePlaybackCapabilities } from "@/lib/device-playback";
 import { downloadedSongUri, hydrateDownloads } from "@/lib/downloads";
 import { shouldRestartFinishedTrack } from "@/lib/playback-state";
 import { playableQueueSongs } from "@/lib/playback-queue";
+import { shouldReconnect } from "@/lib/live-radio";
 import {
   isCompleted,
   isEarlySkip,
@@ -59,13 +86,34 @@ import {
   updateListenedSeconds,
 } from "@/lib/playback-telemetry";
 import { restoredQueue, shuffledQueue } from "@/lib/shuffle-queue";
+import { moveQueueItem, queueIndexAfterMove } from "@/lib/queue-edit";
 import {
   parseStoredPlayerState,
   serializePlayerState,
 } from "@/lib/player-storage";
 import { useSession } from "@/providers/session-provider";
-import { useQueryClient } from "@tanstack/react-query";
+import { getSecureItem } from "@/lib/secure-storage";
+import { ZONE_DEVICE_KEY, mobileZoneName } from "@/lib/zones";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  extendWithRadio,
+  isCurrentRadioPick,
+  needsRadioTopUp,
+  radioStartIndex,
+  withoutBannedRadioPicks,
+} from "@/lib/radio-queue";
 import { useCastOutput } from "@/hooks/use-cast-output";
+import { useRadioBans } from "@/components/radio-bans";
+import {
+  nativeLeveling,
+  parseVolumeLevelingMode,
+  playsInAlbumContext,
+  signalPlatform,
+  VOLUME_LEVELING_STORAGE_KEY,
+  DSP_STORAGE_KEY,
+  parseStoredDsp,
+  type MobileSignalState,
+} from "@/lib/signal-path";
 
 type RepeatMode = "none" | "one" | "all";
 export type AudioPreset = PlayerAudioPresetId;
@@ -79,6 +127,8 @@ type PlaybackSource = {
 };
 
 type NativeAudioGraph = {
+  /** Headroom and EQ between the source and the preset mix. */
+  chain: DspChain;
   convolver: ConvolverNode;
   dryGain: GainNode;
   source: MediaElementAudioSourceNode | null;
@@ -96,7 +146,33 @@ type PlaybackControls = {
   seek: (seconds: number) => void;
 };
 
+export type PlayerRadio = {
+  /** Continue with Radio picks once the queue runs out. */
+  enabled: boolean;
+  /** Show the "Coming up" notice before a Radio pick plays. */
+  comingUpNotice: boolean;
+  /** What the current station is built around, when known. */
+  seed: ResolvedRadioSeed | null;
+  /** Index where the Radio section starts in `queue`, or -1. */
+  sectionStart: number;
+  /** The current track is a Radio pick. */
+  currentIsPick: boolean;
+  liked: ReadonlySet<string>;
+  /** A Radio pick skipped early, awaiting an optional reason. */
+  pendingSkip: LibrarySong | null;
+  answerSkip: (reason: RadioSkipReasonId) => void;
+  dismissSkip: () => void;
+  setEnabled: (enabled: boolean) => void;
+  setComingUpNotice: (visible: boolean) => void;
+  /** Starts a station; resolves to its name, or null when nothing plays. */
+  start: (seed: RadioSeed) => Promise<string | null>;
+  thumbsUp: (index: number) => void;
+  /** Skips the current track, or replaces an upcoming Radio pick. */
+  thumbsDown: (index: number) => void;
+};
+
 type PlayerContextValue = {
+  radio: PlayerRadio;
   current: LibrarySong | null;
   currentIndex: number;
   error: string | null;
@@ -114,13 +190,28 @@ type PlayerContextValue = {
   addToQueue: (songs: LibrarySong[]) => void;
   clearUpcoming: () => void;
   removeFromQueue: (index: number) => void;
+  /** Moves a queue item; the playing song keeps playing. */
+  moveInQueue: (from: number, to: number) => void;
   toggle: () => void;
   next: () => void;
   previous: () => void;
   seek: (seconds: number) => void;
   cycleRepeat: () => void;
+  setRepeatMode: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
+  setShuffleEnabled: (enabled: boolean) => void;
   setAudioPreset: (preset: AudioPreset) => void;
+  /** What this device does to the stream, for the signal path. */
+  signal: MobileSignalState;
+  volumeLevelingMode: VolumeLevelingMode;
+  setVolumeLevelingMode: (mode: VolumeLevelingMode) => void;
+  dsp: DspSettings;
+  setDsp: (settings: DspSettings) => void;
+  /**
+   * The id of the TIDAL or Qobuz play now loaded (the stream URL's
+   * `play`), so the signal line asks about exactly this stream.
+   */
+  streamPlay: string | null;
 };
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -140,6 +231,11 @@ function disconnectSource(graph: NativeAudioGraph) {
   try {
     graph.source.disconnect();
   } catch {}
+  if (graph.wetConnected) {
+    try {
+      (graph.chain.output as unknown as GainNode).disconnect(graph.convolver);
+    } catch {}
+  }
   graph.source = null;
   graph.wetConnected = false;
 }
@@ -540,6 +636,29 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   const playbackSessionId = useRef("");
   const playbackEventSequence = useRef(0);
   const telemetry = useRef(newPlaybackTelemetry());
+  const radioSettingsQuery = useQuery({
+    queryKey: ["radio-settings"],
+    queryFn: getRadioSettings,
+    enabled: session.phase === "ready" && Boolean(session.claims?.sub),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const radioSettings = radioSettingsQuery.data ?? defaultRadioSettings;
+  const radioEnabledRef = useRef(radioSettings.enabled);
+  const [radioIds, setRadioIdsState] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const radioIdsRef = useRef<ReadonlySet<string>>(radioIds);
+  const [radioSeed, setRadioSeedState] = useState<ResolvedRadioSeed | null>(
+    null,
+  );
+  const radioSeedRef = useRef<ResolvedRadioSeed | null>(null);
+  const [likedIds, setLikedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [pendingSkip, setPendingSkip] = useState<LibrarySong | null>(null);
+  const rejectedSongs = useRef(new Set<string>());
+  const radioTopUp = useRef({ inFlight: false, exhaustedKey: "" });
 
   const [queue, setQueue] = useState<LibrarySong[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -552,6 +671,10 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   const [shuffle, setShuffle] = useState(false);
   const originalQueue = useRef<LibrarySong[]>([]);
   const [audioPreset, setAudioPresetState] = useState<AudioPreset>("original");
+  const [volumeLevelingMode, setVolumeLevelingModeState] =
+    useState<VolumeLevelingMode>("off");
+  // Linear volume-leveling gain applied by the graph or the Android player.
+  const levelGainRef = useRef(1);
   const [playbackSource, setPlaybackSource] = useState<PlaybackSource | null>(
     null,
   );
@@ -560,6 +683,49 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     session.instanceId && session.claims?.sub
       ? `parson.player-state.${session.instanceId}.${session.claims.sub}`
       : null;
+
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem(VOLUME_LEVELING_STORAGE_KEY)
+      .then((value) => {
+        if (active) setVolumeLevelingModeState(parseVolumeLevelingMode(value));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const [dsp, setDspState] = useState<DspSettings>(defaultDspSettings);
+  const dspRef = useRef(dsp);
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem(DSP_STORAGE_KEY)
+      .then((value) => {
+        if (active) setDspState(parseStoredDsp(value));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    dspRef.current = dsp;
+    graphRef.current?.chain.update(dsp);
+  }, [dsp]);
+  const setDsp = useCallback((settings: DspSettings) => {
+    setDspState(settings);
+    void AsyncStorage.setItem(DSP_STORAGE_KEY, JSON.stringify(settings)).catch(
+      () => {},
+    );
+  }, []);
+
+  const setVolumeLevelingMode = useCallback((mode: VolumeLevelingMode) => {
+    setVolumeLevelingModeState(mode);
+    void AsyncStorage.setItem(VOLUME_LEVELING_STORAGE_KEY, mode).catch(
+      () => {},
+    );
+  }, []);
 
   useEffect(() => {
     if (!queueStorageKey) {
@@ -635,21 +801,91 @@ export function PlayerProvider({ children }: PropsWithChildren) {
   }, [session.claims, session.phase]);
 
   const current = queue[currentIndex] ?? null;
+  const queueRef = useRef(queue);
+  const currentIndexRef = useRef(currentIndex);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
+  useEffect(() => {
+    radioEnabledRef.current = radioSettings.enabled;
+  }, [radioSettings.enabled]);
+  const setRadioIds = useCallback((ids: ReadonlySet<string>) => {
+    radioIdsRef.current = ids;
+    setRadioIdsState(ids);
+  }, []);
+  const addRadioIds = useCallback(
+    (songs: LibrarySong[]) => {
+      if (!songs.length) return;
+      setRadioIds(
+        new Set([...radioIdsRef.current, ...songs.map((song) => song.id)]),
+      );
+    },
+    [setRadioIds],
+  );
+  const setRadioSeed = useCallback((seed: ResolvedRadioSeed | null) => {
+    radioSeedRef.current = seed;
+    setRadioSeedState(seed);
+  }, []);
+  const resetRadio = useCallback(() => {
+    setRadioIds(new Set());
+    setRadioSeed(null);
+    radioTopUp.current.exhaustedKey = "";
+  }, [setRadioIds, setRadioSeed]);
+  const originFor = useCallback(
+    (song: LibrarySong | undefined): "generated" | "manual" =>
+      song && radioIdsRef.current.has(song.id) ? "generated" : "manual",
+    [],
+  );
   const preset = getPlayerAudioPreset(audioPreset);
   const audioPresetsEnabled = Platform.OS !== "android";
   const effectivePreset = audioPresetsEnabled
     ? preset
     : getPlayerAudioPreset("original");
 
+  // Where plays happen, for listening history: this phone's zone.
+  const historyZone = useRef<{
+    zone_id: string;
+    zone_name: string;
+    device: string;
+  } | null>(null);
+  useEffect(() => {
+    if (session.phase !== "ready" || historyZone.current) return;
+    void getSecureItem(ZONE_DEVICE_KEY)
+      .then((id) => {
+        if (!id || !/^[a-z0-9_-]{8,64}$/i.test(id)) return;
+        historyZone.current = {
+          zone_id: `client:${id}`,
+          zone_name: mobileZoneName(
+            Device.deviceName,
+            Device.modelName,
+            Platform.OS,
+          ),
+          device: Device.modelName ?? Platform.OS,
+        };
+      })
+      .catch(() => {});
+  }, [session.phase]);
+
   const sendPlaybackEvent = useCallback(
     (eventType: PlaybackEventType) => {
-      if (!current?.id || !session.claims?.sub || session.phase === "offline")
+      if (
+        !current?.id ||
+        !session.claims?.sub ||
+        session.phase === "offline" ||
+        // History and recommendations cover the local library only.
+        isStreamingId(current.id) ||
+        isLiveRadioId(current.id)
+      )
         return;
       if (!playbackSessionId.current) {
         playbackSessionId.current = `mobile-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       }
       playbackEventSequence.current += 1;
       void recordPlaybackEvent({
+        ...(eventType === "qualified_play" ? historyZone.current : null),
         duration_seconds: duration || current.duration,
         event_key: `${playbackSessionId.current}:${current.id}:${eventType}:${playbackEventSequence.current}`,
         event_type: eventType,
@@ -683,6 +919,26 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     ],
   );
 
+  /** Feedback about any song, e.g. a thumbs up on an upcoming Radio pick. */
+  const sendSongEvent = useCallback(
+    (songId: string, eventType: PlaybackEventType) => {
+      if (!songId || !session.claims?.sub || session.phase === "offline")
+        return;
+      if (!playbackSessionId.current) {
+        playbackSessionId.current = `mobile-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      }
+      playbackEventSequence.current += 1;
+      void recordPlaybackEvent({
+        event_key: `${playbackSessionId.current}:${songId}:${eventType}:${playbackEventSequence.current}`,
+        event_type: eventType,
+        session_id: playbackSessionId.current,
+        song_id: songId,
+        source: "generated",
+      }).catch(() => {});
+    },
+    [session.claims?.sub, session.phase],
+  );
+
   const ensureGraph = useCallback(() => {
     if (graphRef.current) return graphRef.current;
     if (!audioContext) return null;
@@ -692,10 +948,16 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     convolver.buffer = buildReverbImpulse(audioContext);
     dryGain.gain.value = 1;
     wetGain.gain.value = 0;
+    const chain = createDspChain(
+      audioContext as unknown as DspAudioContext,
+      dspRef.current,
+    );
+    (chain.output as unknown as GainNode).connect(dryGain);
     dryGain.connect(audioContext.destination);
     convolver.connect(wetGain);
     wetGain.connect(audioContext.destination);
     graphRef.current = {
+      chain,
       convolver,
       dryGain,
       source: null,
@@ -712,14 +974,16 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       const graph = graphRef.current;
       if (!graph || !audioContext) return;
       const now = audioContext.currentTime;
-      graph.dryGain.gain.setTargetAtTime(next.dry, now, 0.025);
-      graph.wetGain.gain.setTargetAtTime(next.wet, now, 0.025);
+      const level = levelGainRef.current;
+      graph.dryGain.gain.setTargetAtTime(next.dry * level, now, 0.025);
+      graph.wetGain.gain.setTargetAtTime(next.wet * level, now, 0.025);
+      const chainOutput = graph.chain.output as unknown as GainNode;
       if (next.wet > 0 && graph.source && !graph.wetConnected) {
-        graph.source.connect(graph.convolver);
+        chainOutput.connect(graph.convolver);
         graph.wetConnected = true;
       } else if (next.wet === 0 && graph.source && graph.wetConnected) {
         try {
-          graph.source.disconnect(graph.convolver);
+          chainOutput.disconnect(graph.convolver);
         } catch {}
         graph.wetConnected = false;
       }
@@ -747,7 +1011,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       if (!graph) return;
       disconnectSource(graph);
       const source = audioContext.createMediaElementSource(audio);
-      source.connect(graph.dryGain);
+      source.connect(graph.chain.input as unknown as GainNode);
       graph.source = source;
       applyPreset(audioPreset);
       playWhenRequested();
@@ -768,7 +1032,15 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       return {
         artworkUrl,
         // Native decoding expects a decoded path, not an Expo file URI.
-        uri: local ? decodeURI(local) : streamUrl(song.id, bitrate),
+        uri: local
+          ? decodeURI(local)
+          : streamUrl(
+              song.id,
+              bitrate,
+              devicePlaybackCapabilities(),
+              // Each load is a new play with its own delivery report.
+              isStreamingId(song.id) ? newPlayId() : null,
+            ),
         headers: local ? undefined : await freshAuthorizationHeaders(),
       };
     },
@@ -847,26 +1119,30 @@ export function PlayerProvider({ children }: PropsWithChildren) {
         0,
         songs.findIndex((item) => item.id === song.id),
       );
-      loadAt(songs, index);
+      // Tapping a song inside the current queue keeps its Radio section.
+      if (songs !== queueRef.current) resetRadio();
+      loadAt(songs, index, true, false, originFor(songs[index]));
     },
-    [loadAt],
+    [loadAt, originFor, resetRadio],
   );
 
   const playAt = useCallback(
-    (index: number) => loadAt(queue, index, true, true, "manual"),
-    [loadAt, queue],
+    (index: number) =>
+      loadAt(queue, index, true, true, originFor(queue[index])),
+    [loadAt, originFor, queue],
   );
 
   const playShuffled = useCallback(
     (songs: LibrarySong[]) => {
       if (!songs.length) return;
+      resetRadio();
       originalQueue.current = [...songs];
       const selected = Math.floor(Math.random() * songs.length);
       const shuffled = shuffledQueue(songs, selected);
       setShuffle(true);
       loadAt(shuffled.queue, shuffled.currentIndex, true, true);
     },
-    [loadAt],
+    [loadAt, resetRadio],
   );
 
   const addNext = useCallback(
@@ -1006,6 +1282,57 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     androidPlayerRef.current?.clearLockScreenControls();
   }, [cast.casting]);
 
+  const platform = signalPlatform(Platform.OS);
+  const currentId = current?.id;
+  const currentLoudness = current?.loudness;
+  const albumIds = useMemo(
+    () => queue.map((song) => song.album_object?.id),
+    [queue],
+  );
+  const leveling = useMemo(
+    () =>
+      nativeLeveling(
+        currentLoudness,
+        volumeLevelingMode,
+        platform,
+        playsInAlbumContext(albumIds, currentIndex),
+      ),
+    [albumIds, currentIndex, currentLoudness, platform, volumeLevelingMode],
+  );
+  useEffect(() => {
+    levelGainRef.current = leveling.gain;
+    const androidPlayer = androidPlayerRef.current;
+    if (androidPlayer) androidPlayer.volume = Math.min(1, leveling.gain);
+    else applyPreset(audioPreset);
+  }, [applyPreset, audioPreset, leveling.gain, playbackSource]);
+  const streamBitrate = session.claims?.bitrate ?? 0;
+  const signal = useMemo<MobileSignalState>(
+    () => ({
+      platform,
+      localFile: Boolean(
+        playbackSource && currentId && downloadedSongUri(currentId),
+      ),
+      streamBitrate,
+      contextSampleRate: audioContext?.sampleRate ?? null,
+      leveling: leveling.result,
+      levelingUnavailable: leveling.unavailable,
+      casting: cast.casting,
+      castDeviceName: cast.deviceName,
+      dsp,
+    }),
+    [
+      audioContext,
+      cast.casting,
+      cast.deviceName,
+      currentId,
+      dsp,
+      leveling,
+      platform,
+      streamBitrate,
+      playbackSource,
+    ],
+  );
+
   const next = useCallback(() => {
     if (!queue.length) return;
     const nextIndex = currentIndex + 1;
@@ -1014,16 +1341,26 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       isEarlySkip(telemetry.current.listenedSeconds, duration)
     ) {
       sendPlaybackEvent("early_skip");
+      if (current) setPendingSkip(current);
     }
     if (nextIndex < queue.length)
-      loadAt(queue, nextIndex, true, true, playbackOrigin.current);
+      loadAt(queue, nextIndex, true, true, originFor(queue[nextIndex]));
     else if (repeat === "all")
-      loadAt(queue, 0, true, true, playbackOrigin.current);
+      loadAt(queue, 0, true, true, originFor(queue[0]));
     else {
       desiredPlaying.current = false;
       setIsPlaying(false);
     }
-  }, [currentIndex, duration, loadAt, queue, repeat, sendPlaybackEvent]);
+  }, [
+    current,
+    currentIndex,
+    duration,
+    loadAt,
+    originFor,
+    queue,
+    repeat,
+    sendPlaybackEvent,
+  ]);
 
   const seek = useCallback(
     (seconds: number) => {
@@ -1051,13 +1388,14 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       sendPlaybackEvent("early_skip");
     }
     if (previousIndex >= 0)
-      loadAt(queue, previousIndex, true, true, playbackOrigin.current);
+      loadAt(queue, previousIndex, true, true, originFor(queue[previousIndex]));
     else seek(0);
   }, [
     currentIndex,
     currentTime,
     duration,
     loadAt,
+    originFor,
     queue,
     seek,
     sendPlaybackEvent,
@@ -1078,6 +1416,28 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     },
     [applyPreset, audioPreset, audioPresetsEnabled],
   );
+
+  const moveInQueue = useCallback(
+    (from: number, to: number) => {
+      if (
+        from === to ||
+        from < 0 ||
+        to < 0 ||
+        from >= queue.length ||
+        to >= queue.length
+      ) {
+        return;
+      }
+      const next = moveQueueItem(queue, from, to);
+      setQueue(next);
+      setCurrentIndex((value) => queueIndexAfterMove(value, from, to));
+      // Unshuffled, the new order is the order shuffle-off returns to.
+      if (!shuffle) originalQueue.current = next;
+    },
+    [queue, shuffle],
+  );
+
+  const setRepeatMode = useCallback((mode: RepeatMode) => setRepeat(mode), []);
 
   const cycleRepeat = useCallback(() => {
     setRepeat((value) =>
@@ -1105,7 +1465,93 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     setShuffle(true);
   }, [currentIndex, queue, shuffle]);
 
+  /** Extends a finished queue with a Radio station when Radio is on. */
+  const continueWithRadio = useCallback(() => {
+    desiredPlaying.current = false;
+    const endingSongId = queue[currentIndex]?.id;
+    if (
+      !endingSongId ||
+      // Library Radio seeds from library tracks, not TIDAL or Qobuz ones.
+      isStreamingId(endingSongId) ||
+      isLiveRadioId(endingSongId) ||
+      session.phase !== "ready" ||
+      !shouldContinueWithRadio({
+        enabled: radioEnabledRef.current,
+        repeating: repeat !== "none",
+      })
+    )
+      return;
+    const request = ++radioRequest.current;
+    const seed: RadioSeed =
+      radioIdsRef.current.has(endingSongId) && radioSeedRef.current
+        ? radioSeedRef.current
+        : { kind: "song", id: endingSongId };
+    const endingQueue = queue;
+    const endingIndex = currentIndex;
+    void createPlaybackQueue({
+      ...radioSeedParams(seed),
+      // The queue so far: Radio prefers fresh songs and, once the library
+      // is used up, brings back the ones heard longest ago.
+      exclude_song_ids: radioQueueHistory(
+        endingQueue.map((song) => song.id),
+        100,
+      ),
+      reject_song_ids: [...rejectedSongs.current],
+      generated_items: 20,
+      source: "radio",
+    })
+      .then((generated) => {
+        if (request !== radioRequest.current) return;
+        const songs = playableQueueSongs(generated.items);
+        const extended = extendWithRadio(endingQueue, endingIndex, songs);
+        if (extended.nextIndex >= extended.queue.length) return;
+        addRadioIds(songs);
+        if (generated.seed) setRadioSeed(generated.seed);
+        originalQueue.current = shuffle
+          ? [...originalQueue.current, ...songs]
+          : [...extended.queue];
+        loadAt(extended.queue, extended.nextIndex, true, true, "generated");
+      })
+      .catch((error: unknown) => {
+        // Radio only runs out when everything left is banned or thumbed
+        // down: say so rather than stopping silently.
+        const notice = radioExhaustedNotice(error);
+        if (notice && request === radioRequest.current) {
+          setPlaybackError(notice);
+        }
+      });
+  }, [
+    addRadioIds,
+    currentIndex,
+    loadAt,
+    queue,
+    repeat,
+    session.phase,
+    setRadioSeed,
+    shuffle,
+  ]);
+  const setShuffleEnabled = useCallback(
+    (enabled: boolean) => {
+      if (enabled !== shuffle) toggleShuffle();
+    },
+    [shuffle, toggleShuffle],
+  );
+
+  const liveReconnects = useRef<number[]>([]);
   const handleEnded = useCallback(() => {
+    // A live station only ends when its connection drops: reconnect.
+    const endingId = queue[currentIndex]?.id;
+    if (isLiveRadioId(endingId)) {
+      const next = shouldReconnect(liveReconnects.current, Date.now());
+      liveReconnects.current = next.attempts;
+      if (next.reconnect) {
+        loadAt(queue, currentIndex, true, true, playbackOrigin.current);
+      } else {
+        setIsPlaying(false);
+        setPlaybackError("The station stopped sending audio.");
+      }
+      return;
+    }
     setIsPlaying(false);
     if (
       !telemetry.current.completed &&
@@ -1117,38 +1563,300 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     if (repeat === "one")
       loadAt(queue, currentIndex, true, true, playbackOrigin.current);
     else if (currentIndex + 1 < queue.length)
-      loadAt(queue, currentIndex + 1, true, true, playbackOrigin.current);
+      loadAt(
+        queue,
+        currentIndex + 1,
+        true,
+        true,
+        originFor(queue[currentIndex + 1]),
+      );
     else if (repeat === "all")
-      loadAt(queue, 0, true, true, playbackOrigin.current);
-    else if (current?.id && session.phase === "ready") {
-      desiredPlaying.current = false;
-      const endingSongId = current.id;
-      const request = ++radioRequest.current;
-      void createPlaybackQueue({
-        exclude_song_ids: queue.slice(-50).map((song) => song.id),
-        generated_items: 20,
-        seed_song_id: endingSongId,
-        source: "radio",
-      })
-        .then((generated) => {
-          if (request !== radioRequest.current || current?.id !== endingSongId)
-            return;
-          const songs = playableQueueSongs(generated.items);
-          if (!songs.length) return;
-          originalQueue.current = songs;
-          setShuffle(false);
-          loadAt(songs, 0, true, true, "generated");
-        })
-        .catch(() => {});
-    } else desiredPlaying.current = false;
+      loadAt(queue, 0, true, true, originFor(queue[0]));
+    else continueWithRadio();
   }, [
-    current,
+    continueWithRadio,
     currentIndex,
     duration,
     loadAt,
+    originFor,
     queue,
     repeat,
     sendPlaybackEvent,
+  ]);
+
+  /** Appends Radio picks to the Radio section at the end of the queue. */
+  const requestRadioPicks = useCallback(
+    (limit: number) => {
+      const topUp = radioTopUp.current;
+      const base = queueRef.current;
+      const last = base.at(-1);
+      const key = `${base.length}:${last?.id ?? ""}:${radioSeedRef.current?.id ?? ""}`;
+      if (topUp.inFlight || topUp.exhaustedKey === key) return;
+      const seed: RadioSeed | null =
+        radioSeedRef.current ?? (last ? { kind: "song", id: last.id } : null);
+      topUp.inFlight = true;
+      void getRadioPicks({
+        seed,
+        exclude_song_ids: radioQueueHistory(base.map((song) => song.id)),
+        reject_song_ids: [...rejectedSongs.current],
+        limit,
+      })
+        .then((result) => {
+          const latest = queueRef.current;
+          if (!latest.length || latest[0]?.id !== base[0]?.id) return;
+          // Played songs may come back once the library is used up; only
+          // what is still to come must not be queued twice.
+          const known = new Set(
+            latest
+              .slice(Math.max(0, currentIndexRef.current + 1))
+              .map((song) => song.id),
+          );
+          const songs = playableQueueSongs(result.items).filter(
+            (song) => !known.has(song.id),
+          );
+          if (!songs.length) {
+            topUp.exhaustedKey = key;
+            const notice = radioPicksExhaustedNotice(result);
+            if (notice) setPlaybackError(notice);
+            return;
+          }
+          addRadioIds(songs);
+          if (!radioSeedRef.current && result.seed) setRadioSeed(result.seed);
+          originalQueue.current = [...originalQueue.current, ...songs];
+          setQueue((items) =>
+            items[0]?.id === latest[0]?.id ? [...items, ...songs] : items,
+          );
+        })
+        .catch(() => {})
+        .finally(() => {
+          topUp.inFlight = false;
+        });
+    },
+    [addRadioIds, setRadioSeed],
+  );
+
+  const saveRadioSettings = useCallback(
+    (update: Partial<RadioSettings>) => {
+      const previous =
+        queryClient.getQueryData<RadioSettings>(["radio-settings"]) ??
+        defaultRadioSettings;
+      const optimistic = { ...previous, ...update };
+      queryClient.setQueryData(["radio-settings"], optimistic);
+      radioEnabledRef.current = optimistic.enabled;
+      void updateRadioSettings(update)
+        .then((saved) => {
+          queryClient.setQueryData(["radio-settings"], saved);
+          radioEnabledRef.current = saved.enabled;
+        })
+        .catch(() => {
+          queryClient.setQueryData(["radio-settings"], previous);
+          radioEnabledRef.current = previous.enabled;
+          setPlaybackError("Radio settings could not be saved.");
+        });
+    },
+    [queryClient],
+  );
+
+  const setRadioEnabled = useCallback(
+    (enabled: boolean) => {
+      saveRadioSettings({ enabled });
+      radioTopUp.current.exhaustedKey = "";
+      if (enabled) return;
+      const start = radioStartIndex(queue, radioIdsRef.current, currentIndex);
+      if (start < 0) return;
+      const removed = new Set(queue.slice(start).map((song) => song.id));
+      originalQueue.current = originalQueue.current.filter(
+        (song) => !removed.has(song.id),
+      );
+      setQueue(queue.slice(0, start));
+    },
+    [currentIndex, queue, saveRadioSettings],
+  );
+
+  const startRadio = useCallback(
+    async (seed: RadioSeed) => {
+      let created: Awaited<ReturnType<typeof createPlaybackQueue>>;
+      try {
+        created = await createPlaybackQueue({
+          ...radioSeedParams(seed),
+          explicit_song_ids: seed.kind === "song" ? [seed.id] : [],
+          exclude_song_ids: radioQueueHistory(
+            queueRef.current.map((song) => song.id),
+            100,
+          ),
+          reject_song_ids: [...rejectedSongs.current],
+          generated_items: 25,
+          source: "radio",
+        });
+      } catch (error) {
+        const notice = radioExhaustedNotice(error);
+        if (!notice) throw error;
+        setPlaybackError(notice);
+        return null;
+      }
+      const songs = playableQueueSongs(created.items);
+      if (!songs.length) return null;
+      const generated = new Set(
+        created.items
+          .filter((item) => item.origin === "generated")
+          .map((item) => item.id),
+      );
+      setRadioIds(generated);
+      setRadioSeed(created.seed ?? null);
+      radioTopUp.current.exhaustedKey = "";
+      if (!radioEnabledRef.current) saveRadioSettings({ enabled: true });
+      // Starting Radio turns repeat and shuffle off, as in Roon.
+      setRepeat("none");
+      setShuffle(false);
+      originalQueue.current = [...songs];
+      const first = songs[0]!;
+      loadAt(
+        songs,
+        0,
+        true,
+        true,
+        generated.has(first.id) ? "generated" : "manual",
+      );
+      return created.seed?.name ?? first.name;
+    },
+    [loadAt, saveRadioSettings, setRadioIds, setRadioSeed],
+  );
+
+  const thumbsUp = useCallback(
+    (index: number) => {
+      const song = queue[index];
+      if (!song || likedIds.has(song.id)) return;
+      rejectedSongs.current.delete(song.id);
+      sendSongEvent(song.id, "thumbs_up");
+      setLikedIds(new Set([...likedIds, song.id]));
+    },
+    [likedIds, queue, sendSongEvent],
+  );
+
+  const thumbsDown = useCallback(
+    (index: number) => {
+      const song = queue[index];
+      if (!song) return;
+      rejectedSongs.current.add(song.id);
+      sendSongEvent(song.id, "disliked");
+      if (index === currentIndex) {
+        setPendingSkip(null);
+        if (currentIndex + 1 < queue.length)
+          loadAt(
+            queue,
+            currentIndex + 1,
+            true,
+            true,
+            originFor(queue[currentIndex + 1]),
+          );
+        else {
+          audioRef.current?.pause();
+          androidPlayerRef.current?.pause();
+          setIsPlaying(false);
+          continueWithRadio();
+        }
+        return;
+      }
+      const wasRadioPick = radioIdsRef.current.has(song.id);
+      removeFromQueue(index);
+      if (wasRadioPick && radioEnabledRef.current) {
+        radioTopUp.current.exhaustedKey = "";
+        requestRadioPicks(1);
+      }
+    },
+    [
+      continueWithRadio,
+      currentIndex,
+      loadAt,
+      originFor,
+      queue,
+      removeFromQueue,
+      requestRadioPicks,
+      sendSongEvent,
+    ],
+  );
+
+  // Bans apply at once: banned Radio picks leave the queue, and a banned
+  // Radio pick that is playing is skipped. Songs you queued yourself stay.
+  const { index: banIndex, loaded: bansLoaded } = useRadioBans();
+  const appliedBanIndex = useRef<typeof banIndex | null>(null);
+  useEffect(() => {
+    if (!bansLoaded) return;
+    const previous = appliedBanIndex.current;
+    appliedBanIndex.current = banIndex;
+    if (previous === banIndex || !queue.length) return;
+    const result = withoutBannedRadioPicks(
+      queue,
+      radioIdsRef.current,
+      currentIndex,
+      banIndex,
+    );
+    if (result.removedIds.length) {
+      const removed = new Set(result.removedIds);
+      originalQueue.current = originalQueue.current.filter(
+        (song) => !removed.has(song.id),
+      );
+      setQueue(result.queue);
+      if (radioEnabledRef.current) radioTopUp.current.exhaustedKey = "";
+    }
+    // Only skip for a ban made while listening, not one loaded at start.
+    if (!result.currentBanned || previous === null) return;
+    setPendingSkip(null);
+    if (currentIndex + 1 < result.queue.length) {
+      loadAt(
+        result.queue,
+        currentIndex + 1,
+        true,
+        true,
+        originFor(result.queue[currentIndex + 1]),
+      );
+    } else {
+      audioRef.current?.pause();
+      androidPlayerRef.current?.pause();
+      setIsPlaying(false);
+      continueWithRadio();
+    }
+  }, [
+    banIndex,
+    bansLoaded,
+    continueWithRadio,
+    currentIndex,
+    loadAt,
+    originFor,
+    queue,
+  ]);
+
+  const answerSkip = useCallback(
+    (reason: RadioSkipReasonId) => {
+      const skipped = pendingSkip?.id;
+      setPendingSkip(null);
+      if (!skipped) return;
+      if (reason === "dislike") rejectedSongs.current.add(skipped);
+      sendSongEvent(skipped, radioSkipReasonEvent(reason));
+    },
+    [pendingSkip?.id, sendSongEvent],
+  );
+  const dismissSkip = useCallback(() => setPendingSkip(null), []);
+
+  // Keep a few Radio picks queued while Radio is on.
+  useEffect(() => {
+    if (
+      !radioSettings.enabled ||
+      repeat !== "none" ||
+      cast.casting ||
+      session.phase !== "ready" ||
+      !needsRadioTopUp(queue, radioIds, currentIndex)
+    )
+      return;
+    requestRadioPicks(6);
+  }, [
+    cast.casting,
+    currentIndex,
+    queue,
+    radioIds,
+    radioSettings.enabled,
+    repeat,
+    requestRadioPicks,
     session.phase,
   ]);
 
@@ -1216,9 +1924,27 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     rate: effectivePreset.rate,
   });
 
+  const streamPlay = playIdFromStreamUrl(playbackSource?.value.uri);
   const value = useMemo<PlayerContextValue>(() => {
     const effectiveIndex = cast.casting ? cast.currentIndex : currentIndex;
     return {
+      radio: {
+        enabled: radioSettings.enabled,
+        comingUpNotice: radioSettings.coming_up_notice,
+        seed: radioSeed,
+        sectionStart: radioStartIndex(queue, radioIds, effectiveIndex),
+        currentIsPick: isCurrentRadioPick(queue, radioIds, effectiveIndex),
+        liked: likedIds,
+        pendingSkip,
+        answerSkip,
+        dismissSkip,
+        setEnabled: setRadioEnabled,
+        setComingUpNotice: (visible: boolean) =>
+          saveRadioSettings({ coming_up_notice: visible }),
+        start: startRadio,
+        thumbsUp,
+        thumbsDown,
+      },
       current: queue[effectiveIndex] ?? current,
       currentIndex: effectiveIndex,
       error: playbackError,
@@ -1236,15 +1962,39 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       addToQueue,
       clearUpcoming,
       removeFromQueue,
+      moveInQueue,
       toggle: cast.casting ? cast.toggle : toggle,
       next: cast.casting ? cast.next : next,
       previous: cast.casting ? cast.previous : previous,
       seek: cast.casting ? cast.seek : seek,
       cycleRepeat,
+      setRepeatMode,
       toggleShuffle,
+      setShuffleEnabled,
       setAudioPreset,
+      signal,
+      volumeLevelingMode,
+      setVolumeLevelingMode,
+      dsp,
+      setDsp,
+      streamPlay: cast.casting ? null : streamPlay,
     };
   }, [
+    answerSkip,
+    dismissSkip,
+    likedIds,
+    pendingSkip,
+    radioIds,
+    radioSeed,
+    radioSettings.coming_up_notice,
+    radioSettings.enabled,
+    saveRadioSettings,
+    setRadioEnabled,
+    startRadio,
+    thumbsDown,
+    thumbsUp,
+    dsp,
+    setDsp,
     addNext,
     addToQueue,
     clearUpcoming,
@@ -1261,6 +2011,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     currentIndex,
     cycleRepeat,
     playbackError,
+    streamPlay,
     isBuffering,
     isPlaying,
     next,
@@ -1270,12 +2021,18 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     previous,
     queue,
     removeFromQueue,
+    moveInQueue,
+    setRepeatMode,
+    setShuffleEnabled,
     repeat,
     shuffle,
     seek,
     setAudioPreset,
+    setVolumeLevelingMode,
+    signal,
     toggleShuffle,
     toggle,
+    volumeLevelingMode,
   ]);
   const position = useMemo(
     () => ({

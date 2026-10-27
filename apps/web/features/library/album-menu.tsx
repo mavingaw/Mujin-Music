@@ -8,15 +8,33 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useSession } from "@/features/account/session-provider";
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { getAlbumInfo, type LibraryAlbum } from "@parson/music-sdk";
-import { Disc3, Download, Play, UserRound } from "lucide-react";
+import {
+  Disc3,
+  Download,
+  ListEnd,
+  ListStart,
+  Play,
+  Radio,
+  UserRound,
+} from "lucide-react";
+import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { downloadAlbum } from "@/lib/downloads/download-album";
 import { toast } from "sonner";
 import Link from "next/link";
+import { BanMenuItem } from "@/features/library/radio-bans";
+import { useState } from "react";
+import {
+  CreateTagDialog,
+  TagSubmenu,
+} from "@/features/library/focus/tag-submenu";
+import { ListenLaterMenuItem } from "@/features/library/listen-later/listen-later-menu-item";
+import { LibraryToolsSubmenu } from "@/features/library/tools/library-tools-menu";
 
 type AlbumMenuProps = {
   album_id: string;
+  album_name?: string;
   artist_id: string;
   children: React.ReactNode;
   showArtist?: boolean;
@@ -24,27 +42,35 @@ type AlbumMenuProps = {
 
 export default function AlbumMenu({
   album_id,
+  album_name,
   artist_id,
   children,
   showArtist = true,
 }: AlbumMenuProps) {
-  const player = usePlayer();
+  const playback = useZonePlayback();
+  const startRadio = useStartRadio();
   const { session } = useSession();
+  const [createTagOpen, setCreateTagOpen] = useState(false);
 
   const loadAlbum = () =>
     getAlbumInfo(album_id, false) as Promise<LibraryAlbum>;
 
-  const play = async () => {
-    const album = await loadAlbum();
-    const firstSong = album.songs?.[0];
-    const artist = album.artist_object;
-    if (!firstSong || !artist) {
+  const run = async (action: "play" | "next" | "end") => {
+    let album: LibraryAlbum;
+    try {
+      album = await loadAlbum();
+    } catch {
+      toast("Could not load this album.");
       return;
     }
-    player.setQueue(album.songs.map((song) => ({ song, album, artist })));
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(firstSong, artist, album);
-    player.playAudioSource();
+    const artist = album.artist_object;
+    if (!album.songs?.length || !artist) {
+      return;
+    }
+    const items = album.songs.map((song) => ({ song, album, artist }));
+    if (action === "play") await playback.playQueue(items);
+    else if (action === "next") await playback.playNext(items, album.name);
+    else await playback.addToQueue(items, album.name);
   };
 
   const save = async () => {
@@ -56,35 +82,73 @@ export default function AlbumMenu({
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-60">
-        <ContextMenuItem onSelect={() => void play()}>
-          <Play className="h-4 w-4" />
-          Play
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem asChild>
-          <Link href={`/album?id=${album_id}`}>
-            <Disc3 className="h-4 w-4" />
-            View album
-          </Link>
-        </ContextMenuItem>
-        {session?.role === "user" && (
-          <ContextMenuItem onSelect={() => void save()}>
-            <Download className="h-4 w-4" />
-            Download album
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent className="w-60">
+          <ContextMenuItem onSelect={() => void run("play")}>
+            <Play className="h-4 w-4" />
+            Play
           </ContextMenuItem>
-        )}
-        {showArtist && (
+          <ContextMenuItem onSelect={() => void run("next")}>
+            <ListStart className="h-4 w-4" />
+            Play next
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => void run("end")}>
+            <ListEnd className="h-4 w-4" />
+            Add to queue
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => void startRadio({ kind: "album", id: album_id })}
+          >
+            <Radio className="h-4 w-4" />
+            Start radio
+          </ContextMenuItem>
+          <BanMenuItem
+            target={{ kind: "album", id: album_id, name: album_name }}
+          />
+          <ContextMenuSeparator />
           <ContextMenuItem asChild>
-            <Link href={`/artist?id=${artist_id}`}>
-              <UserRound className="h-4 w-4" />
-              View artist
+            <Link href={`/album?id=${album_id}`}>
+              <Disc3 className="h-4 w-4" />
+              View album
             </Link>
           </ContextMenuItem>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+          <ListenLaterMenuItem
+            entityId={album_id}
+            entityType="album"
+            name={album_name}
+          />
+          <TagSubmenu
+            entityId={album_id}
+            entityType="album"
+            onCreateTag={() => setCreateTagOpen(true)}
+          />
+          {session?.role === "user" && (
+            <ContextMenuItem onSelect={() => void save()}>
+              <Download className="h-4 w-4" />
+              Download album
+            </ContextMenuItem>
+          )}
+          {showArtist && (
+            <ContextMenuItem asChild>
+              <Link href={`/artist?id=${artist_id}`}>
+                <UserRound className="h-4 w-4" />
+                View artist
+              </Link>
+            </ContextMenuItem>
+          )}
+          <LibraryToolsSubmenu scope={{ scope: "albums", ids: [album_id] }} />
+        </ContextMenuContent>
+      </ContextMenu>
+      {createTagOpen && (
+        <CreateTagDialog
+          entityId={album_id}
+          entityType="album"
+          onOpenChange={setCreateTagOpen}
+          open={createTagOpen}
+        />
+      )}
+    </>
   );
 }

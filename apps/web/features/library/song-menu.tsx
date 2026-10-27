@@ -11,17 +11,35 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
-import { usePlayer } from "@/features/player/player-context";
-import { addSongToPlaylist, getPlaylists } from "@parson/music-sdk";
+import { BanMenuItem } from "@/features/library/radio-bans";
+import {
+  CreateTagDialog,
+  TagSubmenu,
+} from "@/features/library/focus/tag-submenu";
+import { ListenLaterMenuItem } from "@/features/library/listen-later/listen-later-menu-item";
+import { useStartRadio } from "@/features/player/radio/radio-controls";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
+import {
+  addSongToPlaylist,
+  getPlaylists,
+  trackWorkTarget,
+  type WorkSummary,
+} from "@parson/music-sdk";
+import { useSongWorks } from "@/features/library/works/use-works";
+import { LibraryToolsSubmenu } from "@/features/library/tools/library-tools-menu";
+import { SongAnalysisDialog } from "@/features/library/tools/song-analysis-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Disc3,
+  Info,
+  Music2,
   ListEnd,
   ListPlus,
   Loader2,
   Pause,
   Play,
   Plus,
+  Radio,
   RefreshCw,
   UserRound,
   X,
@@ -47,6 +65,11 @@ type SongMenuProps = {
   context?: SongMenuContext;
   onRemoveFromPlaylist?: () => void;
   removeFromPlaylistLabel?: string;
+  /** Shows "View credits…" when the caller can show the track's credits. */
+  onViewCredits?: () => void;
+  /** The piece the track performs, when the caller already knows it.
+   * Left undefined, the menu looks it up when it opens. */
+  work?: WorkSummary | null;
 };
 
 export default function SongMenu({
@@ -61,12 +84,19 @@ export default function SongMenu({
   context = "default",
   onRemoveFromPlaylist,
   removeFromPlaylistLabel = "Remove from playlist",
+  onViewCredits,
+  work,
 }: SongMenuProps) {
-  const player = usePlayer();
+  const playback = useZonePlayback();
+  const startRadio = useStartRadio();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createTagOpen, setCreateTagOpen] = useState(false);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
   const entityLinks = songMenuEntityLinkVisibility(context);
+  const songWorks = useSongWorks(song_id, open && work === undefined);
+  const piece = work === undefined ? trackWorkTarget(songWorks.data) : work;
   const playlists = useQuery({
     queryKey: ["playlists"],
     queryFn: getPlaylists,
@@ -103,24 +133,18 @@ export default function SongMenu({
 
   const play = () => {
     if (context === "player") {
-      player.togglePlayPause();
+      void playback.togglePlayPause();
       return;
     }
-    const item = queueItem();
-    player.setQueue([item]);
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(item.song, item.artist, item.album);
-    player.playAudioSource();
+    void playback.playQueue([queueItem()]);
   };
 
   const addToQueue = () => {
-    player.addToQueue([queueItem()]);
-    toast.success(`Added ${song_name} to queue`);
+    void playback.addToQueue([queueItem()], song_name);
   };
 
   const playNext = () => {
-    player.addNextToQueue([queueItem()]);
-    toast.success(`${song_name} will play next`);
+    void playback.playNext([queueItem()], song_name);
   };
 
   return (
@@ -129,12 +153,12 @@ export default function SongMenu({
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent className="w-60">
           <ContextMenuItem onSelect={play}>
-            {context === "player" && player.isPlaying ? (
+            {context === "player" && playback.isPlaying ? (
               <Pause className="h-4 w-4" />
             ) : (
               <Play className="h-4 w-4" />
             )}
-            {context === "player" && player.isPlaying ? "Pause" : "Play"}
+            {context === "player" && playback.isPlaying ? "Pause" : "Play"}
           </ContextMenuItem>
           {(context === "default" || context === "album") && (
             <ContextMenuItem onSelect={playNext}>
@@ -148,6 +172,15 @@ export default function SongMenu({
               Add to queue
             </ContextMenuItem>
           )}
+          <ContextMenuItem
+            onSelect={() => void startRadio({ kind: "song", id: song_id })}
+          >
+            <Radio className="h-4 w-4" />
+            Start radio
+          </ContextMenuItem>
+          <BanMenuItem
+            target={{ kind: "song", id: song_id, name: song_name }}
+          />
           {context !== "artist" && <ContextMenuSeparator />}
           {context !== "artist" && (
             <ContextMenuSub>
@@ -195,8 +228,35 @@ export default function SongMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
-          {(entityLinks.album || entityLinks.artist) && (
-            <ContextMenuSeparator />
+          <ListenLaterMenuItem
+            entityId={song_id}
+            entityType="track"
+            name={song_name}
+          />
+          {context !== "player" && (
+            <TagSubmenu
+              entityId={song_id}
+              entityType="track"
+              onCreateTag={() => setCreateTagOpen(true)}
+            />
+          )}
+          {(entityLinks.album ||
+            entityLinks.artist ||
+            onViewCredits ||
+            piece) && <ContextMenuSeparator />}
+          {onViewCredits && (
+            <ContextMenuItem onSelect={onViewCredits}>
+              <Info className="h-4 w-4" />
+              View credits…
+            </ContextMenuItem>
+          )}
+          {piece && (
+            <ContextMenuItem asChild>
+              <Link href={`/work?id=${encodeURIComponent(piece.mbid)}`}>
+                <Music2 className="h-4 w-4" />
+                <span className="truncate">Go to work</span>
+              </Link>
+            </ContextMenuItem>
           )}
           {entityLinks.album && (
             <ContextMenuItem asChild>
@@ -214,6 +274,12 @@ export default function SongMenu({
               </Link>
             </ContextMenuItem>
           )}
+          {context !== "player" && (
+            <LibraryToolsSubmenu
+              onShowAnalysis={() => setAnalysisOpen(true)}
+              scope={{ scope: "songs", ids: [song_id] }}
+            />
+          )}
           {onRemoveFromPlaylist && <ContextMenuSeparator />}
           {onRemoveFromPlaylist && (
             <ContextMenuItem
@@ -226,11 +292,26 @@ export default function SongMenu({
           )}
         </ContextMenuContent>
       </ContextMenu>
+      {analysisOpen && (
+        <SongAnalysisDialog
+          onOpenChange={setAnalysisOpen}
+          open={analysisOpen}
+          songId={song_id}
+        />
+      )}
       <CreatePlaylistDialog
         initialSongIds={[song_id]}
         onOpenChange={setCreateOpen}
         open={createOpen}
       />
+      {createTagOpen && (
+        <CreateTagDialog
+          entityId={song_id}
+          entityType="track"
+          onOpenChange={setCreateTagOpen}
+          open={createTagOpen}
+        />
+      )}
     </>
   );
 }

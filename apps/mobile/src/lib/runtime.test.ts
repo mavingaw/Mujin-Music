@@ -29,7 +29,7 @@ const token = (expiresInSeconds: number, name: string) => {
   return `${name}.${payload}.signature`;
 };
 
-test("plain local addresses use the Parson port", () => {
+test("plain local addresses use the Mujin Music port", () => {
   expect(normalizeOrigin("192.168.1.10")).toBe("http://192.168.1.10:1993");
   expect(normalizeOrigin("http://music.local:8123/path")).toBe(
     "http://music.local:8123",
@@ -63,7 +63,7 @@ test("Expo web continues on the server origin for HttpOnly authentication", () =
   ).toBeNull();
 });
 
-test("artwork authorization is sent only to the connected Parson origin", () => {
+test("artwork authorization is sent only to the connected Mujin Music origin", () => {
   configureNativeRuntime({
     origin: "https://music.example",
     token: "private-access-token",

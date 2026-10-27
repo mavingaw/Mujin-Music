@@ -1,0 +1,182 @@
+[
+  {
+    "method": "GET",
+    "url": "https://ws.audioscrobbler.com/2.0/",
+    "query": [["method", "auth.getToken"]],
+    "replies": [
+      { "status": 200, "body": { "token": "recorded-request-token" } }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://ws.audioscrobbler.com/2.0/",
+    "query": [["method", "auth.getSession"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "session": {
+            "subscriber": 0,
+            "name": "parson-listener",
+            "key": "recorded-session-key"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "url": "https://ws.audioscrobbler.com/2.0/",
+    "form": [["method", "track.updateNowPlaying"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "nowplaying": {
+            "artist": { "corrected": "0", "#text": "Ilse Marten" },
+            "track": { "corrected": "0", "#text": "Lanterns" },
+            "ignoredMessage": { "code": "0", "#text": "" },
+            "albumArtist": { "corrected": "0", "#text": "Ilse Marten" },
+            "album": { "corrected": "0", "#text": "Glass Orchard" }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "url": "https://ws.audioscrobbler.com/2.0/",
+    "form": [["method", "track.scrobble"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "scrobbles": {
+            "scrobble": [
+              {
+                "artist": { "corrected": "0", "#text": "Ilse Marten" },
+                "album": { "corrected": "0", "#text": "Glass Orchard" },
+                "track": { "corrected": "0", "#text": "Lanterns" },
+                "ignoredMessage": { "code": "0", "#text": "" },
+                "albumArtist": { "corrected": "0", "#text": "Ilse Marten" },
+                "timestamp": "1700000000"
+              },
+              {
+                "artist": { "corrected": "0", "#text": "Ilse Marten" },
+                "album": { "corrected": "0", "#text": "Glass Orchard" },
+                "track": { "corrected": "0", "#text": "Copper Sky" },
+                "ignoredMessage": { "code": "0", "#text": "" },
+                "albumArtist": { "corrected": "0", "#text": "Ilse Marten" },
+                "timestamp": "1700000300"
+              }
+            ],
+            "@attr": { "ignored": 0, "accepted": 2 }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://ws.audioscrobbler.com/2.0/",
+    "query": [
+      ["method", "user.getRecentTracks"],
+      ["page", "1"]
+    ],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "recenttracks": {
+            "track": [
+              {
+                "artist": { "mbid": "", "#text": "Ilse Marten" },
+                "streamable": "0",
+                "image": [],
+                "mbid": "",
+                "album": { "mbid": "", "#text": "Glass Orchard" },
+                "name": "Copper Sky",
+                "@attr": { "nowplaying": "true" },
+                "url": "https://www.last.fm/music/Ilse+Marten/_/Copper+Sky"
+              },
+              {
+                "artist": { "mbid": "", "#text": "Ilse Marten" },
+                "streamable": "0",
+                "image": [],
+                "mbid": "",
+                "album": { "mbid": "", "#text": "Glass Orchard" },
+                "name": "Lanterns",
+                "url": "https://www.last.fm/music/Ilse+Marten/_/Lanterns",
+                "date": { "uts": "1699990000", "#text": "14 Nov 2023, 19:26" }
+              },
+              {
+                "artist": { "mbid": "", "#text": "Ilse Marten" },
+                "streamable": "0",
+                "image": [],
+                "mbid": "",
+                "album": { "mbid": "", "#text": "Glass Orchard" },
+                "name": "Copper Sky (2021 Remaster)",
+                "url": "https://www.last.fm/music/Ilse+Marten/_/Copper+Sky",
+                "date": { "uts": "1699980000", "#text": "14 Nov 2023, 16:40" }
+              },
+              {
+                "artist": {
+                  "mbid": "",
+                  "#text": "Somebody Not In The Library"
+                },
+                "streamable": "0",
+                "image": [],
+                "mbid": "",
+                "album": { "mbid": "", "#text": "" },
+                "name": "A Song Parson Does Not Have",
+                "url": "https://www.last.fm/music/Somebody",
+                "date": { "uts": "1699970000", "#text": "14 Nov 2023, 13:53" }
+              }
+            ],
+            "@attr": {
+              "user": "parson-listener",
+              "totalPages": "2",
+              "page": "1",
+              "perPage": "200",
+              "total": "4"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://ws.audioscrobbler.com/2.0/",
+    "query": [
+      ["method", "user.getRecentTracks"],
+      ["page", "2"]
+    ],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "recenttracks": {
+            "track": {
+              "artist": { "mbid": "", "#text": "Ilse Marten" },
+              "streamable": "0",
+              "image": [],
+              "mbid": "",
+              "album": { "mbid": "", "#text": "Glass Orchard" },
+              "name": "Lanterns",
+              "url": "https://www.last.fm/music/Ilse+Marten/_/Lanterns",
+              "date": { "uts": "1699900000", "#text": "13 Nov 2023, 18:26" }
+            },
+            "@attr": {
+              "user": "parson-listener",
+              "totalPages": "2",
+              "page": "2",
+              "perPage": "200",
+              "total": "4"
+            }
+          }
+        }
+      }
+    ]
+  }
+]

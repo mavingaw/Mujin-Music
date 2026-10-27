@@ -20,37 +20,37 @@ export type FailureCopy = {
 export const failureCopy: Record<FailureKind, FailureCopy> = {
   library_folder_unavailable: {
     title: "Music folder unavailable",
-    body: "Parson can’t open the folder used by this library. Reconnect the drive or choose the folder’s new location.",
+    body: "Mujin Music can’t open the folder used by this library. Reconnect the drive or choose the folder’s new location.",
     action: "Choose music folder",
   },
   library_index_failed: {
     title: "Library scan failed",
-    body: "Parson couldn’t finish scanning this folder. Your existing library was not changed. Check the details, then try again.",
+    body: "Mujin Music couldn’t finish scanning this folder. Your existing library was not changed. Check the details, then try again.",
     action: "Review library settings",
   },
   no_playable_music: {
     title: "No playable music found",
-    body: "This folder doesn’t contain audio that Parson can play. Choose a folder with supported music files.",
+    body: "This folder doesn’t contain audio that Mujin Music can play. Choose a folder with supported music files.",
     action: "Choose another folder",
   },
   database_migration_failed: {
     title: "Database update failed",
-    body: "Parson couldn’t update its library database. Your music files were not changed. Open the logs before trying again.",
+    body: "Mujin Music couldn’t update its library database. Your music files were not changed. Open the logs before trying again.",
     action: "Open logs",
   },
   backup_failed: {
     title: "Backup failed",
-    body: "Parson couldn’t create a safe backup. Check that the data drive is connected and has free space, then try again.",
+    body: "Mujin Music couldn’t create a safe backup. Check that the data drive is connected and has free space, then try again.",
     action: "Try backup again",
   },
   host_unavailable: {
-    title: "Parson host unavailable",
-    body: "The device that serves this library can’t be reached. Make sure it is on, Parson is running, and both devices are on the same network.",
+    title: "Mujin Music host unavailable",
+    body: "The device that serves this library can’t be reached. Make sure it is on, Mujin Music is running, and both devices are on the same network.",
     action: "Try again",
   },
   device_cannot_connect: {
     title: "Device can’t connect",
-    body: "Make sure the Parson host is running and this phone is on the same Wi‑Fi network. Then check the address and try again.",
+    body: "Make sure the Mujin Music host is running and this phone is on the same Wi‑Fi network. Then check the address and try again.",
     action: "Try again",
   },
   lyrics_provider_unavailable: {
@@ -65,12 +65,12 @@ export const failureCopy: Record<FailureKind, FailureCopy> = {
   },
   update_failed: {
     title: "Update failed",
-    body: "Parson couldn’t download or install the update. The current version is still installed and your library was not changed.",
+    body: "Mujin Music couldn’t download or install the update. The current version is still installed and your library was not changed.",
     action: "Close",
   },
   webview_failed: {
-    title: "Parson’s window could not load",
-    body: "The app window failed to load the local Parson interface. Restart the app; if it happens again, open the logs.",
+    title: "Mujin Music’s window could not load",
+    body: "The app window failed to load the local Mujin Music interface. Restart the app; if it happens again, open the logs.",
     action: "Try again",
   },
 };

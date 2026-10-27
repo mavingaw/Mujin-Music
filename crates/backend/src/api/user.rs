@@ -160,30 +160,40 @@ fn delete_user_rows(
             }
         }
 
-        diesel::sql_query(
-            "DELETE FROM playlist
-             WHERE id IN (
-               SELECT a FROM _playlist_to_user
-               WHERE b = ? AND role = 'owner'
-             )",
-        )
-        .bind::<diesel::sql_types::Integer, _>(target_id)
-        .execute(connection)?;
-        diesel::sql_query("DELETE FROM search_item WHERE user_id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
-        diesel::sql_query("DELETE FROM listen_history_item WHERE user_id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
-        diesel::sql_query("DELETE FROM follow WHERE follower_id = ? OR following_id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
-        diesel::sql_query("DELETE FROM user WHERE id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
+        remove_user_rows(connection, target_id)?;
         Ok(())
     })
+}
+
+/// Deletes an account and the personal rows that do not cascade. The caller
+/// checks permissions and runs this inside its transaction.
+pub(crate) fn remove_user_rows(
+    connection: &mut diesel::SqliteConnection,
+    target_id: i32,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query(
+        "DELETE FROM playlist
+         WHERE id IN (
+           SELECT a FROM _playlist_to_user
+           WHERE b = ? AND role = 'owner'
+         )",
+    )
+    .bind::<diesel::sql_types::Integer, _>(target_id)
+    .execute(connection)?;
+    diesel::sql_query("DELETE FROM search_item WHERE user_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    diesel::sql_query("DELETE FROM listen_history_item WHERE user_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    diesel::sql_query("DELETE FROM follow WHERE follower_id = ? OR following_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    diesel::sql_query("DELETE FROM user WHERE id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    Ok(())
 }
 
 #[get("")]
@@ -321,7 +331,7 @@ async fn delete_user(
             "cannot_delete_current_user",
         ),
         Ok(Err(DeleteUserError::LastAdministrator)) => bad_request(
-            "Parson must keep at least one administrator.",
+            "Mujin Music must keep at least one administrator.",
             "last_administrator_required",
         ),
         Ok(Err(DeleteUserError::Database(error))) => {
@@ -1021,6 +1031,7 @@ async fn add_playback_event(
     item: web::Json<PlaybackEventRequest>,
     lifecycle: web::Data<LibraryLifecycle>,
     pool: web::Data<DbPool>,
+    scrobbling: Option<web::Data<crate::scrobbling::ScrobbleHub>>,
     request: HttpRequest,
 ) -> HttpResponse {
     let user_id = match authenticated_user_id(&request) {
@@ -1032,6 +1043,7 @@ async fn add_playback_event(
         Err(readiness) => return library_unavailable_response(readiness),
     };
     let event = item.into_inner();
+    let observed = event.clone();
     let event_cache = cache.clone();
     let event_pool = pool.get_ref().clone();
     match web::block(move || {
@@ -1040,7 +1052,21 @@ async fn add_playback_event(
     })
     .await
     {
-        Ok(Ok(result)) => HttpResponse::Ok().json(result),
+        Ok(Ok(result)) => {
+            // Now playing and scrobbles go out in the background; a slow or
+            // offline service never delays the player.
+            if result.accepted
+                && let Some(hub) = scrobbling
+            {
+                let hub = hub.into_inner();
+                tokio::spawn(async move {
+                    if let Err(error) = hub.observe(user_id, observed, cache).await {
+                        tracing::warn!(%error, "could not queue a scrobble");
+                    }
+                });
+            }
+            HttpResponse::Ok().json(result)
+        }
         Ok(Err(error)) => HttpResponse::BadRequest().json(serde_json::json!({
             "error": "invalid_playback_event",
             "message": error,
@@ -1500,6 +1526,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(delete_user)
             .service(change_password)
             .service(change_username)
+            .configure(crate::api::history::configure)
             .service(get_listen_history_songs)
             .service(get_listen_history)
             .service(add_song_to_listen_history)
@@ -1536,6 +1563,7 @@ mod tests {
         remove_favorite_song,
     };
     use crate::api::auth::Claims;
+    use crate::test_support::{generated_password, wrong_password};
 
     fn favorite_pool() -> web::Data<crate::persistence::connection::DbPool> {
         let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
@@ -1564,14 +1592,14 @@ mod tests {
         web::Data::new(std::sync::Arc::new(pool))
     }
 
-    fn username_pool() -> web::Data<crate::persistence::connection::DbPool> {
+    fn username_pool(password: &str) -> web::Data<crate::persistence::connection::DbPool> {
         let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
         let pool = Pool::builder()
             .max_size(1)
             .build(manager)
             .expect("username test pool");
-        let password_hash = crate::api::auth::hash_password("synthetic-current-password")
-            .expect("fixture password hash");
+        let password_hash =
+            crate::api::auth::hash_password(password).expect("fixture password hash");
         let mut connection = pool.get().expect("username test connection");
         connection
             .batch_execute(
@@ -1683,7 +1711,8 @@ mod tests {
 
     #[actix_web::test]
     async fn username_endpoint_updates_claims_cookie_and_native_token() {
-        let database = username_pool();
+        let password = generated_password();
+        let database = username_pool(&password);
         let app = actix_test::init_service(
             App::new()
                 .app_data(database.clone())
@@ -1695,7 +1724,7 @@ mod tests {
             .uri("/me/username")
             .insert_header(("X-Parson-Client", "native"))
             .set_json(serde_json::json!({
-                "current_password": "synthetic-current-password",
+                "current_password": password,
                 "username": "new-handle"
             }))
             .to_request();
@@ -1741,7 +1770,7 @@ mod tests {
             .uri("/login")
             .set_json(serde_json::json!({
                 "username": "old-handle",
-                "password": "synthetic-current-password"
+                "password": password
             }))
             .to_request();
         let old_login = actix_test::call_service(&app, old_login).await;
@@ -1752,7 +1781,7 @@ mod tests {
             .insert_header(("X-Parson-Client", "native"))
             .set_json(serde_json::json!({
                 "username": "new-handle",
-                "password": "synthetic-current-password"
+                "password": password
             }))
             .to_request();
         let new_login = actix_test::call_service(&app, new_login).await;
@@ -1826,6 +1855,7 @@ mod tests {
     fn username_changes_preserve_identity_and_enforce_password_and_uniqueness() {
         use diesel::{Connection, RunQueryDsl};
 
+        let password = generated_password();
         let mut connection = SqliteConnection::establish(":memory:").expect("user database");
         connection
             .batch_execute(
@@ -1839,8 +1869,8 @@ mod tests {
                  );",
             )
             .expect("username fixture schema");
-        let password_hash = crate::api::auth::hash_password("synthetic-current-password")
-            .expect("fixture password hash");
+        let password_hash =
+            crate::api::auth::hash_password(&password).expect("fixture password hash");
         diesel::sql_query(
             "INSERT INTO user
                 (id, username, password, bitrate, role, token_version)
@@ -1852,13 +1882,8 @@ mod tests {
         .execute(&mut connection)
         .expect("username fixture users");
 
-        let changed = change_username_row(
-            &mut connection,
-            7,
-            "new-handle",
-            "synthetic-current-password",
-        )
-        .expect("change username");
+        let changed = change_username_row(&mut connection, 7, "new-handle", &password)
+            .expect("change username");
         assert_eq!(changed.username, "new-handle");
         assert_eq!(changed.bitrate, 256);
         assert_eq!(changed.role, "user");
@@ -1882,17 +1907,12 @@ mod tests {
                 &mut connection,
                 7,
                 "another-handle",
-                "incorrect-synthetic-password"
+                &wrong_password(&password)
             ),
             Err(ChangeUsernameError::IncorrectPassword)
         ));
         assert!(matches!(
-            change_username_row(
-                &mut connection,
-                7,
-                "reserved-handle",
-                "synthetic-current-password"
-            ),
+            change_username_row(&mut connection, 7, "reserved-handle", &password),
             Err(ChangeUsernameError::Duplicate)
         ));
     }

@@ -1,4 +1,4 @@
-# Parson desktop client
+# Mujin Music desktop client
 
 Electron client for Linux, macOS, and Windows.
 
@@ -30,7 +30,7 @@ user, creates the desktop integration, and relaunches from a stable path. The
 same flow can be requested non-interactively:
 
 ```bash
-./Parson_VERSION_ARCH.AppImage --install
+./Mujin-Music-VERSION-ARCH.AppImage --install
 ```
 
 Windows release:

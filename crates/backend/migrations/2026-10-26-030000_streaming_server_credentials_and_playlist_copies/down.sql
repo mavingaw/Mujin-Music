@@ -1,0 +1,3 @@
+DROP INDEX provider_playlist_copy_saved_idx;
+DROP TABLE provider_playlist_copy;
+DROP TABLE provider_server_credential;

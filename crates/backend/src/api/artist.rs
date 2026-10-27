@@ -246,6 +246,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::scope("/artists")
             .service(get_random_artist)
             .service(get_batch_artist_info)
+            .service(crate::api::editorial::artist_about)
+            .service(crate::api::editorial::artist_credits)
+            .service(crate::api::editorial::artist_image)
+            .service(crate::api::editorial::put_artist_note)
+            .service(crate::api::works::get_artist_works)
+            .service(crate::api::discography::get_discography)
+            .service(crate::api::related::get_related)
             .service(get_artist_info),
     );
 }

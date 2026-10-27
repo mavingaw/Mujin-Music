@@ -1,0 +1,9 @@
+DROP TABLE library_audio_analysis;
+DROP TABLE library_user_album_track;
+DROP TABLE library_user_album;
+DROP TABLE library_album_version_choice;
+DROP TABLE library_album_version_member;
+DROP TABLE library_duplicate_dismissal;
+DROP TABLE library_file_preference;
+DROP TABLE library_file_visibility;
+DROP TABLE library_skipped_file;

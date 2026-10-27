@@ -1,5 +1,136 @@
 @import "tailwindcss";
 
+/*
+ * Mujin Music brand fonts, served from this app (never fetched from Google at
+ * run time): Jost for display, Inter for UI text, JetBrains Mono for
+ * signal-path readouts. All three are SIL Open Font License 1.1; each folder
+ * under /fonts carries its OFL.txt.
+ */
+@font-face {
+  font-family: "Jost";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/jost/jost-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Jost";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/jost/jost-latin-wght-normal.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/inter/inter-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/inter/inter-latin-wght-normal.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-ext-wght-normal.woff2")
+    format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-wght-normal.woff2")
+    format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+
+/*
+ * Mujin Music colour tokens (brand tokens.json). The app's Tailwind
+ * black/white/zinc classes resolve to the brand's deep blacks, ivory text and
+ * warm neutrals, so the whole UI takes the palette without per-screen edits.
+ */
+@theme {
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Jost", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-black: #0a0a0b;
+  --color-white: #f2eee6;
+  --color-zinc-50: #f2eee6;
+  --color-zinc-100: #e9e5dd;
+  --color-zinc-200: #d6d2ca;
+  --color-zinc-300: #c7c2b9;
+  --color-zinc-400: #b8b3aa;
+  --color-zinc-500: #8e8a84;
+  --color-zinc-600: #5c5955;
+  --color-zinc-700: #34343a;
+  --color-zinc-800: #26262b;
+  --color-zinc-900: #17171a;
+  --color-zinc-950: #111113;
+
+  --color-mujin-base: #0a0a0b;
+  --color-mujin-deep: #050506;
+  --color-mujin-raised: #111113;
+  --color-mujin-surface-1: #17171a;
+  --color-mujin-surface-2: #1e1e22;
+  --color-mujin-surface-3: #26262b;
+  --color-mujin-border: #34343a;
+  --color-mujin-border-strong: #66666e;
+  --color-mujin-copper: #d98b5f;
+  --color-mujin-copper-hover: #e6a27a;
+  --color-mujin-copper-pressed: #bf7246;
+  --color-mujin-on-copper: #160d07;
+  --color-mujin-text: #f2eee6;
+  --color-mujin-text-secondary: #b8b3aa;
+  --color-mujin-text-tertiary: #8e8a84;
+  --color-mujin-text-disabled: #5c5955;
+
+  /* The signal-path quality light (and the logo's signal dot). */
+  --color-quality-lossless: #d98b5f;
+  --color-quality-enhanced: #8fc3e0;
+  --color-quality-high: #a3c98b;
+  --color-quality-low: #7e7a74;
+  --color-quality-clipping: #f2473f;
+}
+
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -26,25 +157,27 @@
 }
 
 :root {
-  --background: 0 0% 3%;
-  --foreground: 0 0% 98%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 98%;
-  --popover: 0 0% 6%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 0 0% 96%;
-  --primary-foreground: 0 0% 3%;
-  --secondary: 0 0% 12%;
-  --secondary-foreground: 0 0% 96%;
-  --muted: 0 0% 12%;
-  --muted-foreground: 0 0% 63%;
-  --accent: 0 0% 92%;
-  --accent-foreground: 0 0% 3%;
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 15%;
-  --input: 0 0% 15%;
-  --ring: 0 0% 74%;
+  /* shadcn-style tokens, in HSL, from the Mujin Music palette. */
+  --background: 240 5% 4%; /* #0A0A0B */
+  --foreground: 40 30% 93%; /* #F2EEE6 */
+  --card: 240 6% 10%; /* #17171A */
+  --card-foreground: 40 30% 93%;
+  --popover: 240 6% 13%; /* #1E1E22 */
+  --popover-foreground: 40 30% 93%;
+  --primary: 22 61% 61%; /* Mujin Copper #D98B5F */
+  --primary-foreground: 25 52% 6%; /* #160D07 */
+  --secondary: 240 6% 16%; /* #26262B */
+  --secondary-foreground: 40 30% 93%;
+  --muted: 240 6% 16%;
+  --muted-foreground: 39 9% 70%; /* #B8B3AA */
+  --accent: 240 6% 16%;
+  --accent-foreground: 40 30% 93%;
+  --destructive: 3 87% 60%; /* #F2473F */
+  --destructive-foreground: 40 30% 93%;
+  --border: 240 5% 21%; /* #34343A */
+  --input: 240 5% 21%;
+  --ring: 22 61% 61%;
+  --mujin-quality: #d98b5f;
 }
 
 * {
@@ -55,12 +188,27 @@
 html,
 body {
   min-height: 100%;
-  background: #000;
+  background: var(--color-mujin-base);
   color: hsl(var(--foreground));
 }
 
 body {
+  font-family: var(--font-sans);
   letter-spacing: 0;
+}
+
+/* Display face for page and section titles (album, artist, settings). */
+@layer base {
+  h1,
+  h2 {
+    font-family: var(--font-display);
+  }
+}
+
+/* The logo's signal dot takes the live quality colour where it is shown. */
+.mj-signal {
+  fill: var(--mujin-quality, #d98b5f);
+  transition: fill 240ms ease;
 }
 
 .app-content-shell {
@@ -161,12 +309,59 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Parson Desktop on Windows and Linux draws its own window controls at the
+   right of the header (see desktop-window-controls.tsx); keep the search
+   field clear of them at every window width. */
+html[data-window-controls] .app-titlebar {
+  padding-right: var(--titlebar-controls, 152px);
+}
+
+html[data-window-controls] .app-titlebar-search {
+  margin-right: 0;
+}
+
 @keyframes player-title-marquee {
   0% {
     transform: translateX(0);
   }
   100% {
     transform: translateX(calc(-50% - 1rem));
+  }
+}
+
+@keyframes pin-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+}
+
+@keyframes profile-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes profile-import {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
   }
 }
 
@@ -227,5 +422,62 @@ body {
 @media (min-width: 1024px) {
   .tidal-route {
     padding-inline: 2rem;
+  }
+}
+
+/* Library tools: indeterminate job progress. */
+@keyframes tool-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* Live radio: three bars that move while a station is on air. */
+.live-bars > span {
+  width: 3px;
+  height: 40%;
+  border-radius: 1px;
+  background: currentColor;
+  animation: live-bar 0.9s ease-in-out infinite;
+}
+
+.live-bars > span:nth-child(2) {
+  animation-delay: -0.3s;
+}
+
+.live-bars > span:nth-child(3) {
+  animation-delay: -0.6s;
+}
+
+.live-bars[data-paused] > span {
+  animation-play-state: paused;
+}
+
+@keyframes live-bar {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-bars > span {
+    animation: none;
+    height: 70%;
+  }
+}
+
+@keyframes live-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
   }
 }

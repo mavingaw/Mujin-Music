@@ -9,13 +9,35 @@ pub mod assets;
 pub mod discovery;
 pub mod domain;
 #[cfg(feature = "server")]
+pub mod enrichment;
+#[cfg(feature = "server")]
 pub mod http;
+#[cfg(feature = "server")]
+pub mod imports;
 pub mod library;
+pub mod listen_later;
+#[cfg(feature = "server")]
+pub mod live_radio;
+#[cfg(feature = "server")]
+pub mod outputs;
 pub mod persistence;
 mod playlist_rules;
 pub mod product;
+#[cfg(feature = "server")]
+pub mod providers;
+pub mod radio_bans;
 pub mod recommendation;
+#[cfg(feature = "server")]
+pub mod remote_access;
+pub mod scrobbling;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod settings;
+pub mod signal_path;
+#[cfg(feature = "server")]
+pub mod sonos;
 pub mod startup;
+#[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(feature = "server")]
+pub mod zones;

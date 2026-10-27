@@ -90,6 +90,11 @@ pub fn secure_cookies() -> bool {
     secure_cookies_for(public_url.as_deref())
 }
 
+/// The configured public origin (`PARSON_PUBLIC_URL`), when it is set and valid.
+pub fn public_url() -> Option<String> {
+    configured_public_url().ok().flatten()
+}
+
 pub fn allowed_origins() -> Vec<String> {
     allowed_origins_for(configured_public_url().ok().flatten())
 }
@@ -108,6 +113,44 @@ pub fn is_container() -> bool {
         || Path::new("/run/.containerenv").exists()
 }
 
+/// Keys a desktop app or installer may set for a background server in
+/// `<data dir>/server.env`. A server started by systemd, launchd or the
+/// Windows tray has no shell environment of its own, so Parson Desktop leaves
+/// these here when it installs the server as a background service.
+const HOST_FILE_KEYS: [&str; 3] = [
+    "PARSON_DESKTOP_INSTANCE_TOKEN",
+    "PARSON_LIBRARY_NAME",
+    "PARSON_LOCAL_AUDIO",
+];
+
+/// A host setting: the process environment wins, then `server.env` in the
+/// data directory. The file is read on every call (it is tiny), so a desktop
+/// app can update it without restarting the server.
+pub fn host_setting(key: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(key)
+        && !value.trim().is_empty()
+    {
+        return Some(value);
+    }
+    let contents = fs::read_to_string(data_path(&["server.env"])).ok()?;
+    parse_host_file(&contents, key)
+}
+
+fn parse_host_file(contents: &str, key: &str) -> Option<String> {
+    if !HOST_FILE_KEYS.contains(&key) {
+        return None;
+    }
+    contents.lines().find_map(|line| {
+        let line = line.trim();
+        if line.starts_with('#') {
+            return None;
+        }
+        let (name, value) = line.split_once('=')?;
+        let value = value.trim();
+        (name.trim() == key && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
 pub fn data_path(parts: &[&str]) -> PathBuf {
     let mut path = if let Some(path) = std::env::var_os("PARSON_DATA_DIR") {
         PathBuf::from(path)
@@ -120,6 +163,85 @@ pub fn data_path(parts: &[&str]) -> PathBuf {
     };
     path.extend(parts);
     path
+}
+
+/// A file the server keeps in its data folder. Its path is built only
+/// from the fixed names here, never from anything a request carries, and
+/// every write stays inside the data folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataFile {
+    /// Parson Bridges added by address.
+    Bridges,
+    /// UPnP and AirPlay players added by address.
+    NetworkPlayers,
+    /// Device setup of the old server-output picker (imported into zones).
+    LegacyNativeOutputs,
+    /// DSP chains of the old server-output picker (imported into zones).
+    LegacyNativeDsp,
+    /// Network players of the old server-output picker.
+    LegacyNetworkOutputs,
+}
+
+impl DataFile {
+    fn parts(self) -> &'static [&'static str] {
+        match self {
+            Self::Bridges => &["Outputs", "bridges.json"],
+            Self::NetworkPlayers => &["Outputs", "network-players.json"],
+            Self::LegacyNativeOutputs => &["native-outputs.json"],
+            Self::LegacyNativeDsp => &["native-dsp.json"],
+            Self::LegacyNetworkOutputs => &["network-outputs.json"],
+        }
+    }
+
+    pub fn path(self) -> PathBuf {
+        data_path(self.parts())
+    }
+
+    /// The file's contents; `None` when it does not exist (or cannot be
+    /// read).
+    pub fn read(self) -> Option<Vec<u8>> {
+        fs::read(self.path()).ok()
+    }
+
+    /// Replaces the file atomically (a temporary file in the same folder,
+    /// then a rename), creating its folder when needed.
+    pub fn write(self, bytes: &[u8]) -> std::io::Result<()> {
+        write_inside(&data_path(&[]), self.parts(), bytes)
+    }
+
+    /// Renames the file to `<name>.imported` once its contents moved
+    /// elsewhere, so it is read only once.
+    pub fn retire(self) -> std::io::Result<()> {
+        let path = self.path();
+        let mut retired = path.clone().into_os_string();
+        retired.push(".imported");
+        fs::rename(path, retired)
+    }
+}
+
+/// Writes `bytes` to `root` joined with `parts` (fixed names, no
+/// separators or parent references), atomically.
+fn write_inside(root: &Path, parts: &[&str], bytes: &[u8]) -> std::io::Result<()> {
+    let safe = |part: &&str| {
+        !part.is_empty()
+            && *part != "."
+            && *part != ".."
+            && !part.contains(['/', '\\'])
+            && !part.contains('\0')
+    };
+    let Some((name, folders)) = parts.split_last() else {
+        return Err(std::io::Error::other("no file name"));
+    };
+    if !parts.iter().all(safe) {
+        return Err(std::io::Error::other("invalid data file name"));
+    }
+    let mut folder = root.to_path_buf();
+    folder.extend(folders);
+    fs::create_dir_all(&folder)?;
+    let path = folder.join(name);
+    let temp = folder.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&temp, bytes)?;
+    fs::rename(&temp, &path)
 }
 
 fn copy_restore_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -184,7 +306,7 @@ pub fn apply_staged_restore() -> std::io::Result<()> {
     if !staged.join("manifest.json").is_file() || !staged_music.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "the staged Parson restore is incomplete",
+            "the staged Mujin Music restore is incomplete",
         ));
     }
 
@@ -236,10 +358,107 @@ pub fn apply_staged_restore() -> std::io::Result<()> {
             copy_restore_tree(&source, &destination)?;
         }
     }
+    adopt_restored_identity(
+        &data_path(&["Restore", "ADOPT_IDENTITY"]),
+        &data_path(&["Discovery", "instance-id"]),
+        &rollback,
+    )?;
+    apply_restored_remote_access(
+        &data_path(&["Restore", "REMOTE_ACCESS"]),
+        &data_path(&REMOTE_ACCESS_FILE),
+        &rollback,
+    )?;
     fs::remove_file(marker)?;
     fs::remove_dir_all(staged)?;
     prune_restore_rollbacks(&recovery)?;
     Ok(())
+}
+
+/// When a restore was staged with "take over this library", the server
+/// answers with the backed-up library's instance id from now on, so phones
+/// and computers that knew the old server treat this one as the same library.
+fn adopt_restored_identity(
+    marker: &Path,
+    instance_id_path: &Path,
+    rollback: &Path,
+) -> std::io::Result<()> {
+    let Ok(identity) = fs::read_to_string(marker) else {
+        return Ok(());
+    };
+    let identity = identity.trim();
+    if uuid::Uuid::parse_str(identity).is_ok() {
+        if instance_id_path.is_file() {
+            fs::create_dir_all(rollback)?;
+            fs::copy(instance_id_path, rollback.join("instance-id"))?;
+        }
+        let adopted_at_path = instance_id_path.with_file_name(IDENTITY_ADOPTED_FILE);
+        if adopted_at_path.is_file() {
+            fs::copy(&adopted_at_path, rollback.join(IDENTITY_ADOPTED_FILE))?;
+        }
+        persist_secret(instance_id_path, identity)?;
+        // When this server took the library over. Two servers can answer
+        // with the same identity while the old one is still switched on; the
+        // newer takeover is the library's current home, so every app picks
+        // the same one instead of whichever answered first.
+        persist_secret(
+            &adopted_at_path,
+            &chrono::Utc::now().timestamp_millis().to_string(),
+        )?;
+    }
+    fs::remove_file(marker)
+}
+
+/// Where the away-from-home setting lives (see `remote_access`).
+pub const REMOTE_ACCESS_FILE: [&str; 2] = ["Network", "remote-access.json"];
+const IDENTITY_ADOPTED_FILE: &str = "identity-adopted-at";
+
+/// A restore staged with "also restore away-from-home access" brings the old
+/// server's setting along. Without that choice the new server keeps its own:
+/// the new machine may sit on another network, behind another router.
+fn apply_restored_remote_access(
+    marker: &Path,
+    destination: &Path,
+    rollback: &Path,
+) -> std::io::Result<()> {
+    let Ok(bytes) = fs::read(marker) else {
+        return Ok(());
+    };
+    // Only a setting that still parses is applied; anything else is dropped.
+    let valid = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .is_some_and(|value| value.get("mode").is_some_and(serde_json::Value::is_string));
+    if valid {
+        if destination.is_file() {
+            fs::create_dir_all(rollback)?;
+            fs::copy(destination, rollback.join("remote-access.json"))?;
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let temporary = destination.with_extension("json.restore");
+        fs::write(&temporary, &bytes)?;
+        fs::rename(&temporary, destination)?;
+    }
+    fs::remove_file(marker)
+}
+
+/// When this server took over a restored library's identity (Unix ms), or
+/// `None` for a server that still has the identity it was born with.
+pub fn identity_adopted_at() -> Option<i64> {
+    #[cfg(test)]
+    return None;
+
+    #[cfg(not(test))]
+    read_identity_adopted_at(&data_path(&["Discovery", IDENTITY_ADOPTED_FILE]))
+}
+
+fn read_identity_adopted_at(path: &Path) -> Option<i64> {
+    fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
 }
 
 fn apply_reset_at(root: &Path) -> std::io::Result<bool> {
@@ -304,18 +523,17 @@ pub fn suggested_library_path() -> PathBuf {
 }
 
 pub fn library_name() -> String {
-    let name = std::env::var("PARSON_LIBRARY_NAME")
-        .ok()
+    let name = host_setting("PARSON_LIBRARY_NAME")
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Parson Library".to_string());
+        .unwrap_or_else(|| "Mujin Music Library".to_string());
     let sanitized = name
         .chars()
         .filter(|character| !character.is_control())
         .take(48)
         .collect::<String>();
     if sanitized.trim().is_empty() {
-        "Parson Library".to_string()
+        "Mujin Music Library".to_string()
     } else {
         sanitized
     }
@@ -343,6 +561,56 @@ fn load_or_create_instance_id_at(path: &Path) -> std::io::Result<String> {
     let value = uuid::Uuid::new_v4().to_string();
     persist_secret(path, &value)?;
     Ok(value)
+}
+
+/// Hex-encoded 256-bit key that seals streaming-service tokens at rest.
+///
+/// It lives in `Secrets/streaming.key`, outside the database, so a copied
+/// database or backup alone cannot reveal TIDAL or Qobuz credentials.
+pub fn streaming_token_key() -> std::io::Result<[u8; 32]> {
+    #[cfg(test)]
+    return Ok([7_u8; 32]);
+
+    #[cfg(not(test))]
+    {
+        let path = data_path(&["Secrets", "streaming.key"]);
+        load_or_create_key_at(&path)
+    }
+}
+
+fn decode_hex_key(value: &str) -> Option<[u8; 32]> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut key = [0_u8; 32];
+    for (index, slot) in key.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(key)
+}
+
+fn load_or_create_key_at(path: &Path) -> std::io::Result<[u8; 32]> {
+    if let Ok(value) = fs::read_to_string(path) {
+        return match decode_hex_key(&value) {
+            Some(key) => {
+                restrict_secret_permissions(path);
+                Ok(key)
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "streaming.key is invalid; remove it to sign in to streaming services again",
+            )),
+        };
+    }
+    let mut key = [0_u8; 32];
+    rand::fill(&mut key);
+    let encoded = key
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    persist_secret(path, &encoded)?;
+    Ok(key)
 }
 
 pub fn initialize_session_secret() -> Result<(), String> {
@@ -452,10 +720,76 @@ fn restrict_secret_permissions(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        allowed_origins_for, apply_reset_at, load_or_create_instance_id_at,
-        load_or_create_session_secret_at, parse_bind_address, parse_port, parse_public_url,
-        persist_secret, secure_cookies_for,
+        allowed_origins_for, apply_reset_at, load_or_create_instance_id_at, load_or_create_key_at,
+        load_or_create_session_secret_at, parse_bind_address, parse_host_file, parse_port,
+        parse_public_url, persist_secret, secure_cookies_for, write_inside,
     };
+
+    #[test]
+    fn data_files_are_written_atomically_and_only_inside_the_data_folder() {
+        let root = std::env::temp_dir().join(format!("parson-data-{}", uuid::Uuid::new_v4()));
+        write_inside(&root, &["Outputs", "network-players.json"], b"[]").unwrap();
+        assert_eq!(
+            std::fs::read(root.join("Outputs").join("network-players.json")).unwrap(),
+            b"[]"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(root.join("Outputs"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "the temporary file was renamed");
+        for parts in [
+            &["..", "escape.json"][..],
+            &["Outputs", "../escape.json"][..],
+            &["a\\b.json"][..],
+            &[][..],
+            &[""][..],
+        ] {
+            assert!(write_inside(&root, parts, b"x").is_err(), "{parts:?}");
+        }
+        assert!(!root.with_file_name("escape.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn streaming_token_keys_are_created_once_and_reject_corruption() {
+        let directory =
+            std::env::temp_dir().join(format!("parson-streaming-key-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("streaming.key");
+        let first = load_or_create_key_at(&path).expect("create key");
+        let second = load_or_create_key_at(&path).expect("reload key");
+        assert_eq!(first, second);
+        assert_ne!(first, [0_u8; 32]);
+        std::fs::write(&path, "not-a-key").expect("corrupt key");
+        assert!(load_or_create_key_at(&path).is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn host_file_settings_only_expose_allowed_keys() {
+        let file = "# written by Mujin Music Desktop\n\
+                    PARSON_DESKTOP_INSTANCE_TOKEN = abc123\n\
+                    PARSON_LOCAL_AUDIO=on\n\
+                    PARSON_PORT=80\n\
+                    PARSON_LIBRARY_NAME=\n";
+        assert_eq!(
+            parse_host_file(file, "PARSON_DESKTOP_INSTANCE_TOKEN").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            parse_host_file(file, "PARSON_LOCAL_AUDIO").as_deref(),
+            Some("on")
+        );
+        // Only the allow-listed keys can come from the file, and an empty
+        // value counts as unset.
+        assert_eq!(parse_host_file(file, "PARSON_PORT"), None);
+        assert_eq!(parse_host_file(file, "PARSON_LIBRARY_NAME"), None);
+        assert_eq!(
+            parse_host_file("#PARSON_LOCAL_AUDIO=on", "PARSON_LOCAL_AUDIO"),
+            None
+        );
+    }
 
     #[test]
     fn invalid_ports_are_rejected_instead_of_silently_defaulting() {
@@ -537,6 +871,81 @@ mod tests {
         assert!(parse_public_url(Some("null")).is_err());
         assert!(parse_public_url(Some("https://music.example/app")).is_err());
         assert!(parse_public_url(Some("https://user@music.example")).is_err());
+    }
+
+    #[test]
+    fn a_restore_can_take_over_the_backed_up_library_identity() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("parson-identity-{}", uuid::Uuid::new_v4()));
+        let marker = root.join("Restore/ADOPT_IDENTITY");
+        let identity = root.join("Discovery/instance-id");
+        let rollback = root.join("Recovery/before-restore-test");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::create_dir_all(identity.parent().unwrap()).unwrap();
+        let old = "11111111-1111-4111-8111-111111111111";
+        let adopted = "22222222-2222-4222-8222-222222222222";
+        fs::write(&identity, old).unwrap();
+        fs::write(&marker, adopted).unwrap();
+
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert_eq!(
+            fs::read_to_string(rollback.join("instance-id")).unwrap(),
+            old
+        );
+        assert!(!marker.exists());
+        // The takeover is dated, so apps can tell the library's new home
+        // from the old server while both are still switched on.
+        let adopted_at =
+            super::read_identity_adopted_at(&root.join("Discovery/identity-adopted-at"))
+                .expect("takeover time");
+        assert!(adopted_at > 1_700_000_000_000);
+
+        // No marker: the server keeps its own identity.
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+
+        // A malformed marker is dropped without touching the identity.
+        fs::write(&marker, "not-a-uuid").unwrap();
+        super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_restore_brings_remote_access_only_when_asked() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("parson-remote-{}", uuid::Uuid::new_v4()));
+        let marker = root.join("Restore/REMOTE_ACCESS");
+        let destination = root.join("Network/remote-access.json");
+        let rollback = root.join("Recovery/before-restore-test");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        let current = r#"{"mode":"off","manual_url":null,"external_port":null}"#;
+        fs::write(&destination, current).unwrap();
+
+        // Not chosen: no marker, the new server keeps its own setting.
+        super::apply_restored_remote_access(&marker, &destination, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), current);
+
+        let restored =
+            r#"{"mode":"manual","manual_url":"https://music.example.com","external_port":null}"#;
+        fs::write(&marker, restored).unwrap();
+        super::apply_restored_remote_access(&marker, &destination, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), restored);
+        assert_eq!(
+            fs::read_to_string(rollback.join("remote-access.json")).unwrap(),
+            current
+        );
+        assert!(!marker.exists());
+
+        // A setting that doesn't parse is dropped, not applied.
+        fs::write(&marker, "{not json").unwrap();
+        super::apply_restored_remote_access(&marker, &destination, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), restored);
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

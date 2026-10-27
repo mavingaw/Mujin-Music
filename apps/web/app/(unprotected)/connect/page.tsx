@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Connect",
-  description: "Choose which Parson music library to use.",
+  description: "Choose which Mujin Music music library to use.",
 };
 
 export default function ConnectPage() {

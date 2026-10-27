@@ -20,13 +20,17 @@ server = [
     "dep:actix-web-httpauth",
     "dep:actix-ws",
     "dep:argon2",
+    "dep:aws-lc-rs",
     "dep:bytes",
     "dep:futures",
     "dep:jsonwebtoken",
     "dep:mime_guess",
     "dep:mdns-sd",
+    "dep:if-addrs",
     "dep:ravif",
     "dep:reqwest",
+    "dep:roxmltree",
+    "dep:rustls",
     "dep:rust-embed",
     "dep:tokio-util",
     "dep:tracing-subscriber",
@@ -40,6 +44,7 @@ actix-web = { version = "4.15.0", default-features = false, features = ["macros"
 actix-web-httpauth = { version = "0.8.3", optional = true }
 actix-ws = { version = "0.4.0", optional = true }
 argon2 = { version = "0.6.0", optional = true }
+aws-lc-rs = { version = "1.18.1", optional = true }
 base64 = "0.23.1"
 bytes = { version = "1.12.1", optional = true }
 chrono = { version = "0.4.45", features = ["serde"] }
@@ -56,17 +61,20 @@ libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }
 lofty = "0.25.4"
 mime_guess = { version = "2.0.5", optional = true }
 mdns-sd = { version = "0.21.5", optional = true }
+if-addrs = { version = "0.15.0", optional = true }
 notify = "8.2.0"
 percent-encoding = "2.3.2"
 rand = "0.10.3"
 rayon = "1.12.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls"], optional = true }
+roxmltree = { version = "0.21.2", optional = true }
+rustls = { version = "0.23.45", default-features = false, features = ["aws_lc_rs", "std", "tls12"], optional = true }
 rust-embed = { version = "8.13.0", optional = true }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
-tokio = { version = "1.53.2", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { version = "1.53.2", features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { version = "0.7.20", features = ["io"], optional = true }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["registry", "env-filter"], optional = true }
@@ -75,9 +83,11 @@ unicode-normalization = "0.1.25"
 uuid = { version = "1.27.0", features = ["v4", "fast-rng", "macro-diagnostics", "serde"] }
 jwalk = "0.9.0"
 parson-core = { path = "../parson-core" }
+parson-bridge = { path = "../parson-bridge", default-features = false }
+parson-output = { path = "../parson-output" }
 webp = { version = "0.3.1", optional = true }
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
-zstd = "0.14.1"
+zstd = "0.14.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading"] }
@@ -91,3 +101,7 @@ ravif = { version = "0.13.0", default-features = false, features = ["threading"]
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.190"
 tokio-uring = "0.5.0"
+
+[dev-dependencies]
+# The protocol-level fake renderer and AirPlay receiver for network output tests.
+parson-output = { path = "../parson-output", features = ["network-fakes"] }

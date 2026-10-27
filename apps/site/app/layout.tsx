@@ -9,10 +9,10 @@ export const metadata: Metadata = {
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ?? "https://docs.parson.dev",
   ),
-  title: { default: "Parson Docs", template: "%s · Parson Docs" },
+  title: { default: "Mujin Music Docs", template: "%s · Mujin Music Docs" },
   description:
-    "Practical documentation for Parson, the local-first music server and player.",
-  applicationName: "Parson Docs",
+    "Practical documentation for Mujin Music, the local-first music server and player.",
+  applicationName: "Mujin Music Docs",
   icons: {
     icon: [
       { url: "/icons/icon.svg", type: "image/svg+xml" },
@@ -22,8 +22,8 @@ export const metadata: Metadata = {
     apple: "/icons/apple-touch-icon.png",
   },
   openGraph: {
-    title: "Parson Docs",
-    description: "Practical documentation for your Parson music library.",
+    title: "Mujin Music Docs",
+    description: "Practical documentation for your Mujin Music music library.",
     type: "website",
   },
 };

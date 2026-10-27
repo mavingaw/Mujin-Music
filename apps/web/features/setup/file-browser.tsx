@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createExclusiveOperations } from "./setup-state";
 import { FileBrowserView, type Directory } from "./file-browser-view";
-import { hasDesktopBridge, selectMusicFolder } from "@/lib/desktop/bridge";
+import { hasLocalDesktopBridge, selectMusicFolder } from "@/lib/desktop/bridge";
 import { libraryFailureKind, type FailureKind } from "@/lib/failure-state";
 
 export default function FileBrowser({
@@ -80,7 +80,7 @@ export default function FileBrowser({
   );
 
   useEffect(() => {
-    setDesktopBridgeAvailable(hasDesktopBridge());
+    setDesktopBridgeAvailable(hasLocalDesktopBridge());
   }, []);
 
   useEffect(() => {
