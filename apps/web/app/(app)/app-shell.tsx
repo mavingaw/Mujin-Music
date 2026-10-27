@@ -17,6 +17,7 @@ import AppSidebar from "@/components/layout/app-sidebar";
 import RouteScrollRestoration from "@/components/layout/route-scroll-restoration";
 import ParsonBrandMark from "@/components/icons/parson-brand-mark";
 import { DesktopWindowControls } from "@/components/layout/desktop-window-controls";
+import { ProfileSwitcher } from "@/features/profiles/profile-switcher";
 import {
   clearCachedAlbumInfos,
   clearCachedArtistInfos,
@@ -135,7 +136,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <ArrowRight className="h-4 w-4" />
             </button>
           </form>
-          <DesktopWindowControls />
+          <div className="absolute right-0 top-0 flex h-full items-center">
+            <ProfileSwitcher />
+            <DesktopWindowControls inline />
+          </div>
         </div>
       </header>
 

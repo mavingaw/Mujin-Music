@@ -19,9 +19,13 @@ import ConnectionsSettings from "@/features/settings/connections-settings";
 import ServicesSettings from "@/features/streaming/services-settings";
 import { useSearchParams } from "next/navigation";
 import HomeAssistantSettings from "@/features/settings/home-assistant-settings";
+import ProfilesSettings from "@/features/profiles/profiles-settings";
+import ScrobblingSettings from "@/features/scrobbling/scrobbling-settings";
 
 const settingsTabs = [
   "account",
+  "profiles",
+  "scrobbling",
   "playback",
   "outputs",
   "connections",
@@ -37,6 +41,8 @@ type SettingsTab = (typeof settingsTabs)[number];
 
 const labels: Record<SettingsTab, string> = {
   account: "Account",
+  profiles: "Profiles",
+  scrobbling: "Scrobbling",
   playback: "Playback",
   outputs: "Audio outputs",
   connections: "Connections",
@@ -65,6 +71,8 @@ function SettingsContent() {
     ? settingsTabs
     : ([
         "account",
+        "profiles",
+        "scrobbling",
         "playback",
         "outputs",
         "connections",
@@ -127,6 +135,8 @@ function SettingsContent() {
               <RadioSettings />
             </>
           )}
+          {activeTab === "profiles" && <ProfilesSettings />}
+          {activeTab === "scrobbling" && <ScrobblingSettings />}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}
           {activeTab === "connections" && (
             <>

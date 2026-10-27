@@ -74,3 +74,22 @@ export function renameStoredAccount(
       : account,
   );
 }
+
+/**
+ * After switching profiles on this device the server revoked the previous
+ * profile's session, so its saved entry can no longer sign in. The new
+ * profile replaces it at the top of the list.
+ */
+export function replaceSwitchedAccount(
+  accounts: StoredAccount[],
+  previous: { instanceId: string; sub: string },
+  next: StoredAccount,
+) {
+  return upsertStoredAccount(
+    accounts.filter(
+      (item) =>
+        !(item.instanceId === previous.instanceId && item.sub === previous.sub),
+    ),
+    next,
+  );
+}

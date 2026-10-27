@@ -1,6 +1,7 @@
-//! MD5 (RFC 1321), used only where Qobuz's API protocol requires it: the
-//! hashed password sent to `user/login` and `request_sig` request signatures.
-//! It is not used to protect anything Parson stores.
+//! MD5 (RFC 1321), used only where a service's API protocol requires it:
+//! Qobuz's hashed `user/login` password and `request_sig` signatures, and
+//! Last.fm's `api_sig` request signatures. It is not used to protect
+//! anything Parson stores.
 
 const SHIFTS: [u32; 64] = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,

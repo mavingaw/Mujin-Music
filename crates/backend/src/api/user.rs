@@ -160,30 +160,40 @@ fn delete_user_rows(
             }
         }
 
-        diesel::sql_query(
-            "DELETE FROM playlist
-             WHERE id IN (
-               SELECT a FROM _playlist_to_user
-               WHERE b = ? AND role = 'owner'
-             )",
-        )
-        .bind::<diesel::sql_types::Integer, _>(target_id)
-        .execute(connection)?;
-        diesel::sql_query("DELETE FROM search_item WHERE user_id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
-        diesel::sql_query("DELETE FROM listen_history_item WHERE user_id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
-        diesel::sql_query("DELETE FROM follow WHERE follower_id = ? OR following_id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
-        diesel::sql_query("DELETE FROM user WHERE id = ?")
-            .bind::<diesel::sql_types::Integer, _>(target_id)
-            .execute(connection)?;
+        remove_user_rows(connection, target_id)?;
         Ok(())
     })
+}
+
+/// Deletes an account and the personal rows that do not cascade. The caller
+/// checks permissions and runs this inside its transaction.
+pub(crate) fn remove_user_rows(
+    connection: &mut diesel::SqliteConnection,
+    target_id: i32,
+) -> Result<(), diesel::result::Error> {
+    diesel::sql_query(
+        "DELETE FROM playlist
+         WHERE id IN (
+           SELECT a FROM _playlist_to_user
+           WHERE b = ? AND role = 'owner'
+         )",
+    )
+    .bind::<diesel::sql_types::Integer, _>(target_id)
+    .execute(connection)?;
+    diesel::sql_query("DELETE FROM search_item WHERE user_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    diesel::sql_query("DELETE FROM listen_history_item WHERE user_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    diesel::sql_query("DELETE FROM follow WHERE follower_id = ? OR following_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    diesel::sql_query("DELETE FROM user WHERE id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_id)
+        .execute(connection)?;
+    Ok(())
 }
 
 #[get("")]
@@ -1021,6 +1031,7 @@ async fn add_playback_event(
     item: web::Json<PlaybackEventRequest>,
     lifecycle: web::Data<LibraryLifecycle>,
     pool: web::Data<DbPool>,
+    scrobbling: Option<web::Data<crate::scrobbling::ScrobbleHub>>,
     request: HttpRequest,
 ) -> HttpResponse {
     let user_id = match authenticated_user_id(&request) {
@@ -1032,6 +1043,7 @@ async fn add_playback_event(
         Err(readiness) => return library_unavailable_response(readiness),
     };
     let event = item.into_inner();
+    let observed = event.clone();
     let event_cache = cache.clone();
     let event_pool = pool.get_ref().clone();
     match web::block(move || {
@@ -1040,7 +1052,21 @@ async fn add_playback_event(
     })
     .await
     {
-        Ok(Ok(result)) => HttpResponse::Ok().json(result),
+        Ok(Ok(result)) => {
+            // Now playing and scrobbles go out in the background; a slow or
+            // offline service never delays the player.
+            if result.accepted
+                && let Some(hub) = scrobbling
+            {
+                let hub = hub.into_inner();
+                tokio::spawn(async move {
+                    if let Err(error) = hub.observe(user_id, observed, cache).await {
+                        tracing::warn!(%error, "could not queue a scrobble");
+                    }
+                });
+            }
+            HttpResponse::Ok().json(result)
+        }
         Ok(Err(error)) => HttpResponse::BadRequest().json(serde_json::json!({
             "error": "invalid_playback_event",
             "message": error,

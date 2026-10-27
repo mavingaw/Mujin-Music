@@ -27,6 +27,7 @@ pub mod radio_bans;
 pub mod recommendation;
 #[cfg(feature = "server")]
 pub mod remote_access;
+pub mod scrobbling;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod settings;

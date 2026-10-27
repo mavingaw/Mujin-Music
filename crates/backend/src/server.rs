@@ -18,7 +18,8 @@ use crate::api::library::{
 use crate::api::{
     album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
     genres, home, imports, key_service, library_tools, listen_later, lyrics, metadata, outputs,
-    playback, playlist, providers, remote_access, search, setup, song, user, works, zones,
+    playback, playlist, profiles, providers, remote_access, scrobbling, search, setup, song, user,
+    works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -173,6 +174,8 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(works::configure)
         .configure(imports::configure)
         .configure(providers::configure)
+        .configure(profiles::configure)
+        .configure(scrobbling::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -331,7 +334,9 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "home_assistant",
             "listen_later",
             "smart_tags",
-            "history"
+            "history",
+            "profiles",
+            "scrobbling"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
@@ -435,6 +440,11 @@ pub async fn build_server_with_shutdown_timeout(
         tracing::info!(url = %keys.public_url, "serving the Mujin Music key service");
         web::Data::new(key_service::KeyServiceApp::new(keys))
     });
+    let scrobble_hub = web::Data::new(
+        crate::scrobbling::ScrobbleHub::from_env(database.get_ref().clone())
+            .map_err(std::io::Error::other)?,
+    );
+    tokio::spawn(scrobble_hub.clone().into_inner().run());
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
@@ -462,6 +472,7 @@ pub async fn build_server_with_shutdown_timeout(
     crate::remote_access::start(bind_port);
     let zone_service = web::Data::new(build_zone_service(database.get_ref().clone(), bind_port));
     zone_service.set_library(library.clone().into_inner());
+    zone_service.set_scrobbling(scrobble_hub.clone().into_inner());
     tokio::spawn(zone_service.clone().into_inner().run());
     let bind_address = settings::bind_address().map_err(std::io::Error::other)?;
     let worker_count = std::thread::available_parallelism()
@@ -476,6 +487,7 @@ pub async fn build_server_with_shutdown_timeout(
             .app_data(lyrics_service.clone())
             .app_data(zone_service.clone())
             .app_data(streaming_services.clone())
+            .app_data(scrobble_hub.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())
@@ -514,6 +526,14 @@ pub async fn build_server_with_shutdown_timeout(
                 web::get().to(cast::cast_media),
             )
             .configure(zones::configure_device_routes)
+            .route(
+                "/api/v1/scrobbling/lastfm/complete",
+                web::post().to(scrobbling::complete_lastfm),
+            )
+            .route(
+                "/api/music/v1/scrobbling/lastfm/complete",
+                web::post().to(scrobbling::complete_lastfm),
+            )
             .service(library_routes_at("/api/v1/library"))
             .service(music_routes_at("/api/v1"))
             .service(
