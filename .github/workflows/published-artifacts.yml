@@ -415,7 +415,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.resolve.outputs.current }}
         run: |
-          image="ghcr.io/parsonlabs/parson:${TAG#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}"
           gh attestation verify "oci://${image}" --repo "$GITHUB_REPOSITORY"
           docker buildx imagetools inspect "$image" --raw > "$RUNNER_TEMP/manifest.json"
           jq --exit-status '
@@ -428,7 +428,7 @@ jobs:
         env:
           TAG: ${{ needs.resolve.outputs.current }}
         run: |
-          image="ghcr.io/parsonlabs/parson:${TAG#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}"
           docker run --detach \
             --name parson-published-server \
             --publish 127.0.0.1:1993:1993 \

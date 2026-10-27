@@ -20,12 +20,12 @@ export default function Downloads() {
     <div className={styles.page}>
       <div className={styles.container}>
         <header>
-          <a className={styles.brand} href="https://parson.dev">
+          <a className={styles.brand} href="/">
             <img src="/icons/icon.svg" alt="" />
             Mujin Music
           </a>
-          <a className={styles["header-link"]} href="https://parson.dev">
-            Back to Mujin Music <span aria-hidden="true">↗</span>
+          <a className={styles["header-link"]} href="/">
+            Back to Mujin Music
           </a>
         </header>
         <main>
@@ -210,7 +210,7 @@ export default function Downloads() {
         <footer>
           <span>Mujin Music · Your music. Instantly.</span>
           <div className={styles["footer-links"]}>
-            <a href="https://parson.dev/docs">Documentation</a>
+            <a href="/docs">Documentation</a>
             <a href="https://github.com/mavingaw/parson-jin">GitHub</a>
           </div>
         </footer>

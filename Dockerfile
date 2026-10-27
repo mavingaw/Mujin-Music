@@ -38,8 +38,10 @@ RUN cargo build --release -p parson-music
 FROM debian:trixie-slim AS runner
 WORKDIR /app
 
-LABEL org.opencontainers.image.licenses="GPL-3.0-only" \
-  org.opencontainers.image.source="https://github.com/ParsonLabs/Parson"
+LABEL org.opencontainers.image.title="Mujin Music" \
+  org.opencontainers.image.description="Mujin Music server, based on Parson by ParsonLabs" \
+  org.opencontainers.image.licenses="GPL-3.0-only" \
+  org.opencontainers.image.source="https://github.com/mavingaw/parson-jin"
 
 RUN apt-get update \
   && apt-get upgrade -y \
