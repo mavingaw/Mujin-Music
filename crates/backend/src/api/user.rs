@@ -1500,6 +1500,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(delete_user)
             .service(change_password)
             .service(change_username)
+            .configure(crate::api::history::configure)
             .service(get_listen_history_songs)
             .service(get_listen_history)
             .service(add_song_to_listen_history)

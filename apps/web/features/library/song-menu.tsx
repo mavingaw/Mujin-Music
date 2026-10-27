@@ -16,6 +16,7 @@ import {
   CreateTagDialog,
   TagSubmenu,
 } from "@/features/library/focus/tag-submenu";
+import { ListenLaterMenuItem } from "@/features/library/listen-later/listen-later-menu-item";
 import { useStartRadio } from "@/features/player/radio/radio-controls";
 import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import {
@@ -224,6 +225,11 @@ export default function SongMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
+          <ListenLaterMenuItem
+            entityId={song_id}
+            entityType="track"
+            name={song_name}
+          />
           {context !== "player" && (
             <TagSubmenu
               entityId={song_id}

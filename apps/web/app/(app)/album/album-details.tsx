@@ -1,5 +1,8 @@
 "use client";
 
+import ListenLaterButton from "@/features/library/listen-later/listen-later-button";
+import TagButton from "@/features/library/tags/tag-button";
+
 import getBaseURL from "@/lib/api/server-url";
 import { getLibraryImageUrl } from "@/lib/images/image-url";
 import {
@@ -424,6 +427,16 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           <StartRadioButton
             label={`Start radio from ${album.name}`}
             seed={{ kind: "album", id: album.id }}
+          />
+          <ListenLaterButton
+            entityId={album.id}
+            entityType="album"
+            name={album.name}
+          />
+          <TagButton
+            entityIds={[album.id]}
+            entityType="album"
+            title={album.name}
           />
           <BanToggleButton
             target={{ kind: "album", id: album.id, name: album.name }}

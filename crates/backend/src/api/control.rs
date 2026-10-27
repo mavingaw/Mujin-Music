@@ -1395,6 +1395,7 @@ pub(crate) async fn rate_track(
         source: Some("zone".to_string()),
         position_seconds: Some(zone.position_ms.max(0) as f64 / 1000.0),
         duration_seconds: Some(zone.duration_ms.max(0) as f64 / 1000.0),
+        ..Default::default()
     };
     let event_cache = cache.clone();
     let event_pool = pool.get_ref().clone();

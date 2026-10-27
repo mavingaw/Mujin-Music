@@ -30,6 +30,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, Tag } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
+import { tagTone } from "@/features/library/tags/tag-colors";
 
 export const TAGS_KEY = ["library", "tags"] as const;
 
@@ -84,12 +85,15 @@ function TagSubmenuItems({
     },
     onSuccess: async ({ tag, add }) => {
       toast.success(add ? `Tagged #${tag.name}` : `Removed #${tag.name}`);
+      await queryClient.invalidateQueries({ queryKey: ["library", "tag"] });
       await queryClient.invalidateQueries({ queryKey: TAGS_KEY });
       await queryClient.invalidateQueries({ queryKey: ["library", "focus"] });
     },
     onError: () => toast("Could not update tags."),
   });
   const assignedIds = new Set(assigned.data ?? []);
+  // Smart tags follow their focus and hold no hand-tagged items.
+  const manualTags = (tags.data ?? []).filter((tag) => tag.kind !== "smart");
 
   return (
     <>
@@ -99,7 +103,7 @@ function TagSubmenuItems({
           Loading tags…
         </ContextMenuItem>
       )}
-      {tags.data?.map((tag) => (
+      {manualTags.map((tag) => (
         <ContextMenuCheckboxItem
           checked={assignedIds.has(tag.id)}
           disabled={toggle.isPending || assigned.isPending}
@@ -109,10 +113,14 @@ function TagSubmenuItems({
             toggle.mutate({ tag, add: !assignedIds.has(tag.id) });
           }}
         >
-          <span className="truncate">#{tag.name}</span>
+          <span
+            aria-hidden="true"
+            className={`h-2 w-2 shrink-0 rounded-full ${tagTone(tag).dot}`}
+          />
+          <span className="truncate">{tag.name}</span>
         </ContextMenuCheckboxItem>
       ))}
-      {Boolean(tags.data?.length) && <ContextMenuSeparator />}
+      {manualTags.length > 0 && <ContextMenuSeparator />}
       <ContextMenuItem onSelect={onCreateTag}>
         <Plus className="h-4 w-4" />
         New tag…

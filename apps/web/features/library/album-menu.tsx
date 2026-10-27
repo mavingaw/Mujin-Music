@@ -29,6 +29,7 @@ import {
   CreateTagDialog,
   TagSubmenu,
 } from "@/features/library/focus/tag-submenu";
+import { ListenLaterMenuItem } from "@/features/library/listen-later/listen-later-menu-item";
 
 type AlbumMenuProps = {
   album_id: string;
@@ -112,6 +113,11 @@ export default function AlbumMenu({
               View album
             </Link>
           </ContextMenuItem>
+          <ListenLaterMenuItem
+            entityId={album_id}
+            entityType="album"
+            name={album_name}
+          />
           <TagSubmenu
             entityId={album_id}
             entityType="album"

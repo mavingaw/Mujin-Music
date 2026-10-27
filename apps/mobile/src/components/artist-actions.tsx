@@ -6,6 +6,8 @@ import { useState } from "react";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { StartRadioAction } from "@/components/radio-ui";
 import { BanAction } from "@/components/radio-bans";
+import { ListenLaterAction } from "@/components/listen-later";
+import { TagsAction } from "@/components/tag-picker";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 
 export function ArtistActions({
@@ -52,6 +54,12 @@ export function ArtistActions({
         target={{ kind: "artist", id: artistId, name }}
         onDone={onClose}
       />
+      <ListenLaterAction
+        entityId={artistId}
+        entityType="artist"
+        onDone={onClose}
+      />
+      <TagsAction entityId={artistId} entityType="artist" title={name} />
       <DrawerAction
         icon={UserRound}
         label="Go to artist"

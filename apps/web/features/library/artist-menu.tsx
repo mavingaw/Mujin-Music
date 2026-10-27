@@ -19,6 +19,7 @@ import {
   CreateTagDialog,
   TagSubmenu,
 } from "@/features/library/focus/tag-submenu";
+import { ListenLaterMenuItem } from "@/features/library/listen-later/listen-later-menu-item";
 
 export default function ArtistMenu({
   artistId,
@@ -82,6 +83,11 @@ export default function ArtistMenu({
               View artist
             </Link>
           </ContextMenuItem>
+          <ListenLaterMenuItem
+            entityId={artistId}
+            entityType="artist"
+            name={artistName}
+          />
           <TagSubmenu
             entityId={artistId}
             entityType="artist"

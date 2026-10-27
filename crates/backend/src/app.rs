@@ -305,7 +305,7 @@ fn quality_rank(quality: Option<&'static str>) -> u8 {
     }
 }
 
-fn focus_album(cache: &LibraryCache, id: &str) -> Option<LocalFocusAlbum> {
+pub(crate) fn focus_album(cache: &LibraryCache, id: &str) -> Option<LocalFocusAlbum> {
     let album = cache.album(id)?;
     let artist = cache.album_owner(id)?;
     let quality = album
@@ -329,7 +329,7 @@ fn focus_album(cache: &LibraryCache, id: &str) -> Option<LocalFocusAlbum> {
     })
 }
 
-fn focus_song(cache: &LibraryCache, id: &str) -> Option<LocalFocusSong> {
+pub(crate) fn focus_song(cache: &LibraryCache, id: &str) -> Option<LocalFocusSong> {
     let (artist_index, album_index, song_index) = *cache.song_positions.get(id)?;
     let artist = cache.artists.get(artist_index as usize)?;
     let album = artist.albums.get(album_index as usize)?;
@@ -351,7 +351,7 @@ fn focus_song(cache: &LibraryCache, id: &str) -> Option<LocalFocusSong> {
     })
 }
 
-fn focus_artist(cache: &LibraryCache, id: &str) -> Option<LocalCatalogArtist> {
+pub(crate) fn focus_artist(cache: &LibraryCache, id: &str) -> Option<LocalCatalogArtist> {
     let artist = cache.artist(id)?;
     Some(LocalCatalogArtist {
         id: artist.id.clone(),

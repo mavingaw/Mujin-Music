@@ -42,6 +42,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
 import { PageTitle, Screen, SongRow } from "@/components/music-ui";
+import { BrowseLinks } from "@/components/browse-links";
 import { layout, palette } from "@/constants/colors";
 import { playableCatalogSong } from "@/lib/playable-song";
 import { AlbumActions } from "@/components/album-actions";
@@ -317,6 +318,7 @@ export default function LibraryScreen() {
     <Screen>
       <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
         <PageTitle>Library</PageTitle>
+        {session.phase === "ready" ? <BrowseLinks /> : null}
         {session.phase === "offline" ? (
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineTitle}>Offline downloads</Text>
