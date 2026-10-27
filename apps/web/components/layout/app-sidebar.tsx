@@ -2,6 +2,9 @@
 
 import {
   AudioLines,
+  Clock,
+  Hash,
+  History,
   Home,
   Import,
   Library,
@@ -17,6 +20,9 @@ const navigation = [
   { href: "/", label: "Home", icon: Home },
   { href: "/library", label: "Library", icon: Library },
   { href: "/genre", label: "Genres", icon: Tags },
+  { href: "/listen-later", label: "Listen Later", icon: Clock },
+  { href: "/tags", label: "Tags", icon: Hash },
+  { href: "/history", label: "History", icon: History },
   { href: "/imports", label: "Imports", icon: Import },
   { href: "/streaming", label: "Streaming", icon: AudioLines },
 ];

@@ -27,6 +27,8 @@ import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { StartRadioAction } from "@/components/radio-ui";
 import { BanAction, BannedMark } from "@/components/radio-bans";
+import { ListenLaterAction } from "@/components/listen-later";
+import { TagsAction } from "@/components/tag-picker";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
@@ -218,6 +220,12 @@ export function SongRow({
           target={{ kind: "song", id: song.id, name: song.name }}
           onDone={() => setMenu(false)}
         />
+        <ListenLaterAction
+          entityId={song.id}
+          entityType="track"
+          onDone={() => setMenu(false)}
+        />
+        <TagsAction entityId={song.id} entityType="track" title={song.name} />
         {session.phase !== "offline" && piece ? (
           <DrawerAction
             icon={Music2}

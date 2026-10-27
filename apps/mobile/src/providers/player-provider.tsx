@@ -33,6 +33,7 @@ import {
   type VolumeLevelingMode,
 } from "@parson/music-sdk";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Device from "expo-device";
 import * as Haptics from "expo-haptics";
 import {
   createAudioPlayer,
@@ -89,6 +90,8 @@ import {
   serializePlayerState,
 } from "@/lib/player-storage";
 import { useSession } from "@/providers/session-provider";
+import { getSecureItem } from "@/lib/secure-storage";
+import { ZONE_DEVICE_KEY, mobileZoneName } from "@/lib/zones";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   extendWithRadio,
@@ -840,6 +843,30 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     ? preset
     : getPlayerAudioPreset("original");
 
+  // Where plays happen, for listening history: this phone's zone.
+  const historyZone = useRef<{
+    zone_id: string;
+    zone_name: string;
+    device: string;
+  } | null>(null);
+  useEffect(() => {
+    if (session.phase !== "ready" || historyZone.current) return;
+    void getSecureItem(ZONE_DEVICE_KEY)
+      .then((id) => {
+        if (!id || !/^[a-z0-9_-]{8,64}$/i.test(id)) return;
+        historyZone.current = {
+          zone_id: `client:${id}`,
+          zone_name: mobileZoneName(
+            Device.deviceName,
+            Device.modelName,
+            Platform.OS,
+          ),
+          device: Device.modelName ?? Platform.OS,
+        };
+      })
+      .catch(() => {});
+  }, [session.phase]);
+
   const sendPlaybackEvent = useCallback(
     (eventType: PlaybackEventType) => {
       if (
@@ -855,6 +882,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       }
       playbackEventSequence.current += 1;
       void recordPlaybackEvent({
+        ...(eventType === "qualified_play" ? historyZone.current : null),
         duration_seconds: duration || current.duration,
         event_key: `${playbackSessionId.current}:${current.id}:${eventType}:${playbackEventSequence.current}`,
         event_type: eventType,

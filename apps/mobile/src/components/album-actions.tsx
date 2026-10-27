@@ -39,6 +39,8 @@ import { useSession } from "@/providers/session-provider";
 import { palette } from "@/constants/colors";
 import { StartRadioAction } from "@/components/radio-ui";
 import { BanAction } from "@/components/radio-bans";
+import { ListenLaterAction } from "@/components/listen-later";
+import { TagsAction } from "@/components/tag-picker";
 
 export function AlbumActions({
   albumId,
@@ -194,6 +196,12 @@ export function AlbumActions({
           target={{ kind: "album", id: albumId, name }}
           onDone={onClose}
         />
+        <ListenLaterAction
+          entityId={albumId}
+          entityType="album"
+          onDone={onClose}
+        />
+        <TagsAction entityId={albumId} entityType="album" title={name} />
         <DrawerAction
           icon={ListEnd}
           label="Add to queue"

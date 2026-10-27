@@ -51,9 +51,12 @@ import {
 } from "@tanstack/react-query";
 import {
   Ban,
+  Clock,
   Disc3,
   ChevronRight,
   Feather,
+  Hash,
+  History,
   ListMusic,
   Heart,
   Import,
@@ -71,6 +74,7 @@ import { useCallback, useEffect, useState } from "react";
 import FocusBar from "./focus/focus-bar";
 import FocusPanel from "./focus/focus-panel";
 import SmartPlaylistDialog from "./focus/smart-playlist-dialog";
+import FocusTagMenu from "./tags/focus-tag-menu";
 import {
   audioBadge,
   focusCountLabel,
@@ -388,6 +392,26 @@ export default function LibraryOverview() {
         </div>
       </header>
 
+      <nav
+        aria-label="Browse"
+        className="-mt-2 flex gap-2 overflow-x-auto md:hidden [&::-webkit-scrollbar]:hidden"
+      >
+        {[
+          { href: "/listen-later", label: "Listen Later", icon: <Clock /> },
+          { href: "/tags", label: "Tags", icon: <Hash /> },
+          { href: "/history", label: "History", icon: <History /> },
+        ].map((link) => (
+          <Link
+            className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 text-sm text-zinc-200 active:bg-white/10 [&_svg]:h-4 [&_svg]:w-4 [&_svg]:text-zinc-400"
+            href={link.href}
+            key={link.href}
+          >
+            {link.icon}
+            {link.label}
+          </Link>
+        ))}
+      </nav>
+
       <div className="flex min-h-11 min-w-0 items-end border-b border-white/8">
         <div
           aria-label="Library views"
@@ -458,6 +482,7 @@ export default function LibraryOverview() {
               view === "compositions" ||
               (view === "artists" && focusActive)
             }
+            extraActions={<FocusTagMenu query={focus} />}
             onCreateSmartPlaylist={() => setSmartOpen(true)}
             onPlay={(shuffle) => void playFocus(shuffle)}
             onTogglePanel={() => setPanelOpen((open) => !open)}

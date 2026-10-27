@@ -93,3 +93,22 @@ export function clientZoneIdentity(
   }
   return { kind: "web", name: described, device: "Web browser" };
 }
+
+/**
+ * Where a play happened, for listening history: this device's zone id
+ * (`client:<device id>`, as the server names it), its name and kind.
+ */
+export function localZoneForHistory(
+  deviceId: string,
+  userAgent: string,
+  desktop: boolean,
+): { zone_id?: string; zone_name: string; device: string } {
+  const identity = clientZoneIdentity(userAgent, desktop);
+  return {
+    zone_id: /^[a-z0-9_-]{8,64}$/i.test(deviceId)
+      ? `client:${deviceId}`
+      : undefined,
+    zone_name: identity.name,
+    device: identity.kind === "desktop" ? identity.device : identity.name,
+  };
+}
