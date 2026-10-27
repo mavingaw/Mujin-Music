@@ -1,0 +1,58 @@
+[project]
+name = "mujin-enhancer"
+version = "0.1.0"
+description = "Mujin Music's AI enhancer worker: restores lossy music with Apollo on your own GPU."
+readme = "README.md"
+license = "GPL-3.0-only"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "numpy>=1.26",
+  "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+# The Apollo model (PyTorch). On Windows and Linux the CUDA build is used;
+# it also runs on the CPU, slowly, when there is no NVIDIA GPU.
+apollo = ["torch>=2.4"]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+mujin-enhancer = "mujin_enhancer.__main__:main"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mujin_enhancer"]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]
+ignore = [
+  # The Apollo model definition keeps the upstream maths as written.
+  "E741",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S108", "S603", "S607"]
+# Unpickling happens only after the pinned SHA-256 matched.
+"mujin_enhancer/models/apollo.py" = ["S301"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
