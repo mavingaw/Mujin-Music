@@ -133,6 +133,8 @@ test("listening time, change and labels read naturally", () => {
   expect(historySourceLabel("manual")).toBe("Your picks");
   expect(historySourceLabel(null)).toBe("Unknown");
   expect(historySourceLabel("playlist")).toBe("Playlist");
+  expect(historySourceLabel("lastfm")).toBe("Imported from Last.fm");
+  expect(historySourceLabel("listenbrainz")).toBe("Imported from ListenBrainz");
   expect(historyZoneLabel({ value: "none", label: null })).toBe("Not recorded");
   expect(historyZoneLabel({ value: "client:a", label: " Office " })).toBe(
     "Office",
