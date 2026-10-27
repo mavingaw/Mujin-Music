@@ -909,3 +909,110 @@ html[data-window-controls] .app-titlebar-search {
 :is(.group:hover, .group:focus-visible) .mj-duotone-soft::after {
   opacity: 0;
 }
+
+/*
+ * Display (TV / tablet) mode. Slow, quiet motion only: the artist photo
+ * drifts closer over a minute, a new track fades in, lyrics glide to the
+ * sung line. All of it stands still under prefers-reduced-motion.
+ */
+@keyframes mj-display-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes mj-display-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mj-display-kenburns {
+  from {
+    transform: scale(1.02) translate3d(0, 0, 0);
+  }
+  to {
+    transform: scale(1.09) translate3d(-1.2%, -0.8%, 0);
+  }
+}
+
+@keyframes mj-display-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.mj-display-layer {
+  animation: mj-display-fade-in 1400ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.mj-display-rise {
+  animation: mj-display-rise 900ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.mj-display-kenburns {
+  animation: mj-display-kenburns 60s ease-in-out infinite alternate;
+  transform-origin: 70% 35%;
+  will-change: transform;
+}
+
+.mj-display-breathe {
+  animation: mj-display-breathe 4.8s ease-in-out infinite;
+}
+
+.mj-display-photo {
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0%, #000 38%),
+    linear-gradient(to top, transparent 0%, #000 42%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent 0%, #000 38%),
+    linear-gradient(to top, transparent 0%, #000 42%);
+  mask-composite: intersect;
+}
+
+.mj-display-lyrics {
+  transition: transform 700ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.mj-display-lyrics > p {
+  transition:
+    opacity 500ms ease,
+    color 500ms ease,
+    transform 500ms cubic-bezier(0.2, 0, 0, 1);
+  transform-origin: left center;
+}
+
+.mj-display-drift {
+  transition: transform 6s ease-in-out;
+}
+
+.mj-display-hide-cursor,
+.mj-display-hide-cursor * {
+  cursor: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mj-display-kenburns,
+  .mj-display-breathe {
+    animation: none;
+  }
+
+  .mj-display-lyrics,
+  .mj-display-lyrics > p,
+  .mj-display-drift {
+    transition: none;
+  }
+}

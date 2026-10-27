@@ -49,6 +49,7 @@ import {
   TimerReset,
   X,
   UserRound,
+  Tv,
 } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -72,6 +73,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
+import { useZones } from "@/providers/zones-provider";
 import { SongRow } from "@/components/music-ui";
 import { fonts, palette } from "@/constants/colors";
 import {
@@ -416,6 +418,34 @@ function NowPlayingPanel({
           )}
         </Pressable>
       </View>
+      {!live && player.queue[player.currentIndex + 1] ? (
+        <Pressable
+          {...immediatePressFeedback}
+          accessibilityHint="Opens the queue"
+          accessibilityLabel={`Up next: ${player.queue[player.currentIndex + 1]!.name}`}
+          accessibilityRole="button"
+          onPress={onQueue}
+          style={styles.upNext}
+        >
+          <Artwork
+            path={
+              player.queue[player.currentIndex + 1]!.album_object?.cover_url
+            }
+            rounded={4}
+            size={38}
+          />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.upNextLabel}>UP NEXT</Text>
+            <Text numberOfLines={1} style={styles.upNextTitle}>
+              {player.queue[player.currentIndex + 1]!.name}
+              <Text style={styles.upNextArtist}>
+                {"  ·  "}
+                {player.queue[player.currentIndex + 1]!.artist}
+              </Text>
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
       <View style={styles.panelButtons}>
         <View style={styles.castButton}>
           <CastOutputButton />
@@ -790,6 +820,7 @@ function PlayerDrawers({
   online: boolean;
 }) {
   const playback = useZonePlayback();
+  const zones = useZones();
   const [playlistPicker, setPlaylistPicker] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(false);
@@ -843,6 +874,19 @@ function PlayerDrawers({
             onPress={() => {
               onActionsClose();
               router.replace(`/artist/${song.artist_object.id}`);
+            }}
+          />
+        ) : null}
+        {online ? (
+          <DrawerAction
+            icon={Tv}
+            label="Display mode on this screen"
+            onPress={() => {
+              onActionsClose();
+              const zoneId = zones.selectedZone?.id ?? zones.localZoneId;
+              router.push(
+                `/display?zone=${encodeURIComponent(zoneId ?? "follow")}`,
+              );
             }}
           />
         ) : null}
@@ -1246,6 +1290,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   panelButtons: { flexDirection: "row", gap: 8 },
+  upNext: {
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.25)",
+    borderColor: palette.border,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: 12,
+    padding: 8,
+  },
+  upNextLabel: {
+    color: palette.tertiary,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 1.4,
+  },
+  upNextTitle: { color: palette.text, fontSize: 14, marginTop: 2 },
+  upNextArtist: { color: palette.tertiary },
   castButton: {
     width: 46,
     height: 46,

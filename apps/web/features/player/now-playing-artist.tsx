@@ -38,7 +38,7 @@ export function NowPlayingArtistBio({
   return (
     <section
       aria-label={`About ${about.name}`}
-      className="mt-6 hidden max-w-md rounded-lg border border-white/[0.07] bg-black/25 p-3.5 backdrop-blur-md md:block [@media(max-height:820px)]:hidden"
+      className="mt-6 max-w-md rounded-lg border border-white/[0.07] bg-black/25 p-3.5 backdrop-blur-md md:[@media(max-height:820px)]:hidden"
     >
       <div className="flex items-center gap-3">
         <PersonAvatar imageUrl={about.image?.url} name={about.name} size={40} />

@@ -6,6 +6,7 @@ pub mod cast;
 pub mod control;
 pub mod data;
 pub mod discography;
+pub mod displays;
 pub mod editorial;
 pub mod error;
 pub mod filesystem;

@@ -1294,8 +1294,11 @@ pub async fn artist_about(
 
 #[get("/{id}/image")]
 pub async fn artist_image(id: web::Path<String>, pool: web::Data<DbPool>) -> HttpResponse {
-    let artist_id = id.into_inner();
-    let pool = pool.get_ref().clone();
+    artist_image_response(pool.get_ref().clone(), id.into_inner()).await
+}
+
+/// The stored photo of `artist_id` (an artist page's or a display's).
+pub(crate) async fn artist_image_response(pool: DbPool, artist_id: String) -> HttpResponse {
     let image = web::block(move || {
         let mut connection = pool.get().map_err(|error| error.to_string())?;
         store::load_image(&mut connection, "artist", &artist_id).map_err(|error| error.to_string())
@@ -1314,6 +1317,57 @@ pub async fn artist_image(id: web::Path<String>, pool: web::Data<DbPool>) -> Htt
             .body(bytes),
         Err(_) => HttpResponse::NotFound().finish(),
     }
+}
+
+/// What a display shows about the playing artist: their photo (with its
+/// credit) and the opening of their biography (with its source).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ArtistPortrait {
+    /// The id the photo is stored under, when there is one.
+    pub image_id: Option<String>,
+    /// e.g. `Photo: Jane Doe, CC BY-SA 4.0`.
+    pub image_credit: Option<String>,
+    pub biography: Option<EditorialText>,
+}
+
+/// The photo and biography the artist page would show for `artist_id`,
+/// found the same way (aliases and MusicBrainz ids included).
+pub(crate) async fn artist_portrait(
+    pool: DbPool,
+    cache: std::sync::Arc<LibraryCache>,
+    artist_id: &str,
+) -> Option<ArtistPortrait> {
+    let name = cache.artist(artist_id).map(|artist| artist.name.clone())?;
+    if is_placeholder_artist(&name) {
+        return None;
+    }
+    let identity = load_identity(pool.clone(), cache.clone()).await;
+    let members = identity.members(artist_id);
+    let stored = load_stored(
+        pool,
+        "artist",
+        members.canonical.clone(),
+        None,
+        Some(PersonLookup::new(&members)),
+    )
+    .await
+    .ok()?;
+    let mut texts = stored.texts;
+    let image_credit = stored.image.as_ref().map(|image| {
+        let author = image.author.trim();
+        let license = image.license.trim();
+        match (author.is_empty(), license.is_empty()) {
+            (false, false) => format!("Photo: {author}, {license}"),
+            (false, true) => format!("Photo: {author}"),
+            (true, false) => format!("Photo: {license}"),
+            (true, true) => "Photo: Wikimedia Commons".to_string(),
+        }
+    });
+    Some(ArtistPortrait {
+        image_id: stored.image.as_ref().map(|_| stored.image_id.clone()),
+        image_credit,
+        biography: texts.remove("biography"),
+    })
 }
 
 #[derive(Deserialize)]

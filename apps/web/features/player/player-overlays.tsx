@@ -22,10 +22,15 @@ import {
   ChevronDown,
   AudioLines,
   ChevronLeft,
+  ChevronRight,
   ListMusic,
   MicVocal,
   Minimize2,
   Radio,
+  Repeat,
+  Repeat1,
+  Shuffle,
+  Tv,
 } from "lucide-react";
 import {
   memo,
@@ -228,7 +233,12 @@ export function FullscreenPlayer({
   livePlaying,
   details,
   upNext,
+  upNextItems,
   artistBio,
+  favorite,
+  shuffle,
+  onToggleShuffle,
+  onOpenDisplay,
 }: {
   activeLine: number;
   activeLineRef: RefObject<HTMLElement | null>;
@@ -294,6 +304,15 @@ export function FullscreenPlayer({
   upNext?: UpNextItem | null;
   /** A short "About the artist" card from their biography. */
   artistBio?: ReactNode;
+  /** The next few tracks, for the phone's "Up next" card. */
+  upNextItems?: UpNextItem[];
+  /** The song heart. */
+  favorite?: ReactNode;
+  shuffle?: boolean;
+  /** Turns shuffle on or off; `null` where the zone cannot shuffle. */
+  onToggleShuffle?: (() => void) | null;
+  /** Opens this zone's full-screen display (TV mode) in a new window. */
+  onOpenDisplay?: () => void;
 }) {
   const live = isLiveRadioId(songId);
   const palette = useArtworkPalette(cover);
@@ -568,26 +587,38 @@ export function FullscreenPlayer({
                           : ""}
                       </p>
                     )}
-                    <h1
-                      className="mj-display wrap-break-word text-[32px] text-mujin-text md:text-[clamp(38px,min(5vw,7dvh),72px)]"
-                      title={title}
-                    >
-                      {title}
-                    </h1>
-                    <p className="mt-2 text-[16px] leading-7 text-mujin-text-secondary md:mt-4 md:text-[22px] md:leading-8">
-                      {explicit && <ExplicitBadge />}
-                      <ArtistCreditLinks
-                        credits={artistCredits}
-                        onNavigate={onClose}
-                      />
-                    </p>
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <h1
+                          className="mj-display wrap-break-word text-[32px] text-mujin-text md:text-[clamp(38px,min(5vw,7dvh),72px)]"
+                          title={title}
+                        >
+                          {title}
+                        </h1>
+                        <p className="mt-2 text-[16px] leading-7 text-mujin-text-secondary md:mt-4 md:text-[22px] md:leading-8">
+                          {explicit && <ExplicitBadge />}
+                          <ArtistCreditLinks
+                            credits={artistCredits}
+                            onNavigate={onClose}
+                          />
+                        </p>
+                      </div>
+                      {favorite && !live && (
+                        <div className="-mr-2 mt-1 shrink-0 md:hidden [&_button]:h-11 [&_button]:w-11 [&_svg]:h-5.5 [&_svg]:w-5.5">
+                          {favorite}
+                        </div>
+                      )}
+                    </div>
                     {details && !live && (
                       <NowPlayingFacts details={details} onNavigate={onClose} />
                     )}
-                    {(signalBadge || feedback) && (
+                    {(signalBadge || feedback || favorite) && (
                       <div className="mt-6 flex min-w-0 flex-wrap items-center gap-3">
                         {signalBadge}
                         {feedback}
+                        {favorite && !live && (
+                          <span className="hidden md:contents">{favorite}</span>
+                        )}
                       </div>
                     )}
                     {live && (livePlaying?.history.length ?? 0) > 0 && (
@@ -610,6 +641,58 @@ export function FullscreenPlayer({
                         <SourceBadge provider={streamingSource.provider} />
                         <DeliveredFormat songId={songId} />
                       </div>
+                    )}
+                    {!live && upNextItems && upNextItems.length > 0 && (
+                      <section
+                        aria-label="Up next"
+                        className="mt-6 rounded-lg border border-white/[0.07] bg-black/25 backdrop-blur-md md:hidden"
+                      >
+                        <button
+                          className="flex w-full items-center justify-between px-3.5 pb-1 pt-3 text-left"
+                          onClick={onOpenQueue}
+                          type="button"
+                        >
+                          <span className="mj-eyebrow text-[10px]!">
+                            Up next
+                          </span>
+                          <span className="flex items-center gap-0.5 text-[12px] text-mujin-text-secondary">
+                            Queue
+                            <ChevronRight
+                              aria-hidden="true"
+                              className="h-3.5 w-3.5"
+                            />
+                          </span>
+                        </button>
+                        <ol className="px-1.5 pb-1.5">
+                          {upNextItems.slice(0, 3).map((item, index) => (
+                            <li key={`${index}-${item.title}`}>
+                              <button
+                                className="flex w-full items-center gap-3 rounded-md p-2 text-left active:bg-white/[0.06]"
+                                onClick={onOpenQueue}
+                                type="button"
+                              >
+                                <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-[4px] bg-mujin-surface-2">
+                                  <Image
+                                    alt=""
+                                    className="object-cover"
+                                    fill
+                                    sizes="40px"
+                                    src={item.cover}
+                                  />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[14px] text-mujin-text">
+                                    {item.title}
+                                  </span>
+                                  <span className="block truncate text-[12px] text-mujin-text-tertiary">
+                                    {item.artist}
+                                  </span>
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ol>
+                      </section>
                     )}
                     {!live && artistBio}
                     {upNext && !live && (
@@ -669,7 +752,54 @@ export function FullscreenPlayer({
                   playbackRate={playbackRate}
                 />
               )}
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+              <PhoneTransport
+                isPlaying={isPlaying}
+                live={live}
+                lyricsOpen={lyricsOpen}
+                onNext={onNext}
+                onOpenLyrics={onOpenLyrics}
+                onOpenQueue={queueOpen ? onBackToPlayer : onOpenQueue}
+                onPrevious={onPrevious}
+                onToggleLoop={onToggleLoop}
+                onTogglePlayback={onTogglePlayback}
+                onToggleShuffle={onToggleShuffle}
+                queueOpen={queueOpen}
+                repeatMode={repeatMode ?? (looping ? "one" : "off")}
+                shuffle={Boolean(shuffle)}
+                more={
+                  <PlayerMoreMenu label="More player controls">
+                    <DropdownMenuItem onSelect={onToggleSound}>
+                      <AudioLines />
+                      {slowedReverb ? "Sound: effect on" : "Sound"}
+                    </DropdownMenuItem>
+                    {onOpenDisplay && (
+                      <DropdownMenuItem onSelect={onOpenDisplay}>
+                        <Tv />
+                        Open as display
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>Sound</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={audioPreset}
+                      onValueChange={(value) =>
+                        onSelectPreset(value as AudioPresetId)
+                      }
+                    >
+                      {audioPresets.map((preset) => (
+                        <DropdownMenuRadioItem
+                          key={preset.id}
+                          value={preset.id}
+                        >
+                          {preset.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </PlayerMoreMenu>
+                }
+                zonePicker={zonePicker}
+              />
+              <div className="hidden grid-cols-[1fr_auto_1fr] items-center gap-4 md:grid">
                 <div className="flex items-center gap-1">
                   <button
                     aria-label="Lyrics"
@@ -732,6 +862,20 @@ export function FullscreenPlayer({
                     >
                       {repeatModeLabel(repeatMode ?? (looping ? "one" : "off"))}
                     </DropdownMenuCheckboxItem>
+                    {onToggleShuffle && (
+                      <DropdownMenuCheckboxItem
+                        checked={Boolean(shuffle)}
+                        onCheckedChange={onToggleShuffle}
+                      >
+                        Shuffle
+                      </DropdownMenuCheckboxItem>
+                    )}
+                    {onOpenDisplay && (
+                      <DropdownMenuItem onSelect={onOpenDisplay}>
+                        <Tv />
+                        Open as display
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel>Sound</DropdownMenuLabel>
                     <DropdownMenuRadioGroup
@@ -757,6 +901,105 @@ export function FullscreenPlayer({
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+  );
+}
+
+/**
+ * The phone's controls under the seek bar: shuffle, previous, play, next
+ * and repeat in one row, then the zone, lyrics, queue and more, so nothing
+ * needs a trip out of Now Playing.
+ */
+function PhoneTransport({
+  isPlaying,
+  live,
+  lyricsOpen,
+  more,
+  onNext,
+  onOpenLyrics,
+  onOpenQueue,
+  onPrevious,
+  onToggleLoop,
+  onTogglePlayback,
+  onToggleShuffle,
+  queueOpen,
+  repeatMode,
+  shuffle,
+  zonePicker,
+}: {
+  isPlaying: boolean;
+  live: boolean;
+  lyricsOpen: boolean;
+  more: ReactNode;
+  onNext: () => void;
+  onOpenLyrics: () => void;
+  onOpenQueue: () => void;
+  onPrevious: () => void;
+  onToggleLoop: () => void;
+  onTogglePlayback: () => void;
+  onToggleShuffle?: (() => void) | null;
+  queueOpen: boolean;
+  repeatMode: ZoneRepeatMode;
+  shuffle: boolean;
+  zonePicker?: ReactNode;
+}) {
+  const RepeatIcon = repeatMode === "one" ? Repeat1 : Repeat;
+  const toggle = (active: boolean) =>
+    `grid h-11 w-11 place-items-center rounded-full transition-colors disabled:opacity-35 ${active ? "text-mujin-copper" : "text-mujin-text-secondary active:bg-white/10"}`;
+  return (
+    <div className="md:hidden">
+      <div className="flex items-center justify-between">
+        <button
+          aria-label={shuffle ? "Shuffle on" : "Shuffle off"}
+          aria-pressed={shuffle}
+          className={toggle(shuffle)}
+          disabled={!onToggleShuffle || live}
+          onClick={() => onToggleShuffle?.()}
+          type="button"
+        >
+          <Shuffle className="h-5 w-5" />
+        </button>
+        <PlaybackControls
+          prominent
+          isPlaying={isPlaying}
+          onNext={onNext}
+          onPrevious={onPrevious}
+          onToggle={onTogglePlayback}
+        />
+        <button
+          aria-label={repeatModeLabel(repeatMode)}
+          aria-pressed={repeatMode !== "off"}
+          className={toggle(repeatMode !== "off")}
+          disabled={live}
+          onClick={onToggleLoop}
+          type="button"
+        >
+          <RepeatIcon className="h-5 w-5" />
+        </button>
+      </div>
+      <div className="mt-2 flex items-center justify-between">
+        <div className="flex min-w-11 justify-start">{zonePicker}</div>
+        <button
+          aria-label="Lyrics"
+          aria-pressed={lyricsOpen}
+          className={toggle(lyricsOpen)}
+          disabled={live}
+          onClick={onOpenLyrics}
+          type="button"
+        >
+          <MicVocal className="h-5 w-5" />
+        </button>
+        <button
+          aria-label={queueOpen ? "Back to now playing" : "Queue"}
+          aria-pressed={queueOpen}
+          className={toggle(queueOpen)}
+          onClick={onOpenQueue}
+          type="button"
+        >
+          <ListMusic className="h-5 w-5" />
+        </button>
+        <div className="flex min-w-11 justify-end">{more}</div>
+      </div>
+    </div>
   );
 }
 

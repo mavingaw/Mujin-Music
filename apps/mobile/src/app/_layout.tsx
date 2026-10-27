@@ -45,6 +45,7 @@ function PersistentMiniPlayer() {
   const route = String(segments[segments.length - 1] ?? "");
   if (
     route === "player" ||
+    route === "display" ||
     (session.phase !== "ready" && session.phase !== "offline")
   )
     return null;
@@ -151,6 +152,14 @@ export default function RootLayout() {
                     <Stack.Screen
                       name="connect"
                       options={{ animation: "fade" }}
+                    />
+                    <Stack.Screen
+                      name="display"
+                      options={{
+                        presentation: "fullScreenModal",
+                        animation: "fade",
+                        orientation: "all",
+                      }}
                     />
                     <Stack.Screen
                       name="player"
