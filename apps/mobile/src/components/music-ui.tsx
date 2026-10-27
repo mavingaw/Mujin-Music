@@ -1,4 +1,11 @@
-import type { LibrarySong, ResponseAlbum } from "@parson/music-sdk";
+import {
+  getSongWorks,
+  trackWorkTarget,
+  type LibrarySong,
+  type ResponseAlbum,
+  type WorkSummary,
+} from "@parson/music-sdk";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import {
   Disc3,
@@ -8,6 +15,7 @@ import {
   ListEnd,
   ListPlus,
   MoreHorizontal,
+  Music2,
   Play,
   X,
   UserRound,
@@ -17,8 +25,13 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
+import { StartRadioAction } from "@/components/radio-ui";
+import { BanAction, BannedMark } from "@/components/radio-bans";
+import { ListenLaterAction } from "@/components/listen-later";
+import { TagsAction } from "@/components/tag-picker";
 import { palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   downloadSong,
   isSongDownloaded,
@@ -74,6 +87,8 @@ export function SongRow({
   showAlbum = true,
   albumArtist,
   albumType,
+  work,
+  title,
 }: {
   song: LibrarySong;
   queue?: LibrarySong[];
@@ -85,8 +100,13 @@ export function SongRow({
   showAlbum?: boolean;
   albumArtist?: string;
   albumType?: string | null;
+  /** The piece the song performs when known; looked up when undefined. */
+  work?: WorkSummary | null;
+  /** Shown instead of the song name, e.g. a movement under a work heading. */
+  title?: string;
 }) {
   const player = usePlayer();
+  const playback = useZonePlayback();
   const session = useSession();
   const router = useRouter();
   const [menu, setMenu] = useState(false);
@@ -95,6 +115,14 @@ export function SongRow({
   const [downloadError, setDownloadError] = useState(false);
   useDownloadsRevision();
   const active = player.current?.id === song.id;
+  const songWorks = useQuery({
+    queryKey: ["song-works", song.id],
+    queryFn: () => getSongWorks(song.id),
+    enabled: menu && work === undefined && session.phase !== "offline",
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const piece = work === undefined ? trackWorkTarget(songWorks.data) : work;
   const albumCredit =
     !showAlbum && albumArtist
       ? trackArtistCredit({
@@ -119,7 +147,7 @@ export function SongRow({
         onPress={() => {
           if (menu) return;
           if (active) player.toggle();
-          else player.playSong(song, queue);
+          else playback.playSong(song, queue);
         }}
         onLongPress={() => setMenu(true)}
         delayLongPress={220}
@@ -130,9 +158,12 @@ export function SongRow({
           <Artwork path={song.album_object?.cover_url} size={48} />
         )}
         <View style={styles.songLabels}>
-          <Text numberOfLines={1} style={styles.songTitle}>
-            {song.name}
-          </Text>
+          <View style={styles.songTitleRow}>
+            <Text numberOfLines={1} style={[styles.songTitle, styles.shrink]}>
+              {title ?? song.name}
+            </Text>
+            <BannedMark target={{ kind: "song", id: song.id }} />
+          </View>
           {subtitle ? (
             <Text numberOfLines={1} style={styles.songArtist}>
               {subtitle}
@@ -160,7 +191,7 @@ export function SongRow({
           label="Play"
           onPress={() => {
             setMenu(false);
-            player.playSong(song, queue);
+            playback.playSong(song, queue);
           }}
         />
         <DrawerAction
@@ -168,7 +199,7 @@ export function SongRow({
           label="Play next"
           onPress={() => {
             setMenu(false);
-            player.addNext(song);
+            playback.addNext(song);
           }}
         />
         <DrawerAction
@@ -176,9 +207,35 @@ export function SongRow({
           label="Add to queue"
           onPress={() => {
             setMenu(false);
-            player.addToQueue([song]);
+            playback.addToQueue([song]);
           }}
         />
+        {session.phase !== "offline" ? (
+          <StartRadioAction
+            seed={{ kind: "song", id: song.id }}
+            onStarted={() => setMenu(false)}
+          />
+        ) : null}
+        <BanAction
+          target={{ kind: "song", id: song.id, name: song.name }}
+          onDone={() => setMenu(false)}
+        />
+        <ListenLaterAction
+          entityId={song.id}
+          entityType="track"
+          onDone={() => setMenu(false)}
+        />
+        <TagsAction entityId={song.id} entityType="track" title={song.name} />
+        {session.phase !== "offline" && piece ? (
+          <DrawerAction
+            icon={Music2}
+            label="Go to work"
+            onPress={() => {
+              setMenu(false);
+              router.push(`/work/${encodeURIComponent(piece.mbid)}`);
+            }}
+          />
+        ) : null}
         {session.phase !== "offline" && song.album_object?.id ? (
           <DrawerAction
             icon={Disc3}
@@ -335,6 +392,8 @@ export function AlbumRail({ albums }: { albums: ResponseAlbum[] }) {
 }
 
 const styles = StyleSheet.create({
+  songTitleRow: { alignItems: "center", flexDirection: "row", gap: 6 },
+  shrink: { flexShrink: 1 },
   screen: { flex: 1, backgroundColor: palette.background },
   titleBlock: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 14 },
   pageTitle: {

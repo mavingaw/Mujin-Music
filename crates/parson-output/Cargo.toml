@@ -1,0 +1,27 @@
+[package]
+name = "parson-output"
+description = "Audio outputs for Parson: exclusive, bit-perfect device access (ALSA hw, WASAPI Exclusive, CoreAudio hog mode), network players, format planning, DSP and playback"
+version = "1.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+
+[features]
+# Protocol-level fake AirPlay receiver, for demos and integration tests
+# without network audio hardware.
+network-fakes = []
+
+[[example]]
+name = "network_fakes"
+required-features = ["network-fakes"]
+
+[dependencies]
+mdns-sd = "0.21.5"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.151"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+

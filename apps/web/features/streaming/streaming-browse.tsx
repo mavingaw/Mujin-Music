@@ -1,0 +1,281 @@
+"use client";
+
+import {
+  browseStreaming,
+  type StreamingBrowseSection,
+  type StreamingBrowseSectionInfo,
+  type StreamingProviderId,
+} from "@parson/music-sdk";
+import { useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { usePageTitle } from "@/components/app/title-metadata";
+import { cn } from "@/lib/cn";
+import AlbumCard from "@/features/library/album-card";
+import { ProviderMark } from "./source-badge";
+import { SandboxNotice } from "./services-settings";
+import { StreamingTrackList } from "./library-sources";
+import { StreamingGenresSection } from "./streaming-genres";
+import { StreamingPlaylistsSection } from "./streaming-playlists";
+import { useStreamingProviders } from "./use-streaming";
+
+type Section = StreamingBrowseSection | "genres" | "playlists";
+
+const fallbackEditorial: StreamingBrowseSectionInfo[] = [
+  { id: "new_releases", label: "New releases", by_genre: false },
+];
+
+/**
+ * The service's own editorial lists (TIDAL: New, Recommended, Top; Qobuz:
+ * New releases, Editor's picks, Most streamed, Press awards), then Genres,
+ * the listener's favorites and playlists.
+ */
+export function browseSections(
+  editorial: StreamingBrowseSectionInfo[] | undefined,
+): { id: Section; label: string }[] {
+  return [
+    ...(editorial?.length ? editorial : fallbackEditorial).map((section) => ({
+      id: section.id as Section,
+      label: section.label,
+    })),
+    { id: "genres", label: "Genres" },
+    { id: "favorite_albums", label: "Favorite albums" },
+    { id: "favorite_tracks", label: "Favorite tracks" },
+    { id: "playlists", label: "Playlists" },
+  ];
+}
+
+const knownSections: Section[] = [
+  "new_releases",
+  "popular",
+  "editors_picks",
+  "press_awards",
+  "genres",
+  "favorite_albums",
+  "favorite_tracks",
+  "playlists",
+];
+
+const isSection = (value: string | null): value is Section =>
+  knownSections.includes(value as Section);
+
+function BrowseSectionView({
+  provider,
+  section,
+}: {
+  provider: StreamingProviderId;
+  section: StreamingBrowseSection;
+}) {
+  const page = useQuery({
+    queryKey: ["streaming", "browse", provider, section],
+    queryFn: () => browseStreaming(provider, section, { limit: 50 }),
+  });
+  if (page.isPending) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-zinc-500">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+      </p>
+    );
+  }
+  if (page.isError || !page.data) {
+    return (
+      <p className="text-sm text-zinc-400">
+        This section could not be loaded.{" "}
+        <button
+          className="text-white underline-offset-4 hover:underline"
+          onClick={() => void page.refetch()}
+          type="button"
+        >
+          Try again
+        </button>
+      </p>
+    );
+  }
+  if (section === "favorite_tracks") {
+    return page.data.tracks.length ? (
+      <StreamingTrackList tracks={page.data.tracks} />
+    ) : (
+      <p className="text-sm text-zinc-500">No favorite tracks yet.</p>
+    );
+  }
+  if (!page.data.albums.length) {
+    return <p className="text-sm text-zinc-500">Nothing here yet.</p>;
+  }
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      {page.data.albums.map((album) => (
+        <AlbumCard
+          album_cover={album.cover_url ?? ""}
+          album_id={album.id}
+          album_name={album.title}
+          artist_id={album.artist.id}
+          artist_name={album.artist.name}
+          first_release_date={album.release_date ?? ""}
+          formatLabel={album.format?.label}
+          key={album.id}
+          source={album.provider}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Each connected service's own browser, as in Roon's navigation. */
+export default function StreamingBrowse() {
+  usePageTitle("Streaming");
+  const requested = useSearchParams().get("provider");
+  const { connected, sandbox, isPending } = useStreamingProviders();
+  const [chosen, setChosen] = useState<StreamingProviderId | null>(
+    requested === "tidal" || requested === "qobuz" ? requested : null,
+  );
+  const requestedSection = useSearchParams().get("section");
+  const [section, setSectionState] = useState<Section>(
+    isSection(requestedSection) ? requestedSection : "new_releases",
+  );
+  const [genreId, setGenreIdState] = useState<string | null>(
+    useSearchParams().get("genre"),
+  );
+  const active =
+    connected.find((provider) => provider.id === chosen) ?? connected[0];
+  const sections = browseSections(active?.browse_sections);
+  // A section this service does not publish (Press awards on TIDAL) falls
+  // back to its first list.
+  const shown = sections.some((item) => item.id === section)
+    ? section
+    : (sections[0]?.id ?? "new_releases");
+
+  const remember = (next: {
+    provider?: StreamingProviderId;
+    section: Section;
+    genre: string | null;
+  }) => {
+    const params = new URLSearchParams(window.location.search);
+    if (next.provider) params.set("provider", next.provider);
+    params.set("section", next.section);
+    if (next.genre) params.set("genre", next.genre);
+    else params.delete("genre");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `/streaming?${params}`,
+    );
+  };
+  const setSection = (next: Section) => {
+    setSectionState(next);
+    setGenreIdState(null);
+    remember({ section: next, genre: null });
+  };
+  const setGenreId = (next: string | null) => {
+    setGenreIdState(next);
+    remember({ section: "genres", genre: next });
+  };
+
+  return (
+    <section className="mx-auto w-full max-w-266 space-y-7 px-5 py-8 pb-36 sm:px-7">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <h1 className="text-3xl font-semibold text-white">Streaming</h1>
+        {connected.length > 1 && (
+          <div className="flex gap-2" role="tablist" aria-label="Services">
+            {connected.map((provider) => (
+              <button
+                aria-selected={active?.id === provider.id}
+                className={cn(
+                  "inline-flex h-9 items-center gap-2 rounded-full border px-4 text-sm font-semibold",
+                  active?.id === provider.id
+                    ? "border-white bg-white text-black"
+                    : "border-white/12 text-zinc-300 hover:text-white",
+                )}
+                key={provider.id}
+                onClick={() => {
+                  setChosen(provider.id);
+                  setGenreIdState(null);
+                  remember({
+                    provider: provider.id,
+                    section: shown,
+                    genre: null,
+                  });
+                }}
+                role="tab"
+                type="button"
+              >
+                <ProviderMark
+                  onLight={active?.id === provider.id}
+                  provider={provider.id}
+                />
+                {provider.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </header>
+      {sandbox && <SandboxNotice compact />}
+      {!isPending && !active && (
+        <div className="rounded-xl border border-white/8 px-6 py-14 text-center">
+          <p className="text-lg font-semibold text-white">
+            Connect TIDAL or Qobuz
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-400">
+            Sign in with your account to browse new releases, favorites and
+            playlists, and to add streaming albums to your library.
+          </p>
+          <Link
+            className="mt-6 inline-flex h-10 items-center rounded-full bg-white px-6 text-sm font-semibold text-black"
+            href="/settings?tab=services"
+          >
+            Open Services
+          </Link>
+        </div>
+      )}
+      {active && (
+        <>
+          <nav
+            aria-label={`${active.name} sections`}
+            className="flex gap-1 overflow-x-auto border-b border-white/8 scrollbar-none [&::-webkit-scrollbar]:hidden"
+          >
+            {sections.map((item) => (
+              <button
+                aria-current={shown === item.id ? "page" : undefined}
+                className={cn(
+                  "relative h-11 shrink-0 px-4 text-sm font-medium",
+                  shown === item.id
+                    ? "text-white"
+                    : "text-zinc-500 hover:text-zinc-200",
+                )}
+                key={item.id}
+                onClick={() => setSection(item.id)}
+                type="button"
+              >
+                {item.label}
+                {shown === item.id && (
+                  <span className="absolute inset-x-3 bottom-0 h-0.5 bg-white" />
+                )}
+              </button>
+            ))}
+          </nav>
+          {shown === "playlists" ? (
+            <StreamingPlaylistsSection
+              key={`${active.id}-playlists`}
+              provider={active.id}
+            />
+          ) : shown === "genres" ? (
+            <StreamingGenresSection
+              genreId={genreId}
+              key={`${active.id}-genres`}
+              onGenreChange={setGenreId}
+              provider={active.id}
+              sections={active.browse_sections ?? []}
+            />
+          ) : (
+            <BrowseSectionView
+              key={`${active.id}-${shown}`}
+              provider={active.id}
+              section={shown}
+            />
+          )}
+        </>
+      )}
+    </section>
+  );
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { usePlayer } from "@/features/player/player-context";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import getBaseURL from "@/lib/api/server-url";
 import { AlbumArtFallback, getLibraryImageUrl } from "@/lib/images/image-url";
 import {
@@ -27,6 +27,11 @@ import {
   searchResultIsPlayable,
   searchResultSubtitle,
 } from "@/features/library/search-result-subtitle";
+import StreamingSearchSections, {
+  SearchScopeToggle,
+  parseSearchScope,
+  type SearchScope,
+} from "@/features/streaming/streaming-search";
 
 const isPlayable = (item: CombinedItem) =>
   searchResultIsPlayable(item.item_type);
@@ -110,20 +115,36 @@ function SearchResultMenu({
   }
   if (item.item_type === "album") {
     return (
-      <AlbumMenu album_id={item.id} artist_id={item.artist_object?.id ?? ""}>
+      <AlbumMenu
+        album_id={item.id}
+        album_name={item.name}
+        artist_id={item.artist_object?.id ?? ""}
+      >
         {children}
       </AlbumMenu>
     );
   }
   if (item.item_type === "artist") {
-    return <ArtistMenu artistId={item.id}>{children}</ArtistMenu>;
+    return (
+      <ArtistMenu artistId={item.id} artistName={item.name}>
+        {children}
+      </ArtistMenu>
+    );
   }
   return children;
 }
 
 export default function SearchResults() {
   const router = useRouter();
-  const query = useSearchParams().get("q") ?? "";
+  const searchParams = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const scope = parseSearchScope(searchParams.get("scope"));
+  const setScope = (next: SearchScope) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "everywhere") params.delete("scope");
+    else params.set("scope", next);
+    router.replace(`/search?${params}`);
+  };
   const searchTerm = query.trim();
   const search = useQuery({
     queryKey: ["search", searchTerm],
@@ -136,8 +157,7 @@ export default function SearchResults() {
       results.map((item) => [`${item.item_type}-${item.id}`, item] as const),
     ).values(),
   );
-  const { setCurrentSongIndex, setQueue, setSongCallback, playAudioSource } =
-    usePlayer();
+  const playback = useZonePlayback();
   const [playingKey, setPlayingKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -173,10 +193,9 @@ export default function SearchResults() {
           toast("This album has no playable songs.");
           return;
         }
-        setQueue(album.songs.map((song) => ({ song, artist, album })));
-        setCurrentSongIndex(0);
-        setSongCallback(firstSong, artist, album);
-        playAudioSource();
+        await playback.playQueue(
+          album.songs.map((song) => ({ song, artist, album })),
+        );
         return;
       }
 
@@ -188,10 +207,7 @@ export default function SearchResults() {
         artist: artist.name,
         duration: item.song_object?.duration ?? 0,
       };
-      setQueue([{ song: track, artist, album }]);
-      setCurrentSongIndex(0);
-      setSongCallback(track, artist, album);
-      playAudioSource();
+      await playback.playQueue([{ song: track, artist, album }]);
     } catch {
       toast(
         item.item_type === "album"
@@ -206,16 +222,19 @@ export default function SearchResults() {
   return (
     <section className="mx-auto w-full max-w-190 space-y-7 px-5 py-9 pb-36 sm:px-7">
       {searchTerm && (
-        <h1 className="text-2xl font-semibold text-white">
-          Results for &quot;{query}&quot;
-        </h1>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <h1 className="text-2xl font-semibold text-white">
+            Results for &quot;{query}&quot;
+          </h1>
+          <SearchScopeToggle onChange={setScope} scope={scope} />
+        </div>
       )}
       {!searchTerm && (
         <div className="grid min-h-64 place-items-center text-center">
           <div>
             <Search className="mx-auto h-7 w-7 text-zinc-600" />
             <h1 className="mt-4 text-lg font-semibold text-zinc-200">
-              Find anything in your library
+              Find anything in your library and connected services
             </h1>
           </div>
         </div>
@@ -231,10 +250,15 @@ export default function SearchResults() {
         uniqueResults.length === 0 && (
           <div className="py-12 text-center">
             <p className="font-medium text-zinc-200">
-              No matches for “{searchTerm}”
+              No matches for “{searchTerm}” in your music folder
             </p>
           </div>
         )}
+      {searchTerm && uniqueResults.length > 0 && (
+        <h2 className="-mb-3 text-lg font-semibold text-white">
+          In your music folder
+        </h2>
+      )}
       <div>
         {uniqueResults.map((item) => {
           const playable = isPlayable(item);
@@ -348,6 +372,7 @@ export default function SearchResults() {
           );
         })}
       </div>
+      <StreamingSearchSections query={searchTerm} scope={scope} />
     </section>
   );
 }

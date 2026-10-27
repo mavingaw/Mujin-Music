@@ -2,10 +2,28 @@
 
 import { defaultCover } from "@/lib/images/default-cover";
 import getBaseURL from "@/lib/api/server-url";
-import type { Player } from "./player-api";
-import { ListMusic, Play, X } from "lucide-react";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
+import { usePlayer, type Player } from "./player-api";
+import {
+  type ZoneRepeatMode,
+  nextRepeatMode,
+  radioSectionStart,
+  repeatModeLabel,
+} from "@parson/music-sdk";
+import { RadioQueueSection, RadioThumbs } from "./radio/radio-controls";
+import {
+  ListMusic,
+  ListX,
+  Play,
+  Repeat,
+  Repeat1,
+  Shuffle,
+  Trash2,
+  X,
+} from "lucide-react";
 import Image from "next/image";
 import {
+  Fragment,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
@@ -17,18 +35,117 @@ import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
 import { isExplicitSongTitle } from "@/features/library/song-presentation";
 import { trackArtistCredit } from "@/features/library/track-artist-credit";
 
+/**
+ * Queue management for the local player or a remote zone (another browser,
+ * the phone, a Sonos room). Edits go through the same callbacks either way;
+ * for a remote zone they become zone commands.
+ */
+export type QueueEditing = {
+  /** Index of the playing item; only items after it can be edited. */
+  currentIndex: number;
+  editable: boolean;
+  /** The local player can also reorder history and the playing track. */
+  reorderAnywhere?: boolean;
+  onRemove: (index: number) => void;
+  onClearUpcoming: () => void;
+  repeatMode: ZoneRepeatMode;
+  /** `null` when the zone cannot repeat. */
+  onRepeatChange: ((mode: ZoneRepeatMode) => void) | null;
+  shuffle: boolean;
+  /** `null` when the zone cannot shuffle. */
+  onShuffleChange: ((enabled: boolean) => void) | null;
+};
+
+export function canEditQueueRow(
+  editing: QueueEditing | undefined,
+  index: number,
+  length: number,
+) {
+  return Boolean(
+    editing?.editable && index > editing.currentIndex && index < length,
+  );
+}
+
+export function QueueToolbar({
+  editing,
+  length,
+}: {
+  editing: QueueEditing;
+  length: number;
+}) {
+  const upcoming = Math.max(0, length - editing.currentIndex - 1);
+  const RepeatIcon = editing.repeatMode === "one" ? Repeat1 : Repeat;
+  const toggleClass = (active: boolean) =>
+    `flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
+      active
+        ? "bg-white/12 text-white"
+        : "text-zinc-500 hover:bg-white/10 hover:text-white"
+    }`;
+  return (
+    <div className="flex items-center gap-1">
+      {editing.onShuffleChange && (
+        <button
+          aria-label={editing.shuffle ? "Shuffle on" : "Shuffle off"}
+          aria-pressed={editing.shuffle}
+          className={toggleClass(editing.shuffle)}
+          onClick={() => editing.onShuffleChange?.(!editing.shuffle)}
+          title={
+            editing.shuffle
+              ? "Shuffle on: turn off to restore the order"
+              : "Shuffle upcoming"
+          }
+          type="button"
+        >
+          <Shuffle className="h-4 w-4" />
+        </button>
+      )}
+      {editing.onRepeatChange && (
+        <button
+          aria-label={repeatModeLabel(editing.repeatMode)}
+          aria-pressed={editing.repeatMode !== "off"}
+          className={toggleClass(editing.repeatMode !== "off")}
+          onClick={() =>
+            editing.onRepeatChange?.(nextRepeatMode(editing.repeatMode))
+          }
+          title={repeatModeLabel(editing.repeatMode)}
+          type="button"
+        >
+          <RepeatIcon className="h-4 w-4" />
+        </button>
+      )}
+      {editing.editable && (
+        <button
+          aria-label="Clear upcoming"
+          className="flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-40"
+          disabled={upcoming === 0}
+          onClick={editing.onClearUpcoming}
+          title={`Remove the ${upcoming} upcoming ${upcoming === 1 ? "track" : "tracks"}`}
+          type="button"
+        >
+          <ListX className="h-4 w-4" />
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function PlayerQueue({
   currentSongId,
+  editing,
   onClose,
   onReorder,
   onSelect,
   queue,
+  title = "Queue",
 }: {
   currentSongId: string;
+  editing?: QueueEditing;
   onClose: () => void;
   onReorder: (from: number, to: number) => void;
   onSelect: (index: number) => void;
   queue: Player["queue"];
+  title?: string;
 }) {
   const queueRef = useRef<HTMLElement>(null);
 
@@ -72,35 +189,42 @@ export default function PlayerQueue({
       className="fixed bottom-42 left-3 right-3 z-60 flex max-h-[min(380px,calc(100dvh-188px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/95 text-white shadow-2xl backdrop-blur-2xl sm:left-auto sm:right-5 sm:w-90 md:bottom-31 md:max-h-[min(380px,calc(100dvh-144px))] lg:right-[max(1.25rem,calc((100vw-80px-min(960px,100vw-112px))/2))]"
       ref={queueRef}
     >
-      <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-        <h2 className="font-semibold">Queue</h2>
-        <button
-          aria-label="Close queue"
-          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-500 hover:bg-white/10 hover:text-white"
-          onClick={onClose}
-          type="button"
-        >
-          <X className="h-4 w-4" />
-        </button>
+      <header className="flex items-center justify-between gap-2 border-b border-white/10 py-2 pl-4 pr-2">
+        <h2 className="min-w-0 truncate font-semibold">{title}</h2>
+        <div className="flex shrink-0 items-center gap-1">
+          {editing && <QueueToolbar editing={editing} length={queue.length} />}
+          <button
+            aria-label="Close queue"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-500 hover:bg-white/10 hover:text-white"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </header>
       {queue.length ? (
         <PlayerQueueList
           currentSongId={currentSongId}
+          editing={editing}
           onReorder={onReorder}
           onSelect={onSelect}
           queue={queue}
         />
       ) : (
-        <div className="grid flex-1 place-items-center px-6 text-center">
-          <div>
-            <ListMusic className="mx-auto h-7 w-7 text-zinc-700" />
-            <p className="mt-3 text-sm font-medium text-zinc-300">
-              Nothing queued
-            </p>
-            <p className="mt-1 text-xs leading-5 text-zinc-600">
-              Play a song or album to get started.
-            </p>
+        <div className="flex flex-1 flex-col overflow-y-auto p-2">
+          <div className="grid flex-1 place-items-center px-6 py-6 text-center">
+            <div>
+              <ListMusic className="mx-auto h-7 w-7 text-zinc-700" />
+              <p className="mt-3 text-sm font-medium text-zinc-300">
+                Nothing queued
+              </p>
+              <p className="mt-1 text-xs leading-5 text-zinc-600">
+                Play a song or album, or start a station.
+              </p>
+            </div>
           </div>
+          <RadioQueueSection hasPicks={false} />
         </div>
       )}
     </aside>
@@ -110,12 +234,15 @@ export default function PlayerQueue({
 export function PlayerQueueList({
   className = "",
   currentSongId,
+  editing,
   onReorder,
   onSelect,
   queue,
 }: {
   className?: string;
   currentSongId: string;
+  /** When given, only upcoming rows drag, and rows get a remove button. */
+  editing?: QueueEditing;
   onReorder: (from: number, to: number) => void;
   onSelect: (index: number) => void;
   queue: Player["queue"];
@@ -126,9 +253,22 @@ export function PlayerQueueList({
     index: number;
   } | null>(null);
   const suppressClick = useRef(false);
+  const { currentIndex } = usePlayer();
+  // A remote zone's queue is positioned by the zone, not this player.
+  const radioStart = radioSectionStart(
+    queue.map((item) => item.origin),
+    editing?.currentIndex ?? currentIndex,
+  );
 
+  const movable = (index: number) =>
+    !editing ||
+    Boolean(editing.reorderAnywhere) ||
+    canEditQueueRow(editing, index, queue.length);
   const move = (from: number, to: number) => {
     if (from === to || from < 0 || to < 0 || to >= queue.length) {
+      return;
+    }
+    if (!movable(from) || !movable(to)) {
       return;
     }
     onReorder(from, to);
@@ -164,101 +304,151 @@ export function PlayerQueueList({
       className={`overflow-y-auto p-2 ${className}`}
     >
       {queue.map((item, index) => {
-        const active = item.song.id === currentSongId;
-        const cover = item.album.cover_url
-          ? `${getBaseURL()}/media/images/${encodeURIComponent(item.album.cover_url)}`
-          : defaultCover;
+        const active = editing
+          ? index === editing.currentIndex
+          : item.song.id === currentSongId;
+        const rowMovable = movable(index);
+        const removable = canEditQueueRow(editing, index, queue.length);
+        const radioPick = radioStart >= 0 && index >= radioStart;
+        const cover =
+          getLibraryImageUrl(item.album.cover_url, getBaseURL) ?? defaultCover;
         return (
-          <button
-            aria-current={active ? "true" : undefined}
-            aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}. Drag to reorder, or use the arrow keys.`}
-            className={`group relative flex h-15.5 w-full cursor-grab items-center gap-3 rounded-xl p-2 text-left transition-colors active:cursor-grabbing ${
-              active ? "bg-white/9" : "hover:bg-white/5"
-            } ${draggedIndex === index ? "opacity-60" : ""}`}
-            data-native-drag="true"
-            draggable
-            key={`${item.song.id}-${index}`}
-            onClick={() => {
-              if (!suppressClick.current) {
-                onSelect(index);
-              }
-            }}
-            onDragEnd={() => {
-              setDraggedIndex(null);
-              setDropTarget(null);
-              window.setTimeout(() => {
-                suppressClick.current = false;
-              }, 0);
-            }}
-            onDragOver={(event) => {
-              if (draggedIndex === null) {
-                return;
-              }
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              const bounds = event.currentTarget.getBoundingClientRect();
-              setDropTarget({
-                edge:
-                  event.clientY < bounds.top + bounds.height / 2
-                    ? "before"
-                    : "after",
-                index,
-              });
-            }}
-            onDragStart={(event) => {
-              suppressClick.current = true;
-              setDraggedIndex(index);
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", String(index));
-            }}
-            onDrop={(event) => drop(event, index)}
-            onKeyDown={(event) => moveWithKeyboard(event, index)}
-            type="button"
-          >
-            {dropTarget?.index === index && draggedIndex !== index && (
-              <span
-                aria-hidden="true"
-                className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-white ${
-                  dropTarget.edge === "before" ? "top-0" : "bottom-0"
+          <Fragment key={`${item.song.id}-${index}`}>
+            {index === radioStart && <RadioQueueSection hasPicks />}
+            <div className="group/row relative">
+              <button
+                aria-current={active ? "true" : undefined}
+                aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}.${rowMovable ? " Drag to reorder, or use the arrow keys." : ""}`}
+                className={`group relative flex h-15.5 w-full items-center gap-3 rounded-xl p-2 text-left transition-colors ${
+                  rowMovable ? "cursor-grab active:cursor-grabbing" : ""
+                } ${active ? "bg-white/9" : "hover:bg-white/5"} ${
+                  draggedIndex === index ? "opacity-60" : ""
+                } ${
+                  radioPick
+                    ? removable
+                      ? "pr-32"
+                      : "pr-22"
+                    : removable
+                      ? "pr-11"
+                      : ""
                 }`}
-              />
-            )}
-            <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
-              <Image
-                alt=""
-                className="object-cover"
-                draggable={false}
-                fill
-                sizes="44px"
-                src={cover}
-              />
-              <span className="absolute inset-0 hidden place-items-center bg-black/50 group-hover:grid">
-                <Play className="h-4 w-4 fill-white" />
-              </span>
-            </div>
-            <div className="min-w-0 flex-1">
-              <p
-                className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
+                data-native-drag="true"
+                draggable={rowMovable}
+                onClick={() => {
+                  if (!suppressClick.current) {
+                    onSelect(index);
+                  }
+                }}
+                onDragEnd={() => {
+                  setDraggedIndex(null);
+                  setDropTarget(null);
+                  window.setTimeout(() => {
+                    suppressClick.current = false;
+                  }, 0);
+                }}
+                onDragOver={(event) => {
+                  if (draggedIndex === null || !rowMovable) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  setDropTarget({
+                    edge:
+                      event.clientY < bounds.top + bounds.height / 2
+                        ? "before"
+                        : "after",
+                    index,
+                  });
+                }}
+                onDragStart={(event) => {
+                  if (!rowMovable) {
+                    event.preventDefault();
+                    return;
+                  }
+                  suppressClick.current = true;
+                  setDraggedIndex(index);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", String(index));
+                }}
+                onDrop={(event) => drop(event, index)}
+                onKeyDown={(event) => moveWithKeyboard(event, index)}
+                type="button"
               >
-                <SongTitle title={item.song.name || "Untitled song"} />
-              </p>
-              <p className="truncate text-xs text-zinc-500">
-                {isExplicitSongTitle(item.song.name) && <ExplicitBadge />}
-                {trackArtistCredit({
-                  albumArtist: item.artist.name,
-                  albumType: item.album.primary_type,
-                  contributingArtists: item.song.contributing_artists ?? [],
-                  trackArtist: item.song.artist,
-                }) ||
-                  item.artist.name ||
-                  item.song.artist ||
-                  "Unknown artist"}
-              </p>
+                {dropTarget?.index === index && draggedIndex !== index && (
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-white ${
+                      dropTarget.edge === "before" ? "top-0" : "bottom-0"
+                    }`}
+                  />
+                )}
+                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
+                  <Image
+                    alt=""
+                    className="object-cover"
+                    draggable={false}
+                    fill
+                    sizes="44px"
+                    src={cover}
+                  />
+                  <span className="absolute inset-0 hidden place-items-center bg-black/50 group-hover:grid">
+                    <Play className="h-4 w-4 fill-white" />
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
+                  >
+                    <SongTitle title={item.song.name || "Untitled song"} />
+                  </p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {radioPick && item.reason && (
+                      <span className="sr-only">
+                        Radio pick, {item.reason}.{" "}
+                      </span>
+                    )}
+                    {isExplicitSongTitle(item.song.name) && <ExplicitBadge />}
+                    {trackArtistCredit({
+                      albumArtist: item.artist.name,
+                      albumType: item.album.primary_type,
+                      contributingArtists: item.song.contributing_artists ?? [],
+                      trackArtist: item.song.artist,
+                    }) ||
+                      item.artist.name ||
+                      item.song.artist ||
+                      "Unknown artist"}
+                  </p>
+                </div>
+                {active && (
+                  <span className="mr-2 h-2 w-2 rounded-full bg-white" />
+                )}
+              </button>
+              {radioPick && (
+                <RadioThumbs
+                  className={`absolute top-1/2 -translate-y-1/2 ${removable ? "right-11" : "right-2"}`}
+                  index={index}
+                  label={item.song.name || "this song"}
+                  liked={item.liked}
+                  size="sm"
+                />
+              )}
+              {removable && editing && (
+                <button
+                  aria-label={`Remove ${item.song.name || "this song"} from the queue`}
+                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-zinc-500 opacity-0 transition hover:bg-white/10 hover:text-white focus-visible:opacity-100 group-hover/row:opacity-100 pointer-coarse:opacity-100"
+                  onClick={() => editing.onRemove(index)}
+                  title="Remove from queue"
+                  type="button"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </div>
-            {active && <span className="mr-2 h-2 w-2 rounded-full bg-white" />}
-          </button>
+          </Fragment>
         );
       })}
+      {radioStart < 0 && <RadioQueueSection hasPicks={false} />}
     </div>
   );
 }

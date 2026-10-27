@@ -60,27 +60,40 @@ test("synchronises packages, Expo build numbers and Rust locks without changing 
 test("generates complete update channels with verified hashes and correct architectures", async (t) => {
   const root = fixture(t);
   for (const name of [
-    "x64-setup.exe",
-    "arm64-setup.exe",
-    "x64.zip",
-    "arm64.zip",
-    "x86_64.AppImage",
-    "arm64.AppImage",
+    "Mujin-Music-Setup-2.3.4-x64.exe",
+    "Mujin-Music-Setup-2.3.4-arm64.exe",
+    "Mujin-Music-2.3.4-x64-portable.exe",
+    "Mujin-Music-2.3.4-x64.zip",
+    "Mujin-Music-2.3.4-arm64.zip",
+    "Mujin-Music-2.3.4-x86_64.AppImage",
+    "Mujin-Music-2.3.4-arm64.AppImage",
+    "Mujin-Music-2.3.4-amd64.deb",
+    // Another version's files are never listed.
+    "Mujin-Music-2.3.40-x86_64.AppImage",
+    "Mujin-Music-2.3.4.1-arm64.AppImage",
   ]) {
-    fs.writeFileSync(path.join(root, `Parson_2.3.4_${name}`), name);
+    fs.writeFileSync(path.join(root, name), name);
   }
   await generate(root, "2.3.4");
   const read = (file) => JSON.parse(fs.readFileSync(path.join(root, file)));
   assert.equal(read("latest.yml").files.length, 2);
   assert.equal(
     read("latest-linux-arm64.yml").files[0].url,
-    "Parson_2.3.4_arm64.AppImage",
+    "Mujin-Music-2.3.4-arm64.AppImage",
   );
   assert.equal(
     read("latest-linux.yml").files[0].url,
-    "Parson_2.3.4_x86_64.AppImage",
+    "Mujin-Music-2.3.4-x86_64.AppImage",
+  );
+  assert.deepEqual(
+    read("latest.yml").files.map((file) => file.url),
+    ["Mujin-Music-Setup-2.3.4-x64.exe", "Mujin-Music-Setup-2.3.4-arm64.exe"],
+  );
+  assert.deepEqual(
+    read("latest-mac.yml").files.map((file) => file.url),
+    ["Mujin-Music-2.3.4-x64.zip", "Mujin-Music-2.3.4-arm64.zip"],
   );
   assert.match(read("latest.yml").files[0].sha512, /^[A-Za-z0-9+/]{86}==$/);
-  fs.unlinkSync(path.join(root, "Parson_2.3.4_arm64-setup.exe"));
+  fs.unlinkSync(path.join(root, "Mujin-Music-Setup-2.3.4-arm64.exe"));
   await assert.rejects(generate(root, "2.3.4"), /expected 2 artifacts/);
 });

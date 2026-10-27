@@ -80,7 +80,8 @@ async function main() {
         200,
         `${route} returned ${response.status}`,
       );
-      assert.match(await response.text(), /Parson/);
+      // Every page names the product (Mujin Music, based on Parson).
+      assert.match(await response.text(), /Mujin Music/);
       console.log(`Worker verified: ${route}`);
     }
     const search = await fetch(`${origin}/api/search?query=music`, {

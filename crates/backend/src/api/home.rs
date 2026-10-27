@@ -97,6 +97,8 @@ fn response_album(artist: &Artist, album: &Album) -> ResponseAlbum {
         contributing_artists_ids: album.contributing_artists_ids.clone(),
         release_album: album.release_album.clone(),
         release_group_album: album.release_group_album.clone(),
+        label: crate::api::album::album_label(&album.songs),
+        credits: crate::api::album::album_credits(&album.songs),
     }
 }
 
@@ -183,11 +185,15 @@ async fn home(
         .iter()
         .map(|song| song.id.as_str())
         .collect::<HashSet<_>>();
+    let bans = super::radio_library::listener_bans(&request, Some(&pool)).await;
     let shuffle = fetch_random_songs(SECTION_SIZE * 4, None, &cache)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|song| !recommended_song_ids.contains(song.id.as_str()))
+        .filter(|song| {
+            !recommended_song_ids.contains(song.id.as_str())
+                && !bans.excludes_song(&song.id, &cache)
+        })
         .collect::<Vec<_>>();
 
     let mut albums = recommended_albums(&recommendation_ids, &cache);
@@ -353,6 +359,11 @@ mod tests {
                 ..Album::default()
             },
             artist_object: Artist::default(),
+            audio: None,
+            credits: Vec::new(),
+            isrc: None,
+            label: None,
+            loudness: None,
         }
     }
 

@@ -1,6 +1,6 @@
 # Web
 
-Parson web client.
+Mujin Music web client.
 
 ## Commands
 

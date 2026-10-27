@@ -2,17 +2,23 @@ import packageJson from "../package.json";
 export const releaseVersion = packageJson.version;
 export const releaseTag = `v${releaseVersion}`;
 export const releaseBase =
-  `https://github.com/ParsonLabs/Parson/releases/download/${releaseTag}` as const;
+  `https://github.com/mavingaw/parson-jin/releases/download/${releaseTag}` as const;
 export const releasePage =
-  `https://github.com/ParsonLabs/Parson/releases/tag/${releaseTag}` as const;
+  `https://github.com/mavingaw/parson-jin/releases/tag/${releaseTag}` as const;
+
+/** The Windows installer, e.g. `Mujin-Music-Setup-1.0.1-x64.exe`. */
+export const windowsSetup = (arch: string) =>
+  `${releaseBase}/Mujin-Music-Setup-${releaseVersion}-${arch}.exe`;
+const asset = (suffix: string) =>
+  `${releaseBase}/Mujin-Music-${releaseVersion}-${suffix}`;
 
 export const releaseDownloads = {
-  windowsX64: `${releaseBase}/Parson_${releaseVersion}_x64-setup.exe`,
-  windowsArm64: `${releaseBase}/Parson_${releaseVersion}_arm64-setup.exe`,
-  linuxX64AppImage: `${releaseBase}/Parson_${releaseVersion}_x86_64.AppImage`,
-  linuxArm64AppImage: `${releaseBase}/Parson_${releaseVersion}_arm64.AppImage`,
-  linuxX64Deb: `${releaseBase}/Parson_${releaseVersion}_amd64.deb`,
-  linuxArm64Deb: `${releaseBase}/Parson_${releaseVersion}_arm64.deb`,
-  macX64Dmg: `${releaseBase}/Parson_${releaseVersion}_x64.dmg`,
-  macArm64Dmg: `${releaseBase}/Parson_${releaseVersion}_arm64.dmg`,
+  windowsX64: windowsSetup("x64"),
+  windowsArm64: windowsSetup("arm64"),
+  linuxX64AppImage: asset("x86_64.AppImage"),
+  linuxArm64AppImage: asset("arm64.AppImage"),
+  linuxX64Deb: asset("amd64.deb"),
+  linuxArm64Deb: asset("arm64.deb"),
+  macX64Dmg: asset("x64.dmg"),
+  macArm64Dmg: asset("arm64.dmg"),
 } as const;

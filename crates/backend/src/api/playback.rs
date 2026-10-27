@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use actix_web::{HttpRequest, HttpResponse, get, patch, post, web};
+use actix_web::{HttpRequest, HttpResponse, get, patch, post, put, web};
 use diesel::deserialize::QueryableByName;
 use diesel::prelude::*;
 use diesel::sql_types::{Double, Integer, Text};
@@ -8,29 +8,120 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::auth::authenticated_user_id;
+use crate::library::state::LibraryCache;
 use crate::library::state::{LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
-use crate::recommendation::recommend;
+use crate::recommendation::{RadioSeed, RankedCandidate, catalog_genre, recommend_radio_endless};
 
 const DEFAULT_GENERATED_ITEMS: usize = 20;
 const MAX_QUEUE_ITEMS: usize = 100;
 const MAX_PERSISTED_QUEUES_PER_USER: i64 = 100;
 const MAX_QUEUE_SOURCE_CHARACTERS: usize = 64;
 const MAX_QUEUE_SONG_ID_CHARACTERS: usize = 256;
+const MAX_SEED_GENRE_CHARACTERS: usize = 128;
+const DEFAULT_RADIO_PICKS: usize = 5;
+const MAX_RADIO_PICKS: usize = 20;
+const MAX_RADIO_PICK_EXCLUSIONS: usize = 500;
+const RADIO_EXHAUSTED: &str = "radio_exhausted";
+const RADIO_EXHAUSTED_MESSAGE: &str =
+    "Radio has nothing left to play: every track in your library is banned or thumbed down.";
+
+/// One of these may name what a Radio station is built around.
+#[derive(Default, Deserialize)]
+struct SeedFields {
+    seed_song_id: Option<String>,
+    seed_album_id: Option<String>,
+    seed_artist_id: Option<String>,
+    seed_genre: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+enum SeedError {
+    Invalid,
+    Missing,
+}
+
+impl SeedFields {
+    /// Parses the request's seed without consulting the catalog.
+    fn parse(&self) -> Result<Option<RadioSeed>, SeedError> {
+        let fields = [
+            ("song", &self.seed_song_id),
+            ("album", &self.seed_album_id),
+            ("artist", &self.seed_artist_id),
+            ("genre", &self.seed_genre),
+        ];
+        let mut provided = fields
+            .iter()
+            .filter_map(|(kind, value)| value.as_deref().map(|value| (*kind, value)));
+        let Some((kind, value)) = provided.next() else {
+            return Ok(None);
+        };
+        if provided.next().is_some() {
+            return Err(SeedError::Invalid);
+        }
+        let valid = if kind == "genre" {
+            !value.trim().is_empty() && value.chars().count() <= MAX_SEED_GENRE_CHARACTERS
+        } else {
+            valid_song_id(value)
+        };
+        if !valid {
+            return Err(SeedError::Invalid);
+        }
+        Ok(RadioSeed::from_parts(kind, value))
+    }
+
+    /// Parses the seed and resolves it against the catalog. Genres are
+    /// normalised to the catalog's spelling.
+    fn resolve(&self, cache: &LibraryCache) -> Result<Option<RadioSeed>, SeedError> {
+        let Some(seed) = self.parse()? else {
+            return Ok(None);
+        };
+        let resolved = match &seed {
+            RadioSeed::Song(id) => cache.song(id).map(|_| seed.clone()),
+            RadioSeed::Album(id) => cache.album(id).map(|_| seed.clone()),
+            RadioSeed::Artist(id) => cache.artist(id).map(|_| seed.clone()),
+            RadioSeed::Genre(name) => {
+                catalog_genre(cache, name).map(|genre| RadioSeed::Genre(genre.to_owned()))
+            }
+        };
+        resolved.map(Some).ok_or(SeedError::Missing)
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+struct QueueSeed {
+    kind: &'static str,
+    id: String,
+    name: String,
+}
+
+fn queue_seed(seed: &RadioSeed, cache: &LibraryCache) -> Option<QueueSeed> {
+    Some(QueueSeed {
+        kind: seed.kind(),
+        id: seed.id().to_owned(),
+        name: seed.display_name(cache)?,
+    })
+}
 
 #[derive(Deserialize)]
 struct CreateQueueRequest {
-    seed_song_id: Option<String>,
+    #[serde(flatten)]
+    seed: SeedFields,
     #[serde(default)]
     explicit_song_ids: Vec<String>,
+    /// Songs already queued or played, oldest first. Radio avoids them while
+    /// fresh songs remain and then lets them back in, least recent first.
     #[serde(default)]
     exclude_song_ids: Vec<String>,
+    /// Songs Radio must never pick (this session's thumbs down).
+    #[serde(default)]
+    reject_song_ids: Vec<String>,
     generated_items: Option<usize>,
     source: Option<String>,
 }
 
 #[derive(Serialize)]
-struct QueueSong {
+pub(super) struct QueueSong {
     id: String,
     name: String,
     artist: String,
@@ -42,6 +133,12 @@ struct QueueSong {
     artist_object: QueueArtist,
     origin: String,
     queue_position: i32,
+    /// Technical properties for signal-path displays; omitted when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio: Option<crate::domain::AudioProperties>,
+    /// ReplayGain tags for client volume leveling; omitted when untagged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loudness: Option<crate::domain::Loudness>,
 }
 
 #[derive(Serialize)]
@@ -63,7 +160,41 @@ struct QueueResponse {
     id: String,
     revision: i32,
     current_position: i32,
+    /// Why the queue exists (`radio`, `manual_selection`, ...).
+    source: String,
+    /// What a Radio queue was built around; omitted for profile-only Radio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<QueueSeed>,
     items: Vec<QueueSong>,
+}
+
+#[derive(QueryableByName)]
+struct QueueMetaRow {
+    #[diesel(sql_type = Integer)]
+    revision: i32,
+    #[diesel(sql_type = Integer)]
+    current_position: i32,
+    #[diesel(sql_type = Text)]
+    source: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    seed_kind: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    seed_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    seed_song_id: Option<String>,
+}
+
+impl QueueMetaRow {
+    fn seed(&self) -> Option<RadioSeed> {
+        match (self.seed_kind.as_deref(), self.seed_id.as_deref()) {
+            (Some(kind), Some(id)) => RadioSeed::from_parts(kind, id),
+            // Queues created before seeds were recorded only know the song.
+            _ => self
+                .seed_song_id
+                .as_ref()
+                .map(|id| RadioSeed::Song(id.clone())),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -73,17 +204,17 @@ struct UpdateQueueRequest {
 }
 
 #[derive(QueryableByName)]
-struct QueueItemRow {
+pub(super) struct QueueItemRow {
     #[diesel(sql_type = Integer)]
-    position: i32,
+    pub(super) position: i32,
     #[diesel(sql_type = Text)]
-    song_id: String,
+    pub(super) song_id: String,
     #[diesel(sql_type = Text)]
-    origin: String,
+    pub(super) origin: String,
     #[diesel(sql_type = Double)]
-    score: f64,
+    pub(super) score: f64,
     #[diesel(sql_type = Text)]
-    reason: String,
+    pub(super) reason: String,
 }
 
 #[derive(Debug, PartialEq, QueryableByName)]
@@ -156,7 +287,7 @@ struct QueueCountRow {
     count: i64,
 }
 
-fn hydrate_queue_item(
+pub(super) fn hydrate_queue_item(
     row: QueueItemRow,
     cache: &crate::library::state::LibraryCache,
 ) -> Option<QueueSong> {
@@ -184,10 +315,12 @@ fn hydrate_queue_item(
         },
         origin: row.origin,
         queue_position: row.position,
+        audio: song.audio.clone(),
+        loudness: song.loudness,
     })
 }
 
-fn valid_song_id(value: &str) -> bool {
+pub(super) fn valid_song_id(value: &str) -> bool {
     !value.is_empty() && value.chars().count() <= MAX_QUEUE_SONG_ID_CHARACTERS
 }
 
@@ -230,14 +363,13 @@ async fn create_queue(
     };
     if form.explicit_song_ids.len() > MAX_QUEUE_ITEMS
         || form.exclude_song_ids.len() > MAX_QUEUE_ITEMS
-        || form
-            .seed_song_id
-            .as_deref()
-            .is_some_and(|value| !valid_song_id(value))
+        || form.reject_song_ids.len() > MAX_RADIO_PICK_EXCLUSIONS
+        || form.seed.parse().is_err()
         || form
             .explicit_song_ids
             .iter()
             .chain(&form.exclude_song_ids)
+            .chain(&form.reject_song_ids)
             .any(|value| !valid_song_id(value))
         || form.source.as_deref().is_some_and(|source| {
             source.trim().is_empty() || source.chars().count() > MAX_QUEUE_SOURCE_CHARACTERS
@@ -247,53 +379,48 @@ async fn create_queue(
             "error": "invalid_queue_request"
         }));
     }
-    if let Some(seed) = form.seed_song_id.as_deref()
-        && cache.song(seed).is_none()
-    {
+    let Ok(seed) = form.seed.resolve(cache.as_ref()) else {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "invalid_queue_seed"
         }));
-    }
+    };
 
     let generated_limit = form
         .generated_items
         .unwrap_or(DEFAULT_GENERATED_ITEMS)
         .min(MAX_QUEUE_ITEMS);
-    let recommendation_pool = pool.get_ref().clone();
-    let recommendation_cache = cache.clone();
-    let recommendation_seed = form.seed_song_id.clone();
-    let ranked = match web::block(move || {
-        recommend(
+    let ranked = if generated_limit == 0 {
+        Vec::new()
+    } else {
+        // The explicit songs play next, so they count as the most recent.
+        let queued = form
+            .exclude_song_ids
+            .iter()
+            .chain(&form.explicit_song_ids)
+            .take(MAX_QUEUE_ITEMS * 2)
+            .cloned()
+            .collect::<Vec<_>>();
+        match radio_candidates(
             user_id,
-            recommendation_seed.as_deref(),
-            recommendation_cache.as_ref(),
-            &recommendation_pool,
+            seed.clone(),
+            queued,
+            form.reject_song_ids.iter().cloned().collect(),
+            cache.clone(),
+            pool.get_ref().clone(),
             generated_limit,
         )
-        .map_err(|error| error.to_string())
-    })
-    .await
-    {
-        Ok(Ok(items)) => items,
-        Ok(Err(error)) => {
-            tracing::error!(%error, "queue recommendation failed");
-            return HttpResponse::InternalServerError().finish();
-        }
-        Err(error) => {
-            tracing::error!(%error, "queue recommendation worker failed");
-            return HttpResponse::InternalServerError().finish();
+        .await
+        {
+            Some(items) => items,
+            None => return HttpResponse::InternalServerError().finish(),
         }
     };
 
     let queue_id = Uuid::new_v4().to_string();
     let mut rows = Vec::<QueueItemRow>::new();
-    let mut seen = form
-        .exclude_song_ids
-        .iter()
-        .take(MAX_QUEUE_ITEMS)
-        .filter(|song_id| cache.song(song_id).is_some())
-        .cloned()
-        .collect::<HashSet<_>>();
+    // Generated songs never repeat an explicit one. Radio itself decides
+    // when an earlier queued song may come back.
+    let mut seen = HashSet::new();
     let mut explicit_seen = HashSet::new();
     for song_id in form.explicit_song_ids.iter().take(MAX_QUEUE_ITEMS) {
         if cache.song(song_id).is_some() && explicit_seen.insert(song_id.clone()) {
@@ -322,20 +449,29 @@ async fn create_queue(
         }
     }
     if rows.is_empty() {
+        // Radio recycles played songs, so this only happens when nothing in
+        // the library is left for Radio: every song is banned or disliked.
         return HttpResponse::UnprocessableEntity().json(serde_json::json!({
-            "error": "queue_empty"
+            "error": RADIO_EXHAUSTED,
+            "message": RADIO_EXHAUSTED_MESSAGE,
         }));
     }
 
     let persistence_pool = pool.get_ref().clone();
     let persistence_queue_id = queue_id.clone();
-    let persistence_seed = form.seed_song_id.clone();
+    let persistence_seed = match &seed {
+        Some(RadioSeed::Song(id)) => Some(id.clone()),
+        _ => None,
+    };
+    let persistence_seed_kind = seed.as_ref().map(RadioSeed::kind);
+    let persistence_seed_id = seed.as_ref().map(|seed| seed.id().to_owned());
     let persistence_source = form
         .source
         .as_deref()
         .map(str::trim)
         .unwrap_or("radio")
         .to_owned();
+    let response_source = persistence_source.clone();
     let persistence_rows = rows
         .iter()
         .map(|row| {
@@ -352,13 +488,16 @@ async fn create_queue(
         connection
             .transaction::<_, diesel::result::Error, _>(|connection| {
                 diesel::sql_query(
-                    "INSERT INTO playback_queue (id, user_id, seed_song_id, source)
-                     VALUES (?, ?, ?, ?)",
+                    "INSERT INTO playback_queue
+                     (id, user_id, seed_song_id, source, seed_kind, seed_id)
+                     VALUES (?, ?, ?, ?, ?, ?)",
                 )
                 .bind::<Text, _>(&persistence_queue_id)
                 .bind::<Integer, _>(user_id)
                 .bind::<diesel::sql_types::Nullable<Text>, _>(persistence_seed.as_deref())
                 .bind::<Text, _>(&persistence_source)
+                .bind::<diesel::sql_types::Nullable<Text>, _>(persistence_seed_kind)
+                .bind::<diesel::sql_types::Nullable<Text>, _>(persistence_seed_id.as_deref())
                 .execute(connection)?;
                 for (position, row) in persistence_rows.iter().enumerate() {
                     diesel::sql_query(
@@ -393,6 +532,8 @@ async fn create_queue(
         id: queue_id,
         revision: 1,
         current_position: 0,
+        source: response_source,
+        seed: seed.and_then(|seed| queue_seed(&seed, cache.as_ref())),
         items,
     })
 }
@@ -419,15 +560,15 @@ async fn get_queue(
     let query_queue_id = queue_id.clone();
     let query_pool = pool.get_ref().clone();
     let queried = web::block(
-        move || -> Result<Option<(QueueStateRow, Vec<QueueItemRow>)>, String> {
+        move || -> Result<Option<(QueueMetaRow, Vec<QueueItemRow>)>, String> {
             let mut connection = query_pool.get().map_err(|error| error.to_string())?;
             let state = diesel::sql_query(
-                "SELECT revision, current_position FROM playback_queue
-             WHERE id = ? AND user_id = ?",
+                "SELECT revision, current_position, source, seed_kind, seed_id, seed_song_id
+             FROM playback_queue WHERE id = ? AND user_id = ?",
             )
             .bind::<Text, _>(&query_queue_id)
             .bind::<Integer, _>(user_id)
-            .get_result::<QueueStateRow>(&mut connection)
+            .get_result::<QueueMetaRow>(&mut connection)
             .optional()
             .map_err(|error| error.to_string())?;
             let Some(state) = state else { return Ok(None) };
@@ -461,10 +602,15 @@ async fn get_queue(
         .into_iter()
         .filter_map(|row| hydrate_queue_item(row, cache.as_ref()))
         .collect();
+    let seed = state
+        .seed()
+        .and_then(|seed| queue_seed(&seed, cache.as_ref()));
     HttpResponse::Ok().json(QueueResponse {
         id: queue_id,
         revision: state.revision,
         current_position: state.current_position,
+        source: state.source,
+        seed,
         items,
     })
 }
@@ -535,12 +681,298 @@ async fn update_queue(
     }
 }
 
+async fn radio_candidates(
+    user_id: i32,
+    seed: Option<RadioSeed>,
+    queued: Vec<String>,
+    reject: HashSet<String>,
+    cache: std::sync::Arc<LibraryCache>,
+    pool: DbPool,
+    limit: usize,
+) -> Option<Vec<RankedCandidate>> {
+    match web::block(move || {
+        recommend_radio_endless(
+            user_id,
+            seed.as_ref(),
+            cache.as_ref(),
+            &pool,
+            limit,
+            &queued,
+            &reject,
+        )
+        .map_err(|error| error.to_string())
+    })
+    .await
+    {
+        Ok(Ok(items)) => Some(items),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "radio recommendation failed");
+            None
+        }
+        Err(error) => {
+            tracing::error!(%error, "radio recommendation worker failed");
+            None
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RadioPicksRequest {
+    #[serde(flatten)]
+    seed: SeedFields,
+    /// The client's queue, oldest first (see [`CreateQueueRequest`]).
+    #[serde(default)]
+    exclude_song_ids: Vec<String>,
+    /// Songs Radio must never pick.
+    #[serde(default)]
+    reject_song_ids: Vec<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct RadioPick {
+    #[serde(flatten)]
+    song: QueueSong,
+    /// Short, listener-facing reason for the pick ("from this artist").
+    reason: String,
+}
+
+#[derive(Serialize)]
+struct RadioPicksResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<QueueSeed>,
+    items: Vec<RadioPick>,
+    /// True when Radio has nothing left to play: every song in the library
+    /// is banned or disliked. Clients tell the listener instead of stopping
+    /// silently.
+    exhausted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'static str>,
+}
+
+/// Fresh Radio picks without creating a queue: used to extend the Radio
+/// section of a client-side queue and to replace a thumbed-down pick.
+#[post("/picks")]
+async fn radio_picks(
+    request: HttpRequest,
+    form: web::Json<RadioPicksRequest>,
+    lifecycle: web::Data<LibraryLifecycle>,
+    pool: web::Data<DbPool>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let cache = match lifecycle.cache().await {
+        Ok(cache) => cache,
+        Err(readiness) => return library_unavailable_response(readiness),
+    };
+    let limit = form.limit.unwrap_or(DEFAULT_RADIO_PICKS);
+    if !(1..=MAX_RADIO_PICKS).contains(&limit)
+        || form.exclude_song_ids.len() > MAX_RADIO_PICK_EXCLUSIONS
+        || form.reject_song_ids.len() > MAX_RADIO_PICK_EXCLUSIONS
+        || form
+            .exclude_song_ids
+            .iter()
+            .chain(&form.reject_song_ids)
+            .any(|value| !valid_song_id(value))
+        || form.seed.parse().is_err()
+    {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_radio_request"
+        }));
+    }
+    let Ok(seed) = form.seed.resolve(cache.as_ref()) else {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_queue_seed"
+        }));
+    };
+    let mut queued = Vec::with_capacity(form.exclude_song_ids.len() + 1);
+    if let Some(RadioSeed::Song(id)) = &seed {
+        queued.push(id.clone());
+    }
+    queued.extend(form.exclude_song_ids.iter().cloned());
+    let Some(ranked) = radio_candidates(
+        user_id,
+        seed.clone(),
+        queued,
+        form.reject_song_ids.iter().cloned().collect(),
+        cache.clone(),
+        pool.get_ref().clone(),
+        limit,
+    )
+    .await
+    else {
+        return HttpResponse::InternalServerError().finish();
+    };
+    let items = radio_pick_items(ranked, cache.as_ref());
+    let exhausted = items.is_empty();
+    HttpResponse::Ok().json(RadioPicksResponse {
+        seed: seed.and_then(|seed| queue_seed(&seed, cache.as_ref())),
+        items,
+        exhausted,
+        message: exhausted.then_some(RADIO_EXHAUSTED_MESSAGE),
+    })
+}
+
+fn radio_pick_items(ranked: Vec<RankedCandidate>, cache: &LibraryCache) -> Vec<RadioPick> {
+    ranked
+        .into_iter()
+        .enumerate()
+        .filter_map(|(position, candidate)| {
+            let reason = candidate.reason.clone();
+            hydrate_queue_item(
+                QueueItemRow {
+                    position: position as i32,
+                    song_id: candidate.song_id,
+                    origin: "generated".into(),
+                    score: candidate.score,
+                    reason: String::new(),
+                },
+                cache,
+            )
+            .map(|song| RadioPick { song, reason })
+        })
+        .collect()
+}
+
+#[derive(Debug, PartialEq, Serialize, QueryableByName)]
+struct RadioSettings {
+    /// Continue with Radio picks once the queue runs out.
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    enabled: bool,
+    /// Show a "Coming up" notice with thumbs before a Radio pick plays.
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    coming_up_notice: bool,
+}
+
+impl Default for RadioSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            coming_up_notice: true,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RadioSettingsUpdate {
+    enabled: Option<bool>,
+    coming_up_notice: Option<bool>,
+}
+
+fn load_radio_settings(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    user_id: i32,
+) -> Result<RadioSettings, diesel::result::Error> {
+    Ok(diesel::sql_query(
+        "SELECT enabled, coming_up_notice FROM user_radio_settings WHERE user_id = ?",
+    )
+    .bind::<Integer, _>(user_id)
+    .get_result::<RadioSettings>(connection)
+    .optional()?
+    .unwrap_or_default())
+}
+
+fn save_radio_settings(
+    connection: &mut diesel::sqlite::SqliteConnection,
+    user_id: i32,
+    update: &RadioSettingsUpdate,
+) -> Result<RadioSettings, diesel::result::Error> {
+    connection.transaction(|connection| {
+        let current = load_radio_settings(connection, user_id)?;
+        let next = RadioSettings {
+            enabled: update.enabled.unwrap_or(current.enabled),
+            coming_up_notice: update.coming_up_notice.unwrap_or(current.coming_up_notice),
+        };
+        diesel::sql_query(
+            "INSERT INTO user_radio_settings (user_id, enabled, coming_up_notice)
+             VALUES (?, ?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET
+               enabled = excluded.enabled,
+               coming_up_notice = excluded.coming_up_notice,
+               updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind::<Integer, _>(user_id)
+        .bind::<diesel::sql_types::Bool, _>(next.enabled)
+        .bind::<diesel::sql_types::Bool, _>(next.coming_up_notice)
+        .execute(connection)?;
+        Ok(next)
+    })
+}
+
+#[get("/settings")]
+async fn get_radio_settings(request: HttpRequest, pool: web::Data<DbPool>) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let query_pool = pool.get_ref().clone();
+    match web::block(move || -> Result<RadioSettings, String> {
+        let mut connection = query_pool.get().map_err(|error| error.to_string())?;
+        load_radio_settings(&mut connection, user_id).map_err(|error| error.to_string())
+    })
+    .await
+    {
+        Ok(Ok(settings)) => HttpResponse::Ok().json(settings),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "radio settings lookup failed");
+            HttpResponse::InternalServerError().finish()
+        }
+        Err(error) => {
+            tracing::error!(%error, "radio settings worker failed");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[put("/settings")]
+async fn update_radio_settings(
+    request: HttpRequest,
+    form: web::Json<RadioSettingsUpdate>,
+    pool: web::Data<DbPool>,
+) -> HttpResponse {
+    let user_id = match authenticated_user_id(&request) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let update = form.into_inner();
+    let update_pool = pool.get_ref().clone();
+    match web::block(move || -> Result<RadioSettings, String> {
+        let mut connection = update_pool.get().map_err(|error| error.to_string())?;
+        save_radio_settings(&mut connection, user_id, &update).map_err(|error| error.to_string())
+    })
+    .await
+    {
+        Ok(Ok(settings)) => HttpResponse::Ok().json(settings),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "radio settings update failed");
+            HttpResponse::InternalServerError().finish()
+        }
+        Err(error) => {
+            tracing::error!(%error, "radio settings update worker failed");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/playback/queues")
             .service(create_queue)
             .service(get_queue)
             .service(update_queue),
+    )
+    .service(
+        web::scope("/playback/radio")
+            .service(radio_picks)
+            .service(get_radio_settings)
+            .service(update_radio_settings)
+            .service(super::radio_library::list_bans)
+            .service(super::radio_library::add_ban)
+            .service(super::radio_library::remove_ban)
+            .service(super::radio_library::list_dislikes)
+            .service(super::radio_library::clear_dislike),
     );
 }
 
@@ -675,6 +1107,8 @@ mod tests {
             },
             origin: "manual".into(),
             queue_position: 0,
+            audio: None,
+            loudness: None,
         };
         let json = serde_json::to_value(item).expect("queue item JSON");
         assert!(json.get("path").is_none());
@@ -683,5 +1117,295 @@ mod tests {
         assert!(json["album_object"].get("songs").is_none());
         assert!(json["artist_object"].get("albums").is_none());
         assert!(serde_json::to_vec(&json).unwrap().len() < 512);
+    }
+
+    use super::{
+        QueueMetaRow, QueueSeed, RadioSettings, RadioSettingsUpdate, SeedError, SeedFields,
+        load_radio_settings, queue_seed, radio_pick_items, save_radio_settings,
+    };
+    use crate::recommendation::test_support::{radio_pool, radio_test_cache};
+    use crate::recommendation::{RadioSeed, RankedCandidate};
+
+    fn seed(fields: SeedFields) -> Result<Option<RadioSeed>, SeedError> {
+        fields.resolve(&radio_test_cache())
+    }
+
+    #[test]
+    fn radio_seeds_accept_exactly_one_catalog_entity() {
+        assert_eq!(seed(SeedFields::default()), Ok(None));
+        assert_eq!(
+            seed(SeedFields {
+                seed_album_id: Some("album-jazz".into()),
+                ..SeedFields::default()
+            }),
+            Ok(Some(RadioSeed::Album("album-jazz".into())))
+        );
+        assert_eq!(
+            seed(SeedFields {
+                seed_genre: Some(" jAzZ ".into()),
+                ..SeedFields::default()
+            }),
+            Ok(Some(RadioSeed::Genre("Jazz".into())))
+        );
+        assert_eq!(
+            seed(SeedFields {
+                seed_song_id: Some("r1".into()),
+                seed_artist_id: Some("artist-jazz".into()),
+                ..SeedFields::default()
+            }),
+            Err(SeedError::Invalid)
+        );
+        assert_eq!(
+            seed(SeedFields {
+                seed_genre: Some("x".repeat(129)),
+                ..SeedFields::default()
+            }),
+            Err(SeedError::Invalid)
+        );
+        assert_eq!(
+            seed(SeedFields {
+                seed_artist_id: Some("missing".into()),
+                ..SeedFields::default()
+            }),
+            Err(SeedError::Missing)
+        );
+    }
+
+    #[test]
+    fn queue_seeds_carry_display_names_and_fall_back_to_legacy_song_seeds() {
+        let cache = radio_test_cache();
+        assert_eq!(
+            queue_seed(&RadioSeed::Artist("artist-jazz".into()), &cache),
+            Some(QueueSeed {
+                kind: "artist",
+                id: "artist-jazz".into(),
+                name: "artist-jazz name".into(),
+            })
+        );
+        assert_eq!(queue_seed(&RadioSeed::Song("gone".into()), &cache), None);
+        let legacy = QueueMetaRow {
+            revision: 1,
+            current_position: 0,
+            source: "radio".into(),
+            seed_kind: None,
+            seed_id: None,
+            seed_song_id: Some("r1".into()),
+        };
+        assert_eq!(legacy.seed(), Some(RadioSeed::Song("r1".into())));
+        let genre = QueueMetaRow {
+            seed_kind: Some("genre".into()),
+            seed_id: Some("Rock".into()),
+            seed_song_id: None,
+            ..legacy
+        };
+        assert_eq!(genre.seed(), Some(RadioSeed::Genre("Rock".into())));
+    }
+
+    #[test]
+    fn radio_picks_explain_themselves_as_generated_items() {
+        let cache = radio_test_cache();
+        let picks = radio_pick_items(
+            vec![
+                RankedCandidate {
+                    song_id: "j1".into(),
+                    score: 20.0,
+                    reason: "from this artist".into(),
+                },
+                RankedCandidate {
+                    song_id: "deleted".into(),
+                    score: 19.0,
+                    reason: "played before".into(),
+                },
+            ],
+            &cache,
+        );
+        assert_eq!(picks.len(), 1);
+        let json = serde_json::to_value(&picks[0]).expect("radio pick JSON");
+        assert_eq!(json["id"], "j1");
+        assert_eq!(json["origin"], "generated");
+        assert_eq!(json["reason"], "from this artist");
+        assert!(json.get("score").is_none());
+        assert!(json.get("path").is_none());
+    }
+
+    #[test]
+    fn radio_settings_default_on_and_update_per_listener() {
+        let pool = radio_pool();
+        let mut connection = pool.get().expect("settings connection");
+        assert_eq!(
+            load_radio_settings(&mut connection, 1).expect("default settings"),
+            RadioSettings::default()
+        );
+        let saved = save_radio_settings(
+            &mut connection,
+            1,
+            &RadioSettingsUpdate {
+                enabled: Some(false),
+                coming_up_notice: None,
+            },
+        )
+        .expect("save settings");
+        assert_eq!(
+            saved,
+            RadioSettings {
+                enabled: false,
+                coming_up_notice: true,
+            }
+        );
+        let saved = save_radio_settings(
+            &mut connection,
+            1,
+            &RadioSettingsUpdate {
+                enabled: None,
+                coming_up_notice: Some(false),
+            },
+        )
+        .expect("save notice");
+        assert!(!saved.enabled && !saved.coming_up_notice);
+        assert_eq!(
+            load_radio_settings(&mut connection, 1).expect("reloaded"),
+            saved
+        );
+        assert_eq!(
+            load_radio_settings(&mut connection, 2).expect("other listener"),
+            RadioSettings::default()
+        );
+    }
+
+    fn claims(user: &str) -> crate::api::auth::Claims {
+        crate::api::auth::Claims {
+            sub: user.to_string(),
+            exp: usize::MAX,
+            username: "listener".to_string(),
+            bitrate: 0,
+            token_type: "access".to_string(),
+            role: "user".to_string(),
+            token_version: 0,
+            session_id: None,
+        }
+    }
+
+    /// The round-3 regression: a 43-track library driven like the web
+    /// client (top up the Radio section, then continue with a new Radio
+    /// queue) never answers 422 and never runs dry.
+    #[actix_web::test]
+    async fn radio_never_runs_dry_on_a_43_track_library_over_http() {
+        use actix_web::http::StatusCode;
+        use actix_web::{App, HttpMessage, test as actix_test, web};
+
+        use crate::library::state::LibraryLifecycle;
+        use crate::recommendation::test_support::endless_test_library;
+
+        let pool = crate::recommendation::test_support::radio_pool();
+        let lifecycle = LibraryLifecycle::new();
+        lifecycle.set_ready(endless_test_library()).await;
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .app_data(web::Data::new(lifecycle))
+                .configure(super::configure),
+        )
+        .await;
+        let call = |request: actix_test::TestRequest| {
+            let request = request.to_request();
+            request.extensions_mut().insert(claims("1"));
+            request
+        };
+
+        let mut queue = Vec::<String>::new();
+        let mut request = 0;
+        while queue.len() < 210 {
+            request += 1;
+            // Every fifth request continues with a fresh Radio queue, the
+            // way the client does once the queue ends.
+            let (uri, body) = if request % 5 == 0 {
+                let start = queue.len().saturating_sub(100);
+                (
+                    "/playback/queues",
+                    serde_json::json!({
+                        "seed_genre": "Rock",
+                        "exclude_song_ids": &queue[start..],
+                        "reject_song_ids": ["d1-1"],
+                        "generated_items": 20,
+                        "source": "radio",
+                    }),
+                )
+            } else {
+                let start = queue.len().saturating_sub(500);
+                (
+                    "/playback/radio/picks",
+                    serde_json::json!({
+                        "seed_genre": "Rock",
+                        "exclude_song_ids": &queue[start..],
+                        "reject_song_ids": ["d1-1"],
+                        "limit": 6,
+                    }),
+                )
+            };
+            let response = actix_test::call_service(
+                &app,
+                call(actix_test::TestRequest::post().uri(uri).set_json(body)),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{uri} failed after {} picks",
+                queue.len()
+            );
+            let body: serde_json::Value = actix_test::read_body_json(response).await;
+            let items = body["items"].as_array().expect("items");
+            assert!(
+                !items.is_empty(),
+                "{uri} ran dry after {} picks",
+                queue.len()
+            );
+            assert_ne!(body["exhausted"], true);
+            for item in items {
+                let id = item["id"].as_str().unwrap().to_owned();
+                assert_ne!(id, "d1-1", "a rejected song came back");
+                queue.push(id);
+            }
+        }
+
+        // Ban everything: only now does Radio say it has nothing to play,
+        // and it says so instead of failing silently.
+        let mut connection = pool.get().unwrap();
+        for artist in [
+            "artist-a", "artist-b", "artist-c", "artist-d", "artist-e", "artist-f",
+        ] {
+            crate::radio_bans::add_ban(
+                &mut connection,
+                1,
+                crate::radio_bans::BanKind::Artist,
+                artist,
+            )
+            .unwrap();
+        }
+        drop(connection);
+        let response = actix_test::call_service(
+            &app,
+            call(
+                actix_test::TestRequest::post()
+                    .uri("/playback/radio/picks")
+                    .set_json(serde_json::json!({ "seed_genre": "Rock" })),
+            ),
+        )
+        .await;
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["exhausted"], true);
+        assert!(body["message"].as_str().unwrap().contains("banned"));
+        let response = actix_test::call_service(
+            &app,
+            call(
+                actix_test::TestRequest::post()
+                    .uri("/playback/queues")
+                    .set_json(serde_json::json!({ "seed_genre": "Rock", "source": "radio" })),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["error"], "radio_exhausted");
     }
 }

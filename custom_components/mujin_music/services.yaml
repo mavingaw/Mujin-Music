@@ -1,0 +1,72 @@
+start_radio:
+  target:
+    entity:
+      integration: mujin_music
+      domain: media_player
+  fields:
+    item:
+      example: "artist:artist-id"
+      selector:
+        text:
+    query:
+      example: "Miles Davis"
+      selector:
+        text:
+    kind:
+      selector:
+        select:
+          translation_key: kind
+          options:
+            - artist
+            - album
+            - song
+            - playlist
+            - genre
+
+thumbs_up:
+  target:
+    entity:
+      integration: mujin_music
+      domain: media_player
+
+thumbs_down:
+  target:
+    entity:
+      integration: mujin_music
+      domain: media_player
+
+transfer:
+  target:
+    entity:
+      integration: mujin_music
+      domain: media_player
+  fields:
+    destination:
+      required: true
+      selector:
+        entity:
+          integration: mujin_music
+          domain: media_player
+
+sleep_timer:
+  target:
+    entity:
+      integration: mujin_music
+      domain: media_player
+  fields:
+    minutes:
+      required: true
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 720
+          step: 5
+          unit_of_measurement: min
+
+pause_all:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: mujin_music

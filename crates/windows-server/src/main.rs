@@ -27,5 +27,5 @@ fn run_windows() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("The Parson for Windows tray host is available on Windows only.");
+    eprintln!("The Mujin Music for Windows tray host is available on Windows only.");
 }

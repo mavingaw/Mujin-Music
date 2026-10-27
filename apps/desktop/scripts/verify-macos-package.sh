@@ -21,9 +21,9 @@ case "$architecture" in
 esac
 
 version="$(node -p "require('$workspace/apps/desktop/package.json').version")"
-app="$(find "$bundle_dir" -maxdepth 3 -type d -name Parson.app -print -quit)"
-dmg="$(find "$bundle_dir" -maxdepth 1 -type f -name "Parson_${version}_${artifact_arch}.dmg" -print -quit)"
-zip="$(find "$bundle_dir" -maxdepth 1 -type f -name "Parson_${version}_${artifact_arch}.zip" -print -quit)"
+app="$(find "$bundle_dir" -maxdepth 3 -type d -name "Mujin Music.app" -print -quit)"
+dmg="$(find "$bundle_dir" -maxdepth 1 -type f -name "Mujin-Music-${version}-${artifact_arch}.dmg" -print -quit)"
+zip="$(find "$bundle_dir" -maxdepth 1 -type f -name "Mujin-Music-${version}-${artifact_arch}.zip" -print -quit)"
 
 for path in "$app" "$dmg" "$zip"; do
   if [[ -z "$path" || ! -e "$path" ]]; then
@@ -44,7 +44,7 @@ for path in \
 done
 
 for executable in \
-  "$app/Contents/MacOS/Parson" \
+  "$app/Contents/MacOS/Mujin Music" \
   "$app/Contents/Resources/parson-music-server"; do
   if ! lipo -archs "$executable" | tr ' ' '\n' | grep -Fqx "$expected_arch"; then
     echo "$executable does not contain the expected $expected_arch architecture." >&2
@@ -52,7 +52,7 @@ for executable in \
   fi
 done
 
-unzip -Z1 "$zip" | grep -Fqx "Parson.app/Contents/Resources/LICENSE"
-unzip -Z1 "$zip" | grep -Fqx "Parson.app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+unzip -Z1 "$zip" | grep -Fqx "Mujin Music.app/Contents/Resources/LICENSE"
+unzip -Z1 "$zip" | grep -Fqx "Mujin Music.app/Contents/Resources/THIRD_PARTY_NOTICES.md"
 
 echo "macOS $artifact_arch DMG, ZIP, application payload, and native architectures verified."

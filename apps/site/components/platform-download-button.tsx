@@ -199,7 +199,7 @@ export default function PlatformDownloadButton({
   const { label, Icon, href, available, direct } = selection
     ? detailsFor(selection)
     : {
-        label: "Parson",
+        label: "Mujin Music",
         Icon: Download,
         href: "/docs/download-and-install",
         available: false,
@@ -217,7 +217,7 @@ export default function PlatformDownloadButton({
       className="landing-primary-button landing-platform-download"
       href={href}
       rel={external ? "noopener noreferrer" : undefined}
-      title={direct ? `Download Parson for ${label}` : buttonLabel}
+      title={direct ? `Download Mujin Music for ${label}` : buttonLabel}
     >
       <span className="landing-platform-download-content">
         <Icon aria-hidden="true" size={17} />

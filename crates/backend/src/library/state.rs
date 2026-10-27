@@ -134,7 +134,8 @@ pub struct LibraryCache {
 }
 
 // Version 7 stores accent-folded identities and primary-track appearance relationships.
-const CATALOG_CACHE_SCHEMA_VERSION: u32 = 8;
+// Version 9 adds per-song audio properties, contributor credits, label and ISRC.
+const CATALOG_CACHE_SCHEMA_VERSION: u32 = 10;
 const MAX_DECOMPRESSED_CATALOG_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 static CACHE_PERSIST_REQUEST: AtomicU64 = AtomicU64::new(0);
 static CACHE_PERSIST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
@@ -476,6 +477,46 @@ impl LibraryCache {
 
     pub fn flat_song_id(&self, index: CatalogIndex) -> Option<&str> {
         self.songs_flat.get(index as usize).map(String::as_str)
+    }
+
+    /// A cache over in-memory artists, for tests.
+    #[cfg(test)]
+    pub(crate) fn from_artists(artists: Vec<Artist>) -> Self {
+        let mut artist_positions = HashMap::new();
+        let mut album_positions = HashMap::new();
+        let mut song_positions = HashMap::new();
+        for (artist_index, artist) in artists.iter().enumerate() {
+            artist_positions.insert(artist.id.clone(), artist_index as CatalogIndex);
+            for (album_index, album) in artist.albums.iter().enumerate() {
+                album_positions.insert(
+                    album.id.clone(),
+                    (artist_index as CatalogIndex, album_index as CatalogIndex),
+                );
+                for (song_index, song) in album.songs.iter().enumerate() {
+                    song_positions.insert(
+                        song.id.clone(),
+                        (
+                            artist_index as CatalogIndex,
+                            album_index as CatalogIndex,
+                            song_index as CatalogIndex,
+                        ),
+                    );
+                }
+            }
+        }
+        LibraryCache {
+            search_index: SearchIndex::build(&artists).unwrap(),
+            artists: Arc::new(artists),
+            song_map: HashMap::new(),
+            album_genres: HashMap::new(),
+            artist_positions,
+            album_positions,
+            song_positions,
+            songs_flat: Vec::new(),
+            songs_by_artist: HashMap::new(),
+            songs_by_genre: HashMap::new(),
+            image_paths: Default::default(),
+        }
     }
 }
 

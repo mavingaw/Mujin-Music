@@ -57,11 +57,13 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           version="${RELEASE_VERSION:-${GITHUB_REF_NAME#v}}"
+          # This repository's own package (registry names are lowercase).
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
           {
             echo "version=$version"
             echo "tags<<EOF"
-            echo "ghcr.io/parsonlabs/parson:${version}-${{ matrix.arch }}"
-            echo "ghcr.io/parsonlabs/parson:sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
+            echo "${image}:${version}-${{ matrix.arch }}"
+            echo "${image}:sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -105,7 +107,7 @@ jobs:
         run: |
           version="${RELEASE_VERSION:-${GITHUB_REF_NAME#v}}"
           short_sha="${GITHUB_SHA::7}"
-          image="ghcr.io/parsonlabs/parson"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
           tags=(
             --tag "${image}:${version}"
             --tag "${image}:sha-${short_sha}"
@@ -163,7 +165,8 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           version="${RELEASE_VERSION:-${GITHUB_REF_NAME#v}}"
-          echo "ref=ghcr.io/parsonlabs/parson:${version}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "ref=${image}:${version}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
       - name: Scan the exact release image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         env:

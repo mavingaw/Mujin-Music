@@ -22,12 +22,11 @@ use crate::library::state::{LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
 use crate::settings;
 
-const BACKUP_FORMAT_VERSION: u32 = 1;
+pub(crate) const BACKUP_FORMAT_VERSION: u32 = 1;
 const PUBLIC_INDEX_VERSION: u32 = 1;
 const MAX_RESTORE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_RESTORE_EXTRACTED_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_RESTORE_ENTRIES: usize = 1_000_000;
-const AUTOMATIC_BACKUP_INTERVAL_HOURS: i64 = 24;
 const DAILY_BACKUP_COUNT: usize = 7;
 const WEEKLY_BACKUP_COUNT: usize = 4;
 const MONTHLY_BACKUP_COUNT: usize = 3;
@@ -42,7 +41,8 @@ struct DataStatus {
     favorite_items: i64,
     playlist_items: i64,
     backups: Vec<BackupSummary>,
-    automatic_backup_interval_hours: i64,
+    automatic_backup_interval_hours: Option<i64>,
+    schedule: crate::api::migration::ScheduleStatus,
     daily_backup_count: usize,
     weekly_backup_count: usize,
     monthly_backup_count: usize,
@@ -56,11 +56,16 @@ struct ResetRequest {
 }
 
 #[derive(Clone, Serialize)]
-struct BackupSummary {
-    filename: String,
-    created_at: String,
-    size_bytes: u64,
+pub(crate) struct BackupSummary {
+    pub(crate) filename: String,
+    pub(crate) created_at: String,
+    pub(crate) size_bytes: u64,
     tier: Option<BackupTier>,
+    /// Where the scheduled copy went (a folder or NAS), when one is set up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) copied_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) copy_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +89,18 @@ struct BackupManifest {
     created_at: String,
     product: &'static str,
     product_version: &'static str,
+    /// The library this backup came from, so a new server can say what it
+    /// is about to restore and, if asked, take over its identity.
+    library_name: String,
+    instance_id: Option<String>,
+    /// Music folders on the old server. Music files are not in the backup;
+    /// a new server shows these so they can be pointed at the new location.
+    library_roots: Vec<String>,
+    /// The away-from-home setting (also in `Network/remote-access.json`).
+    /// A restore only applies it when asked to, because the new server may
+    /// be on another network.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_access: Option<serde_json::Value>,
     includes: [&'static str; 6],
     excludes: [&'static str; 3],
 }
@@ -209,9 +226,15 @@ struct PersonalDataExport {
     favorites: Vec<serde_json::Value>,
     searches: Vec<serde_json::Value>,
     playlists: Vec<serde_json::Value>,
+    /// Artists, albums and tracks banned from Radio and Shuffle.
+    radio_bans: Vec<serde_json::Value>,
+    tags: Vec<serde_json::Value>,
+    saved_focuses: Vec<serde_json::Value>,
+    notes: Vec<serde_json::Value>,
+    listen_later: Vec<serde_json::Value>,
 }
 
-fn safe_backup_filename(value: &str) -> Option<&str> {
+pub(crate) fn safe_backup_filename(value: &str) -> Option<&str> {
     (!value.is_empty()
         && value.len() <= 128
         && value.starts_with("parson-backup-")
@@ -262,7 +285,7 @@ fn clear_cache_at(root: &Path) -> std::io::Result<u64> {
     Ok(cleared)
 }
 
-fn backup_directory() -> PathBuf {
+pub(crate) fn backup_directory() -> PathBuf {
     settings::data_path(&["Backups"])
 }
 
@@ -305,6 +328,8 @@ fn list_backup_records() -> std::io::Result<Vec<BackupRecord>> {
                     filename,
                     size_bytes: metadata.len(),
                     tier: None,
+                    copied_to: None,
+                    copy_error: None,
                 },
                 created_at,
                 meaningful_fingerprint: sidecar.map(|metadata| metadata.meaningful_fingerprint),
@@ -380,6 +405,12 @@ fn prune_old_backups() -> std::io::Result<()> {
 }
 
 fn automatic_backup_due(pool: &DbPool) -> Result<bool, String> {
+    let Some(interval_hours) = crate::api::migration::load_schedule()
+        .frequency
+        .interval_hours()
+    else {
+        return Ok(false);
+    };
     let backups = list_backup_records().map_err(|error| error.to_string())?;
     let Some(latest) = backups.first() else {
         return Ok(true);
@@ -387,7 +418,7 @@ fn automatic_backup_due(pool: &DbPool) -> Result<bool, String> {
     if Utc::now()
         .signed_duration_since(latest.created_at)
         .num_hours()
-        < AUTOMATIC_BACKUP_INTERVAL_HOURS
+        < interval_hours
     {
         return Ok(false);
     }
@@ -503,7 +534,33 @@ fn append_safe_tree<W: Write>(
     Ok(())
 }
 
-fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
+/// Creates a private backup in the server's own backup folder, then copies
+/// it to the scheduled destination (a folder or NAS share) when one is set.
+pub(crate) fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
+    let mut summary = create_local_backup_archive(pool)?;
+    let schedule = crate::api::migration::load_schedule();
+    if let Some(destination) = schedule.destination.as_deref() {
+        match crate::api::migration::mirror_backup(
+            &backup_directory(),
+            &summary.filename,
+            Path::new(destination),
+            schedule.destination_keep,
+        ) {
+            Ok(()) => {
+                crate::api::migration::record_mirror_result(&summary.filename, None);
+                summary.copied_to = Some(destination.to_string());
+            }
+            Err(error) => {
+                tracing::warn!(%error, %destination, "could not copy the backup to its destination");
+                crate::api::migration::record_mirror_result(&summary.filename, Some(&error));
+                summary.copy_error = Some(error);
+            }
+        }
+    }
+    Ok(summary)
+}
+
+fn create_local_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
     let _guard = BACKUP_LOCK
         .lock()
         .map_err(|_| "the backup lock is unavailable".to_string())?;
@@ -538,6 +595,12 @@ fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
             created_at: now.to_rfc3339(),
             product: "parson-music",
             product_version: env!("CARGO_PKG_VERSION"),
+            library_name: settings::library_name(),
+            instance_id: settings::instance_id().ok(),
+            library_roots: crate::api::migration::configured_library_roots(),
+            remote_access: fs::read(settings::data_path(&settings::REMOTE_ACCESS_FILE))
+                .ok()
+                .and_then(|bytes| remote_access_setting(&bytes)),
             includes: [
                 "music database",
                 "core database",
@@ -578,6 +641,12 @@ fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
                 append_safe_tree(&mut archive, &source, Path::new(name))?;
             }
         }
+        let remote_access = settings::data_path(&settings::REMOTE_ACCESS_FILE);
+        if remote_access.is_file() {
+            archive
+                .append_path_with_name(&remote_access, REMOTE_ACCESS_ENTRY)
+                .map_err(|error| error.to_string())?;
+        }
         archive.finish().map_err(|error| error.to_string())?;
         archive
             .into_inner()
@@ -616,6 +685,8 @@ fn create_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
         created_at: now.to_rfc3339(),
         size_bytes,
         tier: Some(BackupTier::Daily),
+        copied_to: None,
+        copy_error: None,
     })
 }
 
@@ -837,7 +908,7 @@ fn public_index_zip(index: &PublicLibraryIndex) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())?;
     archive
         .write_all(
-            b"Parson share-safe library index\n\nThis archive contains music metadata and audio characteristics only.\nIt excludes accounts, paths, filenames, server identity, playlists, favorites, and activity history.\n",
+            b"Mujin Music share-safe library index\n\nThis archive contains music metadata and audio characteristics only.\nIt excludes accounts, paths, filenames, server identity, playlists, favorites, and activity history.\n",
         )
         .map_err(|error| error.to_string())?;
     archive
@@ -886,7 +957,7 @@ fn validate_restore_database(path: &Path) -> Result<(), String> {
     .get_result::<CountRow>(&mut connection)
     .map_err(|error| error.to_string())?;
     if required.count != 3 {
-        return Err("the backup database is not a compatible Parson database".to_string());
+        return Err("the backup database is not a compatible Mujin Music database".to_string());
     }
     Ok(())
 }
@@ -905,11 +976,67 @@ fn sanitize_backup_database(path: &Path) -> Result<(), String> {
              SET token_version = token_version + 1, now_playing = NULL;",
         )
         .map_err(|error| error.to_string())?;
+    // Music-service tokens and API keys never leave the server in a backup.
+    #[derive(diesel::deserialize::QueryableByName)]
+    struct TableCount {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    for table in ["import_connection", "import_auth_state"] {
+        let present = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind::<diesel::sql_types::Text, _>(table)
+        .get_result::<TableCount>(&mut snapshot)
+        .map_err(|error| error.to_string())?;
+        if present.count > 0 {
+            snapshot
+                .batch_execute(&format!("DELETE FROM {table};"))
+                .map_err(|error| error.to_string())?;
+        }
+    }
     drop(snapshot);
     validate_restore_database(path)
 }
 
-fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
+/// Where a backup keeps the away-from-home setting.
+const REMOTE_ACCESS_ENTRY: &str = "Network/remote-access.json";
+const MAX_REMOTE_ACCESS_BYTES: u64 = 16 * 1024;
+
+/// The away-from-home setting in `bytes`, when it is one that does
+/// something (not "off").
+pub(crate) fn remote_access_setting(bytes: &[u8]) -> Option<serde_json::Value> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    let mode = value.get("mode")?.as_str()?;
+    if !matches!(mode, "router" | "manual") {
+        return None;
+    }
+    Some(serde_json::json!({
+        "mode": mode,
+        "manual_url": value.get("manual_url").and_then(serde_json::Value::as_str),
+        "external_port": value.get("external_port").and_then(serde_json::Value::as_u64),
+    }))
+}
+
+/// The away-from-home setting a restore brings along: only when the person
+/// restoring asked for it and the backup holds a setting that does something.
+fn staged_remote_access(backed_up: Option<Vec<u8>>, opted_in: bool) -> Option<Vec<u8>> {
+    backed_up.filter(|bytes| opted_in && remote_access_setting(bytes).is_some())
+}
+
+/// Checks a private backup and stages it to replace this server's data on the
+/// next start. With `adopt_identity`, the server also takes over the backed-up
+/// library's identity, so phones and computers that knew the old server find
+/// this one as the same library. With `restore_remote_access`, the old
+/// server's away-from-home setting comes along too.
+pub(crate) fn validate_and_stage_restore(
+    path: &Path,
+    options: RestoreOptions,
+) -> Result<(), String> {
+    let RestoreOptions {
+        adopt_identity,
+        restore_remote_access,
+    } = options;
     let input = File::open(path).map_err(|error| error.to_string())?;
     let decoder = zstd::Decoder::new(input).map_err(|error| error.to_string())?;
     let mut archive = tar::Archive::new(decoder);
@@ -919,6 +1046,8 @@ fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
     fs::create_dir_all(&incoming).map_err(|error| error.to_string())?;
     let mut found_manifest = false;
     let mut found_music_database = false;
+    let mut backed_up_identity = None::<String>;
+    let mut backed_up_remote_access = None::<Vec<u8>>;
     let mut extracted_bytes = 0_u64;
     for (entry_index, item) in archive
         .entries()
@@ -951,10 +1080,23 @@ fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
             if manifest["format"] != "parson-private-backup"
                 || manifest["version"] != BACKUP_FORMAT_VERSION
             {
-                return Err("this is not a supported Parson private backup".to_string());
+                return Err("this is not a supported Mujin Music private backup".to_string());
             }
+            backed_up_identity = manifest["instance_id"]
+                .as_str()
+                .filter(|value| Uuid::parse_str(value).is_ok())
+                .map(str::to_string);
             found_manifest = true;
             fs::write(incoming.join("manifest.json"), bytes).map_err(|error| error.to_string())?;
+            continue;
+        }
+        if item_path == Path::new(REMOTE_ACCESS_ENTRY) {
+            let mut bytes = Vec::new();
+            item.by_ref()
+                .take(MAX_REMOTE_ACCESS_BYTES)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            backed_up_remote_access = Some(bytes);
             continue;
         }
         if item_path == Path::new("Database/parson-music.db") {
@@ -969,6 +1111,24 @@ fn validate_and_stage_restore(path: &Path) -> Result<(), String> {
     validate_restore_database(&incoming.join("Database/parson-music.db"))?;
     let _ = fs::remove_dir_all(&stage);
     fs::rename(&incoming, &stage).map_err(|error| error.to_string())?;
+    let identity_marker = settings::data_path(&["Restore", "ADOPT_IDENTITY"]);
+    match backed_up_identity.filter(|_| adopt_identity) {
+        Some(identity) => fs::write(&identity_marker, identity),
+        None => match fs::remove_file(&identity_marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+    .map_err(|error| error.to_string())?;
+    let remote_access_marker = settings::data_path(&["Restore", "REMOTE_ACCESS"]);
+    match staged_remote_access(backed_up_remote_access, restore_remote_access) {
+        Some(bytes) => fs::write(&remote_access_marker, bytes),
+        None => match fs::remove_file(&remote_access_marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+    .map_err(|error| error.to_string())?;
     fs::write(
         settings::data_path(&["Restore", "READY"]),
         Utc::now().to_rfc3339(),
@@ -1020,7 +1180,10 @@ async fn status(pool: web::Data<DbPool>) -> HttpResponse {
             favorite_items: counts.favorites,
             playlist_items: counts.playlists,
             backups: list_backups().map_err(|error| error.to_string())?,
-            automatic_backup_interval_hours: AUTOMATIC_BACKUP_INTERVAL_HOURS,
+            automatic_backup_interval_hours: crate::api::migration::load_schedule()
+                .frequency
+                .interval_hours(),
+            schedule: crate::api::migration::schedule_status(),
             daily_backup_count: DAILY_BACKUP_COUNT,
             weekly_backup_count: WEEKLY_BACKUP_COUNT,
             monthly_backup_count: MONTHLY_BACKUP_COUNT,
@@ -1079,17 +1242,17 @@ async fn reset_parson(pool: web::Data<DbPool>, body: web::Json<ResetRequest>) ->
     {
         Ok(Ok(())) => HttpResponse::Accepted().json(serde_json::json!({
             "restart_required": true,
-            "message": "Reset is ready. Restart Parson to finish."
+            "message": "Reset is ready. Restart Mujin Music to finish."
         })),
         Ok(Err(error)) => {
-            tracing::error!(%error, "Parson reset staging failed");
+            tracing::error!(%error, "Mujin Music reset staging failed");
             internal_server_error(
-                "Could not create the safety backup, so Parson was not reset.",
+                "Could not create the safety backup, so Mujin Music was not reset.",
                 "reset_failed",
             )
         }
         Err(error) => {
-            tracing::error!(%error, "Parson reset worker failed");
+            tracing::error!(%error, "Mujin Music reset worker failed");
             internal_server_error("Could not prepare the reset.", "reset_failed")
         }
     }
@@ -1157,21 +1320,52 @@ async fn delete_backup(path: web::Path<String>) -> HttpResponse {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+pub(crate) struct RestoreOptions {
+    /// Take over the backed-up library's identity.
+    #[serde(default)]
+    pub(crate) adopt_identity: bool,
+    /// Also bring the old server's away-from-home setting (off unless asked:
+    /// the new server may be on another network).
+    #[serde(default)]
+    pub(crate) restore_remote_access: bool,
+}
+
 #[post("/restore")]
-async fn restore_backup(mut multipart: Multipart) -> HttpResponse {
+async fn restore_backup(multipart: Multipart, options: web::Query<RestoreOptions>) -> HttpResponse {
+    match stage_uploaded_backup(multipart, options.into_inner()).await {
+        Ok(()) => HttpResponse::Accepted().json(serde_json::json!({
+            "restart_required": true,
+            "message": "Backup validated. Restart Mujin Music to apply it."
+        })),
+        Err(response) => response,
+    }
+}
+
+/// Receives one uploaded backup file, validates it and stages it.
+pub(crate) async fn stage_uploaded_backup(
+    mut multipart: Multipart,
+    options: RestoreOptions,
+) -> Result<(), HttpResponse> {
     let upload = settings::data_path(&["Restore", format!(".upload-{}", Uuid::new_v4()).as_str()]);
     if let Some(parent) = upload.parent()
         && let Err(error) = tokio::fs::create_dir_all(parent).await
     {
         tracing::error!(%error, "restore directory creation failed");
-        return internal_server_error("Could not receive the backup.", "restore_upload_failed");
+        return Err(internal_server_error(
+            "Could not receive the backup.",
+            "restore_upload_failed",
+        ));
     }
     let mut total = 0_u64;
     let mut output = match tokio::fs::File::create(&upload).await {
         Ok(file) => file,
         Err(error) => {
             tracing::error!(%error, "restore upload creation failed");
-            return internal_server_error("Could not receive the backup.", "restore_upload_failed");
+            return Err(internal_server_error(
+                "Could not receive the backup.",
+                "restore_upload_failed",
+            ));
         }
     };
     use tokio::io::AsyncWriteExt;
@@ -1179,7 +1373,10 @@ async fn restore_backup(mut multipart: Multipart) -> HttpResponse {
         Some(Ok(field)) => field,
         Some(Err(_)) | None => {
             let _ = tokio::fs::remove_file(&upload).await;
-            return bad_request("The backup upload is invalid.", "invalid_restore_upload");
+            return Err(bad_request(
+                "The backup upload is invalid.",
+                "invalid_restore_upload",
+            ));
         }
     };
     while let Some(chunk) = field.next().await {
@@ -1187,36 +1384,42 @@ async fn restore_backup(mut multipart: Multipart) -> HttpResponse {
             Ok(chunk) => chunk,
             Err(_) => {
                 let _ = tokio::fs::remove_file(&upload).await;
-                return bad_request("The backup upload is invalid.", "invalid_restore_upload");
+                return Err(bad_request(
+                    "The backup upload is invalid.",
+                    "invalid_restore_upload",
+                ));
             }
         };
         total = total.saturating_add(chunk.len() as u64);
         if total > MAX_RESTORE_BYTES || output.write_all(&chunk).await.is_err() {
             let _ = tokio::fs::remove_file(&upload).await;
-            return bad_request(
+            return Err(bad_request(
                 "The backup is too large or incomplete.",
                 "restore_too_large",
-            );
+            ));
         }
     }
     drop(field);
     if multipart.next().await.is_some() || total == 0 {
         let _ = tokio::fs::remove_file(&upload).await;
-        return bad_request("Upload exactly one backup file.", "invalid_restore_upload");
+        return Err(bad_request(
+            "Upload exactly one backup file.",
+            "invalid_restore_upload",
+        ));
     }
     drop(output);
     let validate_path = upload.clone();
-    let result = web::block(move || validate_and_stage_restore(&validate_path)).await;
+    let result = web::block(move || validate_and_stage_restore(&validate_path, options)).await;
     let _ = tokio::fs::remove_file(&upload).await;
     match result {
-        Ok(Ok(())) => HttpResponse::Accepted().json(serde_json::json!({
-            "restart_required": true,
-            "message": "Backup validated. Restart Parson to apply it."
-        })),
-        Ok(Err(error)) => bad_request(&error, "invalid_backup"),
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(bad_request(&error, "invalid_backup")),
         Err(error) => {
             tracing::error!(%error, "restore validation worker failed");
-            internal_server_error("Could not validate the backup.", "restore_failed")
+            Err(internal_server_error(
+                "Could not validate the backup.",
+                "restore_failed",
+            ))
         }
     }
 }
@@ -1305,7 +1508,9 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
             exported_at: Utc::now().to_rfc3339(),
             profile,
             listen_history: object_rows(
-                "SELECT json_object('song_id', song_id, 'listened_at', listened_at) AS value
+                "SELECT json_object('song_id', song_id, 'listened_at', listened_at,
+                  'title', title, 'artist', artist_name, 'album', album_name,
+                  'zone', zone_name, 'device', device, 'source', source) AS value
                  FROM listen_history_item WHERE user_id = ? ORDER BY id DESC",
                 &mut connection,
             )?,
@@ -1319,10 +1524,17 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                  FROM search_item WHERE user_id = ? ORDER BY id DESC",
                 &mut connection,
             )?,
+            radio_bans: object_rows(
+                "SELECT json_object('kind', kind, 'id', entity_id, 'created_at', created_at) AS value
+                 FROM user_radio_ban WHERE user_id = ? ORDER BY created_at DESC",
+                &mut connection,
+            )?,
             playlists: object_rows(
                 "SELECT json_object('id', playlist.id, 'name', playlist.name,
                   'description', playlist.description, 'is_public', playlist.is_public,
                   'created_at', playlist.created_at, 'updated_at', playlist.updated_at,
+                  'smart_focus', (SELECT json(query_json) FROM smart_playlist
+                    WHERE smart_playlist.playlist_id = playlist.id),
                   'songs', json((
                     SELECT json_group_array(json_object(
                       'song_id', _playlist_to_song.b,
@@ -1335,6 +1547,40 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                   ))) AS value
                  FROM playlist JOIN _playlist_to_user ON _playlist_to_user.a = playlist.id
                  WHERE _playlist_to_user.b = ? ORDER BY playlist.id",
+                &mut connection,
+            )?,
+            tags: object_rows(
+                "SELECT json_object('id', user_tag.id, 'name', user_tag.name,
+                  'created_at', user_tag.created_at, 'color', user_tag.color,
+                  'description', user_tag.description,
+                  'smart_focus', json(user_tag.query_json),
+                  'items', json((
+                    SELECT json_group_array(json_object(
+                      'entity_type', user_tag_item.entity_type,
+                      'entity_id', user_tag_item.entity_id,
+                      'added_at', user_tag_item.added_at
+                    ))
+                    FROM user_tag_item WHERE user_tag_item.tag_id = user_tag.id
+                  ))) AS value
+                 FROM user_tag WHERE user_tag.user_id = ? ORDER BY user_tag.id",
+                &mut connection,
+            )?,
+            saved_focuses: object_rows(
+                "SELECT json_object('name', name, 'view', view, 'query', json(query_json),
+                  'position', position, 'created_at', created_at) AS value
+                 FROM saved_focus WHERE user_id = ? ORDER BY position, id",
+                &mut connection,
+            )?,
+            notes: object_rows(
+                "SELECT json_object('entity_type', entity_type, 'entity_id', entity_id,
+                  'body', body, 'updated_at', updated_at) AS value
+                 FROM user_note WHERE user_id = ? ORDER BY updated_at DESC",
+                &mut connection,
+            )?,
+            listen_later: object_rows(
+                "SELECT json_object('entity_type', entity_type, 'entity_id', entity_id,
+                  'added_at', added_at) AS value
+                 FROM listen_later_item WHERE user_id = ? ORDER BY added_at DESC",
                 &mut connection,
             )?,
         })
@@ -1417,7 +1663,10 @@ async fn clear_personal_history(pool: web::Data<DbPool>, request: HttpRequest) -
 }
 
 pub fn configure_admin(cfg: &mut web::ServiceConfig) {
-    cfg.service(status)
+    // `/backups/schedule` and `/backups/folder` must be registered before
+    // `/backups/{filename}`, which would otherwise match them first.
+    cfg.configure(crate::api::migration::configure_admin)
+        .service(status)
         .service(create_backup)
         .service(download_backup)
         .service(delete_backup)
@@ -1516,7 +1765,7 @@ mod tests {
             serde_json::to_string(&public_index(&library, &details)).expect("public index");
         assert!(serialized.contains("\"contains_personal_data\":false"));
         assert!(serialized.contains("\"sample_rate\":96000"));
-        for secret in [
+        for private_value in [
             "/home/alice",
             "private-name",
             "listen_history",
@@ -1526,8 +1775,8 @@ mod tests {
             "192.168.1.20",
         ] {
             assert!(
-                !serialized.contains(secret),
-                "leaked {secret}: {serialized}"
+                !serialized.contains(private_value),
+                "leaked {private_value}: {serialized}"
             );
         }
     }
@@ -1566,6 +1815,8 @@ mod tests {
                     created_at: created_at.to_rfc3339(),
                     size_bytes: 1,
                     tier: None,
+                    copied_to: None,
+                    copy_error: None,
                 },
                 created_at,
                 meaningful_fingerprint: Some(format!("revision-{offset}")),
@@ -1604,6 +1855,31 @@ mod tests {
             ["2026-06-01", "2026-05-01", "2026-04-01"].map(|date| format!("{date}.tar.zst"))
         );
         assert_eq!(plan.len(), 14);
+    }
+
+    #[test]
+    fn remote_access_comes_along_on_restore_only_when_asked() {
+        use super::{remote_access_setting, staged_remote_access};
+        let manual =
+            br#"{"mode":"manual","manual_url":"https://music.example.com","external_port":null}"#
+                .to_vec();
+        let summary = remote_access_setting(&manual).expect("a setting that does something");
+        assert_eq!(summary["mode"], "manual");
+        assert_eq!(summary["manual_url"], "https://music.example.com");
+        assert!(remote_access_setting(br#"{"mode":"off"}"#).is_none());
+        assert!(remote_access_setting(b"{not json").is_none());
+
+        // Opt-in: the new server may be on another network.
+        assert_eq!(staged_remote_access(Some(manual.clone()), false), None);
+        assert_eq!(
+            staged_remote_access(Some(manual.clone()), true),
+            Some(manual)
+        );
+        assert_eq!(
+            staged_remote_access(Some(br#"{"mode":"off"}"#.to_vec()), true),
+            None
+        );
+        assert_eq!(staged_remote_access(None, true), None);
     }
 
     #[test]
@@ -1662,7 +1938,9 @@ mod tests {
                  CREATE TABLE file_entry (id INTEGER PRIMARY KEY);
                  CREATE TABLE listen_history_item (id INTEGER PRIMARY KEY);
                  INSERT INTO user VALUES (1, 4, 'private-song-id');
-                 INSERT INTO refresh_session VALUES ('private-session');",
+                 INSERT INTO refresh_session VALUES ('private-session');
+                 CREATE TABLE import_connection (user_id INTEGER, service TEXT, credentials TEXT);
+                 INSERT INTO import_connection VALUES (1, 'spotify', '{\"refresh_token\":\"x\"}');",
             )
             .expect("private backup fixture");
         drop(connection);
@@ -1689,6 +1967,18 @@ mod tests {
         assert_eq!(state.sessions, 0);
         assert_eq!(state.token_version, 5);
         assert!(state.now_playing.is_none());
+        #[derive(diesel::deserialize::QueryableByName)]
+        struct Connections {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            count: i64,
+        }
+        let connections = diesel::sql_query("SELECT COUNT(*) AS count FROM import_connection")
+            .get_result::<Connections>(&mut connection)
+            .expect("import connections");
+        assert_eq!(
+            connections.count, 0,
+            "music-service tokens are not backed up"
+        );
         drop(connection);
         let _ = std::fs::remove_file(path);
     }

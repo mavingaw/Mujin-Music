@@ -1,0 +1,151 @@
+name: Android
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: Native ABI to build (armeabi-v7a for 32-bit devices such as the Echo Show 8)
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+        default: arm64-v8a
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Android app (${{ inputs.abi || 'arm64-v8a' }})
+    runs-on: ubuntu-latest
+    # One ABI keeps the native build (Reanimated, Worklets, Screens, the audio
+    # engine) to about a quarter of a universal build: arm64-v8a covers every
+    # Android phone and tablet still in use. A cold build, which also installs
+    # the NDK, takes roughly 25-35 minutes; with a warm Gradle cache, less.
+    timeout-minutes: 60
+    env:
+      ANDROID_ABI: ${{ inputs.abi || 'arm64-v8a' }}
+      EXPO_NO_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      # Metro bundles the JavaScript with Node during the Gradle build.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Generate the native Android project
+        working-directory: apps/mobile
+        run: bunx expo prebuild --platform android --clean --no-install
+      # The Gradle files only exist after prebuild, so the cache key is
+      # computed from the generated project (it changes with Expo, React
+      # Native and the config plugins).
+      - name: Cache Gradle dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/mobile/android/**/*.gradle', 'apps/mobile/android/**/*.gradle.kts', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties', 'bun.lock') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+      # Release builds are signed with the upload key when the repository has
+      # the four ANDROID_UPLOAD_* secrets. Without them (forks, or before the
+      # key is configured) the same release build is signed with the debug
+      # key that prebuild generates, and the artifact name says so. Such an
+      # APK installs for testing but cannot update a store-signed install.
+      - name: Choose the release signing key
+        id: signing
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          present=0
+          for value in "$UPLOAD_KEYSTORE_BASE64" "$UPLOAD_STORE_PASSWORD" "$UPLOAD_KEY_ALIAS" "$UPLOAD_KEY_PASSWORD"; do
+            if [[ -n "$value" ]]; then present=$((present + 1)); fi
+          done
+          if [[ "$present" -eq 4 ]]; then
+            keystore="$RUNNER_TEMP/mujin-music-upload.keystore"
+            printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            {
+              echo "kind=release"
+              echo "store-file=$keystore"
+              echo "suffix="
+            } >> "$GITHUB_OUTPUT"
+          elif [[ "$present" -eq 0 ]]; then
+            echo "::notice::No Android upload key is configured; the APK is a release build signed with the debug key."
+            {
+              echo "kind=debug"
+              echo "store-file=debug.keystore"
+              echo "suffix=-debug-signed"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Only $present of the 4 ANDROID_UPLOAD_* secrets are set. Set all of ANDROID_UPLOAD_KEYSTORE_BASE64, ANDROID_UPLOAD_STORE_PASSWORD, ANDROID_UPLOAD_KEY_ALIAS and ANDROID_UPLOAD_KEY_PASSWORD, or none." >&2
+            exit 1
+          fi
+      - name: Build release APK
+        working-directory: apps/mobile/android
+        env:
+          # Read by plugins/with-android-release-signing.js; a relative store
+          # file resolves against android/app, where prebuild writes
+          # debug.keystore.
+          ORG_GRADLE_PROJECT_PARSON_UPLOAD_STORE_FILE: ${{ steps.signing.outputs.store-file }}
+          ORG_GRADLE_PROJECT_PARSON_UPLOAD_STORE_PASSWORD: ${{ steps.signing.outputs.kind == 'release' && secrets.ANDROID_UPLOAD_STORE_PASSWORD || 'android' }}
+          ORG_GRADLE_PROJECT_PARSON_UPLOAD_KEY_ALIAS: ${{ steps.signing.outputs.kind == 'release' && secrets.ANDROID_UPLOAD_KEY_ALIAS || 'androiddebugkey' }}
+          ORG_GRADLE_PROJECT_PARSON_UPLOAD_KEY_PASSWORD: ${{ steps.signing.outputs.kind == 'release' && secrets.ANDROID_UPLOAD_KEY_PASSWORD || 'android' }}
+        run: |
+          ./gradlew assembleRelease \
+            --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g" \
+            -PreactNativeArchitectures="$ANDROID_ABI"
+      - name: Verify the APK (signature, ABI, embedded bundle)
+        env:
+          SUFFIX: ${{ steps.signing.outputs.suffix }}
+        run: |
+          set -euo pipefail
+          apk=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          test -f "$apk"
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$build_tools/apksigner" verify --print-certs "$apk"
+          listing="$(unzip -l "$apk")"
+          grep -q "lib/${ANDROID_ABI}/" <<<"$listing" || {
+            echo "The APK has no native libraries for ${ANDROID_ABI}." >&2
+            exit 1
+          }
+          if grep -E "lib/(armeabi-v7a|x86|x86_64)/" <<<"$listing"; then
+            echo "::warning::The APK also contains native libraries for ABIs other than ${ANDROID_ABI}."
+          fi
+          grep -q "assets/index.android.bundle" <<<"$listing" || {
+            echo "The APK does not embed the JavaScript bundle." >&2
+            exit 1
+          }
+          version="$(node -p "require('./apps/mobile/app.json').expo.version")"
+          name="Mujin-Music-${version}-android-${ANDROID_ABI}${SUFFIX}.apk"
+          mkdir -p artifacts/android
+          cp "$apk" "artifacts/android/$name"
+          ls -l artifacts/android
+      - name: Upload APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mujin-music-android-${{ env.ANDROID_ABI }}${{ steps.signing.outputs.suffix }}
+          path: artifacts/android/*.apk
+          if-no-files-found: error

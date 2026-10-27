@@ -5,6 +5,8 @@ import { downloadAsync as legacyDownloadAsync } from "expo-file-system/legacy";
 import { useSyncExternalStore } from "react";
 
 import { freshAuthorizationHeaders, streamUrl } from "@/lib/runtime";
+import { devicePlaybackCapabilities } from "@/lib/device-playback";
+import { offlineMediaPath } from "@/lib/playback-formats";
 import {
   albumDirectoryName,
   albumTrackFilename,
@@ -327,12 +329,21 @@ export async function downloadAlbum(
     for (let index = 0; index < songs.length; index += 1) {
       const song = songs[index];
       if (!song || isSongDownloaded(song.id)) continue;
+      const capabilities = devicePlaybackCapabilities();
       const destination = new File(
         directory,
-        albumTrackFilename(index, song.name, song.id, song.path),
+        albumTrackFilename(
+          index,
+          song.name,
+          song.id,
+          offlineMediaPath(song.path, song.audio, capabilities),
+        ),
       );
       try {
-        const saved = await downloadToFile(streamUrl(song.id), destination);
+        const saved = await downloadToFile(
+          streamUrl(song.id, 0, capabilities),
+          destination,
+        );
         await rememberDownload(song, saved.uri, false, albumDownload);
         completed += 1;
       } catch {
@@ -360,11 +371,20 @@ export async function downloadAlbum(
 export async function downloadSong(song: LibrarySong) {
   const directory = new Directory(Paths.document, "Parson", "Songs");
   directory.create({ intermediates: true, idempotent: true });
+  const capabilities = devicePlaybackCapabilities();
   const destination = new File(
     directory,
-    songFilename(song.artist, song.name, song.id, song.path),
+    songFilename(
+      song.artist,
+      song.name,
+      song.id,
+      offlineMediaPath(song.path, song.audio, capabilities),
+    ),
   );
-  const saved = await downloadToFile(streamUrl(song.id), destination);
+  const saved = await downloadToFile(
+    streamUrl(song.id, 0, capabilities),
+    destination,
+  );
   await rememberDownload(song, saved.uri);
   return saved;
 }

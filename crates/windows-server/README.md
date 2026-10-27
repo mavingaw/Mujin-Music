@@ -1,4 +1,4 @@
-# Parson Music server for Windows
+# Mujin Music server for Windows
 
 Windows notification-area server with an embedded web UI.
 
@@ -7,8 +7,30 @@ Windows notification-area server with an embedded web UI.
 Run `ParsonMusicServer.exe`. Data is stored in `%LOCALAPPDATA%\Parson` and the UI
 opens at `http://127.0.0.1:1993`.
 
+This is the server only, for a PC that serves music to the rest of the house.
+Mujin Music Desktop also ships it: when you choose "Use this computer", the
+desktop copies it to `%LOCALAPPDATA%\Programs\Mujin Music Server`, starts it
+with `--background` at sign-in, and connects to it as a remote, so closing
+the desktop window never stops the server.
+Use Mujin Music Desktop on other computers in remote mode ("Connect to a server on
+my network"), the Android app, or any browser. The tray menu item **Connect a
+phone or another computer…** shows this server's network address and a QR
+code. See [docs/server.md](../../docs/server.md).
+
 Environment variables: `PARSON_DATA_DIR`, `PARSON_PORT`, and
 `PARSON_LIBRARY_NAME`. FFmpeg is required for transcoding.
+
+## Windows Firewall
+
+Phones, browsers, Sonos and other speakers reach the server over HTTP, and it
+finds speakers with SSDP and mDNS, so Windows Firewall has to let it in.
+Double-click **Allow through Windows Firewall.cmd** (it asks for permission
+through UAC). It adds one inbound rule, `Mujin Music Server`, for
+`ParsonMusicServer.exe` in this folder, on private networks only. Before you
+delete the folder, double-click **Remove from Windows Firewall.cmd**. Both run
+`firewall.ps1` (`-Action Allow|Remove`, `-Program <path>`). Set your home
+network's profile to **Private** in Windows settings: the rule does not open
+the server on public networks.
 
 ## Build and package
 

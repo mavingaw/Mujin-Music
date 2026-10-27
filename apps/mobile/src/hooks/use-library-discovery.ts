@@ -27,12 +27,18 @@ async function inspectLibrary(origin: string) {
   }
 }
 
-export function useLibraryDiscovery() {
+/**
+ * Libraries announcing `_parson._tcp` on this network, each confirmed by its
+ * manifest. Searches while the app is choosing a library, or whenever
+ * `enabled` is true (the library switcher in Settings).
+ */
+export function useLibraryDiscovery(enabled?: boolean) {
   const { phase } = useSession();
   const [libraries, setLibraries] = useState<NearbyLibrary[]>([]);
   const inspected = useRef(new Set<string>());
+  const searching = enabled ?? phase === "discovering";
   useEffect(() => {
-    if (phase !== "discovering") return;
+    if (!searching) return;
     let active = true;
     const subscription = ParsonDiscovery.addListener(
       "onService",
@@ -45,11 +51,10 @@ export function useLibraryDiscovery() {
             if (!active) return;
             setLibraries((current) =>
               [
-                ...current.filter(
-                  (library) =>
-                    library.origin !== origin &&
-                    library.manifest.instanceId !== manifest.instanceId,
-                ),
+                // Keyed by address: two servers can share an identity (a
+                // library taken over by a restore while the old one runs);
+                // libraryRows picks between them the same way every time.
+                ...current.filter((library) => library.origin !== origin),
                 { manifest, origin },
               ].sort((left, right) =>
                 left.manifest.name.localeCompare(right.manifest.name),
@@ -67,9 +72,9 @@ export function useLibraryDiscovery() {
           const permission = PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES;
           if (!(await PermissionsAndroid.check(permission))) {
             await PermissionsAndroid.request(permission, {
-              title: "Find your Parson library",
+              title: "Find your Mujin Music library",
               message:
-                "Allow nearby-device access so Parson can find music libraries on this network.",
+                "Allow nearby-device access so Mujin Music can find music libraries on this network.",
               buttonPositive: "Allow",
               buttonNegative: "Not now",
             });
@@ -84,6 +89,6 @@ export function useLibraryDiscovery() {
       subscription.remove();
       ParsonDiscovery.stop();
     };
-  }, [phase]);
+  }, [searching]);
   return libraries;
 }

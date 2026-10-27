@@ -51,7 +51,7 @@ export default function LibraryConnectionCard() {
 
   function connect(origin: string, name: string) {
     if (!connectToServer(origin, name)) {
-      toast("Enter a valid Parson library address.");
+      toast("Enter a valid Mujin Music library address.");
     }
   }
 
@@ -59,7 +59,7 @@ export default function LibraryConnectionCard() {
     event.preventDefault();
     const origin = normalizeServerOrigin(manualAddress);
     if (!origin) {
-      toast("Enter a valid Parson library address.");
+      toast("Enter a valid Mujin Music library address.");
       return;
     }
     connect(origin, displayAddress(origin));
@@ -67,7 +67,9 @@ export default function LibraryConnectionCard() {
 
   return (
     <div className="w-full max-w-md motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-right-2 motion-safe:duration-200">
-      <h1 className="text-3xl font-bold tracking-tight">Connect to Parson</h1>
+      <h1 className="text-3xl font-bold tracking-tight">
+        Connect to Mujin Music
+      </h1>
 
       <section className="mt-8" aria-labelledby="this-library-heading">
         <h2

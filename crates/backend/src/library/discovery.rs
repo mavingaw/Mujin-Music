@@ -11,7 +11,7 @@ use jwalk::{Parallelism, WalkDir};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::warn;
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "m4a", "opus", "wav", "aiff", "alac"];
+use crate::library::formats::AUDIO_EXTENSIONS;
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 const DEFAULT_INITIAL_CAPACITY: usize = 4_096;
 const DEFAULT_MAX_THREADS: usize = 8;
@@ -506,6 +506,88 @@ fn discover_scope(
         images.sort_unstable_by(|left, right| left.path.cmp(&right.path));
     }
     inventory
+}
+
+/// One entry the skipped-files audit sees: every regular file the scanner
+/// would visit (audio or not), and every folder it could not read.
+#[derive(Debug, Clone)]
+pub(crate) enum AuditEntry {
+    File {
+        path: PathBuf,
+        extension: String,
+        size_bytes: i64,
+        modified_at_ns: i64,
+    },
+    Unreadable {
+        path: PathBuf,
+        error: String,
+    },
+}
+
+/// Walks `root` with the scanner's own rules (hidden and system folders,
+/// exclusion globs, no symlinks) and reports every file and every walk
+/// error, so the audit sees exactly what an import saw.
+pub(crate) fn audit_walk(root: &Path, visit: &mut dyn FnMut(AuditEntry) -> bool) {
+    let options = options_from_environment();
+    let exclusion_root = root.to_path_buf();
+    let exclusions = options.exclusions;
+    let skip_hidden = options.skip_hidden;
+    let skip_system = options.skip_system;
+    let walk = WalkDir::new(root)
+        .follow_links(false)
+        .skip_hidden(skip_hidden)
+        .parallelism(Parallelism::RayonNewPool(options.threads.min(4)))
+        .process_read_dir(move |_depth, _directory, _state, children| {
+            children.retain(|result| {
+                let Ok(entry) = result else { return true };
+                if entry.file_type().is_symlink() {
+                    return false;
+                }
+                if !entry.file_type().is_dir() {
+                    return true;
+                }
+                if has_skipped_attributes(entry, skip_hidden, skip_system) {
+                    return false;
+                }
+                let entry_path = entry.path();
+                let relative = entry_path
+                    .strip_prefix(&exclusion_root)
+                    .unwrap_or(entry_path.as_path());
+                !is_excluded_directory(&exclusions, relative, entry.file_name())
+            });
+        });
+    for entry in walk {
+        let keep_going = match entry {
+            Err(error) => visit(AuditEntry::Unreadable {
+                path: error
+                    .path()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| root.to_path_buf()),
+                error: error.to_string(),
+            }),
+            Ok(entry) if entry.file_type().is_file() => {
+                let path = entry.path();
+                let extension = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                match file_facts(&entry, &path, false, skip_hidden, skip_system, false) {
+                    Some(facts) => visit(AuditEntry::File {
+                        path,
+                        extension,
+                        size_bytes: facts.size_bytes,
+                        modified_at_ns: facts.modified_at_ns,
+                    }),
+                    None => true,
+                }
+            }
+            Ok(_) => true,
+        };
+        if !keep_going {
+            break;
+        }
+    }
 }
 
 pub(crate) fn discover(root: &Path) -> FilesystemInventory {

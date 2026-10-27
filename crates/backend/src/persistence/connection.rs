@@ -18,7 +18,7 @@ pub type DbPool = Arc<r2d2::Pool<ConnectionManager<SqliteConnection>>>;
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
 // Embed crates/backend/migrations.
-const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+pub(crate) const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 const V1_BASELINE_MIGRATION: &str = "20260719000000";
 const LEGACY_MUSIC_MIGRATION: &str = "20240721200400";
 const DEFAULT_SNAPSHOT_GENERATIONS: usize = 3;
@@ -515,6 +515,21 @@ pub fn connect() -> Result<DbPool, BoxError> {
         Ok(pool) => Ok(pool.clone()),
         Err(error) => Err(error.clone().into()),
     }
+}
+
+/// A private in-memory database with every migration applied, for tests.
+#[cfg(test)]
+pub fn migrated_memory_pool() -> DbPool {
+    let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
+    let pool = r2d2::Pool::builder()
+        .max_size(1)
+        .build(manager)
+        .expect("in-memory pool");
+    pool.get()
+        .expect("in-memory connection")
+        .run_pending_migrations(MIGRATIONS)
+        .expect("migrations");
+    Arc::new(pool)
 }
 
 #[cfg(test)]

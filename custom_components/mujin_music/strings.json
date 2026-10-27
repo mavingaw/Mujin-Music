@@ -1,0 +1,195 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Connect to Mujin Music",
+        "description": "Enter the address of the computer or server running Mujin Music. Servers on your network are usually found automatically.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "ssl": "Use HTTPS"
+        },
+        "data_description": {
+          "host": "IP address or host name of your Mujin Music server.",
+          "port": "Mujin Music listens on 1993 unless you changed it."
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "Mujin Music found",
+        "description": "Add the {brand} library **{name}** at {host}? Every zone (apps, Sonos rooms, AirPlay and UPnP speakers, audio devices and linked groups) becomes a media player."
+      },
+      "auth": {
+        "title": "Sign in to Mujin Music",
+        "description": "Pairing is recommended: Home Assistant gets its own device session that you can revoke from the app, and no password is stored.",
+        "menu_options": {
+          "pair": "Pair with a code",
+          "login": "Sign in with username and password"
+        }
+      },
+      "pair": {
+        "title": "Approve Home Assistant",
+        "description": "In the Mujin Music app open **Settings → Home Assistant**, type this code under **Approve Home Assistant** and select **Approve**:\n\n## {code}\n\nThe code works for {minutes} minutes. Select **Submit** here once you have approved it."
+      },
+      "login": {
+        "title": "Sign in to {name}",
+        "description": "Your password is used once to create a device session and is not stored.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "The saved session for **{name}** expired or was revoked. Pair again or sign in to keep your media players working."
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach Mujin Music at that address.",
+      "invalid_auth": "Wrong username or password.",
+      "too_many_attempts": "Too many sign-in attempts. Wait a minute and try again.",
+      "pairing_pending": "Not approved yet. Enter the code in the Mujin Music app, then select Submit again.",
+      "pairing_expired": "That code expired. A new code is shown below."
+    },
+    "abort": {
+      "already_configured": "This Mujin Music library is already set up.",
+      "cannot_connect": "Could not reach Mujin Music.",
+      "not_mujin_music": "This device is not a Mujin Music server.",
+      "ipv6_not_supported": "Found over IPv6 only; add the server by its IPv4 address instead.",
+      "pairing_unavailable": "The server is not accepting pairing requests right now. Try again shortly.",
+      "reauth_successful": "Signed in again.",
+      "wrong_server": "That address belongs to a different Mujin Music library."
+    }
+  },
+  "exceptions": {
+    "command_refused": {
+      "message": "Mujin Music refused the request: {error}."
+    },
+    "command_failed": {
+      "message": "Could not reach Mujin Music: {error}"
+    },
+    "zone_unavailable": {
+      "message": "This zone is not available right now."
+    },
+    "not_a_zone": {
+      "message": "{entity_id} is not a Mujin Music zone on this server."
+    },
+    "unknown_source": {
+      "message": "There is no zone called {source} to play from."
+    },
+    "media_source_unsupported": {
+      "message": "Mujin Music plays from its own library. Pick an item from the Mujin Music media browser instead."
+    },
+    "no_servers": {
+      "message": "No Mujin Music server is set up."
+    },
+    "media_not_found": {
+      "message": "Nothing in the Mujin Music library matches \"{query}\"."
+    },
+    "item_not_found": {
+      "message": "{item} is no longer in the Mujin Music library."
+    },
+    "standby_unsupported": {
+      "message": "This zone cannot be switched off; pause it instead."
+    },
+    "nothing_matches": {
+      "message": "Nothing in the Mujin Music library matches that request."
+    }
+  },
+  "services": {
+    "start_radio": {
+      "name": "Start radio",
+      "description": "Starts an endless station in this zone, seeded by an album, artist, song, genre or playlist (library radio when nothing is given).",
+      "fields": {
+        "item": {
+          "name": "Item",
+          "description": "Media browser id to seed from, e.g. album:…, artist:…, song:…, genre:Jazz or radio:library."
+        },
+        "query": {
+          "name": "Search",
+          "description": "Seed from the best match for this text instead, e.g. \"Miles Davis\"."
+        },
+        "kind": {
+          "name": "Search for",
+          "description": "Limit the search to one kind of item."
+        }
+      }
+    },
+    "thumbs_up": {
+      "name": "Thumbs up",
+      "description": "Likes the playing track: radio plays more like it."
+    },
+    "thumbs_down": {
+      "name": "Thumbs down",
+      "description": "Dislikes the playing track: it is skipped now and radio stays away from it."
+    },
+    "transfer": {
+      "name": "Transfer playback",
+      "description": "Moves this zone's queue, track and position to another zone.",
+      "fields": {
+        "destination": {
+          "name": "Destination",
+          "description": "The Mujin Music zone that takes over."
+        }
+      }
+    },
+    "sleep_timer": {
+      "name": "Sleep timer",
+      "description": "Fades out and pauses this zone after a number of minutes (0 cancels the timer).",
+      "fields": {
+        "minutes": {
+          "name": "Minutes",
+          "description": "Minutes until playback stops."
+        }
+      }
+    },
+    "pause_all": {
+      "name": "Pause all zones",
+      "description": "Pauses every zone that is playing.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Server",
+          "description": "Only this Mujin Music server (all servers when empty)."
+        }
+      }
+    }
+  },
+  "selector": {
+    "kind": {
+      "options": {
+        "artist": "Artist",
+        "album": "Album",
+        "song": "Song",
+        "playlist": "Playlist",
+        "genre": "Genre"
+      }
+    }
+  },
+  "entity": {
+    "event": {
+      "volume_request": {
+        "name": "Volume request",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "volume_up": "Volume up",
+              "volume_down": "Volume down",
+              "volume_set": "Volume set",
+              "mute_on": "Mute",
+              "mute_off": "Unmute"
+            }
+          },
+          "level": {
+            "name": "Level"
+          },
+          "step": {
+            "name": "Step"
+          },
+          "muted": {
+            "name": "Muted"
+          }
+        }
+      }
+    }
+  }
+}

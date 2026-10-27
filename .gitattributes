@@ -5,3 +5,12 @@
 *.icns binary
 *.webp binary
 *.woff2 binary
+*.flac binary
+*.mp3 binary
+*.m4a binary
+*.ogg binary
+*.opus binary
+*.wav binary
+*.aiff binary
+*.mp4 binary
+*.cmd text eol=crlf

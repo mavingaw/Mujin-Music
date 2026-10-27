@@ -13,11 +13,13 @@ use crate::api::image::{create_signed_image_url, image};
 use crate::api::library::{
     head_stream_song, index, library_catalog, library_catalog_artists,
     library_classification_diagnostics, library_readiness, library_refresh, library_roots,
-    remove_library_root, stream_song,
+    remove_library_root, song_delivery, song_signal_path, stream_song,
 };
 use crate::api::{
-    album, artist, cast, data, filesystem, genres, home, lyrics, metadata, playback, playlist,
-    search, setup, song, user,
+    album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
+    genres, home, imports, key_service, library_tools, listen_later, live_radio, lyrics, metadata,
+    outputs, playback, playlist, profiles, providers, remote_access, scrobbling, search, setup,
+    song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -26,6 +28,53 @@ use crate::{assets, http, settings};
 const MAX_JSON_BODY_BYTES: usize = 1024 * 1024;
 const MAX_STREAMING_PAYLOAD_BYTES: usize = 6 * 1024 * 1024;
 const DESKTOP_CHALLENGE_HEADER: &str = "x-parson-desktop-challenge";
+
+static RESTART_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RESTART_SIGNAL: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+
+fn restart_signal() -> &'static tokio::sync::Notify {
+    RESTART_SIGNAL.get_or_init(tokio::sync::Notify::new)
+}
+
+/// Asks the running server to stop gracefully and start again, for example
+/// to apply a restored backup. The request is answered first: the restart
+/// begins a moment later.
+pub fn request_restart() {
+    RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        restart_signal().notify_one();
+    });
+}
+
+/// Resolves once [`request_restart`] has been called.
+pub async fn restart_requested() {
+    restart_signal().notified().await;
+}
+
+/// True (once) after a restart was requested; hosts that run the server
+/// in-process start it again when this is set.
+pub fn take_restart_request() -> bool {
+    RESTART_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Starts this program again with the same arguments and environment.
+/// On Unix the process image is replaced, so the PID (and with it systemd,
+/// launchd, Docker or the desktop's supervisor) stays the same.
+fn relaunch_current_process() -> std::io::Result<()> {
+    let executable = std::env::current_exe()?;
+    let mut command = std::process::Command::new(executable);
+    command.args(std::env::args_os().skip(1));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec())
+    }
+    #[cfg(not(unix))]
+    {
+        command.spawn().map(|_| ())
+    }
+}
 
 fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
     web::scope(path)
@@ -37,12 +86,33 @@ fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .service(library_catalog_artists),
         )
         .service(
+            web::scope("/focus")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(focus::configure_focus),
+        )
+        .service(
+            web::scope("/tags")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(focus::configure_tags),
+        )
+        .service(
+            web::scope("/listen-later")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(listen_later::configure),
+        )
+        .service(
+            web::scope("/tools")
+                .wrap(HttpAuthentication::with_fn(admin_guard))
+                .configure(library_tools::configure),
+        )
+        .service(
             web::scope("")
                 .wrap(HttpAuthentication::with_fn(admin_guard))
                 .service(index)
                 .service(library_refresh)
                 .service(library_roots)
                 .service(library_classification_diagnostics)
+                .service(crate::api::relocate::relocate_library_root)
                 .service(remove_library_root),
         )
 }
@@ -54,6 +124,8 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .service(create_signed_image_url)
         .service(head_stream_song)
         .service(stream_song)
+        .service(song_delivery)
+        .service(song_signal_path)
         .service(
             web::scope("/filesystem")
                 .wrap(HttpAuthentication::with_fn(admin_guard))
@@ -64,7 +136,20 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
                 .wrap(HttpAuthentication::with_fn(admin_guard))
                 .service(metadata::edit_library_metadata)
                 .service(metadata::edit_album_metadata)
-                .service(metadata::upload_album_cover),
+                .service(metadata::upload_album_cover)
+                .service(editorial::get_enrichment)
+                .service(editorial::put_enrichment)
+                .service(editorial::refresh_enrichment)
+                .service(works::identify_search)
+                .service(works::identify_album)
+                .service(works::clear_identification)
+                .service(genre_pages::put_album_genres)
+                .service(genre_pages::delete_album_genres)
+                .service(album_sources::put_album_sources)
+                .service(album_sources::put_album_credits)
+                .service(album_sources::delete_album_credits)
+                .service(album_sources::get_library_sources)
+                .service(album_sources::put_library_sources),
         )
         .service(
             web::scope("/data/admin")
@@ -80,9 +165,18 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(playlist::configure)
         .configure(playback::configure)
         .configure(cast::configure)
+        .configure(outputs::configure)
+        .configure(zones::configure)
+        .configure(control::configure)
         .configure(genres::configure)
         .configure(home::configure)
         .configure(lyrics::configure)
+        .configure(works::configure)
+        .configure(imports::configure)
+        .configure(providers::configure)
+        .configure(profiles::configure)
+        .configure(scrobbling::configure)
+        .configure(live_radio::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -211,10 +305,44 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "product": "parson-music",
         "serverVersion": env!("CARGO_PKG_VERSION"),
         "pairingRequired": true,
-        "capabilities": ["streaming", "downloads", "lyrics", "casting"],
+        "bootId": crate::discovery::boot_id(),
+        "startedAt": crate::discovery::started_at(),
+        // Set when this server took over a restored library's identity, so
+        // apps can tell the library's new home from an old server that is
+        // still switched on and answers with the same instance id.
+        "identityAdoptedAt": settings::identity_adopted_at(),
+        "capabilities": [
+            "streaming",
+            "downloads",
+            "lyrics",
+            "casting",
+            "lossless-delivery",
+            "radio",
+            "focus",
+            "zones",
+            "sonos",
+            "upnp",
+            "audio_devices",
+            "bridges",
+            "airplay",
+            "chromecast",
+            "credits",
+            "works",
+            "imports",
+            "streaming_services",
+            "browse",
+            "ratings",
+            "home_assistant",
+            "listen_later",
+            "smart_tags",
+            "history",
+            "profiles",
+            "scrobbling",
+            "live_radio"
+        ],
     });
     if let (Ok(secret), Some(challenge)) = (
-        std::env::var("PARSON_DESKTOP_INSTANCE_TOKEN"),
+        settings::host_setting("PARSON_DESKTOP_INSTANCE_TOKEN").ok_or(()),
         request
             .headers()
             .get(DESKTOP_CHALLENGE_HEADER)
@@ -226,17 +354,56 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
     HttpResponse::Ok().json(manifest)
 }
 
+async fn host_details() -> HttpResponse {
+    let port = match settings::port() {
+        Ok(port) => port,
+        Err(error) => {
+            tracing::error!(%error, "could not read the server port");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    match crate::discovery::host_info(port) {
+        Ok(info) => HttpResponse::Ok()
+            .insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"))
+            .json(info),
+        Err(error) => {
+            tracing::error!(%error, "could not describe this Mujin Music host");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 async fn nearby_servers() -> HttpResponse {
     match crate::discovery::discover_nearby(Duration::from_millis(1_500)).await {
         Ok(servers) => HttpResponse::Ok().json(servers),
         Err(error) => {
-            tracing::warn!(%error, "nearby Parson discovery failed");
+            tracing::warn!(%error, "nearby Mujin Music discovery failed");
             HttpResponse::ServiceUnavailable().json(serde_json::json!({
                 "error": "discovery_unavailable",
                 "message": "Nearby discovery is unavailable on this device."
             }))
         }
     }
+}
+
+fn build_zone_service(
+    database: crate::persistence::connection::DbPool,
+    port: u16,
+) -> crate::zones::ZoneService {
+    let sonos = crate::sonos::SonosConfig::from_env().and_then(|config| {
+        match crate::sonos::SonosController::new(config) {
+            Ok(controller) => Some(std::sync::Arc::new(controller)),
+            Err(error) => {
+                tracing::warn!(%error, "Sonos support is unavailable");
+                None
+            }
+        }
+    });
+    let service = crate::zones::ZoneService::new(sonos, Some(database));
+    service.set_port(port);
+    service.load_settings();
+    service.set_outputs(std::sync::Arc::new(crate::outputs::Outputs::from_env()));
+    service
 }
 
 /// Builds and binds the HTTP server without awaiting it.
@@ -261,6 +428,25 @@ pub async fn build_server_with_shutdown_timeout(
         .expect("new library lifecycle has no active scan");
     let database = web::Data::new(local_app.database);
     data::start_automatic_backups(database.get_ref().clone());
+    tokio::spawn(crate::enrichment::worker::run(
+        database.get_ref().clone(),
+        local_app.library.clone(),
+    ));
+    let streaming_services = web::Data::new(
+        crate::providers::hub::StreamingHub::from_env(database.get_ref().clone())
+            .map_err(std::io::Error::other)?,
+    );
+    // A server that holds TIDAL or Qobuz keys can serve them to other
+    // Parson servers as a key service.
+    let key_service_app = crate::providers::key_service::ServiceKeys::from_env().map(|keys| {
+        tracing::info!(url = %keys.public_url, "serving the Mujin Music key service");
+        web::Data::new(key_service::KeyServiceApp::new(keys))
+    });
+    let scrobble_hub = web::Data::new(
+        crate::scrobbling::ScrobbleHub::from_env(database.get_ref().clone())
+            .map_err(std::io::Error::other)?,
+    );
+    tokio::spawn(scrobble_hub.clone().into_inner().run());
     let library = web::Data::from(local_app.library);
     let lyrics_service = web::Data::new(
         lyrics::LyricsService::new()
@@ -285,17 +471,31 @@ pub async fn build_server_with_shutdown_timeout(
         });
     }
     let bind_port = settings::port().map_err(std::io::Error::other)?;
+    crate::remote_access::start(bind_port);
+    let zone_service = web::Data::new(build_zone_service(database.get_ref().clone(), bind_port));
+    zone_service.set_library(library.clone().into_inner());
+    zone_service.set_scrobbling(scrobble_hub.clone().into_inner());
+    tokio::spawn(zone_service.clone().into_inner().run());
     let bind_address = settings::bind_address().map_err(std::io::Error::other)?;
     let worker_count = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get().clamp(2, 4))
         .unwrap_or(2);
-    tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Parson server");
+    tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Mujin Music server");
 
+    let live_radio_service = web::Data::from(crate::live_radio::global());
+    live_radio_service
+        .clone()
+        .into_inner()
+        .set_pool(database.get_ref().clone());
     let server = HttpServer::new(move || {
         App::new()
             .app_data(database.clone())
             .app_data(library.clone())
             .app_data(lyrics_service.clone())
+            .app_data(zone_service.clone())
+            .app_data(streaming_services.clone())
+            .app_data(scrobble_hub.clone())
+            .app_data(live_radio_service.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())
@@ -319,9 +519,38 @@ pub async fn build_server_with_shutdown_timeout(
             )
             .service(web::scope("/api/v1/setup").configure(setup::configure))
             .route("/api/v1/discovery/nearby", web::get().to(nearby_servers))
+            .service(
+                web::resource("/api/v1/host")
+                    .wrap(HttpAuthentication::with_fn(validator))
+                    .route(web::get().to(host_details)),
+            )
+            .service(
+                web::scope("/api/v1/remote-access")
+                    .wrap(HttpAuthentication::with_fn(admin_guard))
+                    .configure(remote_access::configure),
+            )
             .route(
                 "/api/v1/cast/media/{song}/stream",
                 web::get().to(cast::cast_media),
+            )
+            .configure(zones::configure_device_routes)
+            .route(
+                "/api/v1/scrobbling/lastfm/complete",
+                web::post().to(scrobbling::complete_lastfm),
+            )
+            .route(
+                "/api/music/v1/scrobbling/lastfm/complete",
+                web::post().to(scrobbling::complete_lastfm),
+            )
+            // Station logos load in <img> tags on every client, so they are
+            // served without a session (only stations Parson knows).
+            .route(
+                "/api/v1/live-radio/stations/{id}/logo",
+                web::get().to(live_radio::station_logo),
+            )
+            .route(
+                "/api/music/v1/live-radio/stations/{id}/logo",
+                web::get().to(live_radio::station_logo),
             )
             .service(library_routes_at("/api/v1/library"))
             .service(music_routes_at("/api/v1"))
@@ -345,9 +574,19 @@ pub async fn build_server_with_shutdown_timeout(
                     .service(web::scope("/setup").configure(setup::configure))
                     .route("/discovery/nearby", web::get().to(nearby_servers))
                     .service(
+                        web::resource("/host")
+                            .wrap(HttpAuthentication::with_fn(validator))
+                            .route(web::get().to(host_details)),
+                    )
+                    .service(
                         web::resource("/libraries")
                             .wrap(HttpAuthentication::with_fn(admin_guard))
                             .route(web::get().to(core_libraries)),
+                    )
+                    .service(
+                        web::scope("/remote-access")
+                            .wrap(HttpAuthentication::with_fn(admin_guard))
+                            .configure(remote_access::configure),
                     ),
             )
             .service(library_routes_at("/api/music/v1/library"))
@@ -359,6 +598,11 @@ pub async fn build_server_with_shutdown_timeout(
             )
             .route("/health/ready", web::get().to(readiness))
             .route("/.well-known/parson", web::get().to(discovery_manifest))
+            .configure(|config| {
+                if let Some(app) = key_service_app.clone() {
+                    key_service::configure(config, app);
+                }
+            })
             .route(
                 "/{filename:.*}",
                 web::head().to(assets::serve_embedded_file),
@@ -377,6 +621,8 @@ pub async fn build_server_with_shutdown_timeout(
 }
 
 pub async fn run() -> std::io::Result<()> {
+    // Fix the process start time before the (possibly slow) startup work.
+    let _ = crate::discovery::boot_id();
     let (server, port) = build_server().await?;
     let _advertisement = match crate::discovery::advertise(port) {
         Ok(advertisement) => Some(advertisement),
@@ -389,8 +635,23 @@ pub async fn run() -> std::io::Result<()> {
             None
         }
     };
-    let result = server.await;
+    let handle = server.handle();
+    tokio::pin!(server);
+    let result = tokio::select! {
+        result = &mut server => result,
+        () = restart_requested() => {
+            tracing::info!("restarting the Mujin Music server");
+            let graceful = tokio::spawn(handle.stop(true));
+            let result = server.await;
+            let _ = graceful.await;
+            result
+        }
+    };
     crate::persistence::connection::mark_clean_shutdown();
+    drop(_advertisement);
+    if result.is_ok() && take_restart_request() {
+        return relaunch_current_process();
+    }
     result
 }
 
@@ -425,6 +686,12 @@ mod tests {
         );
         assert!(value.get("libraryPath").is_none());
         assert!(value.get("desktopProof").is_none());
+        assert_eq!(value["bootId"], crate::discovery::boot_id());
+        assert!(
+            value["startedAt"]
+                .as_u64()
+                .is_some_and(|started| started > 0)
+        );
     }
 
     #[actix_web::test]

@@ -1,0 +1,26 @@
+[package]
+name = "parson-bridge"
+description = "Parson Bridge: makes the DACs and audio outputs of another machine (a Raspberry Pi, a NAS, a desktop) bit-perfect Parson zones"
+version = "1.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "parson-bridge"
+path = "src/main.rs"
+
+[features]
+default = ["mdns"]
+mdns = ["dep:mdns-sd"]
+
+[dependencies]
+parson-output = { path = "../parson-output" }
+mdns-sd = { version = "0.21.5", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"

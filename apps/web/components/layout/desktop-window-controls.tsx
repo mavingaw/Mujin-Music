@@ -3,8 +3,17 @@
 import { desktopPlatform, electronWindowControls } from "@/lib/desktop/bridge";
 import { Copy, Minus, Square, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import {
+  WINDOW_CONTROLS_WIDTH_PX,
+  windowControlsReserve,
+} from "./titlebar-layout";
 
-export function DesktopWindowControls() {
+export function DesktopWindowControls({
+  inline = false,
+}: {
+  /** Sit in the caller's flex row instead of the header's right edge. */
+  inline?: boolean;
+} = {}) {
   const [controls, setControls] =
     useState<ReturnType<typeof electronWindowControls>>(null);
   const [maximized, setMaximized] = useState(false);
@@ -16,11 +25,19 @@ export function DesktopWindowControls() {
       const next = electronWindowControls();
       if (!next) return;
       setControls(next);
+      // The header keeps this much room on its right for the controls.
+      document.documentElement.style.setProperty(
+        "--titlebar-controls",
+        `${windowControlsReserve(platform)}px`,
+      );
+      document.documentElement.dataset.windowControls = "true";
       void next.isMaximized().then(setMaximized);
       next.watchMaximized(setMaximized);
     });
     return () => {
       active = false;
+      document.documentElement.style.removeProperty("--titlebar-controls");
+      delete document.documentElement.dataset.windowControls;
     };
   }, []);
 
@@ -29,8 +46,11 @@ export function DesktopWindowControls() {
   return (
     <div
       aria-label="Window controls"
-      className="electron-titlebar-no-drag absolute right-0 top-0 flex h-full items-stretch"
+      className={`electron-titlebar-no-drag flex h-full items-stretch ${
+        inline ? "ml-2" : "absolute right-0 top-0"
+      }`}
       role="group"
+      style={{ width: WINDOW_CONTROLS_WIDTH_PX }}
     >
       <button
         aria-label="Minimize"

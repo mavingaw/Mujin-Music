@@ -89,7 +89,7 @@ try {
     $env:PARSON_UPDATE_MANIFEST_URL = "http://127.0.0.1:$webPort/windows-server-update.json"
     $env:PARSON_HOST_INSTANCE_ID = $instanceId
     $app = Start-Process $installedExecutable -ArgumentList "--background" -WindowStyle Hidden -PassThru
-    if (-not (Wait-ForHealth $serverPort)) { throw "Initial Parson for Windows did not become healthy." }
+    if (-not (Wait-ForHealth $serverPort)) { throw "Initial Mujin Music for Windows did not become healthy." }
 
     if (-not ("ParsonUpdaterE2E" -as [type])) {
         Add-Type -TypeDefinition @'
@@ -118,8 +118,8 @@ public static class ParsonUpdaterE2E {
     }
 
     if (-not [ParsonUpdaterE2E]::ClickUpdate($app.Id)) { throw "Updater tray window was not found." }
-    if (-not $app.WaitForExit(20000)) { throw "Old Parson for Windows did not stop for the update." }
-    if (-not (Wait-ForHealth $serverPort)) { throw "Updated Parson for Windows did not relaunch healthy." }
+    if (-not $app.WaitForExit(20000)) { throw "Old Mujin Music for Windows did not stop for the update." }
+    if (-not (Wait-ForHealth $serverPort)) { throw "Updated Mujin Music for Windows did not relaunch healthy." }
     Start-Sleep -Seconds 2
 
     $installedHash = (Get-FileHash -LiteralPath $installedExecutable -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -60,6 +60,14 @@ function versionFiles(directory, version) {
     document.expo.ios.buildNumber = String(mobileBuildNumber);
   });
 
+  // The Home Assistant integration ships with the server it talks to.
+  const integration = "custom_components/mujin_music/manifest.json";
+  if (fs.existsSync(path.join(directory, integration))) {
+    updateJson(integration, (document) => {
+      document.version = version;
+    });
+  }
+
   const crateNames = new Set();
   const crates = fs.readdirSync(path.join(directory, "crates"), {
     withFileTypes: true,
@@ -193,7 +201,7 @@ function main(args) {
 
   run("git", ["add", "--", ...files.keys(), "bun.lock"]);
   run("git", ["commit", "-m", `Release ${version}`]);
-  run("git", ["tag", "-a", `v${version}`, "-m", `Parson ${version}`]);
+  run("git", ["tag", "-a", `v${version}`, "-m", `Mujin Music ${version}`]);
   console.log(
     `Prepared v${version}. Publish with: git push origin HEAD --follow-tags`,
   );

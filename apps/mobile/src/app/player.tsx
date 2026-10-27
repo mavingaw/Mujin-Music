@@ -4,12 +4,15 @@ import {
   addFavoriteSong,
   findLyrics,
   isFavoriteSong,
+  radioStationLabel,
   removeFavoriteSong,
+  heartState,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
+import { StreamDeliveryLine } from "@/components/streaming-ui";
 import {
   ChevronDown,
   ChevronLeft,
@@ -24,6 +27,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Ban,
   Heart,
   Gauge,
   AudioLines,
@@ -61,6 +65,7 @@ import {
   usePlayerPosition,
   type AudioPreset,
 } from "@/providers/player-provider";
+import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   downloadSong,
   isSongDownloaded,
@@ -70,7 +75,29 @@ import {
 import { PlaylistPicker } from "@/components/playlist-picker";
 import { PauseGlyph } from "@/components/pause-glyph";
 import { useSession } from "@/providers/session-provider";
+import { BanAction, useRadioBans } from "@/components/radio-bans";
 import { CastOutputButton } from "@/components/cast-output-button";
+import {
+  RadioNotices,
+  RadioQueueHeader,
+  RadioThumbs,
+  StartRadioAction,
+} from "@/components/radio-ui";
+import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
+import { ServerOutputs } from "@/components/server-outputs";
+import { dspAvailable } from "@/lib/signal-path";
+import { useSignalPath } from "@/hooks/use-signal-path";
+import {
+  getLiveNowPlaying,
+  isLiveRadioId,
+  isStreamingId,
+  LIVE_TITLE_POLL_MS,
+  liveStationIdFromSongId,
+  liveTitleText,
+  type SignalPath,
+} from "@parson/music-sdk";
+import { LiveTag, StationLogo } from "@/components/live-radio-ui";
+import { ZoneButton } from "@/components/zone-sheet";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
   immediateBorderlessPressFeedback,
@@ -147,10 +174,13 @@ function NowPlayingPanel({
   song,
   router,
   favorite,
+  banned,
   onToggleFavorite,
   onQueue,
   onLyrics,
   onSound,
+  onSignalPath,
+  signalPath,
   notice,
   online,
 }: {
@@ -158,35 +188,62 @@ function NowPlayingPanel({
   song: PlayerSong;
   router: Router;
   favorite: boolean;
+  /** Third heart state, as in Roon: Radio and Shuffle never pick it. */
+  banned: boolean;
   onToggleFavorite: () => void;
   onQueue: () => void;
   onLyrics: () => void;
   onSound: () => void;
+  onSignalPath: () => void;
+  signalPath: SignalPath | null;
   notice?: string | null;
   online: boolean;
 }) {
   const presetLabel = playerAudioPresets.find(
     (preset) => preset.id === player.audioPreset,
   )?.label;
+  const live = isLiveRadioId(song.id);
   return (
     <View style={styles.player}>
-      <Artwork
-        path={song.album_object?.cover_url}
-        size={330}
-        rounded={14}
-        style={styles.art}
-      />
+      {live ? (
+        <View style={styles.art}>
+          <StationLogo
+            rounded={14}
+            size={330}
+            station={{
+              name: song.name,
+              logo_url: song.album_object?.cover_url || null,
+            }}
+          />
+        </View>
+      ) : (
+        <Artwork
+          path={song.album_object?.cover_url}
+          size={330}
+          rounded={14}
+          style={styles.art}
+        />
+      )}
       <View style={styles.songInfo}>
         <View style={{ flex: 1 }}>
+          {player.radio.currentIsPick ? (
+            <Text numberOfLines={1} style={styles.radioLabel}>
+              {player.radio.seed && player.radio.seed.kind !== "song"
+                ? radioStationLabel(player.radio.seed)
+                : `Radio · ${radioStationLabel(player.radio.seed)}`}
+            </Text>
+          ) : null}
           <Text
             accessibilityLabel={`View album ${song.album_object?.name ?? song.name}`}
             accessibilityRole={song.album_object?.id ? "button" : undefined}
             numberOfLines={1}
             style={styles.title}
-            onPress={() =>
-              song.album_object?.id &&
-              router.replace(`/album/${song.album_object.id}`)
-            }
+            onPress={() => {
+              const station = liveStationIdFromSongId(song.id);
+              if (station) router.replace(`/radio/station/${station}`);
+              else if (song.album_object?.id)
+                router.replace(`/album/${song.album_object.id}`);
+            }}
           >
             {song.name}
           </Text>
@@ -200,32 +257,66 @@ function NowPlayingPanel({
               router.replace(`/artist/${song.artist_object.id}`)
             }
           >
-            {song.artist}
+            {live ? (
+              <LiveTitle fallback={song.artist} songId={song.id} />
+            ) : (
+              song.artist
+            )}
           </Text>
+          {live ? (
+            <View style={styles.liveRow}>
+              <LiveTag />
+              <SignalPathBadge onPress={onSignalPath} path={signalPath} />
+            </View>
+          ) : isStreamingId(song.id) ? (
+            <StreamDeliveryLine songId={song.id} />
+          ) : (
+            <SignalPathBadge onPress={onSignalPath} path={signalPath} />
+          )}
         </View>
-        <Pressable
-          {...immediateBorderlessPressFeedback}
-          accessibilityLabel={
-            !online
-              ? "Liked songs unavailable offline"
-              : favorite
-                ? "Remove from liked songs"
-                : "Add to liked songs"
-          }
-          accessibilityRole="button"
-          disabled={!online}
-          hitSlop={12}
-          style={!online ? styles.disabledControl : undefined}
-          onPress={onToggleFavorite}
-        >
-          <Heart
-            color={favorite ? palette.danger : "white"}
-            fill={favorite ? palette.danger : "transparent"}
-            size={25}
-          />
-        </Pressable>
+        {live ? null : (
+          <Pressable
+            {...immediateBorderlessPressFeedback}
+            accessibilityLabel={
+              !online
+                ? "Liked songs unavailable offline"
+                : banned
+                  ? "Banned from Radio and Shuffle. Unban"
+                  : favorite
+                    ? "Remove from liked songs and ban from Radio"
+                    : "Add to liked songs"
+            }
+            accessibilityRole="button"
+            disabled={!online}
+            hitSlop={12}
+            style={!online ? styles.disabledControl : undefined}
+            onPress={onToggleFavorite}
+          >
+            {banned ? (
+              <Ban color={palette.danger} size={25} />
+            ) : (
+              <Heart
+                color={favorite ? palette.danger : "white"}
+                fill={favorite ? palette.danger : "transparent"}
+                size={25}
+              />
+            )}
+          </Pressable>
+        )}
       </View>
-      <PlaybackTimeline onSeek={player.seek} />
+      {online && !live ? (
+        <View style={styles.feedbackRow}>
+          <RadioThumbs index={player.currentIndex} name={song.name} />
+        </View>
+      ) : null}
+      {live ? (
+        <View style={styles.liveBar}>
+          <View style={styles.liveLine} />
+        </View>
+      ) : (
+        <PlaybackTimeline onSeek={player.seek} />
+      )}
+      {online ? <RadioNotices /> : null}
       {notice ? (
         <Text accessibilityRole="alert" style={styles.playbackError}>
           {notice}
@@ -295,6 +386,9 @@ function NowPlayingPanel({
       <View style={styles.panelButtons}>
         <View style={styles.castButton}>
           <CastOutputButton />
+        </View>
+        <View style={styles.castButton}>
+          <ZoneButton />
         </View>
         <Pressable
           {...immediatePressFeedback}
@@ -392,6 +486,7 @@ function PlaybackTimeline({ onSeek }: { onSeek: (seconds: number) => void }) {
 }
 
 function QueuePanel({ player }: { player: Player }) {
+  const sectionStart = player.radio.sectionStart;
   return (
     <View style={styles.panel}>
       {player.currentIndex < player.queue.length - 1 ? (
@@ -406,26 +501,40 @@ function QueuePanel({ player }: { player: Player }) {
       <FlatList
         data={player.queue}
         contentContainerStyle={{ paddingVertical: 10 }}
-        getItemLayout={(_data, index) => ({
-          index,
-          length: 64,
-          offset: 64 * index,
-        })}
         keyExtractor={(item, index) => `${item.id}-${index}`}
         removeClippedSubviews
-        renderItem={({ item, index }) => (
-          <SongRow
-            song={item}
-            queue={player.queue}
-            index={index}
-            onRemove={
-              index === player.currentIndex
-                ? undefined
-                : () => player.removeFromQueue(index)
-            }
-            removeLabel="Remove from queue"
-          />
-        )}
+        ListFooterComponent={
+          sectionStart < 0 ? <RadioQueueHeader hasPicks={false} /> : null
+        }
+        renderItem={({ item, index }) => {
+          const radioPick = sectionStart >= 0 && index >= sectionStart;
+          const row = (
+            <SongRow
+              song={item}
+              queue={player.queue}
+              index={index}
+              onRemove={
+                index === player.currentIndex
+                  ? undefined
+                  : () => player.removeFromQueue(index)
+              }
+              removeLabel="Remove from queue"
+            />
+          );
+          return (
+            <>
+              {index === sectionStart ? <RadioQueueHeader hasPicks /> : null}
+              {radioPick ? (
+                <View style={styles.radioRow}>
+                  <View style={{ flex: 1 }}>{row}</View>
+                  <RadioThumbs index={index} name={item.name} size={18} />
+                </View>
+              ) : (
+                row
+              )}
+            </>
+          );
+        }}
       />
     </View>
   );
@@ -605,6 +714,7 @@ function PlayerDrawers({
   onSoundClose: () => void;
   online: boolean;
 }) {
+  const playback = useZonePlayback();
   const [playlistPicker, setPlaylistPicker] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(false);
@@ -619,7 +729,7 @@ function PlayerDrawers({
           icon={ListPlus}
           label="Play next"
           onPress={() => {
-            player.addNext(song);
+            playback.addNext(song);
             onActionsClose();
           }}
         />
@@ -627,9 +737,19 @@ function PlayerDrawers({
           icon={ListEnd}
           label="Add to queue"
           onPress={() => {
-            player.addToQueue([song]);
+            playback.addToQueue([song]);
             onActionsClose();
           }}
+        />
+        {online ? (
+          <StartRadioAction
+            seed={{ kind: "song", id: song.id }}
+            onStarted={onActionsClose}
+          />
+        ) : null}
+        <BanAction
+          target={{ kind: "song", id: song.id, name: song.name }}
+          onDone={onActionsClose}
         />
         {online && song.album_object?.id ? (
           <DrawerAction
@@ -728,6 +848,8 @@ export default function PlayerScreen() {
   const [panel, setPanel] = useState<Panel>("player");
   const [actions, setActions] = useState(false);
   const [soundOptions, setSoundOptions] = useState(false);
+  const [signalPathOpen, setSignalPathOpen] = useState(false);
+  const signalPath = useSignalPath(player.current);
   const [favoriteErrorSong, setFavoriteErrorSong] = useState<string | null>(
     null,
   );
@@ -770,6 +892,7 @@ export default function PlayerScreen() {
     staleTime: 30 * 60_000,
     retry: false,
   });
+  const bans = useRadioBans();
   const favorite = useQuery({
     queryKey: ["favorite-membership", player.current?.id],
     queryFn: () => isFavoriteSong(player.current!.id),
@@ -808,9 +931,23 @@ export default function PlayerScreen() {
       </View>
     );
   const song = player.current;
+  const songBanned = bans.isBanned({ kind: "song", id: song.id });
+  /** Heart cycle: not liked, liked, banned, then back to not liked. */
   const toggleFavorite = async () => {
     if (session.phase !== "ready") return;
     setFavoriteErrorSong(null);
+    const state = heartState(!!favorite.data, songBanned);
+    const target = { kind: "song" as const, id: song.id, name: song.name };
+    if (state === "banned") {
+      if (!(await bans.setBanned(target, false))) {
+        setFavoriteErrorSong(song.id);
+      }
+      return;
+    }
+    if (state === "liked" && !(await bans.setBanned(target, true))) {
+      setFavoriteErrorSong(song.id);
+      return;
+    }
     const next = !favorite.data;
     client.setQueryData(["favorite-membership", song.id], next);
     try {
@@ -825,7 +962,7 @@ export default function PlayerScreen() {
   return (
     <GestureDetector gesture={dragDownGesture}>
       <AnimatedLinearGradient
-        colors={["#27272c", "#08080a", "#000"]}
+        colors={["#26262B", "#0A0A0B", "#050506"]}
         style={[styles.page, playerDragStyle]}
       >
         <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
@@ -842,10 +979,13 @@ export default function PlayerScreen() {
               song={song}
               router={router}
               favorite={!!favorite.data}
+              banned={songBanned}
               onToggleFavorite={() => void toggleFavorite()}
               onQueue={() => setPanel("queue")}
               onLyrics={() => setPanel("lyrics")}
               onSound={() => setSoundOptions(true)}
+              onSignalPath={() => setSignalPathOpen(true)}
+              signalPath={signalPath.path}
               notice={
                 player.error ??
                 (favoriteErrorSong === song.id
@@ -879,13 +1019,63 @@ export default function PlayerScreen() {
             onSoundClose={() => setSoundOptions(false)}
             online={session.phase === "ready"}
           />
+          <ActionDrawer
+            open={signalPathOpen}
+            onClose={() => setSignalPathOpen(false)}
+          >
+            <SignalPathContent
+              casting={player.signal.casting}
+              levelingMode={player.volumeLevelingMode}
+              loading={signalPath.loading}
+              onLevelingModeChange={player.setVolumeLevelingMode}
+              path={signalPath.path}
+              dsp={dspAvailable(player.signal.platform) ? player.dsp : null}
+              onDspChange={player.setDsp}
+            />
+            {session.phase === "ready" && !player.signal.casting ? (
+              <PlayerServerOutputs />
+            ) : null}
+          </ActionDrawer>
         </SafeAreaView>
       </AnimatedLinearGradient>
     </GestureDetector>
   );
 }
 
+/** Moves the queue to one of the zones the server plays itself. */
+function PlayerServerOutputs() {
+  const player = usePlayer();
+  return (
+    <ServerOutputs
+      onHandOff={() => {
+        if (player.isPlaying) player.toggle();
+      }}
+    />
+  );
+}
+
+/** A live station's current title (from its stream), polled. */
+function LiveTitle({ songId, fallback }: { songId: string; fallback: string }) {
+  const station = liveStationIdFromSongId(songId);
+  const playing = useQuery({
+    queryKey: ["live-radio", "now-playing", station],
+    queryFn: async () =>
+      (await getLiveNowPlaying([station!]))[station!] ?? null,
+    enabled: Boolean(station),
+    refetchInterval: LIVE_TITLE_POLL_MS,
+  }).data;
+  return <>{liveTitleText(playing?.title) || fallback}</>;
+}
+
 const styles = StyleSheet.create({
+  liveRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 6 },
+  liveBar: { height: 44, justifyContent: "center", paddingHorizontal: 4 },
+  liveLine: {
+    backgroundColor: "#f43f5e",
+    borderRadius: 2,
+    height: 3,
+    opacity: 0.85,
+  },
   page: { flex: 1, backgroundColor: "black" },
   down: { padding: 20 },
   header: {
@@ -966,6 +1156,16 @@ const styles = StyleSheet.create({
   },
   panelText: { color: "white", fontWeight: "800" },
   panel: { flex: 1, paddingTop: 18 },
+  radioLabel: {
+    color: "#7dd3fc",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  feedbackRow: { flexDirection: "row", marginTop: -4, marginLeft: -8 },
+  radioRow: { flexDirection: "row", alignItems: "center", paddingRight: 12 },
   lyricsPanel: {
     overflow: "hidden",
     backgroundColor: "#111114",

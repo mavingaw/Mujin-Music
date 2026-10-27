@@ -3,13 +3,32 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { versionParts } = require("./release.cjs");
 
+/**
+ * Update channels and the release files each one lists, named as
+ * electron-builder writes them (apps/desktop/package.json artifactName):
+ * Mujin-Music-Setup-<version>-<arch>.exe, Mujin-Music-<version>-<arch>.zip
+ * and Mujin-Music-<version>-<x86_64|arm64>.AppImage.
+ */
 const channels = [
-  { name: "latest.yml", pattern: /_.*-setup\.exe$/, artifactCount: 2 },
-  { name: "latest-mac.yml", pattern: /_(x64|arm64)\.zip$/, artifactCount: 2 },
-  { name: "latest-linux.yml", pattern: /_x86_64\.AppImage$/, artifactCount: 1 },
+  {
+    name: "latest.yml",
+    file: (version) =>
+      new RegExp(`^Mujin-Music-Setup-${version}-(x64|arm64)\\.exe$`),
+    artifactCount: 2,
+  },
+  {
+    name: "latest-mac.yml",
+    file: (version) => new RegExp(`^Mujin-Music-${version}-(x64|arm64)\\.zip$`),
+    artifactCount: 2,
+  },
+  {
+    name: "latest-linux.yml",
+    file: (version) => new RegExp(`^Mujin-Music-${version}-x86_64\\.AppImage$`),
+    artifactCount: 1,
+  },
   {
     name: "latest-linux-arm64.yml",
-    pattern: /_arm64\.AppImage$/,
+    file: (version) => new RegExp(`^Mujin-Music-${version}-arm64\\.AppImage$`),
     artifactCount: 1,
   },
 ];
@@ -25,13 +44,13 @@ async function sha512(file) {
 async function generate(directory, version) {
   versionParts(version);
   const names = fs.readdirSync(directory);
-  const artifactPrefix = `Parson_${version}_`;
+  // versionParts accepts digits and dots only; dots must match literally.
+  const escaped = version.replaceAll(".", "\\.");
 
   for (const channel of channels) {
+    const pattern = channel.file(escaped);
     const assets = names
-      .filter(
-        (name) => name.startsWith(artifactPrefix) && channel.pattern.test(name),
-      )
+      .filter((name) => pattern.test(name))
       .sort(
         (left, right) =>
           Number(left.includes("arm64")) - Number(right.includes("arm64")),

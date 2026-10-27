@@ -215,9 +215,9 @@ export default function UserForm() {
           <DialogHeader>
             <DialogTitle>Delete {deleteTarget?.username}?</DialogTitle>
             <DialogDescription>
-              Parson creates a safety backup first, then permanently removes
-              this account, its listening data, favourites, and owned playlists.
-              Music files are not changed.
+              Mujin Music creates a safety backup first, then permanently
+              removes this account, its listening data, favourites, and owned
+              playlists. Music files are not changed.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
@@ -244,7 +244,7 @@ export default function UserForm() {
                   })
                   .catch(() => {
                     toast.error(
-                      "The user could not be deleted. Parson always keeps at least one administrator.",
+                      "The user could not be deleted. Mujin Music always keeps at least one administrator.",
                     );
                   })
                   .finally(() => setDeleting(false));

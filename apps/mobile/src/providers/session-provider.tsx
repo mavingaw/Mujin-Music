@@ -2,6 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   changeUsername as changeUsernameRequest,
   checkDevicePairing,
+  getHostInfo,
+  usableRemoteOrigins,
   getSetupStatus,
   indexSetupLibrary,
   isValid,
@@ -9,7 +11,9 @@ import {
   logout as logoutRequest,
   register,
   startDevicePairing,
+  switchProfile as switchProfileRequest,
   type SetupStatus,
+  type SwitchProfileInput,
 } from "@parson/music-sdk";
 import * as Device from "expo-device";
 import {
@@ -45,9 +49,22 @@ import {
   setSecureItem,
 } from "@/lib/secure-storage";
 import {
+  forgetLibrary as forgetKnownLibrary,
+  isRemoteRoute,
+  isTrustedRoute,
+  libraryRoutes,
+  parseKnownLibraries,
+  pickReachableRoute,
+  rememberLibrary,
+  setRemoteOrigins,
+  touchLibrary,
+  type KnownLibrary,
+} from "@/lib/known-libraries";
+import {
   accountKey,
   parseStoredAccounts,
   renameStoredAccount,
+  replaceSwitchedAccount,
   upsertStoredAccount,
   type StoredAccount,
 } from "@/lib/saved-accounts";
@@ -58,6 +75,7 @@ const REFRESH_TOKEN_KEY = "parson.refresh-token";
 const INSTANCE_KEY = "parson.instance-id";
 const LIBRARY_KEY = "parson.library-name";
 const ACCOUNTS_KEY = "parson.saved-accounts";
+const LIBRARIES_KEY = "parson.known-libraries";
 
 export type SessionPhase =
   | "loading"
@@ -79,6 +97,15 @@ type SessionContextValue = {
   origin: string | null;
   pairing: { code: string; expiresAt: number } | null;
   savedAccounts: { current: boolean; key: string; username: string }[];
+  /** Every library this phone has used, most recent first. */
+  knownLibraries: KnownLibrary[];
+  /**
+   * `home` on the library's home-network address, `away` on one of its
+   * away-from-home addresses (VPN, the owner's address, a port forward).
+   */
+  connectionRoute: "home" | "away" | null;
+  /** Instance ids of every saved account (one entry per account). */
+  accountLibraryIds: string[];
   phase: SessionPhase;
   setupStatus: SetupStatus | null;
   connect: (origin: string, manifest?: DiscoveryManifest) => Promise<boolean>;
@@ -89,8 +116,19 @@ type SessionContextValue = {
   login: (username: string, password: string) => Promise<boolean>;
   startPairing: () => Promise<void>;
   switchAccount: (key: string) => Promise<boolean>;
+  /** Switches this device to another profile on the same server. */
+  switchProfile: (
+    id: number,
+    input?: SwitchProfileInput,
+  ) => Promise<{ ok: boolean; message?: string }>;
   logout: () => Promise<void>;
   changeServer: () => Promise<void>;
+  /**
+   * Moves to another library without signing out of this one, signing in
+   * with that library's most recent saved account when there is one.
+   */
+  switchLibrary: (origin: string) => Promise<boolean>;
+  forgetLibrary: (instanceId: string) => Promise<void>;
   changeUsername: (
     username: string,
     currentPassword: string,
@@ -103,9 +141,12 @@ type SessionContextValue = {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-async function readManifest(origin: string): Promise<DiscoveryManifest> {
+async function readManifest(
+  origin: string,
+  timeoutMs = 8_000,
+): Promise<DiscoveryManifest> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${origin}/.well-known/parson`, {
       headers: { Accept: "application/json" },
@@ -135,6 +176,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     expiresAt: number;
   } | null>(null);
   const [storedAccounts, setStoredAccounts] = useState<StoredAccount[]>([]);
+  const [knownLibraries, setKnownLibraries] = useState<KnownLibrary[]>([]);
+  const knownLibrariesRef = useRef<KnownLibrary[]>([]);
   const [serverReplacementPending, setServerReplacementPending] =
     useState(false);
   const generation = useRef(0);
@@ -158,6 +201,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
     storedAccountsRef.current = accounts;
     setStoredAccounts(accounts);
     void setSecureItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  }, []);
+
+  const replaceKnownLibraries = useCallback((libraries: KnownLibrary[]) => {
+    knownLibrariesRef.current = libraries;
+    setKnownLibraries(libraries);
+    void setSecureItem(LIBRARIES_KEY, JSON.stringify(libraries));
   }, []);
 
   const updateStoredAccountToken = useCallback(
@@ -294,7 +343,26 @@ export function SessionProvider({ children }: PropsWithChildren) {
         }
         const setup = await getSetupStatus(`${nextOrigin}/api/v1`);
         if (currentGeneration !== generation.current) return false;
-        if (serverIdentityChanged(previousServer, nextIdentity)) {
+        // Moving between a library's own addresses (home network and the
+        // away-from-home addresses that server handed out) keeps the
+        // sign-in; any other change of address signs out.
+        const sameLibraryRoute =
+          previousServer.instanceId === manifest.instanceId &&
+          isTrustedRoute(
+            knownLibrariesRef.current,
+            manifest.instanceId,
+            nextOrigin,
+          ) &&
+          (!previousServer.origin ||
+            isTrustedRoute(
+              knownLibrariesRef.current,
+              manifest.instanceId,
+              previousServer.origin,
+            ));
+        if (
+          serverIdentityChanged(previousServer, nextIdentity) &&
+          !sameLibraryRoute
+        ) {
           await clearAuthentication();
           if (currentGeneration !== generation.current) return false;
         }
@@ -310,6 +378,18 @@ export function SessionProvider({ children }: PropsWithChildren) {
           setSecureItem(INSTANCE_KEY, manifest.instanceId),
           setSecureItem(LIBRARY_KEY, manifest.name),
         ]);
+        const known = knownLibrariesRef.current.find(
+          (library) => library.instanceId === manifest.instanceId,
+        );
+        replaceKnownLibraries(
+          isRemoteRoute(known, nextOrigin)
+            ? touchLibrary(knownLibrariesRef.current, manifest.instanceId)
+            : rememberLibrary(knownLibrariesRef.current, {
+                instanceId: manifest.instanceId,
+                origin: nextOrigin,
+                name: manifest.name,
+              }),
+        );
         await resolveSetup(setup, currentGeneration);
         return true;
       } catch (cause) {
@@ -318,20 +398,47 @@ export function SessionProvider({ children }: PropsWithChildren) {
           cause instanceof Error
             ? cause.message
             : "Could not reach that library.";
-        console.error("Could not connect to Parson library", cause);
+        console.error("Could not connect to Mujin Music library", cause);
         setError(message);
         await hydrateDownloads();
         setPhase(downloadedRecords().length ? "offline" : "discovering");
         return false;
       }
     },
-    [clearAuthentication, resolveSetup],
+    [clearAuthentication, replaceKnownLibraries, resolveSetup],
+  );
+
+  /**
+   * Connects to a saved library by whichever of its addresses answers: the
+   * home address at home, Tailscale or the owner's address away from home.
+   */
+  const connectBest = useCallback(
+    async (target: string) => {
+      const library = knownLibrariesRef.current.find((item) =>
+        libraryRoutes(item).includes(target),
+      );
+      if (!library?.remoteOrigins?.length) return connect(target);
+      const routes = [
+        target,
+        ...libraryRoutes(library).filter((route) => route !== target),
+      ];
+      const route = await pickReachableRoute(
+        routes,
+        library.instanceId,
+        async (candidate) => {
+          const manifest = await readManifest(candidate, 4_000);
+          return { instanceId: manifest.instanceId, manifest };
+        },
+      );
+      return route ? connect(route.origin, route.manifest) : connect(target);
+    },
+    [connect],
   );
 
   const retry = useCallback(async () => {
-    if (origin) await connect(origin);
+    if (origin) await connectBest(origin);
     else setPhase("discovering");
-  }, [connect, origin]);
+  }, [connectBest, origin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -343,6 +450,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         savedInstance,
         savedLibrary,
         savedAccounts,
+        savedLibraries,
       ] = await Promise.all([
         getSecureItem(SERVER_KEY),
         getSecureItem(TOKEN_KEY),
@@ -350,8 +458,20 @@ export function SessionProvider({ children }: PropsWithChildren) {
         getSecureItem(INSTANCE_KEY),
         getSecureItem(LIBRARY_KEY),
         getSecureItem(ACCOUNTS_KEY),
+        getSecureItem(LIBRARIES_KEY),
       ]);
       if (cancelled) return;
+      let libraries = parseKnownLibraries(savedLibraries);
+      if (!libraries.length && savedOrigin && savedInstance && savedLibrary) {
+        // Upgrading from a version that only remembered one library.
+        libraries = rememberLibrary([], {
+          instanceId: savedInstance,
+          origin: savedOrigin,
+          name: savedLibrary,
+        });
+      }
+      knownLibrariesRef.current = libraries;
+      setKnownLibraries(libraries);
       const accounts = parseStoredAccounts(savedAccounts);
       storedAccountsRef.current = accounts;
       setStoredAccounts(accounts);
@@ -375,7 +495,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       if (cancelled) return;
       if (downloadedRecords().length) {
         if (
-          !(await connect(savedOrigin)) &&
+          !(await connectBest(savedOrigin)) &&
           !cancelled &&
           !pendingServerReplacement.current
         )
@@ -383,7 +503,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
         return;
       }
       for (let attempt = 0; attempt < 8 && !cancelled; attempt += 1) {
-        if (await connect(savedOrigin)) return;
+        if (await connectBest(savedOrigin)) return;
         if (pendingServerReplacement.current) return;
         if (attempt < 7)
           await new Promise((resolve) => setTimeout(resolve, 750));
@@ -392,7 +512,31 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
     };
-  }, [connect]);
+  }, [connectBest]);
+
+  // Once signed in, learn this library's away-from-home addresses from the
+  // server itself (an authenticated answer), so the app can switch to them
+  // when the home network is out of reach.
+  useEffect(() => {
+    if (Platform.OS === "web" || phase !== "ready" || !instanceId) return;
+    let active = true;
+    void getHostInfo()
+      .then((info) => {
+        if (!active || !info || info.instanceId !== instanceId) return;
+        const next = setRemoteOrigins(
+          knownLibrariesRef.current,
+          instanceId,
+          usableRemoteOrigins(info),
+        );
+        if (next !== knownLibrariesRef.current) replaceKnownLibraries(next);
+      })
+      .catch(() => {
+        // Older servers have no host endpoint; nothing to learn.
+      });
+    return () => {
+      active = false;
+    };
+  }, [instanceId, phase, replaceKnownLibraries]);
 
   useEffect(() => {
     if (
@@ -553,6 +697,72 @@ export function SessionProvider({ children }: PropsWithChildren) {
       }
     },
     [instanceId, origin, queryClient, storeNativeAuthentication],
+  );
+
+  const switchProfile = useCallback(
+    async (id: number, input: SwitchProfileInput = {}) => {
+      if (userOperationInFlight.current)
+        return { ok: false, message: "Another change is in progress." };
+      userOperationInFlight.current = true;
+      const previous = claims;
+      try {
+        const native = Platform.OS !== "web";
+        const response = await switchProfileRequest(id, input, { native });
+        if (!response.status || !response.claims) {
+          return {
+            ok: false,
+            message: response.message || "Could not switch profiles.",
+          };
+        }
+        if (native) {
+          if (!response.access_token) {
+            return { ok: false, message: "Could not switch profiles." };
+          }
+          await storeNativeAuthentication(
+            response.access_token,
+            response.refresh_token,
+          );
+          if (instanceId && origin && previous) {
+            activeAccountRef.current = { instanceId, sub: response.claims.sub };
+            replaceStoredAccounts(
+              replaceSwitchedAccount(
+                storedAccountsRef.current,
+                { instanceId, sub: previous.sub },
+                {
+                  accessToken: response.access_token,
+                  instanceId,
+                  origin,
+                  refreshToken: response.refresh_token || null,
+                  sub: response.claims.sub,
+                  username: response.claims.username,
+                },
+              ),
+            );
+          }
+        }
+        setClaims(response.claims);
+        setTimeout(() => queryClient.clear(), 0);
+        return { ok: true };
+      } catch (cause) {
+        return {
+          ok: false,
+          message:
+            cause instanceof Error
+              ? cause.message
+              : "Could not switch profiles.",
+        };
+      } finally {
+        userOperationInFlight.current = false;
+      }
+    },
+    [
+      claims,
+      instanceId,
+      origin,
+      queryClient,
+      replaceStoredAccounts,
+      storeNativeAuthentication,
+    ],
   );
 
   const startPairing = useCallback(async () => {
@@ -840,6 +1050,67 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setTimeout(() => queryClient.clear(), 0);
   }, [clearAuthentication, queryClient]);
 
+  const switchLibrary = useCallback(
+    async (target: string) => {
+      if (userOperationInFlight.current) return false;
+      if (!(await connectBest(target))) return false;
+      const identity = serverIdentity.current;
+      const account = storedAccountsRef.current.find(
+        (item) =>
+          item.instanceId === identity.instanceId &&
+          (item.origin === identity.origin ||
+            (identity.instanceId !== null &&
+              isTrustedRoute(
+                knownLibrariesRef.current,
+                identity.instanceId,
+                item.origin,
+              ))),
+      );
+      if (!account) return true;
+      const expectedGeneration = generation.current;
+      userOperationInFlight.current = true;
+      try {
+        await storeNativeAuthentication(
+          account.accessToken,
+          account.refreshToken,
+        );
+        activeAccountRef.current = {
+          instanceId: account.instanceId,
+          sub: account.sub,
+        };
+        const restored = await isValid();
+        if (expectedGeneration !== generation.current) return false;
+        if (restored.status && restored.claims) {
+          setClaims(restored.claims);
+          setError(null);
+          setPhase("ready");
+          setTimeout(() => queryClient.clear(), 0);
+        }
+        return true;
+      } catch {
+        // The library is connected; the user can pick or pair an account.
+        return true;
+      } finally {
+        userOperationInFlight.current = false;
+      }
+    },
+    [connectBest, queryClient, storeNativeAuthentication],
+  );
+
+  const forgetLibrary = useCallback(
+    async (target: string) => {
+      replaceKnownLibraries(
+        forgetKnownLibrary(knownLibrariesRef.current, target),
+      );
+      replaceStoredAccounts(
+        storedAccountsRef.current.filter(
+          (account) => account.instanceId !== target,
+        ),
+      );
+    },
+    [replaceKnownLibraries, replaceStoredAccounts],
+  );
+
   const value = useMemo<SessionContextValue>(
     () => ({
       claims,
@@ -851,16 +1122,33 @@ export function SessionProvider({ children }: PropsWithChildren) {
       savedAccounts: storedAccounts
         .filter(
           (account) =>
-            account.instanceId === instanceId && account.origin === origin,
+            account.instanceId === instanceId &&
+            (account.origin === origin ||
+              isTrustedRoute(knownLibraries, instanceId, account.origin)),
         )
         .map((account) => ({
           current: account.sub === claims?.sub,
           key: accountKey(account),
           username: account.username,
         })),
+      knownLibraries,
+      connectionRoute:
+        origin && instanceId
+          ? isRemoteRoute(
+              knownLibraries.find(
+                (library) => library.instanceId === instanceId,
+              ),
+              origin,
+            )
+            ? "away"
+            : "home"
+          : null,
+      accountLibraryIds: storedAccounts.map((account) => account.instanceId),
       phase,
       setupStatus,
       cancelPairing,
+      forgetLibrary,
+      switchLibrary,
       cancelServerReplacement,
       changeServer,
       changeUsername,
@@ -871,6 +1159,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       retry,
       startPairing,
       switchAccount,
+      switchProfile,
       updateBitrate,
       setupAccount,
       setupLibrary,
@@ -885,7 +1174,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
       confirmServerReplacement,
       connect,
       error,
+      forgetLibrary,
       instanceId,
+      knownLibraries,
       libraryName,
       login,
       logout,
@@ -896,6 +1187,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
       startPairing,
       storedAccounts,
       switchAccount,
+      switchLibrary,
+      switchProfile,
       updateBitrate,
       setupAccount,
       setupLibrary,

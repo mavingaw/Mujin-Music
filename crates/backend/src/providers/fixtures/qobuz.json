@@ -1,0 +1,3371 @@
+[
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/user/login",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "user": {
+            "id": 2468013,
+            "login": "recorded-qobuz",
+            "display_name": "Recorded Listener",
+            "country_code": "FR",
+            "credential": {
+              "id": 1,
+              "label": "Studio",
+              "parameters": {
+                "short_label": "Studio",
+                "hires_streaming": true
+              }
+            }
+          },
+          "user_auth_token": "recorded-user-auth-token"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/catalog/search",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "query": "",
+          "albums": {
+            "limit": 10,
+            "offset": 0,
+            "total": 4,
+            "items": [
+              {
+                "id": "q0glassorch01",
+                "title": "Glass Orchard",
+                "version": null,
+                "artist": {
+                  "id": 51001,
+                  "name": "Ilse Marten",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                },
+                "release_date_original": "2025-02-14",
+                "tracks_count": 3,
+                "duration": 823,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Nordlicht Records"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Classical"
+                },
+                "copyright": "(P) 2025 Nordlicht Records",
+                "url": "https://www.qobuz.com/gb-en/album/q0glassorch01"
+              },
+              {
+                "id": "q0brasslate02",
+                "title": "Brass for Late Trains",
+                "version": null,
+                "artist": {
+                  "id": 51002,
+                  "name": "Northbound Brass",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                },
+                "release_date_original": "2020-10-02",
+                "tracks_count": 4,
+                "duration": 1043,
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Platform 9 Music"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Jazz"
+                },
+                "copyright": "(P) 2020 Platform 9 Music",
+                "url": "https://www.qobuz.com/gb-en/album/q0brasslate02"
+              },
+              {
+                "id": "q0kiteskana03",
+                "title": "Kites Over Kanazawa",
+                "version": null,
+                "artist": {
+                  "id": 51003,
+                  "name": "Sora Ueda",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                },
+                "release_date_original": "2024-06-21",
+                "tracks_count": 3,
+                "duration": 893,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Hoshi Label"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Ambient"
+                },
+                "copyright": "(P) 2024 Hoshi Label",
+                "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03"
+              },
+              {
+                "id": "q0harborhr04",
+                "title": "Harbor Lights",
+                "version": null,
+                "artist": {
+                  "id": 51004,
+                  "name": "Mara Vell",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                },
+                "release_date_original": "2024-03-08",
+                "tracks_count": 4,
+                "duration": 1014,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Tideline"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Pop/Rock"
+                },
+                "copyright": "(P) 2024 Tideline",
+                "url": "https://www.qobuz.com/gb-en/album/q0harborhr04"
+              }
+            ]
+          },
+          "tracks": {
+            "limit": 10,
+            "offset": 0,
+            "total": 14,
+            "items": [
+              {
+                "id": 7700001,
+                "title": "I. Bloom",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 274,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700001",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700002,
+                "title": "II. Frost on the Panes",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 231,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700002",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700003,
+                "title": "III. Harvest",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 318,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700003",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700101,
+                "title": "Departure Board",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 212,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700101",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700102,
+                "title": "Sleeper Car",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 288,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700102",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700103,
+                "title": "Signal Fault",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 199,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700103",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700104,
+                "title": "Terminus",
+                "version": null,
+                "track_number": 4,
+                "media_number": 1,
+                "duration": 344,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700104",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700201,
+                "title": "Morning Market",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 255,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700201",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700202,
+                "title": "Kenroku-en",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 402,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700202",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700203,
+                "title": "Paper Kites",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 236,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700203",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700301,
+                "title": "Harbor Lights",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 241,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700301",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700302,
+                "title": "Salt in the Wiring",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 198,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700302",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700303,
+                "title": "Kept the Porch Light On",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 263,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700303",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700304,
+                "title": "Breakwater",
+                "version": null,
+                "track_number": 4,
+                "media_number": 1,
+                "duration": 312,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700304",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          },
+          "artists": {
+            "limit": 10,
+            "offset": 0,
+            "total": 4,
+            "items": [
+              {
+                "id": 51001,
+                "name": "Ilse Marten",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51001.jpg"
+                }
+              },
+              {
+                "id": 51002,
+                "name": "Northbound Brass",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51002.jpg"
+                }
+              },
+              {
+                "id": 51003,
+                "name": "Sora Ueda",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51003.jpg"
+                }
+              },
+              {
+                "id": 51004,
+                "name": "Mara Vell",
+                "image": {
+                  "large": "https://static.qobuz.com/images/artists/51004.jpg"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": "q0glassorch01",
+          "title": "Glass Orchard",
+          "version": null,
+          "artist": {
+            "id": 51001,
+            "name": "Ilse Marten",
+            "albums_count": 1
+          },
+          "artists": [
+            {
+              "id": 51001,
+              "name": "Ilse Marten",
+              "roles": ["main-artist"]
+            }
+          ],
+          "image": {
+            "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+            "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+            "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+          },
+          "release_date_original": "2025-02-14",
+          "tracks_count": 3,
+          "duration": 823,
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "label": {
+            "id": 1,
+            "name": "Nordlicht Records"
+          },
+          "genre": {
+            "id": 1,
+            "name": "Classical"
+          },
+          "copyright": "(P) 2025 Nordlicht Records",
+          "url": "https://www.qobuz.com/gb-en/album/q0glassorch01",
+          "tracks": {
+            "offset": 0,
+            "limit": 100,
+            "total": 3,
+            "items": [
+              {
+                "id": 7700001,
+                "title": "I. Bloom",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 274,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700001",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Ilse Marten, MainArtist - Ilse Marten, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700002,
+                "title": "II. Frost on the Panes",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 231,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700002",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Ilse Marten, MainArtist - Ilse Marten, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700003,
+                "title": "III. Harvest",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 318,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700003",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Ilse Marten, MainArtist - Ilse Marten, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              }
+            ]
+          },
+          "description": "<p>Ilse Marten&rsquo;s <strong>Glass Orchard</strong> is a three-movement suite recorded in 24-bit/192 kHz.</p><p>The sandbox description stands in for Qobuz&rsquo;s own editorial text.</p>",
+          "awards": [
+            {
+              "name": "Qobuzissime",
+              "awarded_at": 1739500000,
+              "publication_name": "Qobuz"
+            }
+          ]
+        }
+      }
+    ],
+    "query": [["album_id", "q0glassorch01"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": "q0brasslate02",
+          "title": "Brass for Late Trains",
+          "version": null,
+          "artist": {
+            "id": 51002,
+            "name": "Northbound Brass",
+            "albums_count": 1
+          },
+          "artists": [
+            {
+              "id": 51002,
+              "name": "Northbound Brass",
+              "roles": ["main-artist"]
+            }
+          ],
+          "image": {
+            "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+            "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+            "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+          },
+          "release_date_original": "2020-10-02",
+          "tracks_count": 4,
+          "duration": 1043,
+          "maximum_bit_depth": 16,
+          "maximum_sampling_rate": 44.1,
+          "hires": false,
+          "hires_streamable": false,
+          "streamable": true,
+          "parental_warning": false,
+          "label": {
+            "id": 1,
+            "name": "Platform 9 Music"
+          },
+          "genre": {
+            "id": 1,
+            "name": "Jazz"
+          },
+          "copyright": "(P) 2020 Platform 9 Music",
+          "url": "https://www.qobuz.com/gb-en/album/q0brasslate02",
+          "tracks": {
+            "offset": 0,
+            "limit": 100,
+            "total": 4,
+            "items": [
+              {
+                "id": 7700101,
+                "title": "Departure Board",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 212,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700101",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700102,
+                "title": "Sleeper Car",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 288,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700102",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700103,
+                "title": "Signal Fault",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 199,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700103",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700104,
+                "title": "Terminus",
+                "version": null,
+                "track_number": 4,
+                "media_number": 1,
+                "duration": 344,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700104",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Northbound Brass, MainArtist - Northbound Brass, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              }
+            ]
+          },
+          "awards": []
+        }
+      }
+    ],
+    "query": [["album_id", "q0brasslate02"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": "q0kiteskana03",
+          "title": "Kites Over Kanazawa",
+          "version": null,
+          "artist": {
+            "id": 51003,
+            "name": "Sora Ueda",
+            "albums_count": 1
+          },
+          "artists": [
+            {
+              "id": 51003,
+              "name": "Sora Ueda",
+              "roles": ["main-artist"]
+            }
+          ],
+          "image": {
+            "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+            "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+            "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+          },
+          "release_date_original": "2024-06-21",
+          "tracks_count": 3,
+          "duration": 893,
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 96.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "label": {
+            "id": 1,
+            "name": "Hoshi Label"
+          },
+          "genre": {
+            "id": 1,
+            "name": "Ambient"
+          },
+          "copyright": "(P) 2024 Hoshi Label",
+          "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03",
+          "tracks": {
+            "offset": 0,
+            "limit": 100,
+            "total": 3,
+            "items": [
+              {
+                "id": 7700201,
+                "title": "Morning Market",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 255,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700201",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Sora Ueda, MainArtist - Sora Ueda, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700202,
+                "title": "Kenroku-en",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 402,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700202",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Sora Ueda, MainArtist - Sora Ueda, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700203,
+                "title": "Paper Kites",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 236,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700203",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Sora Ueda, MainArtist - Sora Ueda, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              }
+            ]
+          },
+          "awards": []
+        }
+      }
+    ],
+    "query": [["album_id", "q0kiteskana03"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": "q0harborhr04",
+          "title": "Harbor Lights",
+          "version": null,
+          "artist": {
+            "id": 51004,
+            "name": "Mara Vell",
+            "albums_count": 1
+          },
+          "artists": [
+            {
+              "id": 51004,
+              "name": "Mara Vell",
+              "roles": ["main-artist"]
+            }
+          ],
+          "image": {
+            "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+            "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+            "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+          },
+          "release_date_original": "2024-03-08",
+          "tracks_count": 4,
+          "duration": 1014,
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "label": {
+            "id": 1,
+            "name": "Tideline"
+          },
+          "genre": {
+            "id": 1,
+            "name": "Pop/Rock"
+          },
+          "copyright": "(P) 2024 Tideline",
+          "url": "https://www.qobuz.com/gb-en/album/q0harborhr04",
+          "tracks": {
+            "offset": 0,
+            "limit": 100,
+            "total": 4,
+            "items": [
+              {
+                "id": 7700301,
+                "title": "Harbor Lights",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 241,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700301",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700302,
+                "title": "Salt in the Wiring",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 198,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700302",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700303,
+                "title": "Kept the Porch Light On",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 263,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700303",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              },
+              {
+                "id": 7700304,
+                "title": "Breakwater",
+                "version": null,
+                "track_number": 4,
+                "media_number": 1,
+                "duration": 312,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700304",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "performers": "Mara Vell, MainArtist - Mara Vell, Composer - Ines Calder, Producer - Theo Barras, Mixing Engineer, Mastering Engineer"
+              }
+            ]
+          },
+          "description": "<p>The Qobuz edition of <em>Harbor Lights</em>, in 24-bit/96 kHz.</p>",
+          "awards": []
+        }
+      }
+    ],
+    "query": [["album_id", "q0harborhr04"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 51001,
+          "name": "Ilse Marten",
+          "image": {
+            "large": "https://static.qobuz.com/images/artists/51001.jpg"
+          },
+          "biography": {
+            "summary": "",
+            "content": "<p>Ilse Marten is a fictional composer whose chamber works open the Mujin Music sandbox.</p>",
+            "source": "Mujin Music sandbox"
+          },
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0glassorch01",
+                "title": "Glass Orchard",
+                "version": null,
+                "artist": {
+                  "id": 51001,
+                  "name": "Ilse Marten",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                },
+                "release_date_original": "2025-02-14",
+                "tracks_count": 3,
+                "duration": 823,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Nordlicht Records"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Classical"
+                },
+                "copyright": "(P) 2025 Nordlicht Records",
+                "url": "https://www.qobuz.com/gb-en/album/q0glassorch01"
+              }
+            ]
+          },
+          "tracks": {
+            "offset": 0,
+            "limit": 10,
+            "total": 3,
+            "items": [
+              {
+                "id": 7700001,
+                "title": "I. Bloom",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 274,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700001",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700002,
+                "title": "II. Frost on the Panes",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 231,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700002",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700003,
+                "title": "III. Harvest",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 318,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700003",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "query": [["artist_id", "51001"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 51002,
+          "name": "Northbound Brass",
+          "image": {
+            "large": "https://static.qobuz.com/images/artists/51002.jpg"
+          },
+          "biography": {
+            "summary": "",
+            "content": "<p>Northbound Brass is a fictional nine-piece brass band.</p>",
+            "source": "Mujin Music sandbox"
+          },
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0brasslate02",
+                "title": "Brass for Late Trains",
+                "version": null,
+                "artist": {
+                  "id": 51002,
+                  "name": "Northbound Brass",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                },
+                "release_date_original": "2020-10-02",
+                "tracks_count": 4,
+                "duration": 1043,
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Platform 9 Music"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Jazz"
+                },
+                "copyright": "(P) 2020 Platform 9 Music",
+                "url": "https://www.qobuz.com/gb-en/album/q0brasslate02"
+              }
+            ]
+          },
+          "tracks": {
+            "offset": 0,
+            "limit": 10,
+            "total": 3,
+            "items": [
+              {
+                "id": 7700101,
+                "title": "Departure Board",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 212,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700101",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700102,
+                "title": "Sleeper Car",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 288,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700102",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700103,
+                "title": "Signal Fault",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 199,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700103",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700104,
+                "title": "Terminus",
+                "version": null,
+                "track_number": 4,
+                "media_number": 1,
+                "duration": 344,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700104",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "query": [["artist_id", "51002"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 51003,
+          "name": "Sora Ueda",
+          "image": {
+            "large": "https://static.qobuz.com/images/artists/51003.jpg"
+          },
+          "biography": {
+            "summary": "",
+            "content": "<p>Sora Ueda is a fictional pianist from Kanazawa.</p>",
+            "source": "Mujin Music sandbox"
+          },
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0kiteskana03",
+                "title": "Kites Over Kanazawa",
+                "version": null,
+                "artist": {
+                  "id": 51003,
+                  "name": "Sora Ueda",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                },
+                "release_date_original": "2024-06-21",
+                "tracks_count": 3,
+                "duration": 893,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Hoshi Label"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Ambient"
+                },
+                "copyright": "(P) 2024 Hoshi Label",
+                "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03"
+              }
+            ]
+          },
+          "tracks": {
+            "offset": 0,
+            "limit": 10,
+            "total": 3,
+            "items": [
+              {
+                "id": 7700201,
+                "title": "Morning Market",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 255,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700201",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700202,
+                "title": "Kenroku-en",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 402,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700202",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700203,
+                "title": "Paper Kites",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 236,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700203",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "query": [["artist_id", "51003"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/artist/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 51004,
+          "name": "Mara Vell",
+          "image": {
+            "large": "https://static.qobuz.com/images/artists/51004.jpg"
+          },
+          "biography": {
+            "summary": "",
+            "content": "<p>Mara Vell is a fictional songwriter, on Qobuz as on TIDAL.</p>",
+            "source": "Mujin Music sandbox"
+          },
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0harborhr04",
+                "title": "Harbor Lights",
+                "version": null,
+                "artist": {
+                  "id": 51004,
+                  "name": "Mara Vell",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                },
+                "release_date_original": "2024-03-08",
+                "tracks_count": 4,
+                "duration": 1014,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Tideline"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Pop/Rock"
+                },
+                "copyright": "(P) 2024 Tideline",
+                "url": "https://www.qobuz.com/gb-en/album/q0harborhr04"
+              }
+            ]
+          },
+          "tracks": {
+            "offset": 0,
+            "limit": 10,
+            "total": 3,
+            "items": [
+              {
+                "id": 7700301,
+                "title": "Harbor Lights",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 241,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700301",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700302,
+                "title": "Salt in the Wiring",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 198,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700302",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700303,
+                "title": "Kept the Porch Light On",
+                "version": null,
+                "track_number": 3,
+                "media_number": 1,
+                "duration": 263,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700303",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700304,
+                "title": "Breakwater",
+                "version": null,
+                "track_number": 4,
+                "media_number": 1,
+                "duration": 312,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700304",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "query": [["artist_id", "51004"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700001,
+          "title": "I. Bloom",
+          "version": null,
+          "track_number": 1,
+          "media_number": 1,
+          "duration": 274,
+          "performer": {
+            "id": 51001,
+            "name": "Ilse Marten"
+          },
+          "isrc": "FRQBZ7700001",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0glassorch01",
+            "title": "Glass Orchard",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+            },
+            "artist": {
+              "id": 51001,
+              "name": "Ilse Marten",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700001"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700002,
+          "title": "II. Frost on the Panes",
+          "version": null,
+          "track_number": 2,
+          "media_number": 1,
+          "duration": 231,
+          "performer": {
+            "id": 51001,
+            "name": "Ilse Marten"
+          },
+          "isrc": "FRQBZ7700002",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0glassorch01",
+            "title": "Glass Orchard",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+            },
+            "artist": {
+              "id": 51001,
+              "name": "Ilse Marten",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700002"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700003,
+          "title": "III. Harvest",
+          "version": null,
+          "track_number": 3,
+          "media_number": 1,
+          "duration": 318,
+          "performer": {
+            "id": 51001,
+            "name": "Ilse Marten"
+          },
+          "isrc": "FRQBZ7700003",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0glassorch01",
+            "title": "Glass Orchard",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+            },
+            "artist": {
+              "id": 51001,
+              "name": "Ilse Marten",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700003"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700101,
+          "title": "Departure Board",
+          "version": null,
+          "track_number": 1,
+          "media_number": 1,
+          "duration": 212,
+          "performer": {
+            "id": 51002,
+            "name": "Northbound Brass"
+          },
+          "isrc": "FRQBZ7700101",
+          "maximum_bit_depth": 16,
+          "maximum_sampling_rate": 44.1,
+          "hires": false,
+          "hires_streamable": false,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0brasslate02",
+            "title": "Brass for Late Trains",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+            },
+            "artist": {
+              "id": 51002,
+              "name": "Northbound Brass",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700101"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700102,
+          "title": "Sleeper Car",
+          "version": null,
+          "track_number": 2,
+          "media_number": 1,
+          "duration": 288,
+          "performer": {
+            "id": 51002,
+            "name": "Northbound Brass"
+          },
+          "isrc": "FRQBZ7700102",
+          "maximum_bit_depth": 16,
+          "maximum_sampling_rate": 44.1,
+          "hires": false,
+          "hires_streamable": false,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0brasslate02",
+            "title": "Brass for Late Trains",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+            },
+            "artist": {
+              "id": 51002,
+              "name": "Northbound Brass",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700102"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700103,
+          "title": "Signal Fault",
+          "version": null,
+          "track_number": 3,
+          "media_number": 1,
+          "duration": 199,
+          "performer": {
+            "id": 51002,
+            "name": "Northbound Brass"
+          },
+          "isrc": "FRQBZ7700103",
+          "maximum_bit_depth": 16,
+          "maximum_sampling_rate": 44.1,
+          "hires": false,
+          "hires_streamable": false,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0brasslate02",
+            "title": "Brass for Late Trains",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+            },
+            "artist": {
+              "id": 51002,
+              "name": "Northbound Brass",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700103"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700104,
+          "title": "Terminus",
+          "version": null,
+          "track_number": 4,
+          "media_number": 1,
+          "duration": 344,
+          "performer": {
+            "id": 51002,
+            "name": "Northbound Brass"
+          },
+          "isrc": "FRQBZ7700104",
+          "maximum_bit_depth": 16,
+          "maximum_sampling_rate": 44.1,
+          "hires": false,
+          "hires_streamable": false,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0brasslate02",
+            "title": "Brass for Late Trains",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+            },
+            "artist": {
+              "id": 51002,
+              "name": "Northbound Brass",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700104"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700201,
+          "title": "Morning Market",
+          "version": null,
+          "track_number": 1,
+          "media_number": 1,
+          "duration": 255,
+          "performer": {
+            "id": 51003,
+            "name": "Sora Ueda"
+          },
+          "isrc": "FRQBZ7700201",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 96.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0kiteskana03",
+            "title": "Kites Over Kanazawa",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+            },
+            "artist": {
+              "id": 51003,
+              "name": "Sora Ueda",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700201"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700202,
+          "title": "Kenroku-en",
+          "version": null,
+          "track_number": 2,
+          "media_number": 1,
+          "duration": 402,
+          "performer": {
+            "id": 51003,
+            "name": "Sora Ueda"
+          },
+          "isrc": "FRQBZ7700202",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 96.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0kiteskana03",
+            "title": "Kites Over Kanazawa",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+            },
+            "artist": {
+              "id": 51003,
+              "name": "Sora Ueda",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700202"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700203,
+          "title": "Paper Kites",
+          "version": null,
+          "track_number": 3,
+          "media_number": 1,
+          "duration": 236,
+          "performer": {
+            "id": 51003,
+            "name": "Sora Ueda"
+          },
+          "isrc": "FRQBZ7700203",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 96.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0kiteskana03",
+            "title": "Kites Over Kanazawa",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+            },
+            "artist": {
+              "id": 51003,
+              "name": "Sora Ueda",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700203"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700301,
+          "title": "Harbor Lights",
+          "version": null,
+          "track_number": 1,
+          "media_number": 1,
+          "duration": 241,
+          "performer": {
+            "id": 51004,
+            "name": "Mara Vell"
+          },
+          "isrc": "FRQBZ7700301",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0harborhr04",
+            "title": "Harbor Lights",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+            },
+            "artist": {
+              "id": 51004,
+              "name": "Mara Vell",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700301"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700302,
+          "title": "Salt in the Wiring",
+          "version": null,
+          "track_number": 2,
+          "media_number": 1,
+          "duration": 198,
+          "performer": {
+            "id": 51004,
+            "name": "Mara Vell"
+          },
+          "isrc": "FRQBZ7700302",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0harborhr04",
+            "title": "Harbor Lights",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+            },
+            "artist": {
+              "id": 51004,
+              "name": "Mara Vell",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700302"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700303,
+          "title": "Kept the Porch Light On",
+          "version": null,
+          "track_number": 3,
+          "media_number": 1,
+          "duration": 263,
+          "performer": {
+            "id": 51004,
+            "name": "Mara Vell"
+          },
+          "isrc": "FRQBZ7700303",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0harborhr04",
+            "title": "Harbor Lights",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+            },
+            "artist": {
+              "id": 51004,
+              "name": "Mara Vell",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700303"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/get",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 7700304,
+          "title": "Breakwater",
+          "version": null,
+          "track_number": 4,
+          "media_number": 1,
+          "duration": 312,
+          "performer": {
+            "id": 51004,
+            "name": "Mara Vell"
+          },
+          "isrc": "FRQBZ7700304",
+          "maximum_bit_depth": 24,
+          "maximum_sampling_rate": 192.0,
+          "hires": true,
+          "hires_streamable": true,
+          "streamable": true,
+          "parental_warning": false,
+          "album": {
+            "id": "q0harborhr04",
+            "title": "Harbor Lights",
+            "image": {
+              "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+              "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+              "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+            },
+            "artist": {
+              "id": 51004,
+              "name": "Mara Vell",
+              "albums_count": 1
+            }
+          }
+        }
+      }
+    ],
+    "query": [["track_id", "7700304"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/album/getFeatured",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 4,
+            "items": [
+              {
+                "id": "q0glassorch01",
+                "title": "Glass Orchard",
+                "version": null,
+                "artist": {
+                  "id": 51001,
+                  "name": "Ilse Marten",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                },
+                "release_date_original": "2025-02-14",
+                "tracks_count": 3,
+                "duration": 823,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Nordlicht Records"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Classical"
+                },
+                "copyright": "(P) 2025 Nordlicht Records",
+                "url": "https://www.qobuz.com/gb-en/album/q0glassorch01"
+              },
+              {
+                "id": "q0brasslate02",
+                "title": "Brass for Late Trains",
+                "version": null,
+                "artist": {
+                  "id": 51002,
+                  "name": "Northbound Brass",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                },
+                "release_date_original": "2020-10-02",
+                "tracks_count": 4,
+                "duration": 1043,
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Platform 9 Music"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Jazz"
+                },
+                "copyright": "(P) 2020 Platform 9 Music",
+                "url": "https://www.qobuz.com/gb-en/album/q0brasslate02"
+              },
+              {
+                "id": "q0kiteskana03",
+                "title": "Kites Over Kanazawa",
+                "version": null,
+                "artist": {
+                  "id": 51003,
+                  "name": "Sora Ueda",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                },
+                "release_date_original": "2024-06-21",
+                "tracks_count": 3,
+                "duration": 893,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Hoshi Label"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Ambient"
+                },
+                "copyright": "(P) 2024 Hoshi Label",
+                "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03"
+              },
+              {
+                "id": "q0harborhr04",
+                "title": "Harbor Lights",
+                "version": null,
+                "artist": {
+                  "id": 51004,
+                  "name": "Mara Vell",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                },
+                "release_date_original": "2024-03-08",
+                "tracks_count": 4,
+                "duration": 1014,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Tideline"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Pop/Rock"
+                },
+                "copyright": "(P) 2024 Tideline",
+                "url": "https://www.qobuz.com/gb-en/album/q0harborhr04"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/favorite/getUserFavorites",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "albums": {
+            "offset": 0,
+            "limit": 50,
+            "total": 1,
+            "items": [
+              {
+                "id": "q0kiteskana03",
+                "title": "Kites Over Kanazawa",
+                "version": null,
+                "artist": {
+                  "id": 51003,
+                  "name": "Sora Ueda",
+                  "albums_count": 1
+                },
+                "artists": [
+                  {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "roles": ["main-artist"]
+                  }
+                ],
+                "image": {
+                  "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                  "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                  "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                },
+                "release_date_original": "2024-06-21",
+                "tracks_count": 3,
+                "duration": 893,
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "label": {
+                  "id": 1,
+                  "name": "Hoshi Label"
+                },
+                "genre": {
+                  "id": 1,
+                  "name": "Ambient"
+                },
+                "copyright": "(P) 2024 Hoshi Label",
+                "url": "https://www.qobuz.com/gb-en/album/q0kiteskana03"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "query": [["type", "albums"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/favorite/getUserFavorites",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "tracks": {
+            "offset": 0,
+            "limit": 50,
+            "total": 2,
+            "items": [
+              {
+                "id": 7700001,
+                "title": "I. Bloom",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 274,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700001",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700002,
+                "title": "II. Frost on the Panes",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 231,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700002",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "query": [["type", "tracks"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/favorite/create",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "status": "success"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/favorite/delete",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "status": "success"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/getFileUrl",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "track_id": 7700001,
+          "duration": 274,
+          "url": "https://streaming-qobuz-std.akamaized.test/file?uid=recorded&fmt=27",
+          "format_id": 27,
+          "mime_type": "audio/flac",
+          "sampling_rate": 192,
+          "bit_depth": 24,
+          "restrictions": []
+        }
+      }
+    ],
+    "query": [["format_id", "27"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/getFileUrl",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "track_id": 7700001,
+          "duration": 274,
+          "url": "https://streaming-qobuz-std.akamaized.test/file?uid=recorded&fmt=6",
+          "format_id": 6,
+          "mime_type": "audio/flac",
+          "sampling_rate": 44.1,
+          "bit_depth": 16,
+          "restrictions": [
+            {
+              "code": "FormatRestrictedByFormatAvailability"
+            }
+          ]
+        }
+      }
+    ],
+    "query": [["format_id", "6"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/track/getFileUrl",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "track_id": 7700001,
+          "duration": 30,
+          "url": "https://streaming-qobuz-sample.akamaized.test/sample",
+          "format_id": 5,
+          "mime_type": "audio/mpeg",
+          "sample": true,
+          "restrictions": [
+            {
+              "code": "UserUncredentialed"
+            }
+          ]
+        }
+      }
+    ],
+    "query": [["format_id", "5"]]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/playlist/getUserPlaylists",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "user": {
+            "id": 2468013,
+            "login": "recorded-qobuz"
+          },
+          "playlists": {
+            "offset": 0,
+            "limit": 50,
+            "total": 2,
+            "items": [
+              {
+                "id": 9100001,
+                "name": "Hi-Res Mornings",
+                "description": "Bright, unhurried, 24-bit.",
+                "owner": {
+                  "id": 2468013,
+                  "name": "Recorded Listener"
+                },
+                "tracks_count": 4,
+                "duration": 982,
+                "updated_at": 1792540800,
+                "created_at": 1792454400,
+                "is_public": false,
+                "images300": [
+                  "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg",
+                  "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg",
+                  "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg",
+                  "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                ],
+                "image_rectangle": [
+                  "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                ]
+              },
+              {
+                "id": 9100002,
+                "name": "Strings and Brass",
+                "description": "A Qobuz editors' selection.",
+                "owner": {
+                  "id": 1,
+                  "name": "Qobuz"
+                },
+                "tracks_count": 2,
+                "duration": 519,
+                "updated_at": 1790000000,
+                "created_at": 1789913600,
+                "is_public": true,
+                "images300": [
+                  "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg",
+                  "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                ],
+                "image_rectangle": [
+                  "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/playlist/get",
+    "query": [["playlist_id", "9100001"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 9100001,
+          "name": "Hi-Res Mornings",
+          "description": "Bright, unhurried, 24-bit.",
+          "owner": {
+            "id": 2468013,
+            "name": "Recorded Listener"
+          },
+          "tracks_count": 4,
+          "duration": 982,
+          "updated_at": 1792540800,
+          "created_at": 1792454400,
+          "is_public": false,
+          "images300": [
+            "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg",
+            "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg",
+            "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg",
+            "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+          ],
+          "image_rectangle": [
+            "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+          ],
+          "tracks": {
+            "offset": 0,
+            "limit": 500,
+            "total": 4,
+            "items": [
+              {
+                "id": 7700001,
+                "title": "I. Bloom",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 274,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700001",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700101,
+                "title": "Departure Board",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 212,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700101",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700201,
+                "title": "Morning Market",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 255,
+                "performer": {
+                  "id": 51003,
+                  "name": "Sora Ueda"
+                },
+                "isrc": "FRQBZ7700201",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 96.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0kiteskana03",
+                  "title": "Kites Over Kanazawa",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0kiteskana03_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0kiteskana03_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0kiteskana03_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51003,
+                    "name": "Sora Ueda",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700301,
+                "title": "Harbor Lights",
+                "version": null,
+                "track_number": 1,
+                "media_number": 1,
+                "duration": 241,
+                "performer": {
+                  "id": 51004,
+                  "name": "Mara Vell"
+                },
+                "isrc": "FRQBZ7700301",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0harborhr04",
+                  "title": "Harbor Lights",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0harborhr04_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0harborhr04_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0harborhr04_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51004,
+                    "name": "Mara Vell",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://www.qobuz.com/api.json/0.2/playlist/get",
+    "query": [["playlist_id", "9100002"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "id": 9100002,
+          "name": "Strings and Brass",
+          "description": "A Qobuz editors' selection.",
+          "owner": {
+            "id": 1,
+            "name": "Qobuz"
+          },
+          "tracks_count": 2,
+          "duration": 519,
+          "updated_at": 1790000000,
+          "created_at": 1789913600,
+          "is_public": true,
+          "images300": [
+            "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg",
+            "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+          ],
+          "image_rectangle": [
+            "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+          ],
+          "tracks": {
+            "offset": 0,
+            "limit": 500,
+            "total": 2,
+            "items": [
+              {
+                "id": 7700002,
+                "title": "II. Frost on the Panes",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 231,
+                "performer": {
+                  "id": 51001,
+                  "name": "Ilse Marten"
+                },
+                "isrc": "FRQBZ7700002",
+                "maximum_bit_depth": 24,
+                "maximum_sampling_rate": 192.0,
+                "hires": true,
+                "hires_streamable": true,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0glassorch01",
+                  "title": "Glass Orchard",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0glassorch01_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0glassorch01_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0glassorch01_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51001,
+                    "name": "Ilse Marten",
+                    "albums_count": 1
+                  }
+                }
+              },
+              {
+                "id": 7700102,
+                "title": "Sleeper Car",
+                "version": null,
+                "track_number": 2,
+                "media_number": 1,
+                "duration": 288,
+                "performer": {
+                  "id": 51002,
+                  "name": "Northbound Brass"
+                },
+                "isrc": "FRQBZ7700102",
+                "maximum_bit_depth": 16,
+                "maximum_sampling_rate": 44.1,
+                "hires": false,
+                "hires_streamable": false,
+                "streamable": true,
+                "parental_warning": false,
+                "album": {
+                  "id": "q0brasslate02",
+                  "title": "Brass for Late Trains",
+                  "image": {
+                    "small": "https://static.qobuz.com/images/covers/q0brasslate02_230.jpg",
+                    "thumbnail": "https://static.qobuz.com/images/covers/q0brasslate02_50.jpg",
+                    "large": "https://static.qobuz.com/images/covers/q0brasslate02_600.jpg"
+                  },
+                  "artist": {
+                    "id": 51002,
+                    "name": "Northbound Brass",
+                    "albums_count": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+]

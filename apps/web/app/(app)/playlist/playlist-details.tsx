@@ -2,7 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import PlaylistCover from "@/features/library/playlist-cover";
-import { usePlayer } from "@/features/player/player-context";
+import SmartPlaylistBanner from "@/features/library/focus/smart-playlist-banner";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import {
   deletePlaylist,
   getPlaylist,
@@ -172,7 +173,7 @@ function UserPlaylistDetails() {
       });
     },
   });
-  const player = usePlayer();
+  const playback = useZonePlayback();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState("");
@@ -203,24 +204,18 @@ function UserPlaylistDetails() {
     const queue = playlist.data?.songs ?? [];
     const selected = queue[index];
     if (!selected) return;
-    player.setQueue(
+    if (playback.currentSongId === selected.id) {
+      void playback.togglePlayPause();
+      return;
+    }
+    void playback.playQueue(
       queue.map((song) => ({
         song,
         artist: song.artist_object,
         album: song.album_object,
       })),
+      index,
     );
-    player.setCurrentSongIndex(index);
-    if (player.song.id === selected.id) {
-      player.togglePlayPause();
-      return;
-    }
-    player.setSongCallback(
-      selected,
-      selected.artist_object,
-      selected.album_object,
-    );
-    player.playAudioSource();
   };
   const shuffle = () => {
     const songs = playlist.data?.songs ?? [];
@@ -228,21 +223,13 @@ function UserPlaylistDetails() {
     const firstIndex = order[0];
     if (firstIndex === undefined) return;
     const shuffled = order.map((index) => songs[index]!);
-    const selected = shuffled[0]!;
-    player.setQueue(
+    void playback.playQueue(
       shuffled.map((song) => ({
         song,
         artist: song.artist_object,
         album: song.album_object,
       })),
     );
-    player.setCurrentSongIndex(0);
-    player.setSongCallback(
-      selected,
-      selected.artist_object,
-      selected.album_object,
-    );
-    player.playAudioSource();
   };
 
   if (!validId)
@@ -309,6 +296,9 @@ function UserPlaylistDetails() {
           </p>
         </div>
       </header>
+      {playlist.data.smart && (
+        <SmartPlaylistBanner playlistId={id} smart={playlist.data.smart} />
+      )}
 
       <PlaylistActions
         deleteOpen={deleteOpen}
@@ -328,8 +318,8 @@ function UserPlaylistDetails() {
         onSubmitEdit={submitEdit}
       />
       <PlaylistTracks
-        activeSongId={player.song.id}
-        isPlaying={player.isPlaying}
+        activeSongId={playback.currentSongId ?? undefined}
+        isPlaying={playback.isPlaying}
         onPlay={playFrom}
         onRemove={(songId) => remove.mutate(songId)}
         onReorder={(orderedSongIds) => reorder.mutate(orderedSongIds)}

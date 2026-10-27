@@ -95,7 +95,7 @@ jobs:
       - name: Download release packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: parson-*
+          pattern: mujin-music-*
           path: artifacts
           merge-multiple: true
       - name: Verify exact release package set
@@ -120,12 +120,12 @@ jobs:
               exit 1
             fi
           }
-          require_count 2 "Parson_${VERSION}_*.AppImage"
-          require_count 2 "Parson_${VERSION}_*.deb"
-          require_count 2 "Parson_${VERSION}_*-setup.exe"
-          require_count 2 "Parson_${VERSION}_*-portable.exe"
-          require_count 2 "Parson_${VERSION}_*.dmg"
-          require_count 2 "Parson_${VERSION}_*.zip"
+          require_count 2 "Mujin-Music-${VERSION}-*.AppImage"
+          require_count 2 "Mujin-Music-${VERSION}-*.deb"
+          require_count 2 "Mujin-Music-Setup-${VERSION}-*.exe"
+          require_count 2 "Mujin-Music-${VERSION}-*-portable.exe"
+          require_count 2 "Mujin-Music-${VERSION}-*.dmg"
+          require_count 2 "Mujin-Music-${VERSION}-*.zip"
           require_count 1 "ParsonMusicServer.exe"
           require_count 1 "windows-server-update.json"
       - name: Generate architecture-specific update feeds
@@ -151,7 +151,7 @@ jobs:
           else
             gh release create "$RELEASE_TAG" "${packages[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Parson ${{ needs.validate.outputs.version }}" \
+              --title "Mujin Music ${{ needs.validate.outputs.version }}" \
               --generate-notes
           fi
       - name: Validate published release artifacts

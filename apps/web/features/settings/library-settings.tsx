@@ -10,27 +10,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { hasDesktopBridge, selectMusicFolder } from "@/lib/desktop/bridge";
+import { hasLocalDesktopBridge, selectMusicFolder } from "@/lib/desktop/bridge";
 import {
   getLibraryCatalog,
   getLibraryReadiness,
   getLibraryRoots,
+  type LibraryRoot,
   indexLibrary,
   refreshCurrentLibrary,
+  relocateLibraryRoot,
   removeLibraryRoot,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Folder, Loader2, Trash2 } from "lucide-react";
+import { ChevronRight, Folder, Loader2, Trash2, Wrench } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { LibraryFolderBrowser } from "./library-folder-browser";
+import { locateStartFolders } from "./locate-folder";
 
 export default function LibrarySettings() {
   const queryClient = useQueryClient();
   const [desktop, setDesktop] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [removePath, setRemovePath] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"add" | "refresh" | "remove" | null>(null);
+  const [locateRoot, setLocateRoot] = useState<LibraryRoot | null>(null);
+  const locatePath = locateRoot?.path ?? null;
+  const [busy, setBusy] = useState<
+    "add" | "refresh" | "remove" | "locate" | null
+  >(null);
   const roots = useQuery({
     queryKey: ["library-roots"],
     queryFn: getLibraryRoots,
@@ -44,7 +52,7 @@ export default function LibrarySettings() {
     queryFn: () => getLibraryCatalog(0, 1),
   });
 
-  useEffect(() => setDesktop(hasDesktopBridge()), []);
+  useEffect(() => setDesktop(hasLocalDesktopBridge()), []);
 
   async function addLibrary(nextPath: string) {
     const selected = nextPath.trim();
@@ -66,8 +74,49 @@ export default function LibrarySettings() {
     }
   }
 
+  /**
+   * A folder from another computer (a restored backup) is missing here: the
+   * server indexes its new location and moves playlists, favourites,
+   * history and edits over to it, track by track, before dropping the old
+   * path.
+   */
+  async function relocate(oldPath: string, nextPath: string) {
+    const selected = nextPath.trim();
+    if (!selected || busy) return;
+    setBusy("locate");
+    try {
+      const report = await relocateLibraryRoot(oldPath, selected);
+      setLocateRoot(null);
+      await Promise.all([
+        roots.refetch(),
+        readiness.refetch(),
+        catalog.refetch(),
+      ]);
+      await invalidateCatalogRevisionQueries(queryClient);
+      toast.success(
+        report.missing_tracks
+          ? `Found ${report.matched_tracks.toLocaleString()} tracks; ${report.missing_tracks.toLocaleString()} weren’t in that folder. Playlists and history moved with the rest.`
+          : `Found all ${report.matched_tracks.toLocaleString()} tracks. Playlists, favourites and history moved with them.`,
+      );
+    } catch {
+      toast("Could not use that folder. Check the path and try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function locateFolder(root: LibraryRoot) {
+    if (hasLocalDesktopBridge()) {
+      // The system picker opens near where the music used to be.
+      const selected = await selectMusicFolder(locateStartFolders(root)[0]);
+      if (selected) await relocate(root.path, selected);
+      return;
+    }
+    setLocateRoot(root);
+  }
+
   async function changeFolder() {
-    if (hasDesktopBridge()) {
+    if (hasLocalDesktopBridge()) {
       const selected = await selectMusicFolder();
       if (selected) await addLibrary(selected);
       return;
@@ -127,8 +176,8 @@ export default function LibrarySettings() {
             </h2>
             <p className="mt-1 text-sm text-zinc-500">
               {desktop
-                ? "Parson watches this folder for your music."
-                : "Folders mounted and available to Parson."}
+                ? "Mujin Music watches this folder for your music."
+                : "Folders mounted and available to Mujin Music."}
             </p>
           </div>
           <Button onClick={() => void changeFolder()}>
@@ -149,13 +198,33 @@ export default function LibrarySettings() {
                 className="flex items-center gap-3 border-b border-white/[0.08] px-4 py-4 last:border-0"
                 key={root.path}
               >
-                <Folder className="h-5 w-5 shrink-0 text-zinc-500" />
-                <p
-                  className="min-w-0 flex-1 truncate text-sm text-zinc-200"
-                  title={root.path}
-                >
-                  {root.path}
-                </p>
+                <Folder
+                  className={`h-5 w-5 shrink-0 ${root.available === false ? "text-amber-300/80" : "text-zinc-500"}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className="truncate text-sm text-zinc-200"
+                    title={root.path}
+                  >
+                    {root.path}
+                  </p>
+                  {root.available === false ? (
+                    <p className="mt-0.5 text-xs text-amber-200/80">
+                      Not found on this server. Moved here from another
+                      computer? Show Mujin Music where this music is now.
+                    </p>
+                  ) : null}
+                </div>
+                {root.available === false ? (
+                  <Button
+                    className="h-8 px-3"
+                    disabled={Boolean(busy)}
+                    onClick={() => void locateFolder(root)}
+                    size="sm"
+                  >
+                    {busy === "locate" ? "Finding…" : "Locate…"}
+                  </Button>
+                ) : null}
                 <Button
                   aria-label={`Remove ${root.path}`}
                   className="h-8 px-2 text-zinc-400 hover:text-red-300"
@@ -200,6 +269,27 @@ export default function LibrarySettings() {
         </Button>
       </section>
 
+      <section className="border-t border-white/[0.08] pt-7">
+        <Link
+          className="group flex items-center gap-4 rounded-xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(178,107,255,0.10),rgba(255,255,255,0.02))] px-4 py-4 transition-colors hover:border-white/[0.16]"
+          href="/library/tools"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-mujin-copper/15 text-mujin-copper">
+            <Wrench className="h-5 w-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-white">
+              Library tools
+            </span>
+            <span className="block text-xs leading-5 text-zinc-400">
+              Skipped files, duplicates, album versions, the Albumizer, rescans
+              and audio analysis.
+            </span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-zinc-500 transition-colors group-hover:text-white" />
+        </Link>
+      </section>
+
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent>
           <DialogHeader>
@@ -219,6 +309,39 @@ export default function LibrarySettings() {
       </Dialog>
 
       <Dialog
+        open={Boolean(locatePath)}
+        onOpenChange={(open) => {
+          if (!open && busy !== "locate") setLocateRoot(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Where is this music now?</DialogTitle>
+            <DialogDescription>
+              It used to be in {locatePath}. Choose the folder that holds it on
+              this server. Mujin Music finds each track at the same place inside
+              the folder and moves playlists, favourites, history and edits over
+              to it.
+            </DialogDescription>
+          </DialogHeader>
+          <LibraryFolderBrowser
+            busy={busy === "locate"}
+            fallbackDirectories={
+              locateRoot ? locateStartFolders(locateRoot).slice(1) : []
+            }
+            initialDirectory={
+              locateRoot ? (locateStartFolders(locateRoot)[0] ?? "/") : "/"
+            }
+            key={locatePath ?? "none"}
+            onCancel={() => setLocateRoot(null)}
+            onSelect={(selected) =>
+              locatePath ? void relocate(locatePath, selected) : undefined
+            }
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={Boolean(removePath)}
         onOpenChange={(open) => {
           if (!open && busy !== "remove") setRemovePath(null);
@@ -228,8 +351,8 @@ export default function LibrarySettings() {
           <DialogHeader>
             <DialogTitle>Remove this music folder?</DialogTitle>
             <DialogDescription>
-              Parson will remove its indexed tracks from the library. Files on
-              disk will not be changed.
+              Mujin Music will remove its indexed tracks from the library. Files
+              on disk will not be changed.
             </DialogDescription>
           </DialogHeader>
           <p

@@ -33,7 +33,7 @@ jobs:
       - name: Download release packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: parson-*
+          pattern: mujin-music-*
           path: artifacts
           merge-multiple: true
       - name: Verify release package set
@@ -46,13 +46,21 @@ jobs:
             fi
             mv "$package" "$destination"
           done < <(find artifacts -mindepth 2 -type f -print0)
+          # The standalone server's one-click update files name the stable
+          # release's download URL, so they belong to stable releases only;
+          # a nightly ships just its zip.
+          rm -f \
+            artifacts/ParsonMusicServer.exe \
+            artifacts/ParsonMusicServer.exe.sha256 \
+            artifacts/windows-server-update.json
           test "$(find artifacts -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -eq 2
           test "$(find artifacts -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 2
-          test "$(find artifacts -maxdepth 1 -type f -name '*-setup.exe' | wc -l)" -eq 2
+          test "$(find artifacts -maxdepth 1 -type f -name 'Mujin-Music-Setup-*.exe' | wc -l)" -eq 2
           test "$(find artifacts -maxdepth 1 -type f -name '*-portable.exe' | wc -l)" -eq 2
           test "$(find artifacts -maxdepth 1 -type f -name '*.dmg' | wc -l)" -eq 2
-          test "$(find artifacts -maxdepth 1 -type f -name 'Parson_*.zip' | wc -l)" -eq 2
-          test "$(find artifacts -maxdepth 1 -type f ! -name '*.blockmap' | wc -l)" -eq 12
+          test "$(find artifacts -maxdepth 1 -type f -name 'Mujin-Music-*.zip' ! -name 'Mujin-Music-Server-*' | wc -l)" -eq 2
+          test "$(find artifacts -maxdepth 1 -type f -name 'Mujin-Music-Server-*-win-x64.zip' | wc -l)" -eq 1
+          test "$(find artifacts -maxdepth 1 -type f ! -name '*.blockmap' | wc -l)" -eq 13
       - name: Publish rolling nightly release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,6 +73,6 @@ jobs:
           mapfile -d '' packages < <(find artifacts -maxdepth 1 -type f -print0 | sort -z)
           gh release create nightly "${packages[@]}" \
             --target "$GITHUB_SHA" \
-            --title "Parson Nightly" \
-            --notes "Automated nightly desktop packages for Linux, macOS, and Windows." \
+            --title "Mujin Music Nightly" \
+            --notes "Automated nightly desktop packages for Linux, macOS, and Windows, and the Windows server-only package." \
             --prerelease

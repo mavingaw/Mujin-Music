@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 export const metadata: Metadata = {
-  title: "Set up Parson",
+  title: "Set up Mujin Music",
   description: "Create your account and add your music.",
 };
 

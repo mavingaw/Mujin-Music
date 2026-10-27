@@ -428,7 +428,7 @@ export default function InteractiveProductDemo({
     <div
       className={`demo-app${fullscreen ? " demo-is-fullscreen" : ""}`}
       role="region"
-      aria-label="Interactive Parson product demo"
+      aria-label="Interactive Mujin Music product demo"
       data-demo-ready={ready}
       data-demo-capture={capture}
     >
@@ -437,7 +437,7 @@ export default function InteractiveProductDemo({
           className="demo-brand-button"
           type="button"
           onClick={goHome}
-          title="Parson home"
+          title="Mujin Music home"
         >
           <BrandMark />
         </button>

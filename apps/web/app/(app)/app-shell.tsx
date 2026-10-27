@@ -17,6 +17,7 @@ import AppSidebar from "@/components/layout/app-sidebar";
 import RouteScrollRestoration from "@/components/layout/route-scroll-restoration";
 import ParsonBrandMark from "@/components/icons/parson-brand-mark";
 import { DesktopWindowControls } from "@/components/layout/desktop-window-controls";
+import { ProfileSwitcher } from "@/features/profiles/profile-switcher";
 import {
   clearCachedAlbumInfos,
   clearCachedArtistInfos,
@@ -100,11 +101,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <AppSidebar />
 
       <header className="electron-titlebar-drag fixed left-0 right-0 top-0 z-40 h-14 bg-black px-4 md:left-20 md:px-5">
-        <div className="relative flex h-full items-center justify-center gap-3">
+        <div className="app-titlebar relative flex h-full items-center justify-center gap-3">
           <Link
             className="electron-titlebar-no-drag absolute left-0 flex h-10 w-10 shrink-0 select-none items-center justify-center md:hidden"
             href="/"
-            aria-label="Parson home"
+            aria-label="Mujin Music home"
             draggable={false}
             onClick={() =>
               window.dispatchEvent(new Event("parson:navigate-home"))
@@ -114,7 +115,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </Link>
 
           <form
-            className="electron-titlebar-no-drag relative mx-12 w-full max-w-130 md:mx-0"
+            className="app-titlebar-search electron-titlebar-no-drag relative mx-12 w-full max-w-130 md:mx-0"
             onSubmit={submitSearch}
           >
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -135,7 +136,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <ArrowRight className="h-4 w-4" />
             </button>
           </form>
-          <DesktopWindowControls />
+          <div className="absolute right-0 top-0 flex h-full items-center">
+            <ProfileSwitcher />
+            <DesktopWindowControls inline />
+          </div>
         </div>
       </header>
 
