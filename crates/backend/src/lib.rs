@@ -16,6 +16,8 @@ pub mod http;
 pub mod imports;
 pub mod library;
 #[cfg(feature = "server")]
+pub mod live_radio;
+#[cfg(feature = "server")]
 pub mod native_output;
 #[cfg(feature = "server")]
 pub mod outputs;

@@ -612,9 +612,11 @@ function SignalPathPanel({
                 ? "Cast compatible"
                 : serverOutput
                   ? "Played by the server"
-                  : streamBitrate > 0
-                    ? `MP3 ${streamBitrate} kbps`
-                    : "Original file"}
+                  : path?.stages.some((stage) => stage.id === "relay")
+                    ? "Live stream, relayed by Parson"
+                    : streamBitrate > 0
+                      ? `MP3 ${streamBitrate} kbps`
+                      : "Original file"}
             </span>
           </span>
           <span className="flex items-center gap-1">

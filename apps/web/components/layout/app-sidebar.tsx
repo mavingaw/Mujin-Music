@@ -5,6 +5,7 @@ import {
   Home,
   Import,
   Library,
+  Radio,
   Search,
   Settings,
   Tags,
@@ -17,6 +18,7 @@ const navigation = [
   { href: "/", label: "Home", icon: Home },
   { href: "/library", label: "Library", icon: Library },
   { href: "/genre", label: "Genres", icon: Tags },
+  { href: "/radio", label: "Live Radio", icon: Radio },
   { href: "/imports", label: "Imports", icon: Import },
   { href: "/streaming", label: "Streaming", icon: AudioLines },
 ];

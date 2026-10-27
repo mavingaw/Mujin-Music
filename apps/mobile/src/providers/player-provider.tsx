@@ -6,6 +6,7 @@ import {
   fillReverbImpulseChannel,
   getRadioPicks,
   getRadioSettings,
+  isLiveRadioId,
   isStreamingId,
   newPlayId,
   playIdFromStreamUrl,
@@ -75,6 +76,7 @@ import { devicePlaybackCapabilities } from "@/lib/device-playback";
 import { downloadedSongUri, hydrateDownloads } from "@/lib/downloads";
 import { shouldRestartFinishedTrack } from "@/lib/playback-state";
 import { playableQueueSongs } from "@/lib/playback-queue";
+import { shouldReconnect } from "@/lib/live-radio";
 import {
   isCompleted,
   isEarlySkip,
@@ -847,7 +849,8 @@ export function PlayerProvider({ children }: PropsWithChildren) {
         !session.claims?.sub ||
         session.phase === "offline" ||
         // History and recommendations cover the local library only.
-        isStreamingId(current.id)
+        isStreamingId(current.id) ||
+        isLiveRadioId(current.id)
       )
         return;
       if (!playbackSessionId.current) {
@@ -1442,6 +1445,7 @@ export function PlayerProvider({ children }: PropsWithChildren) {
       !endingSongId ||
       // Library Radio seeds from library tracks, not TIDAL or Qobuz ones.
       isStreamingId(endingSongId) ||
+      isLiveRadioId(endingSongId) ||
       session.phase !== "ready" ||
       !shouldContinueWithRadio({
         enabled: radioEnabledRef.current,
@@ -1505,7 +1509,21 @@ export function PlayerProvider({ children }: PropsWithChildren) {
     [shuffle, toggleShuffle],
   );
 
+  const liveReconnects = useRef<number[]>([]);
   const handleEnded = useCallback(() => {
+    // A live station only ends when its connection drops: reconnect.
+    const endingId = queue[currentIndex]?.id;
+    if (isLiveRadioId(endingId)) {
+      const next = shouldReconnect(liveReconnects.current, Date.now());
+      liveReconnects.current = next.attempts;
+      if (next.reconnect) {
+        loadAt(queue, currentIndex, true, true, playbackOrigin.current);
+      } else {
+        setIsPlaying(false);
+        setPlaybackError("The station stopped sending audio.");
+      }
+      return;
+    }
     setIsPlaying(false);
     if (
       !telemetry.current.completed &&
