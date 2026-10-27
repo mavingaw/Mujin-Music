@@ -56,7 +56,8 @@
         "react-native-google-cast",
         {
           "receiverAppId": "CC1AD845",
-          "expandedController": true
+          "expandedController": true,
+          "androidPlayServicesCastFrameworkVersion": "22.3.1"
         }
       ],
       [
