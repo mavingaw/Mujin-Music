@@ -116,6 +116,9 @@ fn connect_lyrics_cache() -> Result<DbPool, BoxError> {
         .ok_or_else(|| std::io::Error::other("lyrics cache path is not valid UTF-8"))?;
     let new_database = !path.exists() || path.metadata().is_ok_and(|metadata| metadata.len() == 0);
     let mut connection = SqliteConnection::establish(url)?;
+    // Wait for another opener (a second service starting at the same time)
+    // instead of failing on its VACUUM or journal-mode switch.
+    connection.batch_execute("PRAGMA busy_timeout = 10000;")?;
     if new_database {
         connection.batch_execute("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;")?;
     }
