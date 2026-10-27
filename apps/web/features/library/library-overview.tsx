@@ -66,7 +66,9 @@ import {
   Plus,
   ScrollText,
   UserRound,
+  Wrench,
 } from "lucide-react";
+import { useSession } from "@/features/account/session-provider";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -173,6 +175,7 @@ function writeURL(view: LibraryView, focus: FocusQuery | null) {
 }
 
 export default function LibraryOverview() {
+  const { session } = useSession();
   const searchParams = useSearchParams();
   const requestedView = searchParams.get("view");
   const [view, setView] = useState<LibraryView>(() =>
@@ -390,6 +393,15 @@ export default function LibraryOverview() {
             </p>
           )}
         </div>
+        {session?.role === "admin" && (
+          <Link
+            className="flex h-9 items-center gap-2 rounded-full border border-white/10 px-3.5 text-xs font-semibold text-zinc-300 transition-colors hover:border-white/25 hover:text-white"
+            href="/library/tools"
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            Library tools
+          </Link>
+        )}
       </header>
 
       <nav

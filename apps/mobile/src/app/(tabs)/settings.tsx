@@ -14,7 +14,14 @@ import {
   type LibraryRoot,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
-import { Import, LogOut, Radio, Server, Trash2 } from "lucide-react-native";
+import {
+  Import,
+  LogOut,
+  Radio,
+  Server,
+  Trash2,
+  Wrench,
+} from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import {
@@ -398,6 +405,7 @@ export default function SettingsScreen() {
             ) : tab === "library" ? (
               <LibrarySettings
                 busy={busy}
+                onOpenTools={() => router.push("/library-tools")}
                 onIndex={indexFolder}
                 onPathChange={setLibraryPath}
                 onRefresh={refreshLibrary}
@@ -741,6 +749,7 @@ function ServerSettings({
 function LibrarySettings({
   busy,
   onIndex,
+  onOpenTools,
   onPathChange,
   onRefresh,
   onRemove,
@@ -749,6 +758,7 @@ function LibrarySettings({
 }: {
   busy: boolean;
   onIndex: () => Promise<void>;
+  onOpenTools: () => void;
   onPathChange: (value: string) => void;
   onRefresh: () => Promise<void>;
   onRemove: (root: LibraryRoot) => void;
@@ -801,6 +811,14 @@ function LibrarySettings({
       >
         <Radio color="white" size={21} />
         <Text style={styles.actionText}>Check for changes</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        style={styles.action}
+        onPress={onOpenTools}
+      >
+        <Wrench color="white" size={21} />
+        <Text style={styles.actionText}>Library tools</Text>
       </Pressable>
     </>
   );

@@ -31,6 +31,7 @@ export * from "./resources/host";
 export * from "./resources/images";
 export * from "./resources/library";
 export * from "./resources/listen-later";
+export * from "./resources/library-tools";
 export * from "./resources/lyrics";
 export * from "./resources/media";
 export * from "./resources/outputs";
