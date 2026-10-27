@@ -50,6 +50,7 @@ import {
   ToolCover,
 } from "./tool-primitives";
 import {
+  duplicateComparison,
   duplicateEvidenceLabel,
   duplicateKindLabel,
   formatBytes,
@@ -130,7 +131,7 @@ export function DuplicatesPanel({ jobs }: { jobs: ToolJob[] }) {
             </Button>
           ) : undefined
         }
-        description="The same recording held more than once: a FLAC rip and an MP3 download, a loose single next to its album, or a copy under different tags. Parson compares titles, lengths, ISRCs and the sound itself."
+        description="The same recording held more than once: a FLAC rip and an MP3 download, a loose single next to its album, or a copy under different tags."
         title={
           <span className="flex items-baseline gap-2">
             Duplicates
@@ -141,7 +142,7 @@ export function DuplicatesPanel({ jobs }: { jobs: ToolJob[] }) {
         }
       >
         <div className="flex flex-wrap items-center gap-4 rounded-lg border border-white/[0.06] bg-black/30 px-4 py-3">
-          <Fingerprint className="h-5 w-5 shrink-0 text-[#b26bff]" />
+          <Fingerprint className="h-5 w-5 shrink-0 text-mujin-copper" />
           <div className="min-w-0 flex-1">
             <p className="text-sm text-zinc-200">
               Acoustic fingerprints for{" "}
@@ -159,9 +160,12 @@ export function DuplicatesPanel({ jobs }: { jobs: ToolJob[] }) {
                 </span>
               )}
             </p>
+            <p className="mt-1 text-xs leading-5 text-zinc-500">
+              {duplicateComparison(printed)}
+            </p>
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.05]">
               <div
-                className="h-full rounded-full bg-[#b26bff]"
+                className="h-full rounded-full bg-mujin-copper"
                 style={{
                   width: `${percent(printed.tracks, printed.total)}%`,
                 }}
@@ -293,7 +297,7 @@ export function DuplicatesPanel({ jobs }: { jobs: ToolJob[] }) {
             <DialogTitle>Keep the best copy of each?</DialogTitle>
             <DialogDescription>
               In {formatCount(suggested.length)} group
-              {suggested.length === 1 ? "" : "s"}, Parson keeps the highest
+              {suggested.length === 1 ? "" : "s"}, Mujin Music keeps the highest
               quality copy and merges the other {formatCount(suggestedCopies)}{" "}
               into it: likes and playlist entries move to the kept copy. Nothing
               is deleted from disk, and any copy can be restored later.
@@ -431,7 +435,7 @@ function GroupCard({
             <li
               className={cn(
                 "flex items-center gap-3 px-4 py-2.5 transition-colors",
-                kept ? "bg-[#b26bff]/[0.06]" : "hover:bg-white/[0.02]",
+                kept ? "bg-mujin-copper/[0.06]" : "hover:bg-white/[0.02]",
               )}
               key={song.id}
             >
@@ -440,7 +444,9 @@ function GroupCard({
                 aria-label={`Keep the copy on ${song.album}`}
                 className={cn(
                   "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                  kept ? "border-[#b26bff] bg-[#b26bff]" : "border-zinc-600",
+                  kept
+                    ? "border-mujin-copper bg-mujin-copper"
+                    : "border-zinc-600",
                 )}
                 onClick={() => setKeep(song.id)}
                 role="radio"
@@ -453,7 +459,7 @@ function GroupCard({
                 <p className="flex items-center gap-2 truncate text-sm text-zinc-100">
                   <span className="truncate">{song.album}</span>
                   {song.id === group.best && (
-                    <span className="flex shrink-0 items-center gap-1 text-[11px] text-[#d6b8ff]">
+                    <span className="flex shrink-0 items-center gap-1 text-[11px] text-mujin-copper-hover">
                       <Crown className="h-3 w-3" />
                       Best
                     </span>
@@ -553,8 +559,8 @@ function CopiesSection({
           </span>
         </h2>
         <p className="text-sm text-zinc-500">
-          Parson already plays the highest quality file of these tracks. Pick
-          another copy if you prefer its mastering.
+          Mujin Music already plays the highest quality file of these tracks.
+          Pick another copy if you prefer its mastering.
         </p>
       </div>
       <div className="overflow-hidden rounded-xl border border-white/[0.07]">
@@ -592,7 +598,7 @@ function CopiesSection({
                     className={cn(
                       "flex items-center gap-3 rounded-md border px-3 py-1.5 text-left transition-colors",
                       file.playing
-                        ? "border-[#b26bff]/40 bg-[#b26bff]/[0.07]"
+                        ? "border-mujin-copper/40 bg-mujin-copper/[0.07]"
                         : "border-white/[0.06] hover:bg-white/[0.04]",
                     )}
                     disabled={busy === copy.song.id || file.playing}
@@ -610,7 +616,9 @@ function CopiesSection({
                     <span
                       className={cn(
                         "w-14 shrink-0 text-right text-[11px]",
-                        file.playing ? "text-[#d6b8ff]" : "text-zinc-600",
+                        file.playing
+                          ? "text-mujin-copper-hover"
+                          : "text-zinc-600",
                       )}
                     >
                       {file.playing ? "Playing" : "Use"}

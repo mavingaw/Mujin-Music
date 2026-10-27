@@ -34,15 +34,16 @@ export function parseToolView(value: string | null | undefined): ToolView {
 }
 
 /**
- * Tier colours follow the signal-path light: purple for lossless (deeper
- * for DSD and Hi-Res), amber for lossy.
+ * Tier colours follow the signal-path light and the brand tokens: copper
+ * for lossless (deeper for DSD and Hi-Res), the dimmed low-quality grey
+ * for lossy.
  */
 export const tierColors: Record<FileQualityTier, string> = {
-  dsd: "#7c4dff",
-  hi_res: "#b26bff",
-  lossless: "#d6b8ff",
-  lossy: "#f5c542",
-  unknown: "#52525b",
+  dsd: "var(--color-mujin-copper-pressed)",
+  hi_res: "var(--color-mujin-copper)",
+  lossless: "var(--color-mujin-copper-hover)",
+  lossy: "var(--color-quality-low)",
+  unknown: "var(--color-mujin-text-disabled)",
 };
 
 export const tierShortLabels: Record<FileQualityTier, string> = {
@@ -176,13 +177,13 @@ export const skipReasonHelp: Record<SkipReason, string> = {
   unreadable_folder:
     "Folders the scan could not list; everything inside is missing from your library.",
   not_yet_imported: "New music that arrived after the last scan.",
-  unsupported_format: "Audio in formats Parson does not decode.",
+  unsupported_format: "Audio in formats Mujin Music does not decode.",
   drm_protected: "Copy-protected purchases that no other player can decode.",
   video_file: "Video files in your music folders.",
   disc_image: "Whole discs stored as one image or one long file.",
   playlist_file:
     "Playlists are imported only when you ask, so a scan never changes your playlists.",
-  unreadable_image: "Cover art Parson can't use.",
+  unreadable_image: "Cover art Mujin Music can't use.",
 };
 
 export function duplicateKindLabel(kind: DuplicateGroup["kind"]): string {
@@ -194,6 +195,35 @@ export function duplicateKindLabel(kind: DuplicateGroup["kind"]): string {
     default:
       return "On several albums";
   }
+}
+
+/**
+ * What duplicate detection compares right now. Tags, lengths and ISRCs
+ * are always compared; the sound only for tracks that were fingerprinted
+ * (Library tools > Fingerprint library), and how well depends on the
+ * fingerprint method the server has.
+ */
+export function duplicateComparison(fingerprints: {
+  tracks: number;
+  total: number;
+  method: "chromaprint" | "envelope" | null;
+}): string {
+  const tags = "titles, artists, lengths and ISRC codes";
+  const { tracks, total, method } = fingerprints;
+  let text: string;
+  if (total === 0 || tracks === 0) {
+    text = `Compared: ${tags}. The sound itself is not compared yet. Fingerprint the library to also find copies under different tags and to keep different takes (a live version, a remaster) apart.`;
+  } else if (tracks < total) {
+    text = `Compared: ${tags} for every track, and the sound for the ${formatCount(tracks)} of ${formatCount(total)} tracks fingerprinted so far.`;
+  } else {
+    text = `Compared: ${tags}, and the sound of every track.`;
+  }
+  if (tracks > 0 && method === "envelope")
+    text +=
+      " The server has no Chromaprint, so fingerprints are loudness outlines: reliable for copies of the same file, weaker across different masterings.";
+  if (tracks > 0 && method === "chromaprint")
+    text += " Fingerprints are Chromaprint (AcoustID).";
+  return text;
 }
 
 export function duplicateEvidenceLabel(group: DuplicateGroup): string {
