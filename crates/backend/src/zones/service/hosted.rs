@@ -943,9 +943,12 @@ impl ZoneService {
             };
             if let Some((serial, song_id)) = observed {
                 let cache = self.library_cache().await;
+                let name = renderer.info().name;
                 self.track_zone_listen(
-                    zone_id,
-                    &renderer.info().name,
+                    listens::ZoneLabel {
+                        id: zone_id,
+                        name: &name,
+                    },
                     serial,
                     &song_id,
                     state.position_ms,
