@@ -55,8 +55,18 @@ export function routeLabel(origin: string): string {
   }
 }
 
-export function routeCheckText(check: RouteCheck): string {
-  if (check.ok) return `Works · ${check.latencyMs} ms`;
+/**
+ * What a check from the phone shows. On the home network a check reaches
+ * the server from inside, which says nothing about away from home, so it
+ * says so instead of "Works".
+ */
+export function routeCheckText(
+  check: RouteCheck,
+  { onHomeNetwork = false }: { onHomeNetwork?: boolean } = {},
+): string {
+  if (check.ok && onHomeNetwork)
+    return "Answers here at home · check again on mobile data";
+  if (check.ok) return `Works from here · ${check.latencyMs} ms`;
   switch (check.reason) {
     case "other-library":
       return "Reaches a different library";

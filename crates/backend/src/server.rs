@@ -293,6 +293,10 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
         "pairingRequired": true,
         "bootId": crate::discovery::boot_id(),
         "startedAt": crate::discovery::started_at(),
+        // Set when this server took over a restored library's identity, so
+        // apps can tell the library's new home from an old server that is
+        // still switched on and answers with the same instance id.
+        "identityAdoptedAt": settings::identity_adopted_at(),
         "capabilities": [
             "streaming",
             "downloads",

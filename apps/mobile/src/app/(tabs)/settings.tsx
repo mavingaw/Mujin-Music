@@ -70,8 +70,10 @@ export default function SettingsScreen() {
       instanceId: library.manifest.instanceId,
       origin: library.origin,
       name: library.manifest.name,
+      identityAdoptedAt: library.manifest.identityAdoptedAt ?? 0,
     })),
     currentInstanceId: session.instanceId,
+    currentOrigin: session.origin,
     accountInstanceIds: session.accountLibraryIds,
   });
   const [currentPassword, setCurrentPassword] = useState("");

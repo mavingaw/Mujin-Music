@@ -39,7 +39,12 @@ export type RemoteAddress = {
 };
 
 export type CheckOutcome =
-  "reachable" | "unreachable" | "other_server" | "not_parson";
+  | "reachable"
+  | "unreachable"
+  | "other_server"
+  | "not_parson"
+  /** A private, loopback or link-local address: it only works at home. */
+  | "home_only";
 
 export type PathCheck = {
   origin: string;
@@ -48,6 +53,12 @@ export type PathCheck = {
   outcome: CheckOutcome;
   latency_ms: number | null;
   detail: string;
+  /**
+   * Where the check ran. The server can only call its own addresses from
+   * inside the home, which can't prove they work from outside. Older
+   * servers omit it (their checks also ran on the server).
+   */
+  checked_from?: "server";
 };
 
 export type CheckReport = {
@@ -97,7 +108,10 @@ export function summarizeRemoteAccess(
   status: RemoteAccessStatus,
 ): RemoteAccessSummary {
   const check = status.last_check;
-  const best = check?.results.find((result) => result.outcome === "reachable");
+  const reachable =
+    check?.results.filter((result) => result.outcome === "reachable") ?? [];
+  const best =
+    reachable.find((result) => result.kind === "vpn") ?? reachable[0];
   if (!status.addresses.length) {
     if (status.config.mode === "router") {
       if (status.router.status === "working") {
@@ -129,11 +143,30 @@ export function summarizeRemoteAccess(
       detail: "Run a check to confirm each address reaches this server.",
     };
   }
-  if (best) {
+  if (best?.kind === "vpn") {
     return {
       tone: "good",
-      title: "Reachable away from home",
-      detail: `${best.label} works${best.latency_ms != null ? ` (${best.latency_ms} ms)` : ""}. The Parson app switches to it when you leave home.`,
+      title: "Reachable over your VPN",
+      detail: `${best.label} answers. Phones and computers reach the library away from home while they are connected to the same VPN.`,
+    };
+  }
+  if (best) {
+    // Checked from the server itself: it shows the address leads here, not
+    // that it works from outside the home.
+    return {
+      tone: "warn",
+      title: "Leads here, not yet confirmed from outside",
+      detail: `${best.label} reaches this server when the server calls it, but the server can’t test from outside your home. Open the Parson app on mobile data and use “Check from here” to confirm.`,
+    };
+  }
+  const homeOnly = check.results.find(
+    (result) => result.outcome === "home_only",
+  );
+  if (homeOnly) {
+    return {
+      tone: "warn",
+      title: "Only works on your home network",
+      detail: homeOnly.detail,
     };
   }
   return {

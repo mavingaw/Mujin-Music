@@ -128,11 +128,19 @@ export function libraryRows({
   known,
   nearby,
   currentInstanceId,
+  currentOrigin = null,
   accountInstanceIds = [],
 }: {
   known: KnownLibrary[];
-  nearby: { instanceId: string; origin: string; name: string }[];
+  nearby: {
+    instanceId: string;
+    origin: string;
+    name: string;
+    identityAdoptedAt?: number;
+  }[];
   currentInstanceId: string | null;
+  /** Where this phone is connected now. */
+  currentOrigin?: string | null;
   accountInstanceIds?: string[];
 }): LibraryRow[] {
   const accounts = (instanceId: string) =>
@@ -147,7 +155,32 @@ export function libraryRows({
       accounts: accounts(library.instanceId),
     });
   }
+  // Two servers can answer with one identity (a library taken over by a
+  // restore while the old server still runs). Pick the same one every time,
+  // whichever answered first: the one this phone is connected to, then the
+  // newest takeover, then the address this phone knows, then the address.
+  const chosen = new Map<string, (typeof nearby)[number]>();
   for (const found of nearby) {
+    const other = chosen.get(found.instanceId);
+    if (!other) {
+      chosen.set(found.instanceId, found);
+      continue;
+    }
+    const knownOrigin = rows.get(found.instanceId)?.origin ?? null;
+    const connected = (entry: (typeof nearby)[number]) =>
+      Number(
+        entry.instanceId === currentInstanceId &&
+          entry.origin === currentOrigin,
+      );
+    const better =
+      connected(found) - connected(other) ||
+      (found.identityAdoptedAt ?? 0) - (other.identityAdoptedAt ?? 0) ||
+      Number(found.origin === knownOrigin) -
+        Number(other.origin === knownOrigin) ||
+      other.origin.localeCompare(found.origin);
+    if (better > 0) chosen.set(found.instanceId, found);
+  }
+  for (const found of chosen.values()) {
     const existing = rows.get(found.instanceId);
     rows.set(found.instanceId, {
       instanceId: found.instanceId,

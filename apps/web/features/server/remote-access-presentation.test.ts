@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import type { RouterState } from "@parson/music-sdk";
-import { describeRouter, outcomeLabel } from "./remote-access-presentation";
+import {
+  describeRouter,
+  outcomeLabel,
+  outcomeTone,
+} from "./remote-access-presentation";
 
 const router: RouterState = {
   status: "off",
@@ -43,16 +47,33 @@ test("router states read plainly and stay honest", () => {
   );
 });
 
-test("check badges show latency only for reachable addresses", () => {
+test("check badges never claim a server-side check proves outside access", () => {
   const base = {
     origin: "http://x",
     kind: "vpn" as const,
     label: "Tailscale",
     detail: "",
   };
-  expect(outcomeLabel({ ...base, outcome: "reachable", latency_ms: 42 })).toBe(
-    "42 ms",
-  );
+  const vpn = { ...base, outcome: "reachable" as const, latency_ms: 42 };
+  expect(outcomeLabel(vpn)).toBe("On the VPN");
+  expect(outcomeTone(vpn)).toBe("good");
+  const manual = {
+    ...base,
+    kind: "manual" as const,
+    outcome: "reachable" as const,
+    latency_ms: 0,
+  };
+  expect(outcomeLabel(manual)).toBe("Leads here");
+  expect(outcomeLabel(manual)).not.toContain("ms");
+  expect(outcomeTone(manual)).toBe("warn");
+  const lan = {
+    ...base,
+    kind: "manual" as const,
+    outcome: "home_only" as const,
+    latency_ms: null,
+  };
+  expect(outcomeLabel(lan)).toBe("Home network only");
+  expect(outcomeTone(lan)).toBe("bad");
   expect(
     outcomeLabel({ ...base, outcome: "unreachable", latency_ms: null }),
   ).toBe("No answer");

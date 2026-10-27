@@ -54,11 +54,18 @@ export function describeRouter(router: RouterState): RouterSummary {
   }
 }
 
-/** Short badge text for one check result. */
+/**
+ * Short badge text for one check result. Checks run on the server, which
+ * calls its own addresses from inside the home: the time that takes says
+ * nothing about the way in from outside, so no latency is shown, and only a
+ * VPN address is called reachable (for devices on the same VPN).
+ */
 export function outcomeLabel(result: PathCheck): string {
   switch (result.outcome) {
     case "reachable":
-      return result.latency_ms != null ? `${result.latency_ms} ms` : "Works";
+      return result.kind === "vpn" ? "On the VPN" : "Leads here";
+    case "home_only":
+      return "Home network only";
     case "other_server":
       return "Other server";
     case "not_parson":
@@ -66,4 +73,14 @@ export function outcomeLabel(result: PathCheck): string {
     default:
       return "No answer";
   }
+}
+
+/** The status light for one check result. */
+export function outcomeTone(result: PathCheck): "good" | "warn" | "bad" {
+  if (result.outcome === "reachable") {
+    return result.kind === "vpn" ? "good" : "warn";
+  }
+  return result.outcome === "unreachable" || result.outcome === "home_only"
+    ? "bad"
+    : "warn";
 }

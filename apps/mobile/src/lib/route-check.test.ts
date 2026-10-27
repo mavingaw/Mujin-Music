@@ -38,7 +38,13 @@ test("routes are labelled the way people know them", () => {
   expect(routeLabel("http://music-nas.tail1234.ts.net:1993")).toBe("Tailscale");
   expect(routeLabel("http://100.101.102.103:1993")).toBe("Tailscale");
   expect(routeLabel("https://music.example.com")).toBe("music.example.com");
-  expect(routeCheckText({ ok: true, latencyMs: 40 })).toBe("Works · 40 ms");
+  expect(routeCheckText({ ok: true, latencyMs: 40 })).toBe(
+    "Works from here · 40 ms",
+  );
+  // From the home network a check can't show the way in from outside.
+  expect(
+    routeCheckText({ ok: true, latencyMs: 0 }, { onHomeNetwork: true }),
+  ).toBe("Answers here at home · check again on mobile data");
   expect(routeCheckText({ ok: false, reason: "unreachable" })).toBe(
     "No answer from here",
   );

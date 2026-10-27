@@ -194,3 +194,33 @@ test("away from home, the first route that answers as the library wins", async (
   answers["https://music.example.com"] = new Error("down");
   expect(await pickReachableRoute(routes, "home", probe)).toBeNull();
 });
+
+test("two servers with one identity are listed the same way on every scan", () => {
+  const old = {
+    instanceId: "library-1",
+    origin: "http://192.0.2.2:2014",
+    name: "Basement NAS",
+  };
+  const takeover = {
+    instanceId: "library-1",
+    origin: "http://192.0.2.2:2015",
+    name: "Study Mini",
+    identityAdoptedAt: 1_790_000_000_000,
+  };
+  const pick = (
+    nearby: (typeof old & { identityAdoptedAt?: number })[],
+    currentOrigin: string | null,
+  ) =>
+    libraryRows({
+      known: [],
+      nearby,
+      currentInstanceId: currentOrigin ? "library-1" : null,
+      currentOrigin,
+    }).map((row) => row.name);
+  // Connected to the old server: it stays the row, in either order.
+  expect(pick([old, takeover], old.origin)).toEqual(["Basement NAS"]);
+  expect(pick([takeover, old], old.origin)).toEqual(["Basement NAS"]);
+  // Otherwise the newest takeover is the library's home.
+  expect(pick([old, takeover], null)).toEqual(["Study Mini"]);
+  expect(pick([takeover, old], null)).toEqual(["Study Mini"]);
+});

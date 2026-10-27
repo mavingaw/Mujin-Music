@@ -91,7 +91,8 @@ test("the summary is honest about what was checked", () => {
     },
   });
   expect(good.tone).toBe("good");
-  expect(good.detail).toContain("Tailscale works (38 ms)");
+  expect(good.title).toBe("Reachable over your VPN");
+  expect(good.detail).toContain("same VPN");
   const bad = summarizeRemoteAccess({
     ...base,
     addresses: [{ ...address, verified: false }],
@@ -111,4 +112,59 @@ test("the summary is honest about what was checked", () => {
   });
   expect(bad.title).toBe("No address passed the check");
   expect(bad.detail).toBe("No answer within 5 seconds.");
+});
+
+test("a check from the server never reads as reachable away from home", () => {
+  const manual = {
+    origin: "https://music.example.com",
+    kind: "manual" as const,
+    label: "Your address",
+    verified: true,
+  };
+  const leads = summarizeRemoteAccess({
+    ...base,
+    config: { ...base.config, mode: "manual", manual_url: manual.origin },
+    addresses: [manual],
+    last_check: {
+      checked_at: "now",
+      results: [
+        {
+          origin: manual.origin,
+          kind: "manual",
+          label: manual.label,
+          outcome: "reachable",
+          latency_ms: 0,
+          detail: "Leads to this server when called from the server itself.",
+          checked_from: "server",
+        },
+      ],
+    },
+  });
+  expect(leads.tone).toBe("warn");
+  expect(leads.title).not.toContain("Reachable away from home");
+  expect(leads.detail).toContain("can’t test from outside");
+  expect(leads.detail).not.toContain("0 ms");
+
+  const lan = { ...manual, origin: "http://192.0.2.2:2014", verified: false };
+  const homeOnly = summarizeRemoteAccess({
+    ...base,
+    addresses: [lan],
+    last_check: {
+      checked_at: "now",
+      results: [
+        {
+          origin: lan.origin,
+          kind: "manual",
+          label: lan.label,
+          outcome: "home_only",
+          latency_ms: null,
+          detail:
+            "192.0.2.2 is reserved for documentation and testing, not the internet. It only works on your home network, not away from home.",
+          checked_from: "server",
+        },
+      ],
+    },
+  });
+  expect(homeOnly.title).toBe("Only works on your home network");
+  expect(homeOnly.tone).toBe("warn");
 });

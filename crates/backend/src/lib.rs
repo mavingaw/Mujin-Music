@@ -16,7 +16,6 @@ pub mod http;
 pub mod imports;
 pub mod library;
 #[cfg(feature = "server")]
-#[cfg(feature = "server")]
 pub mod outputs;
 pub mod persistence;
 mod playlist_rules;

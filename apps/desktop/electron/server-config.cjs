@@ -256,16 +256,48 @@ function forgetServer(config, id) {
   };
 }
 
+function adoptedAt(value) {
+  const number = Number(value?.identityAdoptedAt);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+/**
+ * Picks, among servers that answer with the same identity, the one that
+ * represents it. Two servers share an identity after a restore that took the
+ * library over while the old server is still switched on. The choice must
+ * not depend on which one answered first, or the list flips from scan to
+ * scan: the server this window is connected to wins, then the newest
+ * takeover (the library's new home), then the saved address, then the
+ * address itself.
+ */
+function pickPrimary(entries, { activeOrigin = "", savedOrigin = "" } = {}) {
+  return [...entries].sort(
+    (left, right) =>
+      Number(right.origin === activeOrigin) -
+        Number(left.origin === activeOrigin) ||
+      adoptedAt(right) - adoptedAt(left) ||
+      Number(right.origin === savedOrigin) -
+        Number(left.origin === savedOrigin) ||
+      left.origin.localeCompare(right.origin),
+  )[0];
+}
+
 /**
  * The rows the chooser shows: saved servers merged with what discovery just
  * found. A saved server that turns up at a new address (DHCP) is matched by
  * its instance id and shown at the new address.
  *
  * Every row has one consistent state: `active` is the server this window is
- * connected to (by identity, wherever it was reached), and `online` is true
- * for a row discovery confirmed or for the active server while its monitor
- * reports it reachable, so a row is never "Connected" and "Offline" at once.
- * This computer's own server is the local card, never a row.
+ * connected to (by identity and, when known, the address it was reached
+ * at), and `online` is true for a row discovery confirmed or for the active
+ * server while its monitor reports it reachable, so a row is never
+ * "Connected" and "Offline" at once. This computer's own server is the
+ * local card, never a row.
+ *
+ * Servers that answer with the same identity (a library taken over by a
+ * restore while the old server still runs) are listed once each: the one
+ * `pickPrimary` chooses keeps the saved row, the others get their own row
+ * with a note, so the list is the same on every scan.
  */
 function serverRows({
   config,
@@ -273,6 +305,7 @@ function serverRows({
   localInstanceId = "",
   signedIn = new Set(),
   activeId = undefined,
+  activeOrigin = "",
   activeOnline = true,
 }) {
   const currentId =
@@ -281,47 +314,105 @@ function serverRows({
       : config.mode === "remote"
         ? config.activeServerId
         : null;
+  const connectedOrigin = normalizeServerAddress(activeOrigin);
   const rows = new Map();
   for (const server of config.servers) {
     if (localInstanceId && server.instanceId === localInstanceId) continue;
+    const active = Boolean(currentId) && server.id === currentId;
     rows.set(server.id, {
       ...server,
+      // The active row is where this window is connected right now.
+      origin: active && connectedOrigin ? connectedOrigin : server.origin,
       saved: true,
       nearby: false,
-      active: Boolean(currentId) && server.id === currentId,
+      active,
     });
   }
+  const groups = new Map();
   for (const found of discovered) {
     const origin = normalizeServerAddress(found.origin);
     if (!origin) continue;
     const instanceId = text(found.instanceId, 128);
     if (instanceId && instanceId === localInstanceId) continue;
+    const key = instanceId || origin;
+    const entry = {
+      origin,
+      instanceId,
+      name: text(found.name),
+      serverVersion: text(found.serverVersion, 64),
+      identityAdoptedAt: adoptedAt(found),
+    };
+    const group = groups.get(key) ?? [];
+    if (!group.some((other) => other.origin === origin)) group.push(entry);
+    groups.set(key, group);
+  }
+  for (const [key, group] of groups) {
+    const instanceId = group[0].instanceId;
     const match =
       (instanceId && rows.get(instanceId)) ||
-      [...rows.values()].find((row) => row.origin === origin);
-    if (match) {
+      [...rows.values()].find((row) =>
+        group.some((entry) => entry.origin === row.origin),
+      );
+    const matchActive = Boolean(match?.active);
+    const primary = pickPrimary(group, {
+      activeOrigin: matchActive ? connectedOrigin : "",
+      savedOrigin: match?.origin ?? "",
+    });
+    // Connected at a known address: a server answering with the same
+    // identity elsewhere is another server, not this row at a new address.
+    const primaryIsMatch =
+      !match ||
+      !matchActive ||
+      !connectedOrigin ||
+      primary.origin === connectedOrigin;
+    if (match && primaryIsMatch) {
       rows.set(match.id, {
         ...match,
-        origin,
-        name: text(found.name) || match.name,
-        serverVersion: text(found.serverVersion, 64) || match.serverVersion,
+        origin: primary.origin,
+        name: primary.name || match.name,
+        serverVersion: primary.serverVersion || match.serverVersion,
+        identityAdoptedAt: primary.identityAdoptedAt,
         nearby: true,
       });
-      continue;
+    } else if (!match) {
+      const id = instanceId || key;
+      rows.set(id, {
+        id,
+        instanceId,
+        origin: primary.origin,
+        name: primary.name || new URL(primary.origin).hostname,
+        serverVersion: primary.serverVersion,
+        identityAdoptedAt: primary.identityAdoptedAt,
+        lastConnectedAt: 0,
+        manual: false,
+        saved: false,
+        nearby: true,
+        active: Boolean(currentId) && id === currentId,
+      });
     }
-    const id = instanceId || origin;
-    rows.set(id, {
-      id,
-      instanceId,
-      origin,
-      name: text(found.name) || new URL(origin).hostname,
-      serverVersion: text(found.serverVersion, 64),
-      lastConnectedAt: 0,
-      manual: false,
-      saved: false,
-      nearby: true,
-      active: Boolean(currentId) && id === currentId,
-    });
+    const representative = rows.get(match?.id ?? (instanceId || key));
+    for (const entry of group) {
+      if (entry.origin === representative?.origin) continue;
+      const newer = entry.identityAdoptedAt > adoptedAt(representative);
+      const id = `${instanceId}@${entry.origin}`;
+      rows.set(id, {
+        id,
+        instanceId,
+        origin: entry.origin,
+        name: entry.name || new URL(entry.origin).hostname,
+        serverVersion: entry.serverVersion,
+        identityAdoptedAt: entry.identityAdoptedAt,
+        lastConnectedAt: 0,
+        manual: false,
+        saved: false,
+        nearby: true,
+        active: false,
+        sameLibraryAs: representative?.name ?? "",
+        note: newer
+          ? `Took over ${representative?.name ?? "this library"} from a backup. It is the library’s new home; switch the old server off.`
+          : `Same library as ${representative?.name ?? "another server"}, which took it over from a backup. Switch this old server off.`,
+      });
+    }
   }
   return [...rows.values()]
     .map((row) => ({
@@ -335,7 +426,8 @@ function serverRows({
         Number(right.nearby) - Number(left.nearby) ||
         Number(right.saved) - Number(left.saved) ||
         right.lastConnectedAt - left.lastConnectedAt ||
-        left.name.localeCompare(right.name),
+        left.name.localeCompare(right.name) ||
+        left.origin.localeCompare(right.origin),
     );
 }
 
@@ -353,6 +445,30 @@ function isThisComputer(instanceId, localInstanceId) {
 function reconnectDelay(attempt) {
   const steps = [1_000, 2_000, 3_000, 5_000, 8_000];
   return steps[Math.max(0, attempt)] ?? 15_000;
+}
+
+/**
+ * The closest existing folder at or above `target` (an absolute path), for
+ * "Locate…" of a music folder that moved: the picker opens there instead of
+ * at the top of the disk. Empty when nothing usable exists.
+ */
+function nearestExistingFolder(
+  target,
+  { isDirectory = (candidate) => fs.statSync(candidate).isDirectory() } = {},
+) {
+  if (typeof target !== "string" || !target || target.length > 4096) return "";
+  if (!path.isAbsolute(target)) return "";
+  let candidate = path.resolve(target);
+  for (;;) {
+    try {
+      if (isDirectory(candidate)) return candidate;
+    } catch {
+      // Missing or unreadable: keep walking up.
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return "";
+    candidate = parent;
+  }
 }
 
 // Commands the web app may send to the desktop shell. A remote server's web
@@ -462,8 +578,10 @@ module.exports = {
   isThisComputer,
   isLoopbackOrigin,
   loadConfig,
+  nearestExistingFolder,
   normalizeServerAddress,
   parseConfig,
+  pickPrimary,
   probeMessage,
   probeServer,
   reconnectDelay,

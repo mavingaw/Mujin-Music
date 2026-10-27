@@ -42,6 +42,17 @@ export interface FolderBackup {
   product_version: string | null;
   /** Music folders on the server the backup came from. */
   library_roots: string[];
+  /**
+   * The old server's away-from-home setting, when it had one; a restore can
+   * bring it along. Older servers and backups omit it.
+   */
+  remote_access?: BackupRemoteAccess | null;
+}
+
+export interface BackupRemoteAccess {
+  mode: "router" | "manual";
+  manual_url: string | null;
+  external_port: number | null;
 }
 
 export interface FolderBackupListing {
@@ -82,6 +93,11 @@ export interface RestoreOptions {
    * knew the old server treat this one as the same library.
    */
   adoptIdentity?: boolean;
+  /**
+   * Also bring the old server's away-from-home setting. Off unless asked:
+   * the new server may be on another network, behind another router.
+   */
+  restoreRemoteAccess?: boolean;
 }
 
 export async function getDataStatus(): Promise<DataStatus> {
@@ -109,8 +125,20 @@ export async function deletePrivateBackup(filename: string): Promise<void> {
   await api.delete(`/data/admin/backups/${encodeURIComponent(filename)}`);
 }
 
-function restoreQuery(options: RestoreOptions = {}) {
-  return options.adoptIdentity ? "?adopt_identity=true" : "";
+export function restoreQuery(options: RestoreOptions = {}) {
+  const query = new URLSearchParams();
+  if (options.adoptIdentity) query.set("adopt_identity", "true");
+  if (options.restoreRemoteAccess) query.set("restore_remote_access", "true");
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
+function restoreBody(path: string, options: RestoreOptions) {
+  return {
+    path,
+    adopt_identity: Boolean(options.adoptIdentity),
+    restore_remote_access: Boolean(options.restoreRemoteAccess),
+  };
 }
 
 export async function restorePrivateBackup(
@@ -164,7 +192,7 @@ export async function restoreBackupFromFolder(
   return (
     await api.post<RestoreResult>(
       "/data/admin/restore/from-folder",
-      { path, adopt_identity: Boolean(options.adoptIdentity) },
+      restoreBody(path, options),
       { timeout: 30 * 60 * 1000 },
     )
   ).data;
@@ -212,7 +240,7 @@ export async function restoreSetupBackupFromFolder(
   return (
     await api.post<RestoreResult>(
       "/setup/restore/from-folder",
-      { path, adopt_identity: Boolean(options.adoptIdentity) },
+      restoreBody(path, options),
       { timeout: 30 * 60 * 1000 },
     )
   ).data;

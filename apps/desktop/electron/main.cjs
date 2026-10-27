@@ -35,6 +35,7 @@ const {
   commandAllowed,
   forgetServer,
   loadConfig,
+  nearestExistingFolder,
   normalizeServerAddress,
   probeMessage,
   probeServer,
@@ -759,6 +760,10 @@ function currentRows() {
       serverMode === "remote" && currentRemote
         ? currentRemote.instanceId || currentRemote.id
         : null,
+    // The connected row is the server at this address, even when another
+    // server answers with the same identity.
+    activeOrigin:
+      serverMode === "remote" && currentRemote ? currentRemote.origin : "",
     // The window is connected unless the monitor lost the server.
     activeOnline: chooserView !== "reconnecting" && !reconnectState,
   });
@@ -820,11 +825,15 @@ function discoverServers() {
       checked.add(normalized);
       const result = await probeServer(normalized, { timeoutMs: 1_800 });
       if (result.kind !== "ok") return;
-      reachable.set(result.manifest.instanceId, {
+      // Keyed by address: two servers can answer with the same identity
+      // (a library taken over by a restore while the old server still
+      // runs), and the chooser must see both, whichever answered first.
+      reachable.set(normalized, {
         instanceId: result.manifest.instanceId,
         name: result.manifest.name,
         origin: normalized,
         serverVersion: result.manifest.serverVersion,
+        identityAdoptedAt: result.manifest.identityAdoptedAt ?? 0,
       });
       discovered = [...reachable.values()];
       void publishServersState();
@@ -1060,9 +1069,13 @@ function installDesktopBridge() {
         }
         return "linux";
       case "select_music_folder": {
+        // "Locate…" for a moved folder opens near where the music was.
+        const near =
+          typeof args.near === "string" ? nearestExistingFolder(args.near) : "";
         const selection = await dialog.showOpenDialog(mainWindow, {
           properties: ["openDirectory", "createDirectory"],
-          title: "Choose your music folder",
+          title: near ? "Where is this music now?" : "Choose your music folder",
+          ...(near ? { defaultPath: near } : {}),
         });
         return selection.canceled ? null : (selection.filePaths[0] ?? null);
       }

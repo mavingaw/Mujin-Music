@@ -8,7 +8,6 @@ import {
   getRemoteAccess,
   summarizeRemoteAccess,
   updateRemoteAccess,
-  type CheckOutcome,
   type PathCheck,
   type RemoteAccessMode,
   type RemoteAccessStatus,
@@ -24,7 +23,11 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { describeRouter, outcomeLabel } from "./remote-access-presentation";
+import {
+  describeRouter,
+  outcomeLabel,
+  outcomeTone,
+} from "./remote-access-presentation";
 
 const MODES: {
   value: RemoteAccessMode;
@@ -52,18 +55,10 @@ function Light({ tone }: { tone: "good" | "warn" | "off" | "bad" }) {
   );
 }
 
-function outcomeTone(outcome: CheckOutcome) {
-  return outcome === "reachable"
-    ? "good"
-    : outcome === "unreachable"
-      ? "bad"
-      : "warn";
-}
-
 function CheckRow({ result }: { result: PathCheck }) {
   return (
     <li className="flex items-start gap-3 py-2.5">
-      <Light tone={outcomeTone(result.outcome)} />
+      <Light tone={outcomeTone(result)} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="text-sm font-medium text-zinc-100">
@@ -80,7 +75,7 @@ function CheckRow({ result }: { result: PathCheck }) {
       <span
         className={cn(
           "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums",
-          result.outcome === "reachable"
+          outcomeTone(result) === "good"
             ? "bg-emerald-400/10 text-emerald-300"
             : "bg-white/[0.05] text-zinc-400",
         )}
@@ -214,6 +209,11 @@ export default function RemoteAccessPanel() {
           {data.last_check.results.map((result) => (
             <CheckRow key={result.origin} result={result} />
           ))}
+          <li className="py-2.5 text-xs leading-5 text-zinc-500">
+            Checked from this server, inside your home. That can’t prove an
+            address works from outside: confirm with the Parson app on mobile
+            data (Settings → Devices → Check from here).
+          </li>
         </ul>
       ) : null}
 

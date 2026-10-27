@@ -15,6 +15,7 @@ import {
   getLibraryCatalog,
   getLibraryReadiness,
   getLibraryRoots,
+  type LibraryRoot,
   indexLibrary,
   refreshCurrentLibrary,
   relocateLibraryRoot,
@@ -25,13 +26,15 @@ import { Folder, Loader2, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { LibraryFolderBrowser } from "./library-folder-browser";
+import { locateStartFolders } from "./locate-folder";
 
 export default function LibrarySettings() {
   const queryClient = useQueryClient();
   const [desktop, setDesktop] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [removePath, setRemovePath] = useState<string | null>(null);
-  const [locatePath, setLocatePath] = useState<string | null>(null);
+  const [locateRoot, setLocateRoot] = useState<LibraryRoot | null>(null);
+  const locatePath = locateRoot?.path ?? null;
   const [busy, setBusy] = useState<
     "add" | "refresh" | "remove" | "locate" | null
   >(null);
@@ -82,7 +85,7 @@ export default function LibrarySettings() {
     setBusy("locate");
     try {
       const report = await relocateLibraryRoot(oldPath, selected);
-      setLocatePath(null);
+      setLocateRoot(null);
       await Promise.all([
         roots.refetch(),
         readiness.refetch(),
@@ -101,13 +104,14 @@ export default function LibrarySettings() {
     }
   }
 
-  async function locateFolder(oldPath: string) {
+  async function locateFolder(root: LibraryRoot) {
     if (hasLocalDesktopBridge()) {
-      const selected = await selectMusicFolder();
-      if (selected) await relocate(oldPath, selected);
+      // The system picker opens near where the music used to be.
+      const selected = await selectMusicFolder(locateStartFolders(root)[0]);
+      if (selected) await relocate(root.path, selected);
       return;
     }
-    setLocatePath(oldPath);
+    setLocateRoot(root);
   }
 
   async function changeFolder() {
@@ -214,7 +218,7 @@ export default function LibrarySettings() {
                   <Button
                     className="h-8 px-3"
                     disabled={Boolean(busy)}
-                    onClick={() => void locateFolder(root.path)}
+                    onClick={() => void locateFolder(root)}
                     size="sm"
                   >
                     {busy === "locate" ? "Finding…" : "Locate…"}
@@ -285,7 +289,7 @@ export default function LibrarySettings() {
       <Dialog
         open={Boolean(locatePath)}
         onOpenChange={(open) => {
-          if (!open && busy !== "locate") setLocatePath(null);
+          if (!open && busy !== "locate") setLocateRoot(null);
         }}
       >
         <DialogContent>
@@ -300,8 +304,14 @@ export default function LibrarySettings() {
           </DialogHeader>
           <LibraryFolderBrowser
             busy={busy === "locate"}
-            initialDirectory="/"
-            onCancel={() => setLocatePath(null)}
+            fallbackDirectories={
+              locateRoot ? locateStartFolders(locateRoot).slice(1) : []
+            }
+            initialDirectory={
+              locateRoot ? (locateStartFolders(locateRoot)[0] ?? "/") : "/"
+            }
+            key={locatePath ?? "none"}
+            onCancel={() => setLocateRoot(null)}
             onSelect={(selected) =>
               locatePath ? void relocate(locatePath, selected) : undefined
             }

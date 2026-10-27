@@ -8,6 +8,7 @@ const {
   emptyConfig,
   forgetServer,
   loadConfig,
+  nearestExistingFolder,
   normalizeServerAddress,
   parseConfig,
   probeMessage,
@@ -16,6 +17,7 @@ const {
   rememberServer,
   saveConfig,
   isThisComputer,
+  pickPrimary,
   serverRows,
   startupPlan,
   useLocalServer,
@@ -370,4 +372,99 @@ test("this computer's own server is the local card, not a remote row", () => {
   assert.equal(isThisComputer("this-pc", "this-pc"), true);
   assert.equal(isThisComputer("nas", "this-pc"), false);
   assert.equal(isThisComputer("", ""), false);
+});
+
+test("a library taken over by a restore lists both servers the same way on every scan", () => {
+  // Connected to the old server; the new one restored its backup and took
+  // over its identity, and both are switched on.
+  const basement = {
+    instanceId: "library-1",
+    name: "Basement NAS",
+    origin: "http://192.0.2.2:2014",
+    serverVersion: "1.0.1",
+  };
+  const study = {
+    instanceId: "library-1",
+    name: "Study Mini",
+    origin: "http://192.0.2.2:2015",
+    serverVersion: "1.0.1",
+    identityAdoptedAt: 1_790_000_000_000,
+  };
+  const config = useRemoteServer(emptyConfig(), basement, 1_000);
+  const scan = (discovered) =>
+    serverRows({
+      config,
+      discovered,
+      activeId: "library-1",
+      activeOrigin: basement.origin,
+    }).map((row) => [row.name, row.origin, row.active, Boolean(row.note)]);
+  const expected = [
+    ["Basement NAS", basement.origin, true, false],
+    ["Study Mini", study.origin, false, true],
+  ];
+  // Whichever server answered first, and even when the old one missed a
+  // scan, the connected row stays the server this window is connected to.
+  assert.deepEqual(scan([basement, study]), expected);
+  assert.deepEqual(scan([study, basement]), expected);
+  assert.deepEqual(
+    scan([study]).map(([name, origin, active]) => [name, origin, active]),
+    [
+      ["Basement NAS", basement.origin, true],
+      ["Study Mini", study.origin, false],
+    ],
+  );
+  const note = serverRows({
+    config,
+    discovered: [study, basement],
+    activeId: "library-1",
+    activeOrigin: basement.origin,
+  })[1].note;
+  assert.match(note, /Took over Basement NAS/);
+
+  // Not connected to either: the newest takeover represents the library,
+  // in either order, and the old server carries the note.
+  const idle = (discovered) =>
+    serverRows({ config, discovered, activeId: null }).map((row) => [
+      row.name,
+      row.saved,
+      Boolean(row.note),
+    ]);
+  assert.deepEqual(idle([basement, study]), [
+    ["Study Mini", true, false],
+    ["Basement NAS", false, true],
+  ]);
+  assert.deepEqual(idle([study, basement]), idle([basement, study]));
+  assert.equal(
+    pickPrimary([basement, study], { activeOrigin: basement.origin }).name,
+    "Basement NAS",
+  );
+  assert.equal(pickPrimary([basement, study]).name, "Study Mini");
+});
+
+test("Locate opens the folder picker near where the music used to be", () => {
+  const os = require("node:os");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "parson-locate-"));
+  try {
+    const disk = path.join(root, "mnt", "music-disk");
+    fs.mkdirSync(disk, { recursive: true });
+    assert.equal(
+      nearestExistingFolder(path.join(disk, "Old Library", "FLAC")),
+      disk,
+    );
+    assert.equal(nearestExistingFolder(disk), disk);
+    assert.equal(nearestExistingFolder("relative/path"), "");
+    assert.equal(nearestExistingFolder(""), "");
+    // A walk over an injected file system.
+    const existing = new Set(["/", "/Volumes"]);
+    assert.equal(
+      nearestExistingFolder("/Volumes/Old Disk/Music", {
+        isDirectory: (candidate) => existing.has(candidate),
+      }),
+      "/Volumes",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -137,14 +137,65 @@ export function parseHostInfo(value: unknown): HostInfo | null {
 }
 
 /**
+ * True for a host that can only be reached at home: a private, loopback,
+ * link-local, carrier-grade NAT or documentation IP address, or a `.local`
+ * style name. VPN addresses are private too, but are meant for devices on
+ * the VPN, so callers decide about those.
+ */
+export function isHomeOnlyHost(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    bare === "localhost" ||
+    /\.(local|lan|home|home\.arpa|internal|localdomain|localhost)\.?$/.test(
+      bare,
+    )
+  )
+    return true;
+  const v4 = bare.replace(/^::ffff:/, "").match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a = 0, b = 0, c = 0] = v4.slice(1, 4).map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      a >= 224 ||
+      (a === 100 && b >= 64 && b < 128) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b < 32) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) ||
+      (a === 203 && b === 0 && c === 113)
+    );
+  }
+  if (bare.includes(":")) {
+    return (
+      bare === "::1" ||
+      bare === "::" ||
+      /^f[cd]/.test(bare) ||
+      /^fe[89ab]/.test(bare) ||
+      bare.startsWith("2001:db8:")
+    );
+  }
+  return !bare.includes(".");
+}
+
+/**
  * Addresses worth saving for away from home: everything except ones the
- * server checked and found unreachable.
+ * server checked and found unreachable, and never an address that only works
+ * at home (a LAN address is not a way in from outside).
  */
 export function usableRemoteOrigins(info: Pick<HostInfo, "remote">): string[] {
   return [
     ...new Set(
       info.remote
         .filter((address) => address.verified !== false)
+        .filter(
+          (address) =>
+            address.kind === "vpn" ||
+            !isHomeOnlyHost(new URL(address.origin).hostname),
+        )
         .map((address) => address.origin),
     ),
   ];

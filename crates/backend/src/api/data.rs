@@ -96,6 +96,11 @@ struct BackupManifest {
     /// Music folders on the old server. Music files are not in the backup;
     /// a new server shows these so they can be pointed at the new location.
     library_roots: Vec<String>,
+    /// The away-from-home setting (also in `Network/remote-access.json`).
+    /// A restore only applies it when asked to, because the new server may
+    /// be on another network.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_access: Option<serde_json::Value>,
     includes: [&'static str; 6],
     excludes: [&'static str; 3],
 }
@@ -592,6 +597,9 @@ fn create_local_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
             library_name: settings::library_name(),
             instance_id: settings::instance_id().ok(),
             library_roots: crate::api::migration::configured_library_roots(),
+            remote_access: fs::read(settings::data_path(&settings::REMOTE_ACCESS_FILE))
+                .ok()
+                .and_then(|bytes| remote_access_setting(&bytes)),
             includes: [
                 "music database",
                 "core database",
@@ -631,6 +639,12 @@ fn create_local_backup_archive(pool: &DbPool) -> Result<BackupSummary, String> {
             if source.is_dir() {
                 append_safe_tree(&mut archive, &source, Path::new(name))?;
             }
+        }
+        let remote_access = settings::data_path(&settings::REMOTE_ACCESS_FILE);
+        if remote_access.is_file() {
+            archive
+                .append_path_with_name(&remote_access, REMOTE_ACCESS_ENTRY)
+                .map_err(|error| error.to_string())?;
         }
         archive.finish().map_err(|error| error.to_string())?;
         archive
@@ -984,11 +998,44 @@ fn sanitize_backup_database(path: &Path) -> Result<(), String> {
     validate_restore_database(path)
 }
 
+/// Where a backup keeps the away-from-home setting.
+const REMOTE_ACCESS_ENTRY: &str = "Network/remote-access.json";
+const MAX_REMOTE_ACCESS_BYTES: u64 = 16 * 1024;
+
+/// The away-from-home setting in `bytes`, when it is one that does
+/// something (not "off").
+pub(crate) fn remote_access_setting(bytes: &[u8]) -> Option<serde_json::Value> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    let mode = value.get("mode")?.as_str()?;
+    if !matches!(mode, "router" | "manual") {
+        return None;
+    }
+    Some(serde_json::json!({
+        "mode": mode,
+        "manual_url": value.get("manual_url").and_then(serde_json::Value::as_str),
+        "external_port": value.get("external_port").and_then(serde_json::Value::as_u64),
+    }))
+}
+
+/// The away-from-home setting a restore brings along: only when the person
+/// restoring asked for it and the backup holds a setting that does something.
+fn staged_remote_access(backed_up: Option<Vec<u8>>, opted_in: bool) -> Option<Vec<u8>> {
+    backed_up.filter(|bytes| opted_in && remote_access_setting(bytes).is_some())
+}
+
 /// Checks a private backup and stages it to replace this server's data on the
 /// next start. With `adopt_identity`, the server also takes over the backed-up
 /// library's identity, so phones and computers that knew the old server find
-/// this one as the same library.
-pub(crate) fn validate_and_stage_restore(path: &Path, adopt_identity: bool) -> Result<(), String> {
+/// this one as the same library. With `restore_remote_access`, the old
+/// server's away-from-home setting comes along too.
+pub(crate) fn validate_and_stage_restore(
+    path: &Path,
+    options: RestoreOptions,
+) -> Result<(), String> {
+    let RestoreOptions {
+        adopt_identity,
+        restore_remote_access,
+    } = options;
     let input = File::open(path).map_err(|error| error.to_string())?;
     let decoder = zstd::Decoder::new(input).map_err(|error| error.to_string())?;
     let mut archive = tar::Archive::new(decoder);
@@ -999,6 +1046,7 @@ pub(crate) fn validate_and_stage_restore(path: &Path, adopt_identity: bool) -> R
     let mut found_manifest = false;
     let mut found_music_database = false;
     let mut backed_up_identity = None::<String>;
+    let mut backed_up_remote_access = None::<Vec<u8>>;
     let mut extracted_bytes = 0_u64;
     for (entry_index, item) in archive
         .entries()
@@ -1041,6 +1089,15 @@ pub(crate) fn validate_and_stage_restore(path: &Path, adopt_identity: bool) -> R
             fs::write(incoming.join("manifest.json"), bytes).map_err(|error| error.to_string())?;
             continue;
         }
+        if item_path == Path::new(REMOTE_ACCESS_ENTRY) {
+            let mut bytes = Vec::new();
+            item.by_ref()
+                .take(MAX_REMOTE_ACCESS_BYTES)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            backed_up_remote_access = Some(bytes);
+            continue;
+        }
         if item_path == Path::new("Database/parson-music.db") {
             found_music_database = true;
         }
@@ -1057,6 +1114,15 @@ pub(crate) fn validate_and_stage_restore(path: &Path, adopt_identity: bool) -> R
     match backed_up_identity.filter(|_| adopt_identity) {
         Some(identity) => fs::write(&identity_marker, identity),
         None => match fs::remove_file(&identity_marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+    .map_err(|error| error.to_string())?;
+    let remote_access_marker = settings::data_path(&["Restore", "REMOTE_ACCESS"]);
+    match staged_remote_access(backed_up_remote_access, restore_remote_access) {
+        Some(bytes) => fs::write(&remote_access_marker, bytes),
+        None => match fs::remove_file(&remote_access_marker) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
         },
@@ -1253,15 +1319,20 @@ async fn delete_backup(path: web::Path<String>) -> HttpResponse {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
 pub(crate) struct RestoreOptions {
+    /// Take over the backed-up library's identity.
     #[serde(default)]
     pub(crate) adopt_identity: bool,
+    /// Also bring the old server's away-from-home setting (off unless asked:
+    /// the new server may be on another network).
+    #[serde(default)]
+    pub(crate) restore_remote_access: bool,
 }
 
 #[post("/restore")]
 async fn restore_backup(multipart: Multipart, options: web::Query<RestoreOptions>) -> HttpResponse {
-    match stage_uploaded_backup(multipart, options.adopt_identity).await {
+    match stage_uploaded_backup(multipart, options.into_inner()).await {
         Ok(()) => HttpResponse::Accepted().json(serde_json::json!({
             "restart_required": true,
             "message": "Backup validated. Restart Parson to apply it."
@@ -1273,7 +1344,7 @@ async fn restore_backup(multipart: Multipart, options: web::Query<RestoreOptions
 /// Receives one uploaded backup file, validates it and stages it.
 pub(crate) async fn stage_uploaded_backup(
     mut multipart: Multipart,
-    adopt_identity: bool,
+    options: RestoreOptions,
 ) -> Result<(), HttpResponse> {
     let upload = settings::data_path(&["Restore", format!(".upload-{}", Uuid::new_v4()).as_str()]);
     if let Some(parent) = upload.parent()
@@ -1337,8 +1408,7 @@ pub(crate) async fn stage_uploaded_backup(
     }
     drop(output);
     let validate_path = upload.clone();
-    let result =
-        web::block(move || validate_and_stage_restore(&validate_path, adopt_identity)).await;
+    let result = web::block(move || validate_and_stage_restore(&validate_path, options)).await;
     let _ = tokio::fs::remove_file(&upload).await;
     match result {
         Ok(Ok(())) => Ok(()),
@@ -1774,6 +1844,31 @@ mod tests {
             ["2026-06-01", "2026-05-01", "2026-04-01"].map(|date| format!("{date}.tar.zst"))
         );
         assert_eq!(plan.len(), 14);
+    }
+
+    #[test]
+    fn remote_access_comes_along_on_restore_only_when_asked() {
+        use super::{remote_access_setting, staged_remote_access};
+        let manual =
+            br#"{"mode":"manual","manual_url":"https://music.example.com","external_port":null}"#
+                .to_vec();
+        let summary = remote_access_setting(&manual).expect("a setting that does something");
+        assert_eq!(summary["mode"], "manual");
+        assert_eq!(summary["manual_url"], "https://music.example.com");
+        assert!(remote_access_setting(br#"{"mode":"off"}"#).is_none());
+        assert!(remote_access_setting(b"{not json").is_none());
+
+        // Opt-in: the new server may be on another network.
+        assert_eq!(staged_remote_access(Some(manual.clone()), false), None);
+        assert_eq!(
+            staged_remote_access(Some(manual.clone()), true),
+            Some(manual)
+        );
+        assert_eq!(
+            staged_remote_access(Some(br#"{"mode":"off"}"#.to_vec()), true),
+            None
+        );
+        assert_eq!(staged_remote_access(None, true), None);
     }
 
     #[test]
