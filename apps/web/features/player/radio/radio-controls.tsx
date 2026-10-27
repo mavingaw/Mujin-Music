@@ -100,7 +100,7 @@ export function RadioSwitch({
       aria-label={label}
       className={`relative inline-flex h-6 w-10.5 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
         checked
-          ? "border-sky-400 bg-sky-500"
+          ? "border-mujin-copper-hover bg-mujin-copper hover:bg-mujin-copper-hover"
           : "border-white/15 bg-white/10 hover:bg-white/15"
       }`}
       onClick={(event) => {
