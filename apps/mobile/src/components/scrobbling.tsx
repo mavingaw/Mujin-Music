@@ -119,7 +119,7 @@ function ServiceCard({ service }: { service: ScrobbleServiceStatus }) {
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>{service.name}</Text>
           <Text
-            numberOfLines={1}
+            numberOfLines={2}
             style={[styles.status, { color: tones[summary.tone] }]}
           >
             {connection ? `${connection.accountName} · ` : ""}

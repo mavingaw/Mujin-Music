@@ -1,11 +1,22 @@
-import type { ScrobbleImportStatus, ScrobbleLogEntry } from "@parson/music-sdk";
+import type {
+  ScrobbleConnection,
+  ScrobbleImportStatus,
+  ScrobbleLogEntry,
+} from "@parson/music-sdk";
 
 export type Tone = "ok" | "warn" | "error" | "idle";
 
 const count = new Intl.NumberFormat("en");
 
-/** The status chip of one listen in the activity list. */
-export function activityLabel(entry: ScrobbleLogEntry): {
+/**
+ * The status chip of one listen in the activity list. A waiting listen
+ * says why it waits: its service is paused or must be connected again
+ * (it is sent once that is sorted), or a send is about to happen.
+ */
+export function activityLabel(
+  entry: ScrobbleLogEntry,
+  connection?: ScrobbleConnection | null,
+): {
   tone: Tone;
   text: string;
 } {
@@ -13,6 +24,11 @@ export function activityLabel(entry: ScrobbleLogEntry): {
     case "sent":
       return { tone: "ok", text: "Scrobbled" };
     case "pending":
+      if (connection === null) return { tone: "idle", text: "Not connected" };
+      if (connection?.status === "reauth_required")
+        return { tone: "error", text: "Reconnect to send" };
+      if (connection && !connection.enabled)
+        return { tone: "idle", text: "Paused" };
       return {
         tone: "warn",
         text: entry.attempts > 0 ? "Waiting to retry" : "Sending",

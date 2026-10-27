@@ -189,14 +189,20 @@ export function scrobbleServiceSummary(
       ? { tone: "idle", text: "Not connected" }
       : { tone: "idle", text: "Needs the server's Last.fm API key" };
   }
+  const pending = service.queue.pending;
+  // Listens keep queueing while a service is paused or needs reconnecting;
+  // they are sent once it is on and connected again.
   if (connection.status === "reauth_required") {
     return {
       tone: "error",
-      text: `${service.name} needs you to connect again`,
+      text: pending > 0 ? `Reconnect · ${pending} waiting` : "Reconnect needed",
     };
   }
-  if (!connection.enabled) return { tone: "idle", text: "Paused" };
-  const pending = service.queue.pending;
+  if (!connection.enabled)
+    return {
+      tone: "idle",
+      text: pending > 0 ? `Paused · ${pending} waiting` : "Paused",
+    };
   if (pending > 0 && connection.lastError) {
     const wait = service.queue.nextAttemptAt
       ? Math.max(0, service.queue.nextAttemptAt - now)

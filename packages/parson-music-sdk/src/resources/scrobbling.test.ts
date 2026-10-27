@@ -112,7 +112,15 @@ test("service summaries explain the queue in a sentence", () => {
     scrobbleServiceSummary(
       service({ connection: { ...connection, status: "reauth_required" } }),
     ),
-  ).toEqual({ tone: "error", text: "Last.fm needs you to connect again" });
+  ).toEqual({ tone: "error", text: "Reconnect needed" });
+  expect(
+    scrobbleServiceSummary(
+      service({
+        connection: { ...connection, status: "reauth_required" },
+        queue: { pending: 2, failed: 0, sent: 0, ignored: 0, nextAttemptAt: 1 },
+      }),
+    ),
+  ).toEqual({ tone: "error", text: "Reconnect · 2 waiting" });
   expect(
     scrobbleServiceSummary(
       service({
@@ -139,4 +147,12 @@ test("service summaries explain the queue in a sentence", () => {
       service({ connection: { ...connection, enabled: false } }),
     ).text,
   ).toBe("Paused");
+  expect(
+    scrobbleServiceSummary(
+      service({
+        connection: { ...connection, enabled: false },
+        queue: { pending: 3, failed: 0, sent: 0, ignored: 0, nextAttemptAt: 1 },
+      }),
+    ).text,
+  ).toBe("Paused · 3 waiting");
 });

@@ -649,12 +649,13 @@ impl ScrobbleHub {
         if !starting && !qualified {
             return Ok(0);
         }
+        // Every connected service, also one switched off or waiting for
+        // the profile to reconnect: those keep queueing and send once
+        // they are on (and connected) again. Only "now playing", which is
+        // worthless later, needs the service to be active.
         let connections = self
             .db(move |connection| store::connections(connection, user_id))
-            .await?
-            .into_iter()
-            .filter(ConnectionRow::active)
-            .collect::<Vec<_>>();
+            .await?;
         if connections.is_empty() {
             return Ok(0);
         }
@@ -677,7 +678,10 @@ impl ScrobbleHub {
 
         if starting {
             let mut sent = 0;
-            for row in wanted.iter().filter(|row| row.send_now_playing != 0) {
+            for row in wanted
+                .iter()
+                .filter(|row| row.active() && row.send_now_playing != 0)
+            {
                 if self.send_now_playing(row, &listen).await {
                     sent += 1;
                 }
@@ -1625,6 +1629,80 @@ pub(crate) mod tests {
             hub.disconnect(1, Service::Lastfm).await,
             Err(HubError::NotConnected)
         ));
+    }
+
+    #[actix_web::test]
+    async fn switched_off_or_disconnected_services_keep_queueing_and_send_later() {
+        let pool = pool();
+        let transport = fixtures();
+        let hub = hub_with(pool.clone(), transport.clone());
+        connect_both(&hub, 1).await;
+        let cache = crate::scrobbling::import::tests::library();
+        hub.update_settings(
+            1,
+            Service::Lastfm,
+            store::SettingsPatch {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // Switched off: no "now playing" for Last.fm, but the listen waits.
+        let sent = hub
+            .observe(1, event("play_started", "manual", 0.0), cache.clone())
+            .await
+            .unwrap();
+        assert_eq!(sent, 1, "only ListenBrainz hears now playing");
+        assert!(
+            transport
+                .requests()
+                .iter()
+                .all(|request| request.form_value("method") != Some("track.updateNowPlaying"))
+        );
+        let queued = hub
+            .observe(1, event("qualified_play", "manual", 120.0), cache.clone())
+            .await
+            .unwrap();
+        assert_eq!(queued, 2, "the listen is kept for both services");
+        assert_eq!(hub.process_due().await.unwrap(), 1);
+        let status = hub.status(1).await.unwrap();
+        assert_eq!(status.services[0].queue.pending, 1, "Last.fm waits");
+        assert_eq!(status.services[1].queue.sent, 1);
+
+        // Switched back on: the waiting listen goes out.
+        hub.update_settings(
+            1,
+            Service::Lastfm,
+            store::SettingsPatch {
+                enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(hub.process_due().await.unwrap(), 1);
+        let status = hub.status(1).await.unwrap();
+        assert_eq!(status.services[0].queue.pending, 0);
+        assert_eq!(status.services[0].queue.sent, 1);
+
+        // A service that needs reconnecting keeps queueing too.
+        {
+            let mut connection = pool.get().unwrap();
+            store::mark_reauth_required(&mut connection, 1, Service::Listenbrainz, "revoked")
+                .unwrap();
+        }
+        // Another play of the song, started earlier (so a new listen).
+        let mut later = event("qualified_play", "manual", 400.0);
+        later.session_id = Some("s2".into());
+        later.event_key = "s2:song-lanterns:qualified_play".into();
+        assert_eq!(hub.observe(1, later, cache.clone()).await.unwrap(), 2);
+        assert_eq!(hub.process_due().await.unwrap(), 1, "only Last.fm sends");
+        assert_eq!(hub.status(1).await.unwrap().services[1].queue.pending, 1);
+        hub.connect_listenbrainz(1, LB_TOKEN).await.unwrap();
+        assert_eq!(hub.process_due().await.unwrap(), 1);
+        assert_eq!(hub.status(1).await.unwrap().services[1].queue.pending, 0);
     }
 
     #[actix_web::test]
