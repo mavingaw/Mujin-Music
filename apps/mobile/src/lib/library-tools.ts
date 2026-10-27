@@ -1,3 +1,4 @@
+import { palette } from "@/constants/colors";
 import type {
   Breakdown,
   FileQualityTier,
@@ -7,11 +8,11 @@ import type {
 
 /** Tier colours, matching the signal-path light and the web tools. */
 export const TIER_COLORS: Record<FileQualityTier, string> = {
-  dsd: "#7c4dff",
-  hi_res: "#b26bff",
-  lossless: "#d6b8ff",
-  lossy: "#f5c542",
-  unknown: "#52525b",
+  dsd: palette.accentDeep,
+  hi_res: palette.accent,
+  lossless: palette.accentSoft,
+  lossy: palette.qualityLow,
+  unknown: palette.muted,
 };
 
 export const TIER_LABELS: Record<FileQualityTier, string> = {

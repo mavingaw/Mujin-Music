@@ -45,7 +45,7 @@ import {
 import { immediatePressFeedback } from "@/lib/press-feedback";
 import { useSession } from "@/providers/session-provider";
 
-const ACCENT = "#b26bff";
+const ACCENT = palette.accent;
 
 /**
  * Library tools on the phone: statistics, quality breakdown, skipped files
@@ -114,7 +114,7 @@ export default function LibraryToolsScreen() {
           >
             <ArrowLeft color="white" size={22} />
           </Pressable>
-          <PageTitle subtitle="Parson only reads your music files; every change can be undone.">
+          <PageTitle subtitle="Mujin Music only reads your music files; every change can be undone.">
             Library tools
           </PageTitle>
           {!admin ? (
@@ -141,7 +141,7 @@ export default function LibraryToolsScreen() {
               <SectionTitle>Quality</SectionTitle>
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>
-                  <Text style={{ color: "#d6b8ff" }}>
+                  <Text style={{ color: palette.accentSoft }}>
                     {losslessPercent(stats.tiers)}%
                   </Text>{" "}
                   lossless

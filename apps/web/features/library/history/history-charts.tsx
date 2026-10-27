@@ -77,8 +77,8 @@ export function ColumnChart({
             <span
               className={cn(
                 "block w-full rounded-t-[4px] transition-colors",
-                datum.value > 0 ? "bg-sky-400/80" : "bg-white/[0.06]",
-                active === index && "bg-sky-300",
+                datum.value > 0 ? "bg-mujin-copper/80" : "bg-white/[0.06]",
+                active === index && "bg-mujin-copper",
               )}
               style={{
                 height:
@@ -194,7 +194,7 @@ export function RankedList({
               <span className="mt-1 flex items-center gap-2">
                 <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.05]">
                   <span
-                    className="block h-full rounded-full bg-sky-400/80"
+                    className="block h-full rounded-full bg-mujin-copper/80"
                     style={{ width: `${(item.plays / max) * 100}%` }}
                   />
                 </span>

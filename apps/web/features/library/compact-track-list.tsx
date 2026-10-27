@@ -104,7 +104,7 @@ export default function CompactTrackList({
                 <p
                   className={cn(
                     "flex items-center gap-2 truncate text-sm font-medium",
-                    current ? "text-sky-300" : "text-zinc-100",
+                    current ? "text-mujin-copper" : "text-zinc-100",
                   )}
                 >
                   <span className="truncate">{song.name}</span>

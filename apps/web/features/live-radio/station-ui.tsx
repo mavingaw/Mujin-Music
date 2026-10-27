@@ -76,8 +76,8 @@ export function QualityBadge({
       )}
       title={`${LIVE_QUALITY_DESCRIPTIONS[quality.tier]} ${
         quality.verified
-          ? "Parson read this from the station's audio."
-          : "As the station is listed; Parson checks when it plays."
+          ? "Mujin Music read this from the station's audio."
+          : "As the station is listed; Mujin Music checks when it plays."
       }`}
     >
       {quality.verified && (

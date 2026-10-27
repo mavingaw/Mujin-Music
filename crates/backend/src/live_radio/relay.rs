@@ -76,7 +76,7 @@ impl std::fmt::Display for RelayError {
                 "That address is a web page, not an audio stream. Look on the station's site for a \"listen\" link or a stream URL (often ending in .mp3, .aac, .pls, .m3u or .m3u8).",
             ),
             Self::Unsupported(reason) => write!(formatter, "{reason}"),
-            Self::Converter(message) => write!(formatter, "Parson could not convert the stream: {message}"),
+            Self::Converter(message) => write!(formatter, "Mujin Music could not convert the stream: {message}"),
         }
     }
 }

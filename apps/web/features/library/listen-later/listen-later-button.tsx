@@ -28,7 +28,7 @@ export default function ListenLaterButton({
       className={cn(
         "grid h-10 w-10 place-items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-50",
         isSaved
-          ? "border-sky-300/45 bg-sky-400/15 text-sky-200 hover:bg-sky-400/25"
+          ? "border-mujin-copper/45 bg-mujin-copper/15 text-mujin-copper-hover hover:bg-mujin-copper/25"
           : "border-white/15 text-zinc-300 hover:border-white/35 hover:text-white",
         className,
       )}

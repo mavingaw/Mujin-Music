@@ -39,7 +39,7 @@ export default function LibraryToolsPage() {
     return (
       <div className="mx-auto max-w-3xl px-5 py-16">
         <EmptyState icon={<ShieldCheck />} title="Library tools are for admins">
-          Ask the person who runs this Parson server to tidy the library.
+          Ask the person who runs this Mujin Music server to tidy the library.
         </EmptyState>
       </div>
     );
@@ -68,15 +68,15 @@ export default function LibraryToolsPage() {
     <div className="mx-auto w-full max-w-[1180px] px-5 py-9 pb-36 sm:px-7">
       <header className="mb-7 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b26bff]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mujin-copper">
             Library
           </p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
             Library tools
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-500">
-            Keep your collection complete, tidy and in its best quality. Parson
-            only reads your music files; every change here can be undone.
+            Keep your collection complete, tidy and in its best quality. Mujin
+            Music only reads your music files; every change here can be undone.
           </p>
         </div>
       </header>

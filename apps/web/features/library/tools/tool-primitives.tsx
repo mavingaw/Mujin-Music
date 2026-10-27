@@ -64,7 +64,7 @@ export function ToolCover({
   return (
     <span
       className={cn(
-        "relative block shrink-0 overflow-hidden rounded-md bg-[#111] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]",
+        "relative block shrink-0 overflow-hidden rounded-md bg-mujin-raised shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]",
         className,
       )}
       style={{ width: size, height: size }}
@@ -148,7 +148,7 @@ export function JobProgress({
     >
       <div className="flex items-center gap-3">
         {running && (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#b26bff]" />
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-mujin-copper" />
         )}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-zinc-100">

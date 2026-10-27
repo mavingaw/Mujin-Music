@@ -320,7 +320,7 @@ function ProfileCard({
       className={cn(
         "group relative overflow-hidden rounded-2xl border p-4 transition-colors",
         profile.isCurrent
-          ? "border-sky-400/30 bg-sky-400/[0.04]"
+          ? "border-mujin-copper/30 bg-mujin-copper/[0.04]"
           : "border-white/8 bg-white/[0.02] hover:border-white/15",
       )}
     >
@@ -347,7 +347,7 @@ function ProfileCard({
           )}
         </div>
         {profile.isCurrent ? (
-          <span className="flex items-center gap-1 rounded-full bg-sky-400/15 px-2 py-1 text-[11px] font-semibold text-sky-300">
+          <span className="flex items-center gap-1 rounded-full bg-mujin-copper/15 px-2 py-1 text-[11px] font-semibold text-mujin-copper">
             <Check aria-label="This device" className="h-3 w-3" />
             <span className="max-sm:hidden">This device</span>
           </span>

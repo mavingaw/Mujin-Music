@@ -100,7 +100,7 @@ function TagTile({ covers, tag }: { covers: string[]; tag: UserTag }) {
             className={cn("absolute inset-x-0 top-0 h-1 opacity-90", tone.dot)}
           />
           {smart && (
-            <span className="absolute right-2.5 top-3 flex items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-violet-200 backdrop-blur">
+            <span className="absolute right-2.5 top-3 flex items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-mujin-copper-hover backdrop-blur">
               <Sparkles className="h-3 w-3" /> Smart
             </span>
           )}
@@ -172,7 +172,8 @@ export default function TagsOverview() {
           <div className="flex gap-2">
             <Button asChild variant="ghost">
               <Link href="/library">
-                <Sparkles className="text-violet-300" /> Smart tag from a focus
+                <Sparkles className="text-mujin-copper" /> Smart tag from a
+                focus
               </Link>
             </Button>
             <Button className="rounded-full" onClick={() => setCreating(true)}>
@@ -255,7 +256,7 @@ export default function TagsOverview() {
           </p>
         ) : all.length === 0 ? (
           <div className="mx-auto mt-10 max-w-md rounded-2xl border border-white/8 bg-white/2 px-8 py-12 text-center">
-            <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-violet-500/15 text-violet-200">
+            <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-mujin-copper/15 text-mujin-copper-hover">
               <Hash className="h-8 w-8" />
             </div>
             <h2 className="text-xl font-bold text-white">No tags yet</h2>

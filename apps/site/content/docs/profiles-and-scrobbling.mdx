@@ -3,7 +3,7 @@ title: Profiles and scrobbling
 description: Several people on one server, quick profile switching, and Last.fm and ListenBrainz scrobbling.
 ---
 
-Parson is built to be shared. Everyone who listens gets a **profile** with their own listening history, likes, ratings, Radio taste, recommendations and scrobbling.
+Mujin Music is built to be shared. Everyone who listens gets a **profile** with their own listening history, likes, ratings, Radio taste, recommendations and scrobbling.
 
 ## Profiles
 
@@ -32,7 +32,7 @@ Each profile connects its own accounts under Settings → Scrobbling, so everyon
 - **Last.fm** uses Last.fm's web sign-in. Last.fm requires an API account per application, so an administrator creates one at [last.fm/api/account/create](https://www.last.fm/api/account/create) and pastes the API key and shared secret into Settings → Scrobbling. They are stored encrypted. Servers can also set `PARSON_LASTFM_API_KEY` and `PARSON_LASTFM_API_SECRET`.
 - **ListenBrainz** uses your user token from [listenbrainz.org/settings](https://listenbrainz.org/settings/). Self-hosted ListenBrainz servers work by setting `PARSON_LISTENBRAINZ_API_URL`.
 
-Parson follows Last.fm's rules for every service:
+Mujin Music follows Last.fm's rules for every service:
 
 - Tracks of 30 seconds or less are never scrobbled.
 - A track counts once you have heard half of it or four minutes, whichever comes first.
@@ -44,7 +44,7 @@ The server keeps scrobbles in a queue. When a service or the server is offline, 
 
 ### Importing history
 
-On a connected service, **Import history** reads your past listens, matches them to songs in your library and adds the matches to the profile's history with their original dates. Imported listens shape Radio and recommendations straight away. Listens already in Parson are not added twice, and songs you do not have are skipped.
+On a connected service, **Import history** reads your past listens, matches them to songs in your library and adds the matches to the profile's history with their original dates. Imported listens shape Radio and recommendations straight away. Listens already in Mujin Music are not added twice, and songs you do not have are skipped.
 
 ### Trying it without accounts
 

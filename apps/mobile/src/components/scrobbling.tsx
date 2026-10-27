@@ -29,7 +29,7 @@ import { palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
 
 const key = ["scrobbling"] as const;
-const sky = "#38bdf8";
+const accent = palette.accent;
 const tones = {
   ok: "#6ee7b7",
   warn: "#fcd34d",
@@ -72,7 +72,7 @@ function Row({
         accessibilityLabel={label}
         onValueChange={onChange}
         thumbColor="white"
-        trackColor={{ false: "#3f3f46", true: sky }}
+        trackColor={{ false: "#3f3f46", true: accent }}
         value={value}
       />
     </View>

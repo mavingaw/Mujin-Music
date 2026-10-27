@@ -188,7 +188,7 @@ function Operation({
   return (
     <ToolCard className="flex flex-col">
       <div className="flex items-start gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#b26bff]/10 text-[#b26bff] [&_svg]:h-5 [&_svg]:w-5">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-mujin-copper/10 text-mujin-copper [&_svg]:h-5 [&_svg]:w-5">
           {icon}
         </span>
         <div className="min-w-0">
@@ -252,7 +252,7 @@ function MissingFilesSection() {
           </Button>
         ) : undefined
       }
-      description="Files the library remembers but can no longer find. Forgetting removes them from Parson's records only; nothing on disk is touched. Files on a drive or share that is offline are always kept."
+      description="Files the library remembers but can no longer find. Forgetting removes them from Mujin Music's records only; nothing on disk is touched. Files on a drive or share that is offline are always kept."
       title={
         <span className="flex items-baseline gap-2">
           Missing files
@@ -329,7 +329,7 @@ function MissingFilesSection() {
           <DialogHeader>
             <DialogTitle>{forgetButtonLabel(forgettable)}?</DialogTitle>
             <DialogDescription>
-              Parson stops remembering {formatCount(forgettable)} file
+              Mujin Music stops remembering {formatCount(forgettable)} file
               {forgettable === 1 ? "" : "s"} ({formatBytes(forgettableBytes)})
               it can no longer find. Nothing on disk is deleted. If a file comes
               back, the next scan adds it again; its likes and playlist entries

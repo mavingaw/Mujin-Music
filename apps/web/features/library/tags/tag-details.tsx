@@ -212,7 +212,7 @@ export default function TagDetails() {
           <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
             {smart ? (
               <>
-                <Sparkles className="h-3.5 w-3.5 text-violet-300" /> Smart tag
+                <Sparkles className="h-3.5 w-3.5 text-mujin-copper" /> Smart tag
               </>
             ) : (
               <>

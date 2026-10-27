@@ -9,7 +9,11 @@ export const palette = {
   secondary: "#B8B3AA",
   muted: "#5C5955",
   accent: "#D98B5F",
+  accentSoft: "#E6A27A",
+  accentDeep: "#BF7246",
   accentText: "#160D07",
+  qualityHigh: "#A3C98B",
+  qualityLow: "#7E7A74",
   danger: "#F2473F",
   success: "#22c55e",
 } as const;

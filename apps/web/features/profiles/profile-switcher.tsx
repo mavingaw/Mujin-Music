@@ -82,7 +82,7 @@ export function ProfileSwitcher() {
       {open && profiles.data && (
         <div
           aria-label="Switch profile"
-          className="absolute right-0 top-[calc(100%+8px)] z-60 w-[min(340px,calc(100vw-24px))] origin-top-right animate-[profile-panel-in_160ms_ease-out] overflow-hidden rounded-2xl border border-white/10 bg-[#0c0c0e]/95 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl"
+          className="absolute right-0 top-[calc(100%+8px)] z-60 w-[min(340px,calc(100vw-24px))] origin-top-right animate-[profile-panel-in_160ms_ease-out] overflow-hidden rounded-2xl border border-white/10 bg-mujin-raised/95 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl"
           ref={panel}
           role="dialog"
         >
@@ -184,7 +184,7 @@ function SwitcherPanel({
                       size={40}
                     />
                     {profile.isCurrent && (
-                      <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-sky-400 ring-2 ring-[#0c0c0e]">
+                      <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-mujin-copper ring-2 ring-mujin-raised">
                         <Check
                           className="h-2.5 w-2.5 text-black"
                           strokeWidth={3.5}

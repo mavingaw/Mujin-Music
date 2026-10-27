@@ -182,11 +182,11 @@ function SignalSummary({
             station to check its real format…
           </span>
         ) : format?.verified ? (
-          "Read from the stream's audio frames by your Parson server."
+          "Read from the stream's audio frames by your Mujin Music server."
         ) : failed ? (
-          "The station did not answer Parson's check; this is its listing."
+          "The station did not answer Mujin Music's check; this is its listing."
         ) : (
-          "As the directory lists it; Parson confirms it from the audio once the station plays."
+          "As the directory lists it; Mujin Music confirms it from the audio once the station plays."
         )}{" "}
         {LIVE_QUALITY_DESCRIPTIONS[quality.tier]}
       </p>
@@ -398,8 +398,8 @@ export default function StationDetails() {
                 </Fact>
               )}
               <Fact icon={<ShieldCheck className="h-4 w-4" />} label="Delivery">
-                {station.hls ? "HLS" : "Icecast / HTTP"} through your Parson
-                server
+                {station.hls ? "HLS" : "Icecast / HTTP"} through your Mujin
+                Music server
               </Fact>
             </div>
             {station.homepage && (

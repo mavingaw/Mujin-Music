@@ -187,11 +187,12 @@ export function browserRegion(
 }
 
 export const QUALITY_BADGE_CLASSES: Record<LiveQualityTier, string> = {
+  // The brand's quality colours, as on the signal-path light.
   lossless:
-    "border-violet-400/40 bg-violet-500/15 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]",
-  high: "border-sky-400/30 bg-sky-500/10 text-sky-200",
+    "border-quality-lossless/45 bg-quality-lossless/15 text-quality-lossless shadow-[0_0_12px_rgba(217,139,95,0.25)]",
+  high: "border-quality-high/35 bg-quality-high/10 text-quality-high",
   standard: "border-white/12 bg-white/5 text-zinc-300",
-  low: "border-amber-400/30 bg-amber-500/10 text-amber-200",
+  low: "border-quality-low/45 bg-quality-low/10 text-zinc-400",
   unknown: "border-white/8 bg-white/3 text-zinc-500",
 };
 

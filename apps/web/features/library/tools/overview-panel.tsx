@@ -89,7 +89,9 @@ export function OverviewPanel({
           <span className="flex items-baseline gap-3">
             Quality
             <span className="text-sm font-normal text-zinc-500">
-              <span className="font-semibold text-[#d6b8ff]">{share}%</span>{" "}
+              <span className="font-semibold text-mujin-copper-hover">
+                {share}%
+              </span>{" "}
               lossless
             </span>
           </span>

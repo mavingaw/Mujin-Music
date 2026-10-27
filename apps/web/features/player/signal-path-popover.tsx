@@ -612,7 +612,7 @@ function SignalPathPanel({
                 : serverOutput
                   ? "Played by the server"
                   : path?.stages.some((stage) => stage.id === "relay")
-                    ? "Live stream, relayed by Parson"
+                    ? "Live stream, relayed by Mujin Music"
                     : streamBitrate > 0
                       ? `MP3 ${streamBitrate} kbps`
                       : "Original file"}

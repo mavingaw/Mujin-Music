@@ -30,14 +30,14 @@ const TIER_COLORS: Record<
   { border: string; text: string; background: string }
 > = {
   lossless: {
-    border: "rgba(167,139,250,0.5)",
-    text: "#ddd6fe",
-    background: "rgba(139,92,246,0.16)",
+    border: "rgba(217,139,95,0.5)",
+    text: palette.accentSoft,
+    background: "rgba(217,139,95,0.16)",
   },
   high: {
-    border: "rgba(56,189,248,0.4)",
-    text: "#bae6fd",
-    background: "rgba(14,165,233,0.12)",
+    border: "rgba(163,201,139,0.4)",
+    text: palette.qualityHigh,
+    background: "rgba(163,201,139,0.12)",
   },
   standard: {
     border: "rgba(255,255,255,0.14)",
@@ -45,9 +45,9 @@ const TIER_COLORS: Record<
     background: "rgba(255,255,255,0.05)",
   },
   low: {
-    border: "rgba(251,191,36,0.4)",
-    text: "#fde68a",
-    background: "rgba(245,158,11,0.12)",
+    border: "rgba(126,122,116,0.45)",
+    text: palette.secondary,
+    background: "rgba(126,122,116,0.1)",
   },
   unknown: {
     border: "rgba(255,255,255,0.08)",

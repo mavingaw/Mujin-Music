@@ -152,7 +152,7 @@ pub fn classify_extension(path: &Path, extension: &str) -> Option<(SkipReason, S
         return Some((
             SkipReason::VideoFile,
             format!(
-                "{} video. Parson imports audio files; a music video or concert film is left out.",
+                "{} video. Mujin Music imports audio files; a music video or concert film is left out.",
                 extension.to_ascii_uppercase()
             ),
         ));
@@ -160,7 +160,7 @@ pub fn classify_extension(path: &Path, extension: &str) -> Option<(SkipReason, S
     if extension == "iso" {
         return Some((
             SkipReason::DiscImage,
-            "Disc image (often an SACD ISO). Parson reads DSF and DFF files, not ISO images."
+            "Disc image (often an SACD ISO). Mujin Music reads DSF and DFF files, not ISO images."
                 .into(),
         ));
     }
@@ -176,9 +176,9 @@ pub fn classify_extension(path: &Path, extension: &str) -> Option<(SkipReason, S
                 "Surround soundtrack stream without a music container."
             }
             "shn" | "ofr" | "ofs" | "la" | "pac" => {
-                "Legacy lossless codec that Parson does not decode."
+                "Legacy lossless codec that Mujin Music does not decode."
             }
-            _ => "Audio format Parson does not decode.",
+            _ => "Audio format Mujin Music does not decode.",
         };
         return Some((SkipReason::UnsupportedFormat, detail.into()));
     }
@@ -231,13 +231,13 @@ pub fn fix_for(reason: SkipReason, extension: &str, path: &str) -> Fix {
         },
         SkipReason::TagsUnreadable => Fix {
             summary: "The track is in your library under its file name. Fix the tags in a tag \
-                      editor and read it again, or edit its details in Parson."
+                      editor and read it again, or edit its details in Mujin Music."
                 .into(),
             action: Some("edit"),
             command: None,
         },
         SkipReason::NoAudio => Fix {
-            summary: "The file has a music extension but no audio Parson can measure. Check it \
+            summary: "The file has a music extension but no audio Mujin Music can measure. Check it \
                       plays elsewhere, then read it again."
                 .into(),
             action: Some("rescan"),
@@ -251,14 +251,14 @@ pub fn fix_for(reason: SkipReason, extension: &str, path: &str) -> Fix {
             command: None,
         },
         SkipReason::IoFailure => Fix {
-            summary: "The server can't open this file. Check that the account running Parson \
+            summary: "The server can't open this file. Check that the account running Mujin Music \
                       may read it, and that the drive or network share is healthy."
                 .into(),
             action: Some("rescan"),
             command: Some(format!("chmod a+r {}", shell_quote(path))),
         },
         SkipReason::UnreadableFolder => Fix {
-            summary: "Parson can't list this folder, so nothing inside it is in your library. \
+            summary: "Mujin Music can't list this folder, so nothing inside it is in your library. \
                       Check its permissions and that the drive is connected."
                 .into(),
             action: Some("rescan"),
@@ -306,7 +306,7 @@ pub fn fix_for(reason: SkipReason, extension: &str, path: &str) -> Fix {
             },
         },
         SkipReason::PlaylistFile => Fix {
-            summary: "Import it to make a Parson playlist from the tracks it lists.".into(),
+            summary: "Import it to make a Mujin Music playlist from the tracks it lists.".into(),
             action: Some("import_playlist"),
             command: None,
         },

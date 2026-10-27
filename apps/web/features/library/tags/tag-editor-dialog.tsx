@@ -124,7 +124,7 @@ export default function TagEditorDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {smartQuery && <Sparkles className="h-4 w-4 text-violet-300" />}
+            {smartQuery && <Sparkles className="h-4 w-4 text-mujin-copper" />}
             {tag ? "Edit tag" : query ? "New smart tag" : "New tag"}
           </DialogTitle>
           <DialogDescription>
@@ -134,7 +134,7 @@ export default function TagEditorDialog({
           </DialogDescription>
         </DialogHeader>
         {smartQuery && (
-          <div className="rounded-xl border border-violet-300/15 bg-violet-400/6 p-3">
+          <div className="rounded-xl border border-mujin-copper/15 bg-mujin-copper/6 p-3">
             <SmartQuerySummary query={smartQuery} />
           </div>
         )}
