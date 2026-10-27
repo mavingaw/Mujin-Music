@@ -66,11 +66,36 @@ jobs:
       release: true
     secrets: inherit
 
+  # One APK per ABI: arm64-v8a for current phones and tablets, armeabi-v7a
+  # for 32-bit devices. Two jobs rather than a matrix, because a matrix of
+  # reusable-workflow calls keeps only one call's outputs.
+  android-arm64:
+    name: Build Android APK (arm64-v8a)
+    needs: validate
+    uses: ./.github/workflows/android.yml
+    with:
+      abi: arm64-v8a
+      release: true
+    secrets: inherit
+
+  android-armv7:
+    name: Build Android APK (armeabi-v7a)
+    needs: validate
+    uses: ./.github/workflows/android.yml
+    with:
+      abi: armeabi-v7a
+      release: true
+    secrets: inherit
+
+  # The image is pushed (and tagged latest) only once every package has
+  # built, so a failed build never leaves a published image behind.
   container:
     name: Publish release container
     needs:
       - validate
       - build
+      - android-arm64
+      - android-armv7
     uses: ./.github/workflows/container-image.yml
     with:
       version: ${{ needs.validate.outputs.version }}
@@ -81,6 +106,8 @@ jobs:
     needs:
       - validate
       - build
+      - android-arm64
+      - android-armv7
       - container
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -126,8 +153,24 @@ jobs:
           require_count 2 "Mujin-Music-${VERSION}-*-portable.exe"
           require_count 2 "Mujin-Music-${VERSION}-*.dmg"
           require_count 2 "Mujin-Music-${VERSION}-*.zip"
+          require_count 1 "Mujin-Music-Server-${VERSION}-win-x64.zip"
           require_count 1 "ParsonMusicServer.exe"
+          require_count 1 "ParsonMusicServer.exe.sha256"
           require_count 1 "windows-server-update.json"
+          require_count 1 "Mujin-Music-${VERSION}-android-arm64-v8a.apk"
+          require_count 1 "Mujin-Music-${VERSION}-android-armeabi-v7a.apk"
+          # Nothing else, apart from electron-builder's .blockmap files.
+          total="$(find artifacts -maxdepth 1 -type f ! -name '*.blockmap' | wc -l)"
+          if [[ "$total" -ne 18 ]]; then
+            echo "Expected 18 release packages, found $total:" >&2
+            find artifacts -maxdepth 1 -type f ! -name '*.blockmap' -printf '%f\n' | sort >&2
+            exit 1
+          fi
+          unexpected="$(find artifacts -maxdepth 1 -type f -name '*.blockmap' ! -name "*-${VERSION}-*.blockmap")"
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected block maps: $unexpected" >&2
+            exit 1
+          fi
       - name: Generate architecture-specific update feeds
         run: node tools/update-metadata.cjs artifacts "${{ needs.validate.outputs.version }}"
       - name: Attest release package provenance
@@ -135,24 +178,46 @@ jobs:
         with:
           subject-path: |
             artifacts/*.AppImage
+            artifacts/*.apk
             artifacts/*.deb
             artifacts/*.dmg
             artifacts/*.exe
             artifacts/*.zip
             artifacts/*.json
             artifacts/*.yml
+      # Both APKs come from the same secrets, so they are signed alike.
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARM64_SIGNING_KEY: ${{ needs.android-arm64.outputs.signing_key }}
+          ARMV7_SIGNING_KEY: ${{ needs.android-armv7.outputs.signing_key }}
+          ARM64_CERTIFICATE: ${{ needs.android-arm64.outputs.certificate_sha256 }}
+          ARMV7_CERTIFICATE: ${{ needs.android-armv7.outputs.certificate_sha256 }}
+        run: |
+          if [[ "$ARM64_SIGNING_KEY" != "$ARMV7_SIGNING_KEY" || "$ARM64_CERTIFICATE" != "$ARMV7_CERTIFICATE" ]]; then
+            echo "The two Android APKs were not signed with the same key." >&2
+            exit 1
+          fi
+          node tools/release-notes.cjs "$VERSION" "$GITHUB_REPOSITORY" "$ARM64_SIGNING_KEY" "$ARM64_CERTIFICATE" \
+            > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish stable release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLACE: ${{ inputs.replace }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           mapfile -d '' packages < <(find artifacts -maxdepth 1 -type f -print0 | sort -z)
-          if [[ "${{ inputs.replace }}" == "true" ]]; then
+          if [[ "$REPLACE" == "true" ]]; then
             gh release upload "$RELEASE_TAG" "${packages[@]}" --clobber
+            # The notes describe the packages (such as the Android signing
+            # key), so they are replaced with them.
+            gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
             gh release create "$RELEASE_TAG" "${packages[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Mujin Music ${{ needs.validate.outputs.version }}" \
-              --generate-notes
+              --title "Mujin Music $VERSION" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
       - name: Validate published release artifacts
         env:

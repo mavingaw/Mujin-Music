@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "parson-bridge"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "libc",
  "mdns-sd",
@@ -2344,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "parson-core"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "base64 0.23.1",
  "diesel",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "parson-music"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "actix-cors",
  "actix-multipart",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "parson-music-windows-bridge"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "parson-music",
  "serde_json",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "parson-music-windows-server"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "actix-web",
  "dirs",
@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "parson-output"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "libc",
  "mdns-sd",

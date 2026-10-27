@@ -10,6 +10,6 @@
   "issue_tracker": "https://github.com/mavingaw/Mujin-Music/issues",
   "loggers": ["custom_components.mujin_music"],
   "requirements": [],
-  "version": "1.0.1",
+  "version": "1.1.0",
   "zeroconf": ["_parson._tcp.local."]
 }

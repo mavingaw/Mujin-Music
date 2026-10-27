@@ -62,8 +62,8 @@ Desktop apps include everything needed to run your library.
 
 ## Download
 
-Get Windows, macOS and Linux packages from the [Releases page](https://github.com/mavingaw/Mujin-Music/releases).
-The Android APK is built by the [Android workflow](.github/workflows/android.yml).
+Get the Windows, macOS, Linux and Android apps and the Windows server from the [Releases page](https://github.com/mavingaw/Mujin-Music/releases).
+Android comes as two APKs: `arm64-v8a` for most phones and tablets, `armeabi-v7a` for 32-bit devices.
 
 The server container is `ghcr.io/mavingaw/mujin-music:latest`. Versioned image tags are also published for pinned deployments.
 

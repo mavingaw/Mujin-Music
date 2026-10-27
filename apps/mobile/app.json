@@ -2,7 +2,7 @@
   "expo": {
     "name": "Mujin Music",
     "slug": "mujin-music",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "orientation": "default",
     "icon": "./assets/images/mujin-icon.png",
     "scheme": "parson",
@@ -15,7 +15,7 @@
         "NSLocalNetworkUsageDescription": "Mujin Music finds music libraries running on your local network.",
         "NSBonjourServices": ["_parson._tcp"]
       },
-      "buildNumber": "1000001"
+      "buildNumber": "1001000"
     },
     "android": {
       "package": "music.mujin.app",
@@ -39,7 +39,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "versionCode": 1001000
     },
     "web": {
       "output": "single",

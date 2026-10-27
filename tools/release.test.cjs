@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { versionFiles, versionParts, checkVersions } = require("./release.cjs");
 const { generate } = require("./update-metadata.cjs");
+const { render, templatePath } = require("./release-notes.cjs");
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "parson-release-"));
@@ -36,6 +37,7 @@ test("synchronises packages, Expo build numbers and Rust locks without changing 
   const changes = versionFiles(root, "2.3.4");
   const mobile = JSON.parse(changes.get("apps/mobile/app.json"));
   assert.equal(mobile.expo.ios.buildNumber, "2003004");
+  assert.equal(mobile.expo.android.versionCode, 2003004);
   assert.equal(
     JSON.parse(changes.get("apps/mobile/package.json")).dependencies.test,
     "9.0.0",
@@ -96,4 +98,99 @@ test("generates complete update channels with verified hashes and correct archit
   assert.match(read("latest.yml").files[0].sha512, /^[A-Za-z0-9+/]{86}==$/);
   fs.unlinkSync(path.join(root, "Mujin-Music-Setup-2.3.4-arm64.exe"));
   await assert.rejects(generate(root, "2.3.4"), /expected 2 artifacts/);
+});
+
+test("renders the release notes with a link to each package the stable release publishes", () => {
+  const template = fs.readFileSync(templatePath, "utf8");
+  const certificate = "ab".repeat(32);
+  const options = {
+    version: "2.3.4",
+    repository: "Owner/Mujin-Music",
+    certificate,
+  };
+  const debug = render(template, { ...options, signingKey: "debug" });
+  const upload = render(template, { ...options, signingKey: "upload" });
+
+  for (const notes of [debug, upload]) {
+    assert.match(notes, /^# Mujin Music 2\.3\.4\n/);
+    assert.doesNotMatch(notes, /\{\{|\}\}|<!--/);
+    assert.match(
+      notes,
+      /based on \[Parson\]\(https:\/\/github\.com\/ParsonLabs\/parson\) by\s+ParsonLabs/,
+    );
+    assert.match(notes, /More info\*\*, then\s+\*\*Run anyway/);
+    assert.match(notes, /winget install Gyan\.FFmpeg/);
+    assert.match(notes, /Install unknown apps/);
+    assert.match(notes, /docker pull ghcr\.io\/owner\/mujin-music:2\.3\.4/);
+    assert.ok(notes.includes(certificate));
+  }
+  assert.match(debug, /publicly known\s+Android debug key/);
+  assert.doesNotMatch(upload, /debug key/);
+  assert.match(upload, /Mujin Music release key/);
+
+  // Every download link names a file that release.yml requires, and each
+  // user-facing file it requires has a link.
+  const links = [
+    ...debug.matchAll(
+      /https:\/\/github\.com\/Owner\/Mujin-Music\/releases\/download\/v2\.3\.4\/([^)\s]+)\)/g,
+    ),
+  ].map((match) => match[1]);
+  assert.deepEqual([...new Set(links)].sort(), [
+    "Mujin-Music-2.3.4-amd64.deb",
+    "Mujin-Music-2.3.4-android-arm64-v8a.apk",
+    "Mujin-Music-2.3.4-android-armeabi-v7a.apk",
+    "Mujin-Music-2.3.4-arm64-portable.exe",
+    "Mujin-Music-2.3.4-arm64.AppImage",
+    "Mujin-Music-2.3.4-arm64.deb",
+    "Mujin-Music-2.3.4-arm64.dmg",
+    "Mujin-Music-2.3.4-x64-portable.exe",
+    "Mujin-Music-2.3.4-x64.dmg",
+    "Mujin-Music-2.3.4-x86_64.AppImage",
+    "Mujin-Music-Server-2.3.4-win-x64.zip",
+    "Mujin-Music-Setup-2.3.4-arm64.exe",
+    "Mujin-Music-Setup-2.3.4-x64.exe",
+  ]);
+  const workflow = fs.readFileSync(
+    path.join(__dirname, "..", ".github", "workflows", "release.yml"),
+    "utf8",
+  );
+  const required = [...workflow.matchAll(/require_count \d+ "([^"]+)"/g)].map(
+    (match) =>
+      new RegExp(
+        `^${match[1]
+          .replaceAll("${VERSION}", "2.3.4")
+          .replace(/[.+^$()|[\]\\]/g, "\\$&")
+          .replaceAll("*", ".*")}$`,
+      ),
+  );
+  for (const link of links) {
+    assert.ok(
+      required.some((pattern) => pattern.test(link)),
+      `release.yml does not require ${link}`,
+    );
+  }
+  for (const pattern of required) {
+    if (
+      /ParsonMusicServer|windows-server-update|\\\.zip\$/.test(pattern.source)
+    ) {
+      continue;
+    }
+    assert.ok(
+      links.some((link) => pattern.test(link)),
+      `The release notes do not link to ${pattern}`,
+    );
+  }
+
+  for (const invalid of [
+    { ...options, signingKey: "debug", version: "2.3" },
+    { ...options, signingKey: "debug", repository: "not a repository" },
+    { ...options, signingKey: "unknown" },
+    { ...options, signingKey: "debug", certificate: "secret" },
+  ]) {
+    assert.throws(() => render(template, invalid));
+  }
+  assert.throws(
+    () => render("{{version}} {{other}}", { ...options, signingKey: "debug" }),
+    /android-signing/,
+  );
 });
