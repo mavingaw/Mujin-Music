@@ -8,6 +8,13 @@ import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import PlaylistCover from "@/features/library/playlist-cover";
 import PlaylistMenu from "@/features/library/playlist-menu";
 import SongMenu from "@/features/library/song-menu";
+import { PlayNowSplit } from "@/features/player/play-now-split";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
+import { requestViewLyrics } from "@/features/player/view-lyrics";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import BannedView from "@/features/library/banned-view";
 import { BannedBadge } from "@/features/library/radio-bans";
 import { SongTitle, ExplicitBadge } from "./song-title";
@@ -43,6 +50,7 @@ import {
   type LibraryCatalogAlbum,
   type LibraryCatalogArtist,
   type LibraryCatalogSong,
+  type LyricsAvailability,
 } from "@parson/music-sdk";
 import {
   keepPreviousData,
@@ -58,6 +66,7 @@ import {
   Hash,
   History,
   ListMusic,
+  MicVocal,
   Heart,
   Import,
   Music2,
@@ -72,7 +81,7 @@ import { useSession } from "@/features/account/session-provider";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import FocusBar from "./focus/focus-bar";
 import FocusPanel from "./focus/focus-panel";
 import SmartPlaylistDialog from "./focus/smart-playlist-dialog";
@@ -812,10 +821,39 @@ function SongsView({
     );
   }
   return (
+    <SongsList
+      songs={songs}
+      hasMore={hasMore}
+      loadingMore={loadingMore}
+      onLoadMore={onLoadMore}
+    />
+  );
+}
+
+function SongsList({
+  songs,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  songs: FocusedSong[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  const lyrics = useLyricsAvailability(
+    useMemo(() => songs.map((song) => song.id), [songs]),
+  );
+  return (
     <>
       <div className="overflow-hidden rounded-xl border border-white/8">
         {songs.map((song, index) => (
-          <CatalogSongRow key={song.id} index={index} song={song} />
+          <CatalogSongRow
+            key={song.id}
+            index={index}
+            lyrics={lyrics[song.id]}
+            song={song}
+          />
         ))}
       </div>
       <InfiniteLoad
@@ -827,7 +865,34 @@ function SongsView({
   );
 }
 
-function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
+/** A catalogue song as a queue item. */
+function catalogQueueItem(song: FocusedSong) {
+  return {
+    song: {
+      id: song.id,
+      name: song.name,
+      artist: song.artistName,
+      path: song.path,
+      duration: song.durationSeconds,
+    },
+    artist: { id: song.artistId, name: song.artistName },
+    album: {
+      id: song.albumId,
+      name: song.albumName,
+      cover_url: song.coverPath,
+    },
+  };
+}
+
+function CatalogSongRow({
+  index,
+  lyrics,
+  song,
+}: {
+  index: number;
+  lyrics?: LyricsAvailability;
+  song: FocusedSong;
+}) {
   const playback = useZonePlayback();
   const active = playback.currentSongId === song.id;
   const artwork = song.coverPath
@@ -839,20 +904,7 @@ function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
       void playback.togglePlayPause();
       return;
     }
-    const artist = { id: song.artistId, name: song.artistName };
-    const album = {
-      id: song.albumId,
-      name: song.albumName,
-      cover_url: song.coverPath,
-    };
-    const track = {
-      id: song.id,
-      name: song.name,
-      artist: song.artistName,
-      path: song.path,
-      duration: song.durationSeconds,
-    };
-    void playback.playQueue([{ song: track, artist, album }]);
+    void playback.playQueue([catalogQueueItem(song)]);
   };
 
   return (
@@ -899,6 +951,7 @@ function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
               className="ml-1.5 align-[-2px]"
               target={{ kind: "song", id: song.id }}
             />
+            <TimedLyricsMark availability={lyrics} className="ml-2" />
           </p>
           <p className="truncate text-xs text-zinc-500 hover:text-white hover:underline sm:hidden">
             {isExplicitSongTitle(song.name) && <ExplicitBadge />}
@@ -910,6 +963,32 @@ function CatalogSongRow({ index, song }: { index: number; song: FocusedSong }) {
           <ArtistCreditLinks credits={catalogSongArtistCredits(song)} />
         </p>
         <span className="flex items-center gap-3 pr-2 text-xs tabular-nums text-zinc-600">
+          <PlayNowSplit
+            onPlayNow={play}
+            playing={active && playback.isPlaying}
+            target={{
+              kind: "track",
+              id: song.id,
+              name: song.name,
+              item: catalogQueueItem(song),
+            }}
+            variant="row"
+          >
+            <DropdownMenuItem
+              onSelect={() =>
+                requestViewLyrics({
+                  songId: song.id,
+                  title: song.name,
+                  artist: song.artistName,
+                  cover: artwork,
+                  item: catalogQueueItem(song),
+                })
+              }
+            >
+              <MicVocal className="h-4 w-4" />
+              View lyrics
+            </DropdownMenuItem>
+          </PlayNowSplit>
           {song.badge && (
             <span className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 md:inline">
               {song.badge}
@@ -973,19 +1052,30 @@ function ArtistRow({ artist }: { artist: LibraryCatalogArtist }) {
   const summary = artistCatalogSummary(artist);
   return (
     <ArtistMenu artistId={artist.id} artistName={artist.name}>
-      <Link
-        className="group flex min-w-0 items-center gap-4 border-b border-white/6 px-4 py-4 transition-colors last:border-0 hover:bg-white/[0.035] sm:px-5"
-        href={`/artist?id=${artist.id}`}
-      >
-        <div className="min-w-0 flex-1">
-          <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-zinc-100 group-hover:text-white">
-            <span className="truncate">{artist.name}</span>
-            <BannedBadge target={{ kind: "artist", id: artist.id }} />
-          </h2>
-          {summary && <p className="mt-1 text-xs text-zinc-500">{summary}</p>}
+      <div className="group relative border-b border-white/6 transition-colors last:border-0 hover:bg-white/[0.035]">
+        <Link
+          className="flex min-w-0 items-center gap-4 px-4 py-4 pr-28 sm:px-5 sm:pr-28"
+          href={`/artist?id=${artist.id}`}
+        >
+          <div className="min-w-0 flex-1">
+            <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-zinc-100 group-hover:text-white">
+              <span className="truncate">{artist.name}</span>
+              <BannedBadge target={{ kind: "artist", id: artist.id }} />
+            </h2>
+            {summary && <p className="mt-1 text-xs text-zinc-500">{summary}</p>}
+          </div>
+        </Link>
+        <div className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-3 sm:right-5">
+          <PlayNowSplit
+            target={{ kind: "artist", id: artist.id, name: artist.name }}
+            variant="row"
+          />
+          <ChevronRight
+            aria-hidden="true"
+            className="pointer-events-none h-4 w-4 shrink-0 text-zinc-600 transition-colors group-hover:text-white"
+          />
         </div>
-        <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600 transition-colors group-hover:text-white" />
-      </Link>
+      </div>
     </ArtistMenu>
   );
 }

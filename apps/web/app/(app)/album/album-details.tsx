@@ -32,16 +32,11 @@ import { useMemo, useState } from "react";
 import {
   Download,
   Globe2,
-  ListEnd,
   ListPlus,
-  ListStart,
   Loader2,
   MoreHorizontal,
   Pencil,
   SlidersHorizontal,
-  Pause,
-  Play,
-  Radio,
   Plus,
   RefreshCw,
   ScanSearch,
@@ -51,11 +46,9 @@ import { IdentifyAlbumDialog } from "@/features/library/works/identify-album-dia
 import { GenreChips } from "@/features/library/genres/genre-chips";
 import { AlbumGenresDialog } from "@/features/library/genres/album-genres-dialog";
 import { downloadAlbum } from "@/lib/downloads/download-album";
-import {
-  StartRadioButton,
-  useStartRadio,
-} from "@/features/player/radio/radio-controls";
+import { StartRadioButton } from "@/features/player/radio/radio-controls";
 import { AlbumFormat } from "@/features/player/signal-path-popover";
+import { PlayNowSplit } from "@/features/player/play-now-split";
 import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor, {
@@ -206,7 +199,6 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
 
   const playback = useZonePlayback();
   const { isPlaying, currentSongId, currentAlbumId } = playback;
-  const startRadio = useStartRadio();
 
   const albumCoverURL = useMemo(
     () => getLibraryImageUrl(album?.cover_url, getBaseURL),
@@ -244,30 +236,6 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     },
     onError: () => toast("Could not add this album."),
   });
-
-  const addAlbumToQueue = () => {
-    if (!album || !artist) {
-      return;
-    }
-    void playback.addToQueue(
-      album.songs.map((song) => ({
-        song,
-        album,
-        artist,
-      })),
-      album.name,
-    );
-  };
-
-  const playAlbumNext = () => {
-    if (!album || !artist) {
-      return;
-    }
-    void playback.playNext(
-      album.songs.map((song) => ({ song, album, artist })),
-      album.name,
-    );
-  };
 
   const saveAlbum = () => {
     if (!album) {
@@ -435,20 +403,12 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
         </div>
 
         <div className="mb-9 flex flex-wrap items-center gap-3">
-          <button
-            aria-label={`${isAlbumPlaying ? "Pause" : "Play"} ${album.name}`}
-            onClick={playAlbum}
-            className="mj-primary inline-flex h-11 items-center gap-2 rounded-full pl-4 pr-5 text-[13.5px] font-semibold shadow-[0_10px_30px_-10px_rgba(217,139,95,0.6)] disabled:opacity-70"
-            disabled={preferred.starting}
-            type="button"
-          >
-            {isAlbumPlaying ? (
-              <Pause className="h-4.5 w-4.5 fill-current" />
-            ) : (
-              <Play className="h-4.5 w-4.5 fill-current" />
-            )}
-            {isAlbumPlaying ? "Pause" : "Play now"}
-          </button>
+          <PlayNowSplit
+            busy={preferred.starting}
+            onPlayNow={playAlbum}
+            playing={isAlbumPlaying}
+            target={{ kind: "album", id: album.id, name: album.name }}
+          />
           <StartRadioButton
             label={`Start radio from ${album.name}`}
             seed={{ kind: "album", id: album.id }}
@@ -481,26 +441,6 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onSelect={playAlbum}>
-                <Play className="h-4 w-4 fill-current" />
-                Play
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() =>
-                  void startRadio({ kind: "album", id: album.id })
-                }
-              >
-                <Radio className="h-4 w-4" />
-                Start radio
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={playAlbumNext}>
-                <ListStart className="h-4 w-4" />
-                Play next
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={addAlbumToQueue}>
-                <ListEnd className="h-4 w-4" />
-                Add to queue
-              </DropdownMenuItem>
               {session?.role === "user" && (
                 <DropdownMenuItem onSelect={saveAlbum}>
                   <Download className="h-4 w-4" />

@@ -161,7 +161,7 @@ export function AlbumActions({
       >
         <DrawerAction
           icon={Play}
-          label="Play"
+          label="Play now"
           onPress={() => {
             setOperationError("");
             void load()
@@ -174,34 +174,18 @@ export function AlbumActions({
           }}
         />
         <DrawerAction
-          icon={Shuffle}
-          label="Shuffle"
+          icon={ListPlus}
+          label="Add next"
           onPress={() => {
             setOperationError("");
             void load()
               .then((album) => {
-                playback.playShuffled(album.songs);
+                playback.addNext(album.songs);
                 onClose();
               })
               .catch(() => setOperationError("Could not load this album."));
           }}
         />
-        {session.phase !== "offline" ? (
-          <StartRadioAction
-            seed={{ kind: "album", id: albumId }}
-            onStarted={onClose}
-          />
-        ) : null}
-        <BanAction
-          target={{ kind: "album", id: albumId, name }}
-          onDone={onClose}
-        />
-        <ListenLaterAction
-          entityId={albumId}
-          entityType="album"
-          onDone={onClose}
-        />
-        <TagsAction entityId={albumId} entityType="album" title={name} />
         <DrawerAction
           icon={ListEnd}
           label="Add to queue"
@@ -215,6 +199,35 @@ export function AlbumActions({
               .catch(() => setOperationError("Could not load this album."));
           }}
         />
+        {session.phase !== "offline" ? (
+          <StartRadioAction
+            seed={{ kind: "album", id: albumId }}
+            onStarted={onClose}
+          />
+        ) : null}
+        <DrawerAction
+          icon={Shuffle}
+          label="Shuffle"
+          onPress={() => {
+            setOperationError("");
+            void load()
+              .then((album) => {
+                playback.playShuffled(album.songs);
+                onClose();
+              })
+              .catch(() => setOperationError("Could not load this album."));
+          }}
+        />
+        <BanAction
+          target={{ kind: "album", id: albumId, name }}
+          onDone={onClose}
+        />
+        <ListenLaterAction
+          entityId={albumId}
+          entityType="album"
+          onDone={onClose}
+        />
+        <TagsAction entityId={albumId} entityType="album" title={name} />
         {session.phase !== "offline" && showAlbum ? (
           <DrawerAction
             icon={Disc3}

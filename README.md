@@ -51,9 +51,11 @@ The Mujin Music server holds your library. Mujin Music Desktop, the Android app,
 Mujin Music does not upload analytics or crash reports.
 
 Music, accounts, playlists, history, and recommendations stay on infrastructure
-you control. External requests are limited to services you use, such as lyrics,
+you control. External requests are limited to services you use, such as
 updates, casting, and online metadata (credits, biographies and reviews from
-MusicBrainz and Wikipedia), which is off until an administrator turns it on.
+MusicBrainz and Wikipedia, and lyrics from LRCLIB), which is off until an
+administrator turns it on. Lyrics in your files (embedded LRC, ID3 SYLT/USLT, or
+an `.lrc` file beside the track) are always shown, timed when they carry stamps.
 
 [Privacy and security](https://parson.dev/docs/accounts-privacy-security)
 

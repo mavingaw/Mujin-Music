@@ -1,17 +1,32 @@
 import Slider from "@react-native-community/slider";
 /* eslint-disable react-hooks/immutability -- Reanimated SharedValues are mutated only inside gesture worklets. */
 import {
+  activeLyricIndex,
   addFavoriteSong,
   findLyrics,
+  lyricLineEmphasis,
+  lyricsEmptyMessage,
+  lyricsFailureKind,
+  lyricsSourceLabel,
+  parseLrc,
+  type LyricsFailure,
+  type LyricsSourceKind,
   isFavoriteSong,
   radioStationLabel,
   removeFavoriteSong,
   heartState,
+  getLiveNowPlaying,
+  isLiveRadioId,
+  isStreamingId,
+  LIVE_TITLE_POLL_MS,
+  liveStationIdFromSongId,
+  liveTitleText,
+  type SignalPath,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { StreamDeliveryLine } from "@/components/streaming-ui";
 import {
   ChevronDown,
@@ -87,15 +102,6 @@ import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
 import { ServerOutputs } from "@/components/server-outputs";
 import { dspAvailable } from "@/lib/signal-path";
 import { useSignalPath } from "@/hooks/use-signal-path";
-import {
-  getLiveNowPlaying,
-  isLiveRadioId,
-  isStreamingId,
-  LIVE_TITLE_POLL_MS,
-  liveStationIdFromSongId,
-  liveTitleText,
-  type SignalPath,
-} from "@parson/music-sdk";
 import { LiveTag, StationLogo } from "@/components/live-radio-ui";
 import { ZoneButton } from "@/components/zone-sheet";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
@@ -121,7 +127,7 @@ const time = (seconds: number) =>
 type Player = ReturnType<typeof usePlayer>;
 type PlayerSong = NonNullable<Player["current"]>;
 type Router = ReturnType<typeof useRouter>;
-type SyncedLine = { at: number; text: string };
+type SyncedLine = { time: number; text: string };
 
 /** "The Open Goldberg Variations · 2012 · Bach" under the artist. */
 function nowPlayingMeta(song: {
@@ -575,9 +581,10 @@ function LyricsPanel({
   instrumental,
   currentTime,
   onSeek,
-  failed,
+  failure,
   onRetry,
   offline,
+  source,
 }: {
   artworkPath?: string | null;
   pending: boolean;
@@ -586,9 +593,10 @@ function LyricsPanel({
   instrumental?: boolean;
   currentTime: number;
   onSeek: (seconds: number) => void;
-  failed: boolean;
+  failure: LyricsFailure | null;
   onRetry: () => void;
   offline: boolean;
+  source: LyricsSourceKind | null;
 }) {
   const artworkUri = imageUrl(artworkPath);
   const scrollRef = useRef<ScrollView>(null);
@@ -596,10 +604,8 @@ function LyricsPanel({
   const lastCenteredLine = useRef(-1);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [contentHeight, setContentHeight] = useState(0);
-  const activeLine = synced.reduce(
-    (found, line, index) => (line.at <= currentTime ? index : found),
-    -1,
-  );
+  const activeLine = activeLyricIndex(synced, currentTime);
+  const hasTimed = synced.some((line) => line.text.trim());
   useEffect(() => {
     lineLayouts.current.clear();
     lastCenteredLine.current = -1;
@@ -608,14 +614,17 @@ function LyricsPanel({
     const layout = lineLayouts.current.get(activeLine);
     if (!layout || !viewportHeight) return;
     const frame = requestAnimationFrame(() => {
+      // The sung line sits a little above the middle.
       scrollRef.current?.scrollTo({
-        y: Math.max(0, layout.y - (viewportHeight - layout.height) / 2),
+        y: Math.max(0, layout.y - (viewportHeight * 0.38 - layout.height / 2)),
         animated: lastCenteredLine.current >= 0,
       });
       lastCenteredLine.current = activeLine;
     });
     return () => cancelAnimationFrame(frame);
   }, [activeLine, contentHeight, viewportHeight]);
+  const where = lyricsSourceLabel(source);
+  const empty = lyricsEmptyMessage(failure, Boolean(instrumental));
   return (
     <View style={[styles.panel, styles.lyricsPanel]}>
       {artworkUri ? (
@@ -633,6 +642,33 @@ function LyricsPanel({
           <View pointerEvents="none" style={styles.lyricsScrim} />
         </>
       ) : null}
+      {!pending && !offline && (hasTimed || plainLyrics) ? (
+        <View style={styles.lyricsSourceRow}>
+          <View
+            style={[
+              styles.lyricsSourceChip,
+              hasTimed ? styles.lyricsSourceTimed : null,
+            ]}
+          >
+            <View
+              style={[
+                styles.lyricsSourceDot,
+                hasTimed ? styles.lyricsSourceDotTimed : null,
+              ]}
+            />
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.lyricsSourceText,
+                hasTimed ? styles.lyricsSourceTextTimed : null,
+              ]}
+            >
+              {hasTimed ? "Timed lyrics" : "Untimed lyrics"}
+              {where ? ` · ${where}` : ""}
+            </Text>
+          </View>
+        </View>
+      ) : null}
       <ScrollView
         ref={scrollRef}
         onLayout={({ nativeEvent }) =>
@@ -641,8 +677,11 @@ function LyricsPanel({
         onContentSizeChange={(_width, height) => setContentHeight(height)}
         contentContainerStyle={[
           styles.lyricsContent,
-          synced.length
-            ? { paddingBottom: Math.max(24, viewportHeight / 2) }
+          hasTimed
+            ? {
+                paddingTop: Math.max(24, viewportHeight * 0.3),
+                paddingBottom: Math.max(24, viewportHeight / 2),
+              }
             : null,
         ]}
         showsVerticalScrollIndicator={false}
@@ -652,63 +691,72 @@ function LyricsPanel({
             <Text style={styles.emptyTitle}>
               Lyrics are unavailable offline
             </Text>
+            <Text style={styles.emptyDetail}>
+              Reconnect to the server to read this track&apos;s lyrics.
+            </Text>
           </View>
         ) : pending ? (
-          <Text style={styles.loadingLyrics}>•••</Text>
-        ) : failed ? (
-          <Pressable
-            accessibilityRole="button"
-            style={styles.emptyLyrics}
-            onPress={onRetry}
-          >
-            <Text style={styles.emptyTitle}>
-              Lyrics are temporarily unavailable
+          <View accessibilityRole="progressbar" style={styles.loadingLyricsBox}>
+            <View style={styles.loadingBars}>
+              {[12, 18, 10, 16].map((height, bar) => (
+                <View key={bar} style={[styles.loadingBar, { height }]} />
+              ))}
+            </View>
+            <Text style={styles.loadingLyrics}>Finding lyrics…</Text>
+            <Text style={styles.loadingDetail}>
+              Reading the file&apos;s tags and any .lrc beside it, then LRCLIB
+              when online lookups are on.
             </Text>
-            <Text style={styles.retryText}>
-              Playback is unaffected. Tap to try lyrics again.
-            </Text>
-          </Pressable>
-        ) : synced.length ? (
+          </View>
+        ) : hasTimed ? (
           synced.map((line, index) => {
             const captureLayout = ({
               nativeEvent,
             }: {
               nativeEvent: { layout: { height: number; y: number } };
             }) => lineLayouts.current.set(index, nativeEvent.layout);
+            const emphasis = lyricLineEmphasis(index, activeLine);
             return line.text.trim() ? (
               <Text
-                key={`${line.at}-${index}`}
-                onPress={() => onSeek(line.at)}
+                accessibilityState={{ selected: emphasis.state === "active" }}
+                key={`${line.time}-${index}`}
+                onPress={() => onSeek(line.time)}
                 onLayout={captureLayout}
                 style={[
                   styles.lyricLine,
-                  index === activeLine
-                    ? styles.activeLyric
-                    : index < activeLine
-                      ? styles.pastLyric
-                      : styles.futureLyric,
+                  { opacity: emphasis.opacity },
+                  emphasis.state === "active" ? styles.activeLyric : null,
                 ]}
               >
                 {line.text}
               </Text>
             ) : (
               <View
-                key={`${line.at}-${index}`}
+                key={`${line.time}-${index}`}
                 onLayout={captureLayout}
                 style={styles.lyricSpacer}
-              />
+              >
+                {emphasis.state === "active" ? (
+                  <Text style={styles.lyricBreak}>• • •</Text>
+                ) : null}
+              </View>
             );
           })
         ) : plainLyrics ? (
           <Text style={styles.lyrics}>{plainLyrics}</Text>
         ) : (
-          <View style={styles.emptyLyrics}>
-            <Text style={styles.emptyTitle}>
-              {instrumental
-                ? "Instrumental"
-                : "No lyrics are available for this track"}
-            </Text>
-          </View>
+          <Pressable
+            accessibilityRole={empty.retry ? "button" : undefined}
+            disabled={!empty.retry}
+            onPress={onRetry}
+            style={styles.emptyLyrics}
+          >
+            <Text style={styles.emptyTitle}>{empty.title}</Text>
+            <Text style={styles.emptyDetail}>{empty.detail}</Text>
+            {empty.retry ? (
+              <Text style={styles.retryText}>Tap to try again.</Text>
+            ) : null}
+          </Pressable>
         )}
       </ScrollView>
     </View>
@@ -872,7 +920,13 @@ export default function PlayerScreen() {
   const client = useQueryClient();
   const session = useSession();
   const player = usePlayer();
-  const [panel, setPanel] = useState<Panel>("player");
+  // "View lyrics" in a track menu opens the player on its lyrics.
+  const params = useLocalSearchParams<{ panel?: string }>();
+  const [panel, setPanel] = useState<Panel>(
+    params.panel === "lyrics" || params.panel === "queue"
+      ? params.panel
+      : "player",
+  );
   const [actions, setActions] = useState(false);
   const [soundOptions, setSoundOptions] = useState(false);
   const [signalPathOpen, setSignalPathOpen] = useState(false);
@@ -926,21 +980,10 @@ export default function PlayerScreen() {
     enabled: !!player.current && session.phase === "ready",
     staleTime: 30_000,
   });
-  const synced = useMemo(() => {
-    const source = lyrics.data?.syncedLyrics;
-    if (!source) return [];
-    return source.split("\n").flatMap((line) => {
-      const match = line.match(/^\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$/);
-      return match
-        ? [
-            {
-              at: Number(match[1]) * 60 + Number(match[2]),
-              text: match[3] ?? "",
-            },
-          ]
-        : [];
-    });
-  }, [lyrics.data?.syncedLyrics]);
+  const synced = useMemo(
+    () => parseLrc(lyrics.data?.syncedLyrics),
+    [lyrics.data?.syncedLyrics],
+  );
   if (!player.current)
     return (
       <View style={styles.page}>
@@ -1057,9 +1100,10 @@ export default function PlayerScreen() {
               plainLyrics={lyrics.data?.plainLyrics}
               instrumental={lyrics.data?.instrumental}
               onSeek={player.seek}
-              failed={lyrics.isError}
+              failure={lyrics.isError ? lyricsFailureKind(lyrics.error) : null}
               onRetry={() => void lyrics.refetch()}
               offline={session.phase === "offline"}
+              source={(lyrics.data?.source ?? null) as LyricsSourceKind | null}
             />
           )}
           <PlayerDrawers
@@ -1241,7 +1285,7 @@ const styles = StyleSheet.create({
   lyricsScrim: {
     position: "absolute",
     inset: 0,
-    backgroundColor: "rgba(0,0,0,.52)",
+    backgroundColor: "rgba(5,5,6,.62)",
   },
   clearQueue: {
     alignSelf: "flex-end",
@@ -1265,28 +1309,80 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   lyricLine: {
-    color: "white",
-    fontSize: 25,
+    color: palette.text,
+    fontFamily: fonts.titleMedium,
+    fontSize: 27,
     lineHeight: 34,
-    fontWeight: "800",
     paddingHorizontal: 24,
     paddingVertical: 7,
+  },
+  lyricBreak: {
+    color: palette.text,
+    fontSize: 22,
+    letterSpacing: 4,
+    paddingHorizontal: 24,
+  },
+  lyricsSourceRow: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    flexDirection: "row",
+  },
+  lyricsSourceChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: "100%",
+    borderWidth: 1,
+    borderColor: "rgba(242,238,230,0.14)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: "rgba(0,0,0,.25)",
+  },
+  lyricsSourceTimed: {
+    borderColor: "rgba(217,139,95,0.4)",
+    backgroundColor: "rgba(217,139,95,0.1)",
+  },
+  lyricsSourceDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: palette.tertiary,
+  },
+  lyricsSourceDotTimed: { backgroundColor: palette.accent },
+  lyricsSourceText: { color: palette.secondary, fontSize: 11, flexShrink: 1 },
+  lyricsSourceTextTimed: { color: palette.accent },
+  loadingLyricsBox: {
+    alignItems: "center",
+    paddingHorizontal: 32,
+    marginTop: 80,
+  },
+  loadingBars: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 3,
+    height: 20,
+  },
+  loadingBar: { width: 3, borderRadius: 2, backgroundColor: palette.accent },
+  loadingDetail: {
+    color: palette.tertiary,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8,
     textAlign: "center",
   },
   lyricsContent: {
     flexGrow: 1,
     paddingVertical: 24,
   },
-  activeLyric: { color: "white", transform: [{ scale: 1.03 }] },
-  pastLyric: { color: "rgba(255,255,255,.25)" },
-  futureLyric: { color: "rgba(255,255,255,.45)" },
-  lyricSpacer: { height: 20 },
+  activeLyric: { color: palette.text },
+  lyricSpacer: { minHeight: 20, justifyContent: "center" },
   loadingLyrics: {
-    color: palette.secondary,
-    fontSize: 24,
+    color: palette.text,
+    fontFamily: fonts.title,
+    fontSize: 22,
     textAlign: "center",
-    marginTop: 40,
-    letterSpacing: 5,
+    marginTop: 16,
   },
   emptyLyrics: {
     padding: 24,

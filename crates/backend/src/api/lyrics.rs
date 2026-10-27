@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use actix_web::{HttpResponse, get, web};
+use actix_web::{HttpResponse, get, post, web};
 use diesel::connection::SimpleConnection;
 use diesel::deserialize::QueryableByName;
 use diesel::prelude::*;
@@ -17,14 +18,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::api::error::{internal_server_error, not_found};
+use crate::api::error::not_found;
+use crate::library::lyrics_local::{
+    LocalLyrics, LyricsFingerprint, LyricsSource, lyrics_fingerprint, read_local_lyrics,
+};
 use crate::library::search::normalize;
 use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
 use crate::settings::data_path;
 
-const LRCLIB_GET_URL: &str = "https://lrclib.net/api/get";
-const LRCLIB_SEARCH_URL: &str = "https://lrclib.net/api/search";
+const LRCLIB_API_BASE: &str = "https://lrclib.net/api";
+/// Points the LRCLIB client somewhere else (a local fake in tests).
+const LRCLIB_URL_ENV: &str = "PARSON_LRCLIB_URL";
+const MAX_AVAILABILITY_SONGS: usize = 500;
+const MAX_AVAILABILITY_ENTRIES: usize = 50_000;
 const MAX_CONCURRENT_LYRICS_REQUESTS: usize = 8;
 const MAX_LYRICS_RESPONSE_BYTES: usize = 1024 * 1024;
 const LYRICS_LOOKUP_LOCK_STRIPES: usize = 64;
@@ -139,6 +146,87 @@ pub struct LyricsResponse {
     pub instrumental: bool,
     pub plain_lyrics: Option<String>,
     pub synced_lyrics: Option<String>,
+}
+
+impl LyricsResponse {
+    fn has_synced(&self) -> bool {
+        self.synced_lyrics
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }
+
+    fn has_plain(&self) -> bool {
+        self.plain_lyrics
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }
+}
+
+/// `GET /lyrics/{song}`: LRCLIB's fields, plus where the lyrics came from
+/// and whether they are timed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LyricsPayload<'a> {
+    #[serde(flatten)]
+    lyrics: &'a LyricsResponse,
+    source: &'static str,
+    synced: bool,
+}
+
+fn lyrics_http_response(lyrics: &LyricsResponse, source: LyricsSource) -> HttpResponse {
+    HttpResponse::Ok().json(LyricsPayload {
+        lyrics,
+        source: source.as_str(),
+        synced: lyrics.has_synced(),
+    })
+}
+
+fn local_response(
+    local: LocalLyrics,
+    track_name: &str,
+    artist_name: &str,
+    album_name: &str,
+    duration: f64,
+) -> LyricsResponse {
+    LyricsResponse {
+        id: 0,
+        track_name: track_name.to_string(),
+        artist_name: artist_name.to_string(),
+        album_name: album_name.to_string(),
+        duration,
+        instrumental: false,
+        plain_lyrics: local.plain,
+        synced_lyrics: local.synced,
+    }
+}
+
+/// What the online source said about a track.
+enum OnlineLyrics {
+    Found(Arc<LyricsResponse>),
+    /// LRCLIB answered and has nothing (or the negative answer is cached).
+    Missing,
+    /// Online metadata is off and nothing is cached.
+    Disabled,
+    /// LRCLIB could not be asked or did not answer: a 503 to pass on.
+    Unavailable(HttpResponse),
+}
+
+/// Which lyrics to show: timed lyrics from the file, then timed lyrics from
+/// LRCLIB, then the file's plain text, then LRCLIB's plain text.
+enum LyricsChoice {
+    Local,
+    Online,
+    Neither,
+}
+
+fn choose_lyrics(local: Option<&LocalLyrics>, online: Option<&LyricsResponse>) -> LyricsChoice {
+    match (local, online) {
+        (Some(local), _) if local.is_synced() => LyricsChoice::Local,
+        (_, Some(online)) if online.has_synced() => LyricsChoice::Online,
+        (Some(_), _) => LyricsChoice::Local,
+        (None, Some(online)) if online.has_plain() || online.instrumental => LyricsChoice::Online,
+        (None, _) => LyricsChoice::Neither,
+    }
 }
 
 fn strip_synced_lyrics(value: &str) -> String {
@@ -408,8 +496,19 @@ fn cached_lyrics_weight(value: &CachedLyrics) -> usize {
     }
 }
 
+/// Whether a track has lyrics, as list rows show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct LyricsAvailability {
+    pub synced: bool,
+    pub source: LyricsSource,
+}
+
+type AvailabilityCache = HashMap<String, (LyricsFingerprint, Option<LyricsAvailability>)>;
+
 pub struct LyricsService {
     client: Client,
+    api_base: String,
+    availability: StdMutex<AvailabilityCache>,
     cache: LyricsMemoryCache,
     persistent: DbPool,
     lookup_locks: Vec<Mutex<()>>,
@@ -426,8 +525,15 @@ impl LyricsService {
             .pool_idle_timeout(Duration::from_secs(90))
             .user_agent(concat!("Parson/", env!("CARGO_PKG_VERSION")))
             .build()?;
+        let api_base = std::env::var(LRCLIB_URL_ENV)
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| LRCLIB_API_BASE.to_string());
         Ok(Self {
             client,
+            api_base,
+            availability: StdMutex::new(HashMap::new()),
             cache: LyricsMemoryCache::new(),
             persistent: connect_lyrics_cache()?,
             lookup_locks: (0..LYRICS_LOOKUP_LOCK_STRIPES)
@@ -436,6 +542,43 @@ impl LyricsService {
             slots: Semaphore::new(MAX_CONCURRENT_LYRICS_REQUESTS),
             persistent_writes: AtomicU64::new(0),
         })
+    }
+
+    fn get_url(&self) -> String {
+        format!("{}/get", self.api_base)
+    }
+
+    fn search_url(&self) -> String {
+        format!("{}/search", self.api_base)
+    }
+
+    /// Lyrics availability for a file, read again only when the file or an
+    /// LRC beside it changed.
+    fn local_availability(&self, path: &Path) -> Option<LyricsAvailability> {
+        let fingerprint = lyrics_fingerprint(path);
+        let key = path.to_string_lossy().into_owned();
+        if let Some((cached_fingerprint, value)) = self
+            .availability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&key)
+            && *cached_fingerprint == fingerprint
+        {
+            return *value;
+        }
+        let value = read_local_lyrics(path).map(|lyrics| LyricsAvailability {
+            synced: lyrics.is_synced(),
+            source: lyrics.source,
+        });
+        let mut cache = self
+            .availability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if cache.len() >= MAX_AVAILABILITY_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, (fingerprint, value));
+        value
     }
 
     fn should_purge_expired(&self) -> bool {
@@ -635,7 +778,7 @@ async fn search_lrclib_fallback(
         let started = Instant::now();
         let response = match service
             .client
-            .get(LRCLIB_SEARCH_URL)
+            .get(service.search_url())
             .query(&query)
             .send()
             .await
@@ -1013,44 +1156,44 @@ async fn store_persisted(
     .map_err(|error| std::io::Error::other(format!("lyrics cache write task failed: {error}")))?
 }
 
-fn cached_http_response(value: CachedLyrics) -> HttpResponse {
-    match value {
-        CachedLyrics::Found(lyrics) => HttpResponse::Ok().json(lyrics.as_ref()),
-        CachedLyrics::Missing => not_found("Lyrics not found.", "lyrics_not_found"),
-    }
+/// Whether online lookups are allowed: the server's "online metadata" switch.
+async fn online_metadata_enabled(pool: &DbPool) -> bool {
+    let pool = pool.clone();
+    web::block(move || {
+        let mut connection = pool.get().ok()?;
+        crate::enrichment::store::load_settings(&mut connection).ok()
+    })
+    .await
+    .ok()
+    .flatten()
+    .is_some_and(|settings| settings.enabled)
 }
 
-#[get("/lyrics/{song_id}")]
-async fn find_lyrics(
-    song_id: web::Path<String>,
-    lifecycle: web::Data<LibraryLifecycle>,
-    service: web::Data<LyricsService>,
-) -> HttpResponse {
-    let library = match lifecycle.cache().await {
-        Ok(cache) => cache,
-        Err(readiness) => return library_unavailable_response(readiness),
+/// Asks LRCLIB (exact match, then searches), through the memory and disk
+/// caches. With `allow_network` false only the caches are read.
+async fn online_lyrics(
+    service: &LyricsService,
+    song_id: &str,
+    track_name: &str,
+    artist_name: &str,
+    album_name: &str,
+    duration: f64,
+    allow_network: bool,
+) -> OnlineLyrics {
+    let found_or_missing = |cached: CachedLyrics| match cached {
+        CachedLyrics::Found(lyrics) => OnlineLyrics::Found(lyrics),
+        CachedLyrics::Missing => OnlineLyrics::Missing,
     };
-    let song_id = song_id.into_inner();
-    let Some(song) = library.song(&song_id) else {
-        return not_found("Song not found.", "song_not_found");
-    };
-    let Some((artist_id, album_id)) = library.song_map.get(&song_id) else {
-        return not_found("Song context not found.", "song_context_not_found");
-    };
-    let (Some(artist), Some(album)) = (library.artist(artist_id), library.album(album_id)) else {
-        return not_found("Song context not found.", "song_context_not_found");
-    };
-
-    let signature = lyrics_signature(&song.name, &artist.name, &album.name, song.duration);
+    let signature = lyrics_signature(track_name, artist_name, album_name, duration);
     let cache_key = lyrics_cache_key(&signature);
     if let Some(cached) = service.cache.get(&cache_key) {
-        return cached_http_response(cached);
+        return found_or_missing(cached);
     }
 
     let lock_index = LyricsMemoryCache::shard_index(&cache_key) % service.lookup_locks.len();
     let _lookup_guard = service.lookup_locks[lock_index].lock().await;
     if let Some(cached) = service.cache.get(&cache_key) {
-        return cached_http_response(cached);
+        return found_or_missing(cached);
     }
 
     match load_persisted(service.persistent.clone(), cache_key).await {
@@ -1061,7 +1204,7 @@ async fn find_lyrics(
             if let Err(error) = index_cached_lyrics(
                 service.persistent.clone(),
                 cache_key,
-                song_id.clone(),
+                song_id.to_string(),
                 cached.clone(),
                 valid_for,
             )
@@ -1069,31 +1212,34 @@ async fn find_lyrics(
             {
                 tracing::warn!(%error, "could not index persisted lyrics");
             }
-            return cached_http_response(cached);
+            return found_or_missing(cached);
         }
         Ok(None) => {}
         Err(error) => tracing::warn!(%error, "could not read the persistent lyrics cache"),
+    }
+    if !allow_network {
+        return OnlineLyrics::Disabled;
     }
 
     let _permit = match service.slots.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
-            return crate::api::error::service_unavailable(
+            return OnlineLyrics::Unavailable(crate::api::error::service_unavailable(
                 "Too many lyrics lookups are in progress. Retry shortly.",
                 "lyrics_capacity_reached",
-            );
+            ));
         }
     };
 
     let started = Instant::now();
     let exact_response = service
         .client
-        .get(LRCLIB_GET_URL)
+        .get(service.get_url())
         .query(&LrclibQuery {
-            track_name: &song.name,
-            artist_name: &artist.name,
-            album_name: &album.name,
-            duration: song.duration.round().max(0.0) as u64,
+            track_name,
+            artist_name,
+            album_name,
+            duration: duration.round().max(0.0) as u64,
         })
         .send()
         .await;
@@ -1135,61 +1281,213 @@ async fn find_lyrics(
 
     let lyrics = match exact_lyrics {
         Some(lyrics) => Some(lyrics),
-        None => match search_lrclib_fallback(
-            service.get_ref(),
-            &song.name,
-            &artist.name,
-            &album.name,
-            song.duration,
-        )
-        .await
-        {
-            Ok(lyrics) => lyrics,
-            Err(error) => {
-                tracing::warn!(%error, "all LRCLIB lyrics lookup strategies failed");
-                return internal_server_error(
-                    "Lyrics provider unavailable.",
-                    "lyrics_provider_unavailable",
-                );
+        None => {
+            match search_lrclib_fallback(service, track_name, artist_name, album_name, duration)
+                .await
+            {
+                Ok(lyrics) => lyrics,
+                Err(error) => {
+                    tracing::warn!(%error, "all LRCLIB lyrics lookup strategies failed");
+                    // Not cached: the next request asks again.
+                    return OnlineLyrics::Unavailable(crate::api::error::service_unavailable(
+                        "The online lyrics source (LRCLIB) did not answer. Retry shortly.",
+                        "lyrics_provider_unavailable",
+                    ));
+                }
             }
-        },
-    };
-
-    let Some(lyrics) = lyrics else {
-        let missing = CachedLyrics::Missing;
-        service.cache.insert(cache_key, missing.clone());
-        if let Err(error) = store_persisted(
-            service.persistent.clone(),
-            cache_key,
-            missing,
-            song_id.clone(),
-            service.should_purge_expired(),
-        )
-        .await
-        {
-            tracing::warn!(%error, "could not persist a negative lyrics lookup");
         }
-        return not_found("Lyrics not found.", "lyrics_not_found");
     };
 
-    let cached = CachedLyrics::Found(Arc::new(lyrics));
+    let cached = match lyrics {
+        Some(lyrics) => CachedLyrics::Found(Arc::new(lyrics)),
+        None => CachedLyrics::Missing,
+    };
     service.cache.insert(cache_key, cached.clone());
     if let Err(error) = store_persisted(
         service.persistent.clone(),
         cache_key,
         cached.clone(),
-        song_id,
+        song_id.to_string(),
         service.should_purge_expired(),
     )
     .await
     {
-        tracing::warn!(%error, "could not persist lyrics");
+        tracing::warn!(%error, "could not persist a lyrics lookup");
     }
-    cached_http_response(cached)
+    found_or_missing(cached)
+}
+
+#[get("/lyrics/{song_id}")]
+async fn find_lyrics(
+    song_id: web::Path<String>,
+    lifecycle: web::Data<LibraryLifecycle>,
+    service: web::Data<LyricsService>,
+    pool: web::Data<DbPool>,
+) -> HttpResponse {
+    let library = match lifecycle.cache().await {
+        Ok(cache) => cache,
+        Err(readiness) => return library_unavailable_response(readiness),
+    };
+    let song_id = song_id.into_inner();
+    let Some(song) = library.song(&song_id) else {
+        return not_found("Song not found.", "song_not_found");
+    };
+    let Some((artist_id, album_id)) = library.song_map.get(&song_id) else {
+        return not_found("Song context not found.", "song_context_not_found");
+    };
+    let (Some(artist), Some(album)) = (library.artist(artist_id), library.album(album_id)) else {
+        return not_found("Song context not found.", "song_context_not_found");
+    };
+
+    // 1. The file itself: an LRC beside it, SYLT, or lyrics tags.
+    let path = PathBuf::from(&song.path);
+    let local = web::block(move || read_local_lyrics(&path))
+        .await
+        .ok()
+        .flatten();
+    let local_payload = |local: LocalLyrics| {
+        let source = local.source;
+        let lyrics = local_response(local, &song.name, &artist.name, &album.name, song.duration);
+        lyrics_http_response(&lyrics, source)
+    };
+    if let Some(local) = local.clone().filter(LocalLyrics::is_synced) {
+        return local_payload(local);
+    }
+
+    // 2. LRCLIB, when online metadata is on (cached answers are always used).
+    let allow_network = online_metadata_enabled(pool.get_ref()).await;
+    let online = online_lyrics(
+        service.get_ref(),
+        &song_id,
+        &song.name,
+        &artist.name,
+        &album.name,
+        song.duration,
+        allow_network,
+    )
+    .await;
+    let found = match &online {
+        OnlineLyrics::Found(lyrics) => Some(lyrics.as_ref()),
+        _ => None,
+    };
+    match choose_lyrics(local.as_ref(), found) {
+        LyricsChoice::Local => {
+            if let Some(local) = local {
+                return local_payload(local);
+            }
+        }
+        LyricsChoice::Online => {
+            if let Some(lyrics) = found {
+                return lyrics_http_response(lyrics, LyricsSource::Lrclib);
+            }
+        }
+        LyricsChoice::Neither => {}
+    }
+    match online {
+        OnlineLyrics::Unavailable(response) => response,
+        OnlineLyrics::Disabled => not_found(
+            "This track has no lyrics in its file or beside it, and online lookups are off. \
+             Turn on online metadata in Settings to look them up on LRCLIB.",
+            "lyrics_not_found_offline",
+        ),
+        OnlineLyrics::Found(_) | OnlineLyrics::Missing => {
+            not_found("Lyrics not found.", "lyrics_not_found")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AvailabilityRequest {
+    song_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct AvailabilityResponse {
+    /// Only songs with lyrics are listed.
+    songs: HashMap<String, LyricsAvailability>,
+}
+
+/// `POST /lyrics/availability`: which of these songs have lyrics, and whether
+/// they are timed, from the files and the online cache. Never goes online.
+#[post("/lyrics/availability")]
+async fn lyrics_availability(
+    body: web::Json<AvailabilityRequest>,
+    lifecycle: web::Data<LibraryLifecycle>,
+    service: web::Data<LyricsService>,
+) -> HttpResponse {
+    let library = match lifecycle.cache().await {
+        Ok(cache) => cache,
+        Err(readiness) => return library_unavailable_response(readiness),
+    };
+    let mut requested = body.into_inner().song_ids;
+    requested.sort();
+    requested.dedup();
+    requested.truncate(MAX_AVAILABILITY_SONGS);
+    let songs = requested
+        .into_iter()
+        .filter_map(|song_id| {
+            let song = library.song(&song_id)?;
+            let (artist_id, album_id) = library.song_map.get(&song_id)?;
+            let artist = library.artist(artist_id)?;
+            let album = library.album(album_id)?;
+            Some((
+                song_id,
+                PathBuf::from(&song.path),
+                lyrics_cache_key(&lyrics_signature(
+                    &song.name,
+                    &artist.name,
+                    &album.name,
+                    song.duration,
+                )),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let service = service.into_inner();
+    let result = web::block(move || {
+        let mut available = HashMap::new();
+        let mut connection = service.persistent.get().ok();
+        let now = unix_seconds();
+        for (song_id, path, cache_key) in songs {
+            if let Some(local) = service.local_availability(&path) {
+                available.insert(song_id, local);
+                continue;
+            }
+            let cached = service.cache.get(&cache_key).or_else(|| {
+                let connection = connection.as_mut()?;
+                load_persisted_lyrics(connection, cache_key, now)
+                    .ok()
+                    .flatten()
+                    .map(|(cached, _)| cached)
+            });
+            if let Some(CachedLyrics::Found(lyrics)) = cached
+                && (lyrics.has_synced() || lyrics.has_plain())
+            {
+                available.insert(
+                    song_id,
+                    LyricsAvailability {
+                        synced: lyrics.has_synced(),
+                        source: LyricsSource::Lrclib,
+                    },
+                );
+            }
+        }
+        available
+    })
+    .await;
+    match result {
+        Ok(songs) => HttpResponse::Ok().json(AvailabilityResponse { songs }),
+        Err(error) => {
+            tracing::warn!(%error, "could not check lyrics availability");
+            crate::api::error::internal_server_error(
+                "Could not check lyrics.",
+                "lyrics_availability_failed",
+            )
+        }
+    }
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(find_lyrics);
+    cfg.service(lyrics_availability).service(find_lyrics);
 }
 
 #[cfg(test)]
@@ -1209,6 +1507,173 @@ mod tests {
     };
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// A service on a scratch cache database, asking LRCLIB at `api_base`.
+    fn test_service(api_base: String) -> super::LyricsService {
+        use diesel::r2d2::{ConnectionManager, Pool};
+        let path = std::env::temp_dir().join(format!(
+            "mujin-lyrics-service-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let url = path.to_str().unwrap().to_string();
+        SqliteConnection::establish(&url)
+            .unwrap()
+            .batch_execute(LYRICS_CACHE_SCHEMA)
+            .unwrap();
+        let pool = Pool::builder()
+            .max_size(2)
+            .build(ConnectionManager::<SqliteConnection>::new(url))
+            .unwrap();
+        super::LyricsService {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            api_base,
+            availability: std::sync::Mutex::new(std::collections::HashMap::new()),
+            cache: LyricsMemoryCache::new(),
+            persistent: Arc::new(pool),
+            lookup_locks: (0..4).map(|_| tokio::sync::Mutex::new(())).collect(),
+            slots: tokio::sync::Semaphore::new(2),
+            persistent_writes: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// A protocol-level stand-in for LRCLIB: answers every request with
+    /// `status` and `body`, and counts the requests.
+    fn fake_lrclib(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer);
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (format!("http://{address}/api"), requests)
+    }
+
+    #[test]
+    fn timed_lyrics_from_the_file_beat_everything_and_plain_text_waits_for_lrclib() {
+        use super::{LyricsChoice, choose_lyrics};
+        use crate::library::lyrics_local::{LocalLyrics, LyricsSource};
+        let timed_local = LocalLyrics {
+            source: LyricsSource::EmbeddedLrc,
+            synced: Some("[00:01.00] a".into()),
+            plain: Some("a".into()),
+        };
+        let plain_local = LocalLyrics {
+            source: LyricsSource::EmbeddedText,
+            synced: None,
+            plain: Some("a".into()),
+        };
+        let timed_online = LyricsResponse {
+            synced_lyrics: Some("[00:01.00] b".into()),
+            ..lyrics(1, 1)
+        };
+        let plain_online = LyricsResponse {
+            synced_lyrics: None,
+            ..lyrics(2, 1)
+        };
+        let choice = |local, online| match choose_lyrics(local, online) {
+            LyricsChoice::Local => "local",
+            LyricsChoice::Online => "online",
+            LyricsChoice::Neither => "neither",
+        };
+        assert_eq!(choice(Some(&timed_local), Some(&timed_online)), "local");
+        assert_eq!(choice(Some(&plain_local), Some(&timed_online)), "online");
+        assert_eq!(choice(Some(&plain_local), Some(&plain_online)), "local");
+        assert_eq!(choice(None, Some(&plain_online)), "online");
+        assert_eq!(choice(None, None), "neither");
+    }
+
+    #[actix_web::test]
+    async fn a_503_from_lrclib_is_passed_on_and_not_cached() {
+        let (base, requests) = fake_lrclib("503 Service Unavailable", "");
+        let service = test_service(base);
+        let outcome =
+            super::online_lyrics(&service, "song", "Track", "Artist", "Album", 200.0, true).await;
+        let super::OnlineLyrics::Unavailable(response) = outcome else {
+            panic!("expected the source to be unavailable");
+        };
+        assert_eq!(
+            response.status(),
+            actix_web::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        // The exact lookup and the three searches were all tried.
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 4);
+        // Nothing was cached, so the next request asks again.
+        let again =
+            super::online_lyrics(&service, "song", "Track", "Artist", "Album", 200.0, true).await;
+        assert!(matches!(again, super::OnlineLyrics::Unavailable(_)));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 8);
+    }
+
+    #[actix_web::test]
+    async fn online_lookups_stay_off_until_allowed_and_found_lyrics_are_cached() {
+        let body = r#"{"id":7,"trackName":"Track","artistName":"Artist","albumName":"Album","duration":200,"instrumental":false,"plainLyrics":"Hello","syncedLyrics":"[00:01.00]Hello"}"#;
+        let (base, requests) = fake_lrclib("200 OK", body);
+        let service = test_service(base);
+        let offline =
+            super::online_lyrics(&service, "song", "Track", "Artist", "Album", 200.0, false).await;
+        assert!(matches!(offline, super::OnlineLyrics::Disabled));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let online =
+            super::online_lyrics(&service, "song", "Track", "Artist", "Album", 200.0, true).await;
+        let super::OnlineLyrics::Found(found) = online else {
+            panic!("expected lyrics");
+        };
+        assert_eq!(found.synced_lyrics.as_deref(), Some("[00:01.00]Hello"));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Once cached, even an offline request reads them, without a request.
+        let cached =
+            super::online_lyrics(&service, "song", "Track", "Artist", "Album", 200.0, false).await;
+        assert!(matches!(cached, super::OnlineLyrics::Found(_)));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn availability_is_read_once_per_file_version() {
+        use crate::library::lyrics_local::LyricsSource;
+        let service = test_service("http://127.0.0.1:9/api".into());
+        let directory =
+            std::env::temp_dir().join(format!("mujin-availability-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("track.flac");
+        std::fs::write(
+            &path,
+            include_bytes!("../../testdata/audio/flac-44k-16bit-mono.flac"),
+        )
+        .unwrap();
+        assert_eq!(service.local_availability(&path), None);
+        std::fs::write(directory.join("track.lrc"), "[00:01.00]Now timed").unwrap();
+        assert_eq!(
+            service.local_availability(&path),
+            Some(super::LyricsAvailability {
+                synced: true,
+                source: LyricsSource::SidecarLrc,
+            })
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[derive(QueryableByName)]
     struct CountRow {

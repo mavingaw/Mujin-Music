@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { PlayNowSplit } from "@/features/player/play-now-split";
 import Link from "next/link";
 import { useRef, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Radio } from "lucide-react";
@@ -166,27 +167,34 @@ export function HomeAlbumCard({ album }: { album: HomeAlbum }) {
 export function ArtistCircle({ artist }: { artist: HomeArtist }) {
   const image = coverUrl(artist.image_url, artist.name);
   return (
-    <Link
-      className="group block min-w-0 snap-start text-center"
-      href={`/artist?id=${encodeURIComponent(artist.id)}`}
-    >
-      <span className="relative mx-auto block aspect-square w-full overflow-hidden rounded-full bg-mujin-surface-1 shadow-[0_0_0_1px_rgba(242,238,230,0.07),0_18px_40px_-20px_rgba(0,0,0,0.9)]">
-        <Image
-          alt=""
-          className="object-cover grayscale-[0.25] transition-[transform,filter] duration-500 ease-out group-hover:grayscale-0 motion-safe:group-hover:scale-[1.04]"
-          fill
-          sizes="180px"
-          src={image}
-        />
-      </span>
-      <span className="mt-3 block truncate text-[13.5px] font-medium text-mujin-text group-hover:underline">
-        {artist.name}
-      </span>
-      <span className="block truncate text-[12px] text-mujin-text-tertiary">
-        {artist.reason ??
-          `${artist.album_count} ${artist.album_count === 1 ? "album" : "albums"}`}
-      </span>
-    </Link>
+    <div className="mj-card group relative min-w-0 snap-start text-center">
+      <Link
+        className="block"
+        href={`/artist?id=${encodeURIComponent(artist.id)}`}
+      >
+        <span className="relative mx-auto block aspect-square w-full overflow-hidden rounded-full bg-mujin-surface-1 shadow-[0_0_0_1px_rgba(242,238,230,0.07),0_18px_40px_-20px_rgba(0,0,0,0.9)]">
+          <Image
+            alt=""
+            className="object-cover grayscale-[0.25] transition-[transform,filter] duration-500 ease-out group-hover:grayscale-0 motion-safe:group-hover:scale-[1.04]"
+            fill
+            sizes="180px"
+            src={image}
+          />
+        </span>
+        <span className="mt-3 block truncate text-[13.5px] font-medium text-mujin-text group-hover:underline">
+          {artist.name}
+        </span>
+        <span className="block truncate text-[12px] text-mujin-text-tertiary">
+          {artist.reason ??
+            `${artist.album_count} ${artist.album_count === 1 ? "album" : "albums"}`}
+        </span>
+      </Link>
+      <PlayNowSplit
+        className="mj-card-play absolute right-[6%] top-[62%]"
+        target={{ kind: "artist", id: artist.id, name: artist.name }}
+        variant="card"
+      />
+    </div>
   );
 }
 
