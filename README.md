@@ -7,11 +7,20 @@ Mujin Music is a local-first music app for your own collection. Based on
 
 Choose a folder. Start listening.
 
-![Mujin Music](apps/site/public/screenshots/01-home.png)
+![Mujin Music library tools](docs/images/library-tools.png)
 
 [Download](https://github.com/mavingaw/Mujin-Music/releases) ·
 [Docs](apps/site/content/docs) ·
 [What Mujin Music adds](docs/mujin-music.md)
+
+## Screenshots
+
+|                                                                     |                                                              |
+| ------------------------------------------------------------------- | ------------------------------------------------------------ |
+| ![Album page with format, credits and radio](docs/images/album.png) | ![Live internet radio](docs/images/live-radio.png)           |
+| ![Now playing with the quality light](docs/images/now-playing.png)  | ![Profiles with instant switching](docs/images/profiles.png) |
+
+<img src="docs/images/phone-album.png" alt="Album page on a phone" width="320">
 
 ## What Mujin Music adds
 
