@@ -161,6 +161,8 @@ struct Pending {
     /// Latest master timeline: (frame, bridge_us, rate).
     sync_ref: Option<(u64, i64, f64)>,
     received: u64,
+    /// The stream's player has stopped and let go of its device.
+    finished: bool,
 }
 
 struct StreamShared {
@@ -174,7 +176,32 @@ impl StreamShared {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    /// Waits (up to `timeout`) until this stream's player has let go of its
+    /// device.
+    fn wait_finished(&self, timeout: Duration) {
+        let pending = self.lock();
+        drop(
+            self.wake
+                .wait_timeout_while(pending, timeout, |pending| !pending.finished),
+        );
+    }
 }
+
+/// Marks a stream finished when its playback thread ends, after the device
+/// output it owned has been dropped.
+struct FinishedOnDrop(Arc<StreamShared>);
+
+impl Drop for FinishedOnDrop {
+    fn drop(&mut self) {
+        self.0.lock().finished = true;
+        self.0.wake.notify_all();
+    }
+}
+
+/// How long a new stream waits for the one it replaces to let go of the
+/// device (a blocked write finishes within the device buffer, ~100 ms).
+const TAKEOVER_WAIT: Duration = Duration::from_secs(2);
 
 struct Session {
     backend: Option<Arc<dyn Backend>>,
@@ -445,10 +472,12 @@ impl Session {
         // told, so whatever still feeds the old stream fails at once
         // instead of waiting for audio that will never be played.
         let writer = self.writer.clone();
+        let mut replaced = Vec::new();
         self.streams.retain(|old, (shared, _, open_device)| {
             if *open_device == device {
                 shared.lock().close = true;
                 shared.wake.notify_all();
+                replaced.push(shared.clone());
                 send(
                     &writer,
                     &BridgeMessage::Failed {
@@ -472,6 +501,16 @@ impl Session {
         let _ = std::thread::Builder::new()
             .name(format!("parson-bridge-play-{stream}"))
             .spawn(move || {
+                // Declared first, so it is dropped last: after the player
+                // and its device output.
+                let _finished = FinishedOnDrop(shared.clone());
+                // The replaced stream may still be inside a write to the
+                // device; open it only once that stream has let go, so none
+                // of its audio lands after this stream's (and an exclusive
+                // device is free to open).
+                for old in &replaced {
+                    old.wait_finished(TAKEOVER_WAIT);
+                }
                 let output = match backend.open(&device, format, exclusive) {
                     Ok(output) => output,
                     Err(error) => {
