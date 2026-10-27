@@ -301,14 +301,87 @@ export interface SmartPlaylist {
   smart: SmartPlaylistInfo;
 }
 
+/** Colours a tag can carry; clients map each to their own palette. */
+export const TAG_COLORS = [
+  "slate",
+  "red",
+  "orange",
+  "amber",
+  "lime",
+  "green",
+  "teal",
+  "sky",
+  "blue",
+  "violet",
+  "fuchsia",
+  "pink",
+] as const;
+
+export type TagColor = (typeof TAG_COLORS)[number];
+
+export type TaggedEntity = "track" | "album" | "artist" | "work" | "playlist";
+
+/** Items of each kind on a tag. A smart tag counts what its focus matches. */
+export type TagCounts = Record<TaggedEntity, number>;
+
 export interface UserTag {
   id: number;
   name: string;
   item_count: number;
   created_at: string;
+  updated_at?: string;
+  /** A smart tag holds whatever its focus matches and updates by itself. */
+  kind?: "manual" | "smart";
+  color?: TagColor | null;
+  description?: string | null;
+  /** The focus a smart tag follows. */
+  query?: FocusQuery | null;
+  counts?: TagCounts;
 }
 
-export type TaggedEntity = "track" | "album" | "artist";
+export interface TagDetails {
+  color?: TagColor | null;
+  description?: string | null;
+  /** Makes the tag smart. Albums, songs and artists browsers only. */
+  query?: FocusQuery | null;
+}
+
+export interface TagPatch {
+  name?: string;
+  color?: TagColor | null;
+  description?: string | null;
+  /** A new focus for a smart tag. */
+  query?: FocusQuery;
+}
+
+export interface TaggedPlaylist {
+  id: number;
+  name: string;
+  songCount: number;
+}
+
+/** A tag with its members, hand-tagged or matched by its focus. */
+export interface TagPage {
+  tag: UserTag;
+  albums: FocusAlbum[];
+  songs: FocusSong[];
+  artists: LibraryCatalogArtist[];
+  works: FocusWork[];
+  playlists: TaggedPlaylist[];
+}
+
+export interface TagCoverage {
+  tagId: number;
+  /** How many of the requested items carry the tag. */
+  count: number;
+}
+
+export interface BulkTagOutcome {
+  added: number;
+  removed: number;
+  /** Tags skipped because they are missing or smart. */
+  skipped: number[];
+}
 
 const MAX_TAG_BATCH = 500;
 
@@ -428,11 +501,136 @@ export async function getTags(): Promise<UserTag[]> {
   return Array.isArray(response.data) ? response.data : [];
 }
 
-export async function createTag(name: string): Promise<UserTag> {
+export async function createTag(
+  name: string,
+  details: TagDetails = {},
+): Promise<UserTag> {
   const response = await api.post<UserTag>("/library/tags", {
     name: name.trim(),
+    ...details,
+    description: details.description?.trim() || undefined,
   });
   return response.data;
+}
+
+/** Creates a smart tag that holds whatever `query` matches. */
+export function createSmartTag(
+  name: string,
+  query: FocusQuery,
+  details: Omit<TagDetails, "query"> = {},
+): Promise<UserTag> {
+  return createTag(name, { ...details, query });
+}
+
+export async function updateTag(id: number, patch: TagPatch): Promise<UserTag> {
+  const response = await api.patch<UserTag>(`/library/tags/${id}`, {
+    ...patch,
+    name: patch.name?.trim(),
+  });
+  return response.data;
+}
+
+export async function getTagPage(id: number): Promise<TagPage> {
+  const response = await api.get<TagPage>(`/library/tags/${id}`);
+  return response.data;
+}
+
+/** For each tag, how many of the given items carry it. */
+export async function getTagCoverage(
+  entityType: TaggedEntity,
+  entityIds: string[],
+): Promise<Map<number, number>> {
+  const unique = Array.from(new Set(entityIds.filter(Boolean)));
+  const coverage = new Map<number, number>();
+  for (let index = 0; index < unique.length; index += MAX_TAG_BATCH) {
+    const response = await api.post<TagCoverage[]>(
+      "/library/tags/assigned/bulk",
+      {
+        entity_type: entityType,
+        entity_ids: unique.slice(index, index + MAX_TAG_BATCH),
+      },
+    );
+    for (const item of Array.isArray(response.data) ? response.data : []) {
+      coverage.set(item.tagId, (coverage.get(item.tagId) ?? 0) + item.count);
+    }
+  }
+  return coverage;
+}
+
+/** Adds and removes several tags on many items, as Manage Tags saves. */
+export async function bulkTag(
+  entityType: TaggedEntity,
+  entityIds: string[],
+  changes: { add?: number[]; remove?: number[] },
+): Promise<BulkTagOutcome> {
+  const unique = Array.from(new Set(entityIds.filter(Boolean)));
+  const outcome: BulkTagOutcome = { added: 0, removed: 0, skipped: [] };
+  const add = changes.add ?? [];
+  const remove = changes.remove ?? [];
+  if (!unique.length || (!add.length && !remove.length)) return outcome;
+  for (let index = 0; index < unique.length; index += MAX_TAG_BATCH) {
+    const response = await api.post<BulkTagOutcome>("/library/tags/bulk", {
+      entity_type: entityType,
+      entity_ids: unique.slice(index, index + MAX_TAG_BATCH),
+      add,
+      remove,
+    });
+    outcome.added += response.data?.added ?? 0;
+    outcome.removed += response.data?.removed ?? 0;
+    for (const id of response.data?.skipped ?? []) {
+      if (!outcome.skipped.includes(id)) outcome.skipped.push(id);
+    }
+  }
+  return outcome;
+}
+
+export type TagCheckState = "checked" | "mixed" | "unchecked";
+
+/** Tri-state of one tag across a selection of `total` items. */
+export function tagCheckState(count: number, total: number): TagCheckState {
+  if (total <= 0 || count <= 0) return "unchecked";
+  return count >= total ? "checked" : "mixed";
+}
+
+/**
+ * What Manage Tags must change: tags the listener ticked that not every
+ * item has yet, and tags they cleared that some item still has. Mixed tags
+ * left alone stay as they are.
+ */
+export function tagChanges(
+  initial: Map<number, TagCheckState>,
+  desired: Map<number, TagCheckState>,
+): { add: number[]; remove: number[] } {
+  const add: number[] = [];
+  const remove: number[] = [];
+  for (const [id, state] of desired) {
+    const before = initial.get(id) ?? "unchecked";
+    if (state === before) continue;
+    if (state === "checked") add.push(id);
+    else if (state === "unchecked" && before !== "unchecked") remove.push(id);
+  }
+  return { add, remove };
+}
+
+/** Short summary of what a tag holds: "12 albums · 3 artists". */
+export function tagCountsSummary(tag: Pick<UserTag, "counts" | "item_count">) {
+  const counts = tag.counts;
+  if (!counts) {
+    return `${tag.item_count} ${tag.item_count === 1 ? "item" : "items"}`;
+  }
+  const nouns: [TaggedEntity, string, string][] = [
+    ["album", "album", "albums"],
+    ["artist", "artist", "artists"],
+    ["track", "track", "tracks"],
+    ["work", "work", "works"],
+    ["playlist", "playlist", "playlists"],
+  ];
+  const parts = nouns
+    .filter(([key]) => counts[key] > 0)
+    .map(
+      ([key, one, many]) => `${counts[key]} ${counts[key] === 1 ? one : many}`,
+    );
+  return parts.length ? parts.join(" · ") : "Empty";
 }
 
 export async function renameTag(id: number, name: string): Promise<UserTag> {
@@ -490,5 +688,22 @@ export function untagItems(
     `/library/tags/${tagId}/items/remove`,
     entityType,
     entityIds,
+  );
+}
+
+export interface TagPreview {
+  tagId: number;
+  /** Up to four album covers for the tag's tile. */
+  covers: string[];
+}
+
+/** Album covers that picture each tag, for the Tags overview. */
+export async function getTagPreviews(): Promise<Map<number, string[]>> {
+  const response = await api.get<TagPreview[]>("/library/tags/previews");
+  return new Map(
+    (Array.isArray(response.data) ? response.data : []).map((preview) => [
+      preview.tagId,
+      preview.covers ?? [],
+    ]),
   );
 }

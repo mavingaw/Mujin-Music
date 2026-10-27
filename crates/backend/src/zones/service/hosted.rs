@@ -36,6 +36,9 @@ pub(super) struct HostedQueue {
     started: bool,
     /// Where to resume after a stop.
     resume_ms: i64,
+    /// The profile whose music this is, so finished tracks reach their
+    /// listening history.
+    listener: Option<i32>,
 }
 
 impl HostedQueue {
@@ -392,6 +395,7 @@ impl ZoneService {
     /// A remote-control command for a server-driven zone.
     pub(super) async fn hosted_command(
         &self,
+        user_id: i32,
         zone_id: &str,
         command: ZoneCommand,
         cache: Option<&LibraryCache>,
@@ -417,7 +421,7 @@ impl ZoneService {
             let member = member.clone();
             let mut command = command.clone();
             strip_member(&mut command);
-            return Box::pin(self.hosted_command(&member, command, cache)).await;
+            return Box::pin(self.hosted_command(user_id, &member, command, cache)).await;
         }
         let info = renderer.info();
         let settings = self
@@ -480,6 +484,7 @@ impl ZoneService {
                         next: None,
                         started: false,
                         resume_ms: position_ms,
+                        listener: Some(user_id),
                     },
                 );
                 self.hosted_start(zone_id, renderer.as_ref(), cache, position_ms, play)
@@ -531,7 +536,7 @@ impl ZoneService {
                 } else {
                     ZoneCommand::Play
                 };
-                return Box::pin(self.hosted_command(zone_id, next, cache)).await;
+                return Box::pin(self.hosted_command(user_id, zone_id, next, cache)).await;
             }
             ZoneCommand::Stop => {
                 if let Some(queue) = self.lock().hosted.get_mut(zone_id) {
@@ -760,10 +765,17 @@ impl ZoneService {
             Start,
         }
         let state: RendererState = renderer.state();
+        let mut finished: Option<(i32, String, u64)> = None;
         let step = {
             let mut zones = self.lock();
             let Some(queue) = zones.hosted.get_mut(zone_id) else {
                 return;
+            };
+            let ended = |queue: &HostedQueue| {
+                queue
+                    .listener
+                    .zip(queue.song_ids.get(queue.current).cloned())
+                    .map(|(listener, song)| (listener, song, queue.current_serial))
             };
             if queue.desired != Desired::Playing {
                 Step::Nothing
@@ -774,12 +786,14 @@ impl ZoneService {
             } else if let Some((index, serial)) = queue.next
                 && state.serial == Some(serial)
             {
+                finished = ended(queue);
                 queue.current = index;
                 queue.current_serial = serial;
                 queue.next = None;
                 queue.started = state.state == PlayState::Playing;
                 Step::MovedOn
             } else if state.finished_serial == Some(queue.current_serial) {
+                finished = ended(queue);
                 match queue.following() {
                     Some(index) => {
                         queue.current = index;
@@ -804,12 +818,22 @@ impl ZoneService {
                 Step::Nothing
             }
         };
-        let Some(cache) = (match step {
-            Step::Nothing => None,
+        let Some(cache) = (match (&step, &finished) {
+            (Step::Nothing, None) => None,
             _ => self.library_cache().await,
         }) else {
             return;
         };
+        if let Some((listener, song_id, serial)) = finished {
+            self.record_hosted_play(
+                zone_id,
+                &renderer.info().name,
+                listener,
+                song_id,
+                serial,
+                &cache,
+            );
+        }
         let result = match step {
             Step::Nothing => Ok(()),
             Step::MovedOn => self.hosted_send_next(zone_id, renderer, &cache).await,
@@ -819,6 +843,41 @@ impl ZoneService {
             tracing::warn!(%error, zone_id, "server-driven zone could not move on");
         }
         self.changed(None);
+    }
+}
+
+impl ZoneService {
+    /// A track a server-driven zone played to its end joins the listener's
+    /// history, attributed to the zone, as plays in the apps do.
+    fn record_hosted_play(
+        &self,
+        zone_id: &str,
+        zone_name: &str,
+        listener: i32,
+        song_id: String,
+        serial: u64,
+        cache: &Arc<LibraryCache>,
+    ) {
+        let Some(pool) = self.pool.clone() else {
+            return;
+        };
+        let event = crate::recommendation::PlaybackEventRequest {
+            event_key: format!("zone:{zone_id}:{serial}:{song_id}"),
+            song_id,
+            event_type: "qualified_play".to_string(),
+            source: Some("zone".to_string()),
+            zone_id: Some(zone_id.to_string()),
+            zone_name: Some(zone_name.to_string()).filter(|name| !name.trim().is_empty()),
+            ..Default::default()
+        };
+        let cache = cache.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) =
+                crate::recommendation::record_playback_event(listener, &event, &cache, &pool)
+            {
+                tracing::debug!(%error, "zone play not added to history");
+            }
+        });
     }
 }
 

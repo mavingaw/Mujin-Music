@@ -17,8 +17,8 @@ use crate::api::library::{
 };
 use crate::api::{
     album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
-    genres, home, imports, key_service, lyrics, metadata, outputs, playback, playlist, providers,
-    remote_access, search, setup, song, user, works, zones,
+    genres, home, imports, key_service, listen_later, lyrics, metadata, outputs, playback,
+    playlist, providers, remote_access, search, setup, song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -93,6 +93,11 @@ fn library_routes_at(path: &'static str) -> impl HttpServiceFactory {
             web::scope("/tags")
                 .wrap(HttpAuthentication::with_fn(validator))
                 .configure(focus::configure_tags),
+        )
+        .service(
+            web::scope("/listen-later")
+                .wrap(HttpAuthentication::with_fn(validator))
+                .configure(listen_later::configure),
         )
         .service(
             web::scope("")
@@ -318,7 +323,10 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "streaming_services",
             "browse",
             "ratings",
-            "home_assistant"
+            "home_assistant",
+            "listen_later",
+            "smart_tags",
+            "history"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (

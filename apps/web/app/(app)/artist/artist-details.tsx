@@ -47,6 +47,8 @@ import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
 import AlbumMenu from "@/features/library/album-menu";
 import { StartRadioButton } from "@/features/player/radio/radio-controls";
+import ListenLaterButton from "@/features/library/listen-later/listen-later-button";
+import TagButton from "@/features/library/tags/tag-button";
 import { BannedBadge, BanToggleButton } from "@/features/library/radio-bans";
 import { songCreditsArtist } from "@/features/library/artist-appearance";
 
@@ -339,6 +341,16 @@ function LibraryArtistDetails({
                 <StartRadioButton
                   label={`Start ${artist.name} radio`}
                   seed={{ kind: "artist", id: artist.id }}
+                />
+                <ListenLaterButton
+                  entityId={artist.id}
+                  entityType="artist"
+                  name={artist.name}
+                />
+                <TagButton
+                  entityIds={[artist.id]}
+                  entityType="artist"
+                  title={artist.name}
                 />
                 <BanToggleButton
                   target={{ kind: "artist", id: artist.id, name: artist.name }}

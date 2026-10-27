@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::api::auth::authenticated_user_id;
 use crate::api::error::{bad_request, conflict, internal_server_error, not_found};
 use crate::app::LocalApp;
-use crate::library::focus::{FacetRequest, FocusQuery, MAX_PAGE_SIZE, MAX_RESOLVED_IDS, focus_ids};
+use crate::library::focus::{
+    Criterion, FacetRequest, FocusQuery, MAX_PAGE_SIZE, MAX_RESOLVED_IDS, focus_ids,
+};
 use crate::library::state::{LibraryLifecycle, library_unavailable_response};
 use crate::persistence::connection::DbPool;
 use crate::playlist_rules::{
@@ -960,17 +962,83 @@ async fn detach_smart(
 // Tags
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, PartialEq, QueryableByName)]
+/// Items of each kind on a tag. A smart tag counts what its focus matches.
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+pub(crate) struct TagCounts {
+    pub(crate) album: i64,
+    pub(crate) track: i64,
+    pub(crate) artist: i64,
+    pub(crate) work: i64,
+    pub(crate) playlist: i64,
+}
+
+impl TagCounts {
+    fn total(&self) -> i64 {
+        self.album + self.track + self.artist + self.work + self.playlist
+    }
+
+    fn set(&mut self, entity_type: &str, count: i64) {
+        match entity_type {
+            "album" => self.album = count,
+            "track" => self.track = count,
+            "artist" => self.artist = count,
+            "work" => self.work = count,
+            "playlist" => self.playlist = count,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct UserTag {
+    pub(crate) id: i32,
+    pub(crate) name: String,
+    pub(crate) item_count: i64,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    /// `manual` or `smart`.
+    pub(crate) kind: &'static str,
+    pub(crate) color: Option<String>,
+    pub(crate) description: Option<String>,
+    /// The focus a smart tag follows.
+    pub(crate) query: Option<FocusQuery>,
+    pub(crate) counts: TagCounts,
+}
+
+#[derive(QueryableByName)]
+struct TagRow {
     #[diesel(sql_type = Integer)]
     id: i32,
     #[diesel(sql_type = Text)]
     name: String,
-    #[diesel(sql_type = BigInt)]
-    item_count: i64,
     #[diesel(sql_type = Text)]
     created_at: String,
+    #[diesel(sql_type = Text)]
+    updated_at: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    query_json: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    color: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    description: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    album: i64,
+    #[diesel(sql_type = BigInt)]
+    track: i64,
+    #[diesel(sql_type = BigInt)]
+    artist: i64,
+    #[diesel(sql_type = BigInt)]
+    work: i64,
+    #[diesel(sql_type = BigInt)]
+    playlist: i64,
 }
+
+/// Tag colours the clients know how to draw.
+pub(crate) const TAG_COLORS: [&str; 12] = [
+    "slate", "red", "orange", "amber", "lime", "green", "teal", "sky", "blue", "violet", "fuchsia",
+    "pink",
+];
+pub(crate) const MAX_TAG_DESCRIPTION_CHARACTERS: usize = 500;
 
 fn normalize_tag_name(name: &str) -> String {
     name.split_whitespace()
@@ -979,45 +1047,198 @@ fn normalize_tag_name(name: &str) -> String {
         .to_lowercase()
 }
 
+fn tag_rows(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    tag_id: Option<i32>,
+) -> Result<Vec<TagRow>, diesel::result::Error> {
+    diesel::sql_query(
+        "SELECT g.id, g.name, CAST(g.created_at AS TEXT) AS created_at, \
+         CAST(g.updated_at AS TEXT) AS updated_at, g.query_json, g.color, g.description, \
+         COALESCE(SUM(i.entity_type = 'album'), 0) AS album, \
+         COALESCE(SUM(i.entity_type = 'track'), 0) AS track, \
+         COALESCE(SUM(i.entity_type = 'artist'), 0) AS artist, \
+         COALESCE(SUM(i.entity_type = 'work'), 0) AS work, \
+         COALESCE(SUM(i.entity_type = 'playlist'), 0) AS playlist \
+         FROM user_tag g LEFT JOIN user_tag_item i ON i.tag_id = g.id \
+         WHERE g.user_id = ? AND (? IS NULL OR g.id = ?) \
+         GROUP BY g.id ORDER BY g.name COLLATE NOCASE, g.id LIMIT ?",
+    )
+    .bind::<Integer, _>(user_id)
+    .bind::<diesel::sql_types::Nullable<Integer>, _>(tag_id)
+    .bind::<diesel::sql_types::Nullable<Integer>, _>(tag_id)
+    .bind::<BigInt, _>(MAX_TAGS)
+    .load::<TagRow>(connection)
+}
+
+fn hydrate_tags(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    rows: Vec<TagRow>,
+) -> Result<Vec<UserTag>, diesel::result::Error> {
+    #[derive(QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+    let smart = if rows.iter().any(|row| row.query_json.is_some()) {
+        crate::library::tags::smart_tag_queries(connection, user_id)?
+    } else {
+        HashMap::new()
+    };
+    let mut hydrated = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut counts = TagCounts {
+            album: row.album,
+            track: row.track,
+            artist: row.artist,
+            work: row.work,
+            playlist: row.playlist,
+        };
+        let query = row
+            .query_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<FocusQuery>(json).ok());
+        if let Some(query) = &query {
+            let resolved = smart.get(&i64::from(row.id)).map(|definition| {
+                let mut resolved = crate::library::tags::resolve_with(definition, &smart);
+                // A smart tag never matches through itself.
+                resolved.filters.retain(|filter| {
+                    !matches!(filter.criterion, Criterion::Tag { tag_id, .. } if tag_id == i64::from(row.id))
+                });
+                resolved
+            });
+            let count = match resolved {
+                Some(resolved) => {
+                    crate::library::focus::count_sql(&resolved, user_id)
+                        .into_query()
+                        .get_result::<CountRow>(connection)?
+                        .count
+                }
+                None => 0,
+            };
+            counts = TagCounts::default();
+            counts.set(
+                crate::library::focus::tagged_entity_type(query.entity),
+                count,
+            );
+        }
+        hydrated.push(UserTag {
+            id: row.id,
+            name: row.name,
+            item_count: counts.total(),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            kind: if row.query_json.is_some() {
+                "smart"
+            } else {
+                "manual"
+            },
+            color: row.color,
+            description: row.description,
+            query,
+            counts,
+        });
+    }
+    Ok(hydrated)
+}
+
 pub(crate) fn list_tags(
     connection: &mut SqliteConnection,
     user_id: i32,
 ) -> Result<Vec<UserTag>, diesel::result::Error> {
-    diesel::sql_query(
-        "SELECT g.id, g.name, (SELECT COUNT(*) FROM user_tag_item i WHERE i.tag_id = g.id) AS item_count, \
-         CAST(g.created_at AS TEXT) AS created_at FROM user_tag g WHERE g.user_id = ? \
-         ORDER BY g.name COLLATE NOCASE, g.id LIMIT ?",
-    )
-    .bind::<Integer, _>(user_id)
-    .bind::<BigInt, _>(MAX_TAGS)
-    .load::<UserTag>(connection)
+    let rows = tag_rows(connection, user_id, None)?;
+    hydrate_tags(connection, user_id, rows)
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum TagWrite {
-    Written(UserTag),
+    Written(Box<UserTag>),
     Duplicate,
     CapacityReached,
     Missing,
+    /// The change does not fit the tag (a focus for a manual tag, say).
+    Invalid(&'static str),
 }
 
-fn tag_by_id(
+pub(crate) fn tag_by_id(
     connection: &mut SqliteConnection,
     user_id: i32,
     tag_id: i32,
 ) -> Result<Option<UserTag>, diesel::result::Error> {
-    Ok(list_tags(connection, user_id)?
-        .into_iter()
-        .find(|tag| tag.id == tag_id))
+    let rows = tag_rows(connection, user_id, Some(tag_id))?;
+    Ok(hydrate_tags(connection, user_id, rows)?.into_iter().next())
 }
 
+/// Everything a new tag may carry besides its name.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub(crate) struct TagDetails {
+    #[serde(default)]
+    pub(crate) color: Option<String>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    /// Makes the tag smart: it holds whatever this focus matches.
+    #[serde(default)]
+    pub(crate) query: Option<FocusQuery>,
+}
+
+fn valid_color(color: Option<&str>) -> bool {
+    color.is_none_or(|color| TAG_COLORS.contains(&color))
+}
+
+fn valid_description(description: Option<&str>) -> bool {
+    description.is_none_or(|text| text.chars().count() <= MAX_TAG_DESCRIPTION_CHARACTERS)
+}
+
+fn smart_query_problem(query: &FocusQuery) -> Option<&'static str> {
+    if query.validate().is_err() {
+        return Some("tag_query_invalid");
+    }
+    if !crate::library::tags::smart_entity_supported(query.entity) {
+        return Some("tag_query_entity_unsupported");
+    }
+    None
+}
+
+fn clean_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(test)]
 pub(crate) fn create_tag(
     connection: &mut SqliteConnection,
     user_id: i32,
     name: &str,
 ) -> Result<TagWrite, diesel::result::Error> {
+    create_tag_with(connection, user_id, name, &TagDetails::default())
+}
+
+pub(crate) fn create_tag_with(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    name: &str,
+    details: &TagDetails,
+) -> Result<TagWrite, diesel::result::Error> {
     let display = name.split_whitespace().collect::<Vec<_>>().join(" ");
     let normalized = normalize_tag_name(name);
+    if !valid_color(details.color.as_deref()) {
+        return Ok(TagWrite::Invalid("tag_color_invalid"));
+    }
+    if !valid_description(details.description.as_deref()) {
+        return Ok(TagWrite::Invalid("tag_description_invalid"));
+    }
+    if let Some(problem) = details.query.as_ref().and_then(smart_query_problem) {
+        return Ok(TagWrite::Invalid(problem));
+    }
+    let query_json = details
+        .query
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| diesel::result::Error::SerializationError(Box::new(error)))?;
     connection.immediate_transaction(|connection| {
         #[derive(QueryableByName)]
         struct Counts {
@@ -1025,9 +1246,12 @@ pub(crate) fn create_tag(
             count: i64,
             #[diesel(sql_type = BigInt)]
             duplicate: i64,
+            #[diesel(sql_type = BigInt)]
+            smart: i64,
         }
         let counts = diesel::sql_query(
-            "SELECT COUNT(*) AS count, COALESCE(SUM(normalized_name = ?), 0) AS duplicate \
+            "SELECT COUNT(*) AS count, COALESCE(SUM(normalized_name = ?), 0) AS duplicate, \
+             COALESCE(SUM(query_json IS NOT NULL), 0) AS smart \
              FROM user_tag WHERE user_id = ?",
         )
         .bind::<Text, _>(&normalized)
@@ -1036,14 +1260,22 @@ pub(crate) fn create_tag(
         if counts.duplicate > 0 {
             return Ok(TagWrite::Duplicate);
         }
-        if counts.count >= MAX_TAGS {
+        if counts.count >= MAX_TAGS
+            || (query_json.is_some() && counts.smart >= crate::library::tags::MAX_SMART_TAGS)
+        {
             return Ok(TagWrite::CapacityReached);
         }
-        diesel::sql_query("INSERT INTO user_tag(user_id, name, normalized_name) VALUES (?, ?, ?)")
-            .bind::<Integer, _>(user_id)
-            .bind::<Text, _>(&display)
-            .bind::<Text, _>(&normalized)
-            .execute(connection)?;
+        diesel::sql_query(
+            "INSERT INTO user_tag(user_id, name, normalized_name, query_json, color, description) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind::<Integer, _>(user_id)
+        .bind::<Text, _>(&display)
+        .bind::<Text, _>(&normalized)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(query_json.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(details.color.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(clean_text(details.description.as_deref()))
+        .execute(connection)?;
         #[derive(QueryableByName)]
         struct Inserted {
             #[diesel(sql_type = Integer)]
@@ -1053,84 +1285,188 @@ pub(crate) fn create_tag(
             .get_result::<Inserted>(connection)?
             .id;
         Ok(match tag_by_id(connection, user_id, id)? {
-            Some(tag) => TagWrite::Written(tag),
+            Some(tag) => TagWrite::Written(Box::new(tag)),
             None => TagWrite::Missing,
         })
     })
 }
 
+/// A partial tag update. `Some(None)` clears colour or description.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TagPatch {
+    #[serde(default)]
+    pub(crate) name: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub(crate) color: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub(crate) description: Option<Option<String>>,
+    #[serde(default)]
+    pub(crate) query: Option<FocusQuery>,
+}
+
+fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
 pub(crate) fn rename_tag(
     connection: &mut SqliteConnection,
     user_id: i32,
     tag_id: i32,
     name: &str,
 ) -> Result<TagWrite, diesel::result::Error> {
-    let display = name.split_whitespace().collect::<Vec<_>>().join(" ");
-    let normalized = normalize_tag_name(name);
+    update_tag(
+        connection,
+        user_id,
+        tag_id,
+        &TagPatch {
+            name: Some(name.to_string()),
+            ..TagPatch::default()
+        },
+    )
+}
+
+pub(crate) fn update_tag(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    tag_id: i32,
+    patch: &TagPatch,
+) -> Result<TagWrite, diesel::result::Error> {
+    if !valid_color(patch.color.as_ref().and_then(|color| color.as_deref())) {
+        return Ok(TagWrite::Invalid("tag_color_invalid"));
+    }
+    if !valid_description(
+        patch
+            .description
+            .as_ref()
+            .and_then(|description| description.as_deref()),
+    ) {
+        return Ok(TagWrite::Invalid("tag_description_invalid"));
+    }
+    if let Some(problem) = patch.query.as_ref().and_then(smart_query_problem) {
+        return Ok(TagWrite::Invalid(problem));
+    }
+    let query_json = patch
+        .query
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| diesel::result::Error::SerializationError(Box::new(error)))?;
     connection.immediate_transaction(|connection| {
         #[derive(QueryableByName)]
-        struct CountRow {
-            #[diesel(sql_type = BigInt)]
-            count: i64,
+        struct Existing {
+            #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+            query_json: Option<String>,
         }
-        let duplicate = diesel::sql_query(
-            "SELECT COUNT(*) AS count FROM user_tag WHERE user_id = ? AND normalized_name = ? AND id <> ?",
-        )
-        .bind::<Integer, _>(user_id)
-        .bind::<Text, _>(&normalized)
-        .bind::<Integer, _>(tag_id)
-        .get_result::<CountRow>(connection)?
-        .count;
-        if duplicate > 0 {
-            return Ok(TagWrite::Duplicate);
-        }
-        let updated = diesel::sql_query(
-            "UPDATE user_tag SET name = ?, normalized_name = ?, updated_at = CURRENT_TIMESTAMP \
-             WHERE user_id = ? AND id = ?",
-        )
-        .bind::<Text, _>(&display)
-        .bind::<Text, _>(&normalized)
-        .bind::<Integer, _>(user_id)
-        .bind::<Integer, _>(tag_id)
-        .execute(connection)?;
-        if updated == 0 {
+        let Some(existing) =
+            diesel::sql_query("SELECT query_json FROM user_tag WHERE user_id = ? AND id = ?")
+                .bind::<Integer, _>(user_id)
+                .bind::<Integer, _>(tag_id)
+                .get_result::<Existing>(connection)
+                .optional()?
+        else {
             return Ok(TagWrite::Missing);
+        };
+        if query_json.is_some() && existing.query_json.is_none() {
+            return Ok(TagWrite::Invalid("tag_not_smart"));
         }
+        if let Some(name) = &patch.name {
+            #[derive(QueryableByName)]
+            struct CountRow {
+                #[diesel(sql_type = BigInt)]
+                count: i64,
+            }
+            let display = name.split_whitespace().collect::<Vec<_>>().join(" ");
+            let normalized = normalize_tag_name(name);
+            let duplicate = diesel::sql_query(
+                "SELECT COUNT(*) AS count FROM user_tag WHERE user_id = ? AND normalized_name = ? AND id <> ?",
+            )
+            .bind::<Integer, _>(user_id)
+            .bind::<Text, _>(&normalized)
+            .bind::<Integer, _>(tag_id)
+            .get_result::<CountRow>(connection)?
+            .count;
+            if duplicate > 0 {
+                return Ok(TagWrite::Duplicate);
+            }
+            diesel::sql_query("UPDATE user_tag SET name = ?, normalized_name = ? WHERE id = ?")
+                .bind::<Text, _>(&display)
+                .bind::<Text, _>(&normalized)
+                .bind::<Integer, _>(tag_id)
+                .execute(connection)?;
+        }
+        if let Some(color) = &patch.color {
+            diesel::sql_query("UPDATE user_tag SET color = ? WHERE id = ?")
+                .bind::<diesel::sql_types::Nullable<Text>, _>(color.as_deref())
+                .bind::<Integer, _>(tag_id)
+                .execute(connection)?;
+        }
+        if let Some(description) = &patch.description {
+            diesel::sql_query("UPDATE user_tag SET description = ? WHERE id = ?")
+                .bind::<diesel::sql_types::Nullable<Text>, _>(clean_text(description.as_deref()))
+                .bind::<Integer, _>(tag_id)
+                .execute(connection)?;
+        }
+        if let Some(query_json) = &query_json {
+            diesel::sql_query("UPDATE user_tag SET query_json = ? WHERE id = ?")
+                .bind::<Text, _>(query_json)
+                .bind::<Integer, _>(tag_id)
+                .execute(connection)?;
+        }
+        diesel::sql_query("UPDATE user_tag SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind::<Integer, _>(tag_id)
+            .execute(connection)?;
         Ok(match tag_by_id(connection, user_id, tag_id)? {
-            Some(tag) => TagWrite::Written(tag),
+            Some(tag) => TagWrite::Written(Box::new(tag)),
             None => TagWrite::Missing,
         })
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TaggedEntity {
     Track,
     Album,
     Artist,
+    Work,
+    Playlist,
 }
 
 impl TaggedEntity {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Track => "track",
             Self::Album => "album",
             Self::Artist => "artist",
+            Self::Work => "work",
+            Self::Playlist => "playlist",
         }
     }
 
-    fn table(self) -> &'static str {
+    /// Selects `id` when it names an entity of this kind the user can tag.
+    /// Binds: the id, then the user.
+    fn existing_sql(self) -> &'static str {
         match self {
-            Self::Track => "track_entity",
-            Self::Album => "album_entity",
-            Self::Artist => "artist_entity",
+            Self::Track => "SELECT id AS id FROM track_entity WHERE id = ? AND ? IS NOT NULL",
+            Self::Album => "SELECT id AS id FROM album_entity WHERE id = ? AND ? IS NOT NULL",
+            Self::Artist => "SELECT id AS id FROM artist_entity WHERE id = ? AND ? IS NOT NULL",
+            Self::Work => "SELECT id AS id FROM library_work WHERE id = ? AND ? IS NOT NULL",
+            Self::Playlist => {
+                "SELECT CAST(p.id AS TEXT) AS id FROM playlist p \
+                 JOIN _playlist_to_user pu ON pu.a = p.id \
+                 WHERE CAST(p.id AS TEXT) = ? AND pu.b = ?"
+            }
         }
     }
 }
 
 /// Adds or removes catalog entities on a tag. Unknown ids are ignored.
-/// Returns `None` when the tag does not belong to the user.
+/// Returns `None` when the tag does not belong to the user or is smart.
 pub(crate) fn change_tag_items(
     connection: &mut SqliteConnection,
     user_id: i32,
@@ -1140,7 +1476,19 @@ pub(crate) fn change_tag_items(
     add: bool,
 ) -> Result<Option<usize>, diesel::result::Error> {
     connection.immediate_transaction(|connection| {
-        if tag_by_id(connection, user_id, tag_id)?.is_none() {
+        #[derive(QueryableByName)]
+        struct Owned {
+            #[diesel(sql_type = BigInt)]
+            count: i64,
+        }
+        let owned = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM user_tag \
+             WHERE user_id = ? AND id = ? AND query_json IS NULL",
+        )
+        .bind::<Integer, _>(user_id)
+        .bind::<Integer, _>(tag_id)
+        .get_result::<Owned>(connection)?;
+        if owned.count == 0 {
             return Ok(None);
         }
         let mut changed = 0;
@@ -1148,13 +1496,14 @@ pub(crate) fn change_tag_items(
             changed += if add {
                 diesel::sql_query(format!(
                     "INSERT INTO user_tag_item(tag_id, entity_type, entity_id) \
-                     SELECT ?, ?, id FROM {} WHERE id = ? \
+                     SELECT ?, ?, existing.id FROM ({}) existing WHERE 1 \
                      ON CONFLICT(tag_id, entity_type, entity_id) DO NOTHING",
-                    entity.table()
+                    entity.existing_sql()
                 ))
                 .bind::<Integer, _>(tag_id)
                 .bind::<Text, _>(entity.as_str())
                 .bind::<Text, _>(id)
+                .bind::<Integer, _>(user_id)
                 .execute(connection)?
             } else {
                 diesel::sql_query(
@@ -1200,14 +1549,16 @@ pub(crate) fn tags_for_entity(
 }
 
 #[derive(Deserialize)]
-struct TagName {
+struct NewTag {
     name: String,
+    #[serde(flatten)]
+    details: TagDetails,
 }
 
 #[derive(Deserialize)]
-struct TagItems {
-    entity_type: TaggedEntity,
-    entity_ids: Vec<String>,
+pub(crate) struct TagItems {
+    pub(crate) entity_type: TaggedEntity,
+    pub(crate) entity_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1216,7 +1567,7 @@ struct TagLookup {
     entity_id: String,
 }
 
-fn valid_tag_name(name: &str) -> bool {
+pub(crate) fn valid_tag_name(name: &str) -> bool {
     valid_optional_text(Some(name.trim()), MAX_TAG_NAME_CHARACTERS, false)
 }
 
@@ -1227,9 +1578,9 @@ fn tag_response(
     match result {
         Ok(Ok(TagWrite::Written(tag))) => {
             if created {
-                HttpResponse::Created().json(tag)
+                HttpResponse::Created().json(*tag)
             } else {
-                HttpResponse::Ok().json(tag)
+                HttpResponse::Ok().json(*tag)
             }
         }
         Ok(Ok(TagWrite::Duplicate)) => conflict("A tag with this name exists.", "tag_exists"),
@@ -1237,6 +1588,7 @@ fn tag_response(
             conflict("Tag capacity reached.", "tag_capacity_reached")
         }
         Ok(Ok(TagWrite::Missing)) => not_found("Tag not found.", "tag_not_found"),
+        Ok(Ok(TagWrite::Invalid(code))) => bad_request("The tag change is invalid.", code),
         Ok(Err(error)) => worker_failed("tag write failed", error),
         Err(error) => worker_failed("tag worker failed", error),
     }
@@ -1264,7 +1616,7 @@ async fn tags(request: HttpRequest, pool: web::Data<DbPool>) -> HttpResponse {
 #[post("")]
 async fn create_tag_route(
     request: HttpRequest,
-    body: web::Json<TagName>,
+    body: web::Json<NewTag>,
     pool: web::Data<DbPool>,
 ) -> HttpResponse {
     let user_id = match authenticated_user_id(&request) {
@@ -1277,11 +1629,11 @@ async fn create_tag_route(
             "tag_name_invalid",
         );
     }
-    let name = body.into_inner().name;
+    let NewTag { name, details } = body.into_inner();
     let pool = pool.get_ref().clone();
     let result = web::block(move || -> Result<_, BoxError> {
         let mut connection = pool.get()?;
-        Ok(create_tag(&mut connection, user_id, &name)?)
+        Ok(create_tag_with(&mut connection, user_id, &name, &details)?)
     })
     .await;
     tag_response(result, true)
@@ -1323,25 +1675,29 @@ async fn assigned_tags(
 async fn rename_tag_route(
     request: HttpRequest,
     id: web::Path<i32>,
-    body: web::Json<TagName>,
+    body: web::Json<TagPatch>,
     pool: web::Data<DbPool>,
 ) -> HttpResponse {
     let user_id = match authenticated_user_id(&request) {
         Ok(id) => id,
         Err(response) => return response,
     };
-    if !valid_tag_name(&body.name) {
+    if body
+        .name
+        .as_deref()
+        .is_some_and(|name| !valid_tag_name(name))
+    {
         return bad_request(
             "Tag names must contain 1 to 100 characters.",
             "tag_name_invalid",
         );
     }
     let id = id.into_inner();
-    let name = body.into_inner().name;
+    let patch = body.into_inner();
     let pool = pool.get_ref().clone();
     let result = web::block(move || -> Result<_, BoxError> {
         let mut connection = pool.get()?;
-        Ok(rename_tag(&mut connection, user_id, id, &name)?)
+        Ok(update_tag(&mut connection, user_id, id, &patch)?)
     })
     .await;
     tag_response(result, false)
@@ -1415,7 +1771,10 @@ async fn change_items(
     .await
     {
         Ok(Ok(Some(changed))) => HttpResponse::Ok().json(serde_json::json!({ "changed": changed })),
-        Ok(Ok(None)) => not_found("Tag not found.", "tag_not_found"),
+        Ok(Ok(None)) => not_found(
+            "Tag not found, or it is a smart tag that follows its focus.",
+            "tag_not_found",
+        ),
         Ok(Err(error)) => worker_failed("tag item change failed", error),
         Err(error) => worker_failed("tag item worker failed", error),
     }
@@ -1465,7 +1824,8 @@ pub fn configure_tags(cfg: &mut web::ServiceConfig) {
         .service(rename_tag_route)
         .service(delete_tag_route)
         .service(add_tag_items)
-        .service(remove_tag_items);
+        .service(remove_tag_items)
+        .configure(crate::api::tags::configure);
 }
 
 #[cfg(test)]

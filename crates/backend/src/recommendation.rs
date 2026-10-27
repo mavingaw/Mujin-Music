@@ -14,13 +14,15 @@ const MAX_PROFILE_ARTISTS: i64 = 24;
 const MAX_TRANSITIONS: i64 = 80;
 const RECENT_EXCLUSION_COUNT: i64 = 40;
 const MAX_PLAYBACK_EVENTS_PER_USER: i64 = 20_000;
-const MAX_LISTEN_HISTORY_PER_USER: i64 = 20_000;
+/// Plays kept per profile: about ten years of heavy daily listening.
+const MAX_LISTEN_HISTORY_PER_USER: i64 = 100_000;
 const MAX_SEARCH_PROFILE_TRACKS: i64 = 500;
 const MAX_SEARCH_AFFINITY_BOOST: f64 = 10.0;
 /// Maximum events accepted before ordered retention runs.
 const RETENTION_BATCH_SIZE: i32 = 256;
 const MAX_EVENT_REFERENCE_CHARACTERS: usize = 160;
 const MAX_EVENT_SOURCE_CHARACTERS: usize = 64;
+const MAX_EVENT_ZONE_CHARACTERS: usize = 120;
 /// Tracks at or below this preference score are kept out of Radio.
 const REJECTED_TRACK_SCORE: f64 = -15.0;
 const ARTIST_PENALTY_GRACE: f64 = 20.0;
@@ -34,7 +36,7 @@ const RECYCLE_GAP_HOURS: f64 = 3.0;
 /// Played songs considered when ranking repeats by how long ago they played.
 const MAX_RECYCLE_HISTORY: i64 = 5_000;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct PlaybackEventRequest {
     pub event_key: String,
     pub song_id: String,
@@ -44,6 +46,17 @@ pub struct PlaybackEventRequest {
     pub source: Option<String>,
     pub position_seconds: Option<f64>,
     pub duration_seconds: Option<f64>,
+    /// The zone that played the track (`client:<device>`, `sonos:...`), so
+    /// history can say where something was heard.
+    #[serde(default)]
+    pub zone_id: Option<String>,
+    /// The zone's name as the client showed it; a name set in zone
+    /// settings wins.
+    #[serde(default)]
+    pub zone_name: Option<String>,
+    /// The kind of device: "Desktop app", "Chrome on macOS", "Android", ...
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -233,6 +246,12 @@ fn validate_playback_event(
         || event
             .duration_seconds
             .is_some_and(|value| !value.is_finite() || value < 0.0)
+        || [&event.zone_id, &event.zone_name, &event.device]
+            .into_iter()
+            .flatten()
+            .any(|value| {
+                value.trim().is_empty() || value.chars().count() > MAX_EVENT_ZONE_CHARACTERS
+            })
     {
         return Err("playback event contains an invalid or oversized field".into());
     }
@@ -323,13 +342,8 @@ fn persist_playback_event(
     }
 
     if event.event_type == "qualified_play" {
-        diesel::sql_query(
-            "INSERT INTO listen_history_item (user_id, song_id, listened_at)
-             VALUES (?, ?, CURRENT_TIMESTAMP)",
-        )
-        .bind::<diesel::sql_types::Integer, _>(user_id)
-        .bind::<Text, _>(&event.song_id)
-        .execute(connection)?;
+        insert_listen_history(connection, user_id, event, cache)?;
+        crate::listen_later::remove_played(connection, user_id, &event.song_id, cache)?;
     }
 
     let weight = event_weight(&event.event_type);
@@ -452,6 +466,63 @@ fn persist_playback_event(
         accepted: true,
         qualified: is_positive(&event.event_type),
     })
+}
+
+/// Records one play with a snapshot of what the track was called, so the
+/// history still reads right after files are renamed or removed.
+fn insert_listen_history(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    event: &PlaybackEventRequest,
+    cache: &LibraryCache,
+) -> QueryResult<usize> {
+    let song = cache.song(&event.song_id);
+    let (artist_id, album_id) = cache
+        .song_map
+        .get(&event.song_id)
+        .map(|(artist, album)| (Some(artist.as_str()), Some(album.as_str())))
+        .unwrap_or((None, None));
+    let artist_name = artist_id
+        .and_then(|id| cache.artist(id))
+        .map(|artist| artist.name.as_str())
+        .or_else(|| song.map(|song| song.artist.as_str()));
+    let album_name = album_id
+        .and_then(|id| cache.album(id))
+        .map(|album| album.name.as_str());
+    let duration = song
+        .map(|song| song.duration)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .or(event.duration_seconds);
+    let clean = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let zone_id = clean(&event.zone_id);
+    diesel::sql_query(
+        "INSERT INTO listen_history_item
+         (user_id, song_id, listened_at, zone_id, zone_name, source, device,
+          title, artist_id, artist_name, album_id, album_name, duration_seconds)
+         VALUES (?, ?, CURRENT_TIMESTAMP, ?,
+                 COALESCE((SELECT NULLIF(TRIM(name), '') FROM zone_setting WHERE zone_id = ?), ?),
+                 ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind::<diesel::sql_types::Integer, _>(user_id)
+    .bind::<Text, _>(&event.song_id)
+    .bind::<Nullable<Text>, _>(zone_id.as_deref())
+    .bind::<Nullable<Text>, _>(zone_id.as_deref())
+    .bind::<Nullable<Text>, _>(clean(&event.zone_name))
+    .bind::<Nullable<Text>, _>(clean(&event.source))
+    .bind::<Nullable<Text>, _>(clean(&event.device))
+    .bind::<Nullable<Text>, _>(song.map(|song| song.name.as_str()))
+    .bind::<Nullable<Text>, _>(artist_id)
+    .bind::<Nullable<Text>, _>(artist_name)
+    .bind::<Nullable<Text>, _>(album_id)
+    .bind::<Nullable<Text>, _>(album_name)
+    .bind::<Nullable<Double>, _>(duration)
+    .execute(connection)
 }
 
 fn schedule_playback_retention(
@@ -2419,6 +2490,7 @@ mod tests {
             source: Some("manual".into()),
             position_seconds: Some(0.0),
             duration_seconds: Some(180.0),
+            ..Default::default()
         };
         assert!(record_playback_event(1, &event, &one_song_cache(), &pool).is_err());
         let mut connection = pool.get().expect("event count connection");
@@ -2501,6 +2573,7 @@ mod tests {
             source: Some("generated".into()),
             position_seconds: Some(0.0),
             duration_seconds: Some(180.0),
+            ..Default::default()
         };
         let result = record_playback_event(1, &event, &one_song_cache(), &pool)
             .expect("playback start event");
@@ -2537,11 +2610,13 @@ mod tests {
                    SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value <= {}
                  )
                  INSERT INTO playback_event (user_id) SELECT 1 FROM sequence;
-                 INSERT INTO listen_history_item (user_id)
-                 SELECT 1 FROM playback_event;
+                 WITH RECURSIVE sequence(value) AS (
+                   SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value <= {}
+                 )
+                 INSERT INTO listen_history_item (user_id) SELECT 1 FROM sequence;
                  INSERT INTO playback_event (user_id) VALUES (2);
                  INSERT INTO listen_history_item (user_id) VALUES (2);",
-                MAX_PLAYBACK_EVENTS_PER_USER
+                MAX_PLAYBACK_EVENTS_PER_USER, MAX_LISTEN_HISTORY_PER_USER
             ))
             .expect("history retention fixture");
         prune_playback_history(&mut connection, 1, true, true).expect("history pruning");
@@ -2580,6 +2655,7 @@ mod tests {
             source: Some("generated".into()),
             position_seconds: Some(4.0),
             duration_seconds: Some(200.0),
+            ..Default::default()
         }
     }
 
@@ -3096,19 +3172,11 @@ pub(crate) mod test_support {
         let manager = ConnectionManager::<diesel::sqlite::SqliteConnection>::new(":memory:");
         let pool = Arc::new(Pool::builder().max_size(1).build(manager).unwrap());
         let mut connection = pool.get().expect("radio schema connection");
-        connection
-            .batch_execute(include_str!(
-                "../migrations/2026-07-19-000000_v1_0_0_baseline/up.sql"
-            ))
-            .expect("baseline schema");
-        connection
-            .batch_execute(include_str!("../migrations/2026-10-25-000000_radio/up.sql"))
-            .expect("radio schema");
-        connection
-            .batch_execute(include_str!(
-                "../migrations/2026-10-26-000000_radio_bans/up.sql"
-            ))
-            .expect("radio bans schema");
+        diesel_migrations::MigrationHarness::run_pending_migrations(
+            &mut *connection,
+            crate::persistence::connection::MIGRATIONS,
+        )
+        .expect("migrated schema");
         connection
             .batch_execute(
                 "INSERT INTO user (id, username, password, bitrate, role)
