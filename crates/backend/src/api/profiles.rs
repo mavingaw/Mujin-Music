@@ -634,7 +634,8 @@ async fn delete_profile(
         return response;
     }
     crate::api::auth::invalidate_image_session(target_id).await;
-    let avatar = crate::library::storage::profile_picture_file(target_id);
+    let avatar =
+        crate::library::storage::get_profile_picture_path().join(format!("{target_id}.jpg"));
     if let Err(error) = tokio::fs::remove_file(avatar).await
         && error.kind() != std::io::ErrorKind::NotFound
     {
