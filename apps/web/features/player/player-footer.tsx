@@ -3,7 +3,18 @@
 import FavoriteButton from "@/features/library/favorite-button";
 import { DeliveredFormat } from "@/features/streaming/delivered-format";
 import { NowPlayingStreamingSource } from "@/features/streaming/now-playing-source";
-import { isStreamingId } from "@parson/music-sdk";
+import {
+  isLiveRadioId,
+  isStreamingId,
+  liveStationIdFromSongId,
+  type LiveNowPlaying,
+} from "@parson/music-sdk";
+import {
+  LiveStationSave,
+  LiveTimeline,
+} from "@/features/live-radio/live-player";
+import { LiveBadge, StationArtwork } from "@/features/live-radio/station-ui";
+import { stationHref } from "@/features/live-radio/live-radio-model";
 import { ExplicitBadge } from "@/features/library/song-title";
 import { ArtistCreditLinks } from "@/features/library/artist-credit-links";
 import type { TrackArtistCreditPart } from "@/features/library/track-artist-credit";
@@ -24,6 +35,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import Image from "next/image";
+import { defaultCover } from "@/lib/images/default-cover";
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
@@ -77,6 +89,7 @@ export function PlayerFooter({
   zonePicker,
   zoneLabel,
   zoneSignal,
+  livePlaying,
 }: {
   albumCover?: string;
   albumId: string;
@@ -125,7 +138,158 @@ export function PlayerFooter({
   zoneLabel?: string | null;
   /** The remote zone's quality light, beside "Playing on". */
   zoneSignal?: ReactNode;
+  /** What a live station is playing (titles and format), when one plays. */
+  livePlaying?: LiveNowPlaying | null;
 }) {
+  const live = isLiveRadioId(songId);
+  const footer = (
+    <footer className="fixed bottom-20 left-2 right-2 z-50 isolate overflow-visible rounded-[14px] border border-white/10 bg-[#080808] px-3 py-2 text-white shadow-[0_20px_70px_rgba(0,0,0,0.72)] md:bottom-4 md:left-[calc(50%+40px)] md:right-auto md:w-[min(980px,calc(100vw-112px))] md:-translate-x-1/2 md:rounded-3xl md:px-4 md:py-4 md:pl-5 md:pr-3">
+      <button
+        aria-label={`Open now playing: ${title}`}
+        className="absolute inset-0 z-20 rounded-[14px] md:hidden"
+        onClick={onOpenFullscreen}
+        type="button"
+      />
+      <div className="relative z-10 grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(180px,0.9fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] lg:gap-x-4">
+        <TrackInfo
+          albumId={albumId}
+          artistCredits={artistCredits}
+          cover={cover}
+          songId={songId}
+          title={title}
+          explicit={explicit}
+          feedback={feedback}
+          zoneLabel={zoneLabel ?? null}
+          zoneSignal={zoneSignal}
+        />
+        <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
+          <div className="flex items-center gap-1.5">
+            {signalLight ? (
+              <span className="hidden md:contents">{signalLight}</span>
+            ) : null}
+            <PlaybackControls
+              compact
+              prominent
+              isPlaying={isPlaying}
+              onNext={onNext}
+              onPrevious={onPrevious}
+              onToggle={onTogglePlayback}
+            />
+            {signalLight ? (
+              <span aria-hidden="true" className="hidden h-8 w-8 md:block" />
+            ) : null}
+          </div>
+          {live ? (
+            <LiveTimeline
+              className="hidden w-full md:flex"
+              currentTime={currentTime}
+              isPlaying={isPlaying}
+              playing={livePlaying}
+            />
+          ) : (
+            <Timeline
+              className="hidden w-full md:flex"
+              currentTime={currentTime}
+              duration={duration}
+              isPlaying={isPlaying}
+              readPosition={readPosition}
+              onChange={onSeek}
+              playbackRate={playbackRate}
+            />
+          )}
+        </section>
+        <section className="relative z-30 flex items-center justify-end gap-1.5 lg:justify-self-end">
+          <span className="hidden md:inline" data-player-queue-trigger>
+            <ActionButton
+              active={queueOpen}
+              label="Queue"
+              onClick={onOpenQueue}
+            >
+              <ListMusic className="h-4 w-4" />
+            </ActionButton>
+          </span>
+          <div className={live ? "hidden" : "hidden sm:block"}>
+            <ActionButton
+              active={lyricsOpen}
+              label="Lyrics"
+              onClick={onToggleLyrics}
+            >
+              <MicVocal className="h-4 w-4" />
+            </ActionButton>
+          </div>
+          <div className="hidden sm:block">
+            <ActionButton
+              active={slowedReverb}
+              label="Sound"
+              onClick={onToggleSound}
+            >
+              <AudioLines className="h-4 w-4" />
+            </ActionButton>
+          </div>
+          {zonePicker && (
+            <div className="relative z-30" data-zone-picker-slot>
+              {zonePicker}
+            </div>
+          )}
+          <div className="hidden sm:block">
+            <VolumeControl
+              muted={muted}
+              onChange={onVolumeChange}
+              onToggleMute={onToggleMute}
+              volume={volume}
+            />
+          </div>
+          <PlayerMoreMenu>
+            <DropdownMenuLabel>Sound</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={audioPreset}
+              onValueChange={(value) => onSelectPreset(value as AudioPresetId)}
+            >
+              {audioPresets.map((preset) => (
+                <DropdownMenuRadioItem key={preset.id} value={preset.id}>
+                  {preset.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            {onOpenDsp ? (
+              <DropdownMenuItem onSelect={onOpenDsp}>
+                <SlidersHorizontal className="h-4 w-4" />
+                DSP engine
+                <span className="ml-auto text-[11px] text-zinc-500">
+                  {DSP_SHORTCUT_LABEL}
+                </span>
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem onSelect={onOpenFullscreen}>
+              <Maximize2 className="h-4 w-4" />
+              Fullscreen
+            </DropdownMenuItem>
+            {onHandOffToSpotify && (
+              <DropdownMenuItem onSelect={onHandOffToSpotify}>
+                <MonitorSpeaker className="h-4 w-4" />
+                Play on Spotify device…
+              </DropdownMenuItem>
+            )}
+          </PlayerMoreMenu>
+        </section>
+      </div>
+      <div className="relative z-10 hidden md:block">
+        {!live && (
+          <Timeline
+            className="mt-2 flex w-full md:hidden"
+            currentTime={currentTime}
+            duration={duration}
+            isPlaying={isPlaying}
+            onChange={onSeek}
+            playbackRate={playbackRate}
+          />
+        )}
+      </div>
+    </footer>
+  );
+  // A live station is not a library song: no song menu.
+  if (live) return footer;
   return (
     <SongMenu
       album_cover={albumCover}
@@ -137,141 +301,7 @@ export function PlayerFooter({
       song_id={songId}
       song_name={title}
     >
-      <footer className="fixed bottom-20 left-2 right-2 z-50 isolate overflow-visible rounded-[14px] border border-white/10 bg-[#080808] px-3 py-2 text-white shadow-[0_20px_70px_rgba(0,0,0,0.72)] md:bottom-4 md:left-[calc(50%+40px)] md:right-auto md:w-[min(980px,calc(100vw-112px))] md:-translate-x-1/2 md:rounded-3xl md:px-4 md:py-4 md:pl-5 md:pr-3">
-        <button
-          aria-label={`Open now playing: ${title}`}
-          className="absolute inset-0 z-20 rounded-[14px] md:hidden"
-          onClick={onOpenFullscreen}
-          type="button"
-        />
-        <div className="relative z-10 grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(180px,0.9fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] lg:gap-x-4">
-          <TrackInfo
-            albumId={albumId}
-            artistCredits={artistCredits}
-            cover={cover}
-            songId={songId}
-            title={title}
-            explicit={explicit}
-            feedback={feedback}
-            zoneLabel={zoneLabel ?? null}
-            zoneSignal={zoneSignal}
-          />
-          <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
-            <div className="flex items-center gap-1.5">
-              {signalLight ? (
-                <span className="hidden md:contents">{signalLight}</span>
-              ) : null}
-              <PlaybackControls
-                compact
-                prominent
-                isPlaying={isPlaying}
-                onNext={onNext}
-                onPrevious={onPrevious}
-                onToggle={onTogglePlayback}
-              />
-              {signalLight ? (
-                <span aria-hidden="true" className="hidden h-8 w-8 md:block" />
-              ) : null}
-            </div>
-            <Timeline
-              className="hidden w-full md:flex"
-              currentTime={currentTime}
-              duration={duration}
-              isPlaying={isPlaying}
-              readPosition={readPosition}
-              onChange={onSeek}
-              playbackRate={playbackRate}
-            />
-          </section>
-          <section className="relative z-30 flex items-center justify-end gap-1.5 lg:justify-self-end">
-            <span className="hidden md:inline" data-player-queue-trigger>
-              <ActionButton
-                active={queueOpen}
-                label="Queue"
-                onClick={onOpenQueue}
-              >
-                <ListMusic className="h-4 w-4" />
-              </ActionButton>
-            </span>
-            <div className="hidden sm:block">
-              <ActionButton
-                active={lyricsOpen}
-                label="Lyrics"
-                onClick={onToggleLyrics}
-              >
-                <MicVocal className="h-4 w-4" />
-              </ActionButton>
-            </div>
-            <div className="hidden sm:block">
-              <ActionButton
-                active={slowedReverb}
-                label="Sound"
-                onClick={onToggleSound}
-              >
-                <AudioLines className="h-4 w-4" />
-              </ActionButton>
-            </div>
-            {zonePicker && (
-              <div className="relative z-30" data-zone-picker-slot>
-                {zonePicker}
-              </div>
-            )}
-            <div className="hidden sm:block">
-              <VolumeControl
-                muted={muted}
-                onChange={onVolumeChange}
-                onToggleMute={onToggleMute}
-                volume={volume}
-              />
-            </div>
-            <PlayerMoreMenu>
-              <DropdownMenuLabel>Sound</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={audioPreset}
-                onValueChange={(value) =>
-                  onSelectPreset(value as AudioPresetId)
-                }
-              >
-                {audioPresets.map((preset) => (
-                  <DropdownMenuRadioItem key={preset.id} value={preset.id}>
-                    {preset.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
-              {onOpenDsp ? (
-                <DropdownMenuItem onSelect={onOpenDsp}>
-                  <SlidersHorizontal className="h-4 w-4" />
-                  DSP engine
-                  <span className="ml-auto text-[11px] text-zinc-500">
-                    {DSP_SHORTCUT_LABEL}
-                  </span>
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem onSelect={onOpenFullscreen}>
-                <Maximize2 className="h-4 w-4" />
-                Fullscreen
-              </DropdownMenuItem>
-              {onHandOffToSpotify && (
-                <DropdownMenuItem onSelect={onHandOffToSpotify}>
-                  <MonitorSpeaker className="h-4 w-4" />
-                  Play on Spotify device…
-                </DropdownMenuItem>
-              )}
-            </PlayerMoreMenu>
-          </section>
-        </div>
-        <div className="relative z-10 hidden md:block">
-          <Timeline
-            className="mt-2 flex w-full md:hidden"
-            currentTime={currentTime}
-            duration={duration}
-            isPlaying={isPlaying}
-            onChange={onSeek}
-            playbackRate={playbackRate}
-          />
-        </div>
-      </footer>
+      {footer}
     </SongMenu>
   );
 }
@@ -297,27 +327,41 @@ function TrackInfo({
   zoneLabel: string | null;
   zoneSignal?: ReactNode;
 }) {
+  const liveStation = liveStationIdFromSongId(songId);
+  const href = liveStation
+    ? stationHref(liveStation)
+    : `/album?id=${encodeURIComponent(albumId)}`;
   return (
     <section className="flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden md:justify-self-start">
       <Link
-        href={`/album?id=${encodeURIComponent(albumId)}`}
+        href={href}
         aria-label={`View ${title} album`}
         className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg md:h-14 md:w-14"
       >
-        <Image
-          alt={title}
-          className="object-cover"
-          fill
-          sizes="44px"
-          src={cover}
-        />
+        {liveStation ? (
+          <StationArtwork
+            className="h-full w-full"
+            rounded="rounded-lg"
+            sizes="56px"
+            station={{
+              name: title,
+              logo_url: cover === defaultCover ? null : cover,
+            }}
+          />
+        ) : (
+          <Image
+            alt={title}
+            className="object-cover"
+            fill
+            sizes="44px"
+            src={cover}
+          />
+        )}
       </Link>
       <div className="min-w-0 flex-[0_1_auto] sm:ml-1">
-        <MarqueeTitle
-          href={`/album?id=${encodeURIComponent(albumId)}`}
-          title={title}
-        />
+        <MarqueeTitle href={href} title={title} />
         <span className="flex min-w-0 items-center gap-2 text-xs text-zinc-400">
+          {liveStation && <LiveBadge className="shrink-0" />}
           <span className="block min-w-0 truncate">
             {explicit && <ExplicitBadge />}
             <ArtistCreditLinks credits={artistCredits} />
@@ -339,7 +383,9 @@ function TrackInfo({
         )}
       </div>
       {songId &&
-        (isStreamingId(songId) ? (
+        (liveStation ? (
+          <LiveStationSave songId={songId} />
+        ) : isStreamingId(songId) ? (
           <NowPlayingStreamingSource songId={songId} title={title} />
         ) : (
           <FavoriteButton songId={songId} songName={title} />

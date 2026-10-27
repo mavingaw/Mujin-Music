@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  isLiveRadioId,
   isStreamingId,
   recordPlaybackEvent,
   type PlaybackEventType,
@@ -57,7 +58,13 @@ export function usePlaybackTelemetry({
     (eventType: PlaybackEventType, position?: number, duration?: number) => {
       const song = activeSong.current;
       // Listening history and recommendations cover the local library.
-      if (!song.id || !userId || isStreamingId(song.id)) return;
+      if (
+        !song.id ||
+        !userId ||
+        isStreamingId(song.id) ||
+        isLiveRadioId(song.id)
+      )
+        return;
       if (!zone.current && typeof window !== "undefined") {
         zone.current = localZoneForHistory(
           readOrCreateDeviceId(),

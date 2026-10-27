@@ -20,6 +20,7 @@ pub mod key_service;
 pub mod library;
 pub mod library_tools;
 pub mod listen_later;
+pub mod live_radio;
 pub mod lyrics;
 pub mod metadata;
 pub mod migration;

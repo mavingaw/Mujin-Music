@@ -270,7 +270,9 @@ export function getSongSignalPath(
   const capabilityParams =
     target === "direct" ? playbackCapabilityParams(options.capabilities) : {};
   const key = `${songId}:${bitrate}:${options.audioEffect ?? ""}:${target}:${new URLSearchParams(capabilityParams).toString()}`;
-  const cached = signalPathCache.get(key);
+  // Live stations change format as the server reads their audio: no cache.
+  const live = songId.startsWith("radio:");
+  const cached = live ? undefined : signalPathCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   const params: Record<string, string | number> = {
     ...capabilityParams,
@@ -284,6 +286,7 @@ export function getSongSignalPath(
       { params },
     )
     .then((response) => response.data);
+  if (live) return value;
   value.catch(() => signalPathCache.delete(key));
   if (signalPathCache.size >= MAX_SIGNAL_PATH_CACHE_ENTRIES) {
     const oldest = signalPathCache.keys().next().value;

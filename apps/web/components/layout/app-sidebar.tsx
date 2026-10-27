@@ -8,6 +8,7 @@ import {
   Home,
   Import,
   Library,
+  Radio,
   Search,
   Settings,
   Tags,
@@ -23,6 +24,7 @@ const navigation = [
   { href: "/listen-later", label: "Listen Later", icon: Clock },
   { href: "/tags", label: "Tags", icon: Hash },
   { href: "/history", label: "History", icon: History },
+  { href: "/radio", label: "Live Radio", icon: Radio },
   { href: "/imports", label: "Imports", icon: Import },
   { href: "/streaming", label: "Streaming", icon: AudioLines },
 ];

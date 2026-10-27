@@ -17,9 +17,9 @@ use crate::api::library::{
 };
 use crate::api::{
     album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
-    genres, home, imports, key_service, library_tools, listen_later, lyrics, metadata, outputs,
-    playback, playlist, profiles, providers, remote_access, scrobbling, search, setup, song, user,
-    works, zones,
+    genres, home, imports, key_service, library_tools, listen_later, live_radio, lyrics, metadata,
+    outputs, playback, playlist, profiles, providers, remote_access, scrobbling, search, setup,
+    song, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -176,6 +176,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(providers::configure)
         .configure(profiles::configure)
         .configure(scrobbling::configure)
+        .configure(live_radio::configure)
 }
 
 async fn core_libraries() -> HttpResponse {
@@ -336,7 +337,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "smart_tags",
             "history",
             "profiles",
-            "scrobbling"
+            "scrobbling",
+            "live_radio"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (
@@ -480,6 +482,11 @@ pub async fn build_server_with_shutdown_timeout(
         .unwrap_or(2);
     tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Mujin Music server");
 
+    let live_radio_service = web::Data::from(crate::live_radio::global());
+    live_radio_service
+        .clone()
+        .into_inner()
+        .set_pool(database.get_ref().clone());
     let server = HttpServer::new(move || {
         App::new()
             .app_data(database.clone())
@@ -488,6 +495,7 @@ pub async fn build_server_with_shutdown_timeout(
             .app_data(zone_service.clone())
             .app_data(streaming_services.clone())
             .app_data(scrobble_hub.clone())
+            .app_data(live_radio_service.clone())
             .app_data(web::JsonConfig::default().limit(MAX_JSON_BODY_BYTES))
             .app_data(web::PayloadConfig::new(MAX_STREAMING_PAYLOAD_BYTES))
             .wrap(http::cors())
@@ -533,6 +541,16 @@ pub async fn build_server_with_shutdown_timeout(
             .route(
                 "/api/music/v1/scrobbling/lastfm/complete",
                 web::post().to(scrobbling::complete_lastfm),
+            )
+            // Station logos load in <img> tags on every client, so they are
+            // served without a session (only stations Parson knows).
+            .route(
+                "/api/v1/live-radio/stations/{id}/logo",
+                web::get().to(live_radio::station_logo),
+            )
+            .route(
+                "/api/music/v1/live-radio/stations/{id}/logo",
+                web::get().to(live_radio::station_logo),
             )
             .service(library_routes_at("/api/v1/library"))
             .service(music_routes_at("/api/v1"))

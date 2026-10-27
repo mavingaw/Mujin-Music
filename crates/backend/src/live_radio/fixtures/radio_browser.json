@@ -1,0 +1,504 @@
+[
+  {
+    "method": "GET",
+    "url": "https://all.api.radio-browser.info/json/servers",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "ip": "91.98.4.78",
+            "name": "de1.api.radio-browser.info"
+          },
+          {
+            "ip": "2a01:4f8:1c1d:699::1",
+            "name": "de1.api.radio-browser.info"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/stations/search",
+    "query": [["codec", "FLAC"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "stationuuid": "e8f9ffdc-22a8-4c8b-82dd-ec63685feee6",
+            "name": "Radio Paradise Serenity - FLAC",
+            "url": "https://audio-geo.radioparadise.com/chan/42/x/4254/4/b/4254-0.flac?ngsw-bypass=true",
+            "url_resolved": "https://audio-geo.radioparadise.com/chan/42/x/4254/4/b/4254-0.flac?ngsw-bypass=true",
+            "homepage": "https://radioparadise.com/home",
+            "favicon": "https://radioparadise.com/rpassets/images/logo/logo_2022_nav_244x64.svg",
+            "tags": "ambiant,concentration,electroacoustic,electronic,experimental",
+            "country": "The United States Of America",
+            "countrycode": "US",
+            "state": "",
+            "language": "",
+            "codec": "FLAC",
+            "bitrate": 0,
+            "hls": 0,
+            "votes": 66,
+            "clickcount": 13,
+            "clicktrend": 13,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "002859e6-fa1c-4ad8-8f4c-f204c42e36ae",
+            "name": "Rondo Classic Klasu Pro",
+            "url": "https://iradio.fi/klasupro.flac",
+            "url_resolved": "https://iradio.fi/klasupro.flac",
+            "homepage": "https://rondo.fi/",
+            "favicon": "https://static.mytuner.mobi/media/tvos_radios/UyZJwdEzqv.jpg",
+            "tags": "classical",
+            "country": "Finland",
+            "countrycode": "FI",
+            "state": "",
+            "language": "",
+            "codec": "FLAC",
+            "bitrate": 0,
+            "hls": 0,
+            "votes": 29,
+            "clickcount": 10,
+            "clicktrend": 10,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "45be7e54-944f-4a57-9d51-8f74c88097cb",
+            "name": "Rondo Classic Klasu",
+            "url": "https://iradio.fi/klasu.flac",
+            "url_resolved": "https://iradio.fi/klasu.flac",
+            "homepage": "https://rondo.fi/",
+            "favicon": "https://liveonlineradio.net/wp-content/uploads/2015/05/Rondo-Classic-Klasu.jpg",
+            "tags": "classical",
+            "country": "Finland",
+            "countrycode": "FI",
+            "state": "",
+            "language": "",
+            "codec": "FLAC",
+            "bitrate": 0,
+            "hls": 0,
+            "votes": 17,
+            "clickcount": 7,
+            "clicktrend": 7,
+            "lastcheckok": 1
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/stations/search",
+    "query": [["tag", "jazz"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "stationuuid": "d1a54d2e-623e-4970-ab11-35f7b56c5ec3",
+            "name": "Classic Vinyl HD",
+            "url": "https://icecast.walmradio.com:8443/classic",
+            "url_resolved": "https://icecast.walmradio.com:8443/classic",
+            "homepage": "https://walmradio.com/classic",
+            "favicon": "https://icecast.walmradio.com:8443/classic.jpg",
+            "tags": "1930,1940,1950,1960,beautiful music,big band",
+            "country": "The United States Of America",
+            "countrycode": "US",
+            "state": "New York NY",
+            "language": "english",
+            "codec": "MP3",
+            "bitrate": 320,
+            "hls": 0,
+            "votes": 309171,
+            "clickcount": 811,
+            "clicktrend": 811,
+            "lastcheckok": 1
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/stations/search",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "stationuuid": "d1a54d2e-623e-4970-ab11-35f7b56c5ec3",
+            "name": "Classic Vinyl HD",
+            "url": "https://icecast.walmradio.com:8443/classic",
+            "url_resolved": "https://icecast.walmradio.com:8443/classic",
+            "homepage": "https://walmradio.com/classic",
+            "favicon": "https://icecast.walmradio.com:8443/classic.jpg",
+            "tags": "1930,1940,1950,1960,beautiful music,big band",
+            "country": "The United States Of America",
+            "countrycode": "US",
+            "state": "New York NY",
+            "language": "english",
+            "codec": "MP3",
+            "bitrate": 320,
+            "hls": 0,
+            "votes": 309171,
+            "clickcount": 811,
+            "clicktrend": 811,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "1cfb151d-a341-11e9-a787-52543be04c81",
+            "name": "France Info",
+            "url": "http://direct.franceinfo.fr/live/franceinfo-midfi.mp3",
+            "url_resolved": "http://direct.franceinfo.fr/live/franceinfo-midfi.mp3",
+            "homepage": "https://www.francetvinfo.fr/",
+            "favicon": "https://www.francetvinfo.fr/assets/common/images/pwa/ios/120-5487caf3.png",
+            "tags": "",
+            "country": "France",
+            "countrycode": "FR",
+            "state": "",
+            "language": "",
+            "codec": "MP3",
+            "bitrate": 128,
+            "hls": 0,
+            "votes": 94639,
+            "clickcount": 1568,
+            "clicktrend": 1568,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "042d3140-227c-4fac-9387-4903b692d5f2",
+            "name": "RTL",
+            "url": "https://live.m6radio.quortex.io/webM89Hc99XApzgfhXNX8ASN5/grouprtl/national/short/audio-64000/index.m3u8",
+            "url_resolved": "https://live.m6radio.quortex.io/webM89Hc99XApzgfhXNX8ASN5/grouprtl/national/short/audio-64000/index.m3u8",
+            "homepage": "https://www.rtl.fr/",
+            "favicon": "https://duckduckgo.com/i/035a5e15d396c67a.png",
+            "tags": "généraliste",
+            "country": "France",
+            "countrycode": "FR",
+            "state": "",
+            "language": "",
+            "codec": "AAC",
+            "bitrate": 64,
+            "hls": 1,
+            "votes": 2796,
+            "clickcount": 1532,
+            "clicktrend": 1532,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "7a3a3989-8f26-44f7-9ae5-fa91e5cf4f9d",
+            "name": "RMC FR",
+            "url": "https://audio.bfmtv.com/rmcradio_128.mp3",
+            "url_resolved": "https://audio.bfmtv.com/rmcradio_128.mp3",
+            "homepage": "https://rmc.bfmtv.com/",
+            "favicon": "https://i1.wp.com/www.mediasportif.fr/wp-content/uploads/2014/05/Radio-RMC.jpg",
+            "tags": "france,info,sport,talk",
+            "country": "France",
+            "countrycode": "FR",
+            "state": "",
+            "language": "french",
+            "codec": "MP3",
+            "bitrate": 128,
+            "hls": 0,
+            "votes": 77703,
+            "clickcount": 977,
+            "clicktrend": 977,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "dfcef843-6bf9-40f6-b3fe-2b224df86e48",
+            "name": "Europe 1",
+            "url": "https://stream.europe1.fr/europe1.aac",
+            "url_resolved": "https://stream.europe1.fr/europe1.aac",
+            "homepage": "https://www.europe1.fr/",
+            "favicon": "https://www.europe1.fr/build/e1/images/favicon-120x120.png",
+            "tags": "aac,news,talk",
+            "country": "France",
+            "countrycode": "FR",
+            "state": "",
+            "language": "french",
+            "codec": "AAC",
+            "bitrate": 128,
+            "hls": 0,
+            "votes": 21745,
+            "clickcount": 835,
+            "clicktrend": 835,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "98adecf7-2683-4408-9be7-02d3f9098eb8",
+            "name": "BBC World Service",
+            "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+            "url_resolved": "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+            "homepage": "https://www.bbc.co.uk/programmes/w172xzjgf6lxp7y",
+            "favicon": "http://cdn-profiles.tunein.com/s24948/images/logoq.jpg?t=1",
+            "tags": "news,talk",
+            "country": "The United Kingdom Of Great Britain And Northern Ireland",
+            "countrycode": "GB",
+            "state": "",
+            "language": "english",
+            "codec": "MP3",
+            "bitrate": 56,
+            "hls": 0,
+            "votes": 166371,
+            "clickcount": 769,
+            "clicktrend": 769,
+            "lastcheckok": 1
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/stations/byuuid",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "stationuuid": "d1a54d2e-623e-4970-ab11-35f7b56c5ec3",
+            "name": "Classic Vinyl HD",
+            "url": "https://icecast.walmradio.com:8443/classic",
+            "url_resolved": "https://icecast.walmradio.com:8443/classic",
+            "homepage": "https://walmradio.com/classic",
+            "favicon": "https://icecast.walmradio.com:8443/classic.jpg",
+            "tags": "1930,1940,1950,1960,beautiful music,big band",
+            "country": "The United States Of America",
+            "countrycode": "US",
+            "state": "New York NY",
+            "language": "english",
+            "codec": "MP3",
+            "bitrate": 320,
+            "hls": 0,
+            "votes": 309171,
+            "clickcount": 811,
+            "clicktrend": 811,
+            "lastcheckok": 1
+          },
+          {
+            "stationuuid": "e8f9ffdc-22a8-4c8b-82dd-ec63685feee6",
+            "name": "Radio Paradise Serenity - FLAC",
+            "url": "https://audio-geo.radioparadise.com/chan/42/x/4254/4/b/4254-0.flac?ngsw-bypass=true",
+            "url_resolved": "https://audio-geo.radioparadise.com/chan/42/x/4254/4/b/4254-0.flac?ngsw-bypass=true",
+            "homepage": "https://radioparadise.com/home",
+            "favicon": "https://radioparadise.com/rpassets/images/logo/logo_2022_nav_244x64.svg",
+            "tags": "ambiant,concentration,electroacoustic,electronic,experimental",
+            "country": "The United States Of America",
+            "countrycode": "US",
+            "state": "",
+            "language": "",
+            "codec": "FLAC",
+            "bitrate": 0,
+            "hls": 0,
+            "votes": 66,
+            "clickcount": 13,
+            "clicktrend": 13,
+            "lastcheckok": 1
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/url/*",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "message": "retrieved station url",
+          "stationuuid": "d1a54d2e-623e-4970-ab11-35f7b56c5ec3",
+          "name": "Classic Vinyl HD",
+          "url": "https://icecast.walmradio.com:8443/classic"
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/tags",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "name": "pop",
+            "stationcount": 6233
+          },
+          {
+            "name": "music",
+            "stationcount": 5052
+          },
+          {
+            "name": "news",
+            "stationcount": 3213
+          },
+          {
+            "name": "rock",
+            "stationcount": 3150
+          },
+          {
+            "name": "radio",
+            "stationcount": 2397
+          },
+          {
+            "name": "entretenimiento",
+            "stationcount": 2254
+          },
+          {
+            "name": "estación",
+            "stationcount": 2248
+          },
+          {
+            "name": "méxico",
+            "stationcount": 2084
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://fi1.api.radio-browser.info/json/tags",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "name": "pop",
+            "stationcount": 6233
+          },
+          {
+            "name": "music",
+            "stationcount": 5052
+          },
+          {
+            "name": "news",
+            "stationcount": 3213
+          },
+          {
+            "name": "rock",
+            "stationcount": 3150
+          },
+          {
+            "name": "radio",
+            "stationcount": 2397
+          },
+          {
+            "name": "entretenimiento",
+            "stationcount": 2254
+          },
+          {
+            "name": "estación",
+            "stationcount": 2248
+          },
+          {
+            "name": "méxico",
+            "stationcount": 2084
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/countries",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "name": "The United States Of America",
+            "iso_3166_1": "US",
+            "stationcount": 7613
+          },
+          {
+            "name": "Germany",
+            "iso_3166_1": "DE",
+            "stationcount": 6318
+          },
+          {
+            "name": "France",
+            "iso_3166_1": "FR",
+            "stationcount": 3779
+          },
+          {
+            "name": "The Russian Federation",
+            "iso_3166_1": "RU",
+            "stationcount": 3041
+          },
+          {
+            "name": "Mexico",
+            "iso_3166_1": "MX",
+            "stationcount": 2860
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/languages",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "name": "english",
+            "iso_639": "en",
+            "stationcount": 12641
+          },
+          {
+            "name": "spanish",
+            "iso_639": "es",
+            "stationcount": 5425
+          },
+          {
+            "name": "german",
+            "iso_639": "de",
+            "stationcount": 4450
+          },
+          {
+            "name": "french",
+            "iso_639": "fr",
+            "stationcount": 3258
+          },
+          {
+            "name": "chinese",
+            "iso_639": "zh",
+            "stationcount": 2223
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://de1.api.radio-browser.info/json/codecs",
+    "replies": [
+      {
+        "status": 200,
+        "body": [
+          {
+            "name": "MP3",
+            "stationcount": 30000
+          },
+          {
+            "name": "AAC",
+            "stationcount": 9000
+          },
+          {
+            "name": "FLAC",
+            "stationcount": 180
+          }
+        ]
+      }
+    ]
+  }
+]

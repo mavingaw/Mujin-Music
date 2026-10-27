@@ -161,6 +161,9 @@ fn cast_zone(snapshot: &CastZoneSnapshot, cache: Option<&LibraryCache>) -> Zone 
         .song_ids
         .get(snapshot.current_position)
         .and_then(|song_id| {
+            if crate::live_radio::is_live_song_id(song_id) {
+                return crate::zones::service::radio_now_playing(song_id);
+            }
             let cache = cache?;
             let song = cache.song(song_id)?;
             let album = cache
@@ -1116,6 +1119,14 @@ pub(crate) async fn zone_media(
         return HttpResponse::Unauthorized()
             .json(serde_json::json!({"error": "zone_queue_changed"}));
     }
+    if crate::live_radio::is_live_song_id(&song_id) {
+        return crate::api::live_radio::stream_station_to(
+            &request,
+            &song_id,
+            crate::live_radio::relay::Destination::Renderer(crate::outputs::FormatLimits::SONOS),
+        )
+        .await;
+    }
     let gain = match leveling {
         Some(leveling) => match library_cache(&lifecycle).await {
             Some(cache) => Some(
@@ -1166,6 +1177,19 @@ pub(crate) async fn render_media(
         return HttpResponse::Unauthorized()
             .json(serde_json::json!({"error": "zone_queue_changed"}));
     };
+    if crate::live_radio::is_live_song_id(&song_id) {
+        if request.method() == actix_web::http::Method::HEAD {
+            return HttpResponse::Ok()
+                .insert_header((actix_web::http::header::ACCEPT_RANGES, "none"))
+                .finish();
+        }
+        return crate::api::live_radio::stream_station_to(
+            &request,
+            &song_id,
+            crate::live_radio::relay::Destination::Renderer(stream.limits),
+        )
+        .await;
+    }
     let gain = match stream.leveling {
         Some(leveling) => Some(
             service
