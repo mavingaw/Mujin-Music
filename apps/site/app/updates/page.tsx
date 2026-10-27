@@ -4,7 +4,7 @@ import Downloads from "./downloads";
 export const metadata: Metadata = {
   title: { absolute: "Mujin Music Downloads" },
   description: "Download Mujin Music for Windows, macOS and Linux.",
-  alternates: { canonical: "https://parson.dev/updates" },
+  alternates: { canonical: "/updates" },
 };
 
 export default function UpdatesPage() {

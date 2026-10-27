@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/mavingaw/parson-jin/security/advisories/new
     about: Report vulnerabilities in Mujin Music privately.
   - name: Documentation
-    url: https://parson.dev/docs
-    about: Setup and troubleshooting (Mujin Music is based on Parson, whose documentation applies).
+    url: https://github.com/mavingaw/parson-jin/tree/master/apps/site/content/docs
+    about: Setup and troubleshooting for Mujin Music.
