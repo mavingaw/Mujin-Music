@@ -1,26 +1,24 @@
 import "./globals.css";
 
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
 import type { ReactNode } from "react";
 import SessionProvider from "@/features/account/session-provider";
 import AppBootstrap from "@/components/app/splash-screen";
 import NativeDragGuard from "@/components/app/native-drag-guard";
 
 import { Toaster } from "sonner";
-const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ?? "https://parson.dev",
   ),
-  applicationName: "Parson",
-  title: "Parson",
+  applicationName: "Mujin Music",
+  title: "Mujin Music",
   description: "Own your music.",
   manifest: "/site.webmanifest",
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.ico", sizes: "48x48" },
       { url: "/icons/icon.svg", type: "image/svg+xml" },
       { url: "/icons/favicon-32x32.png", sizes: "32x32", type: "image/png" },
       { url: "/icons/favicon-16x16.png", sizes: "16x16", type: "image/png" },
@@ -28,26 +26,24 @@ export const metadata: Metadata = {
     apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
-    title: "Parson",
+    title: "Mujin Music",
     description: "Own your music.",
-    images: [{ url: "/images/og/parson.jpg", width: 1200, height: 630 }],
+    images: [{ url: "/images/og/mujin-music.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Parson",
+    title: "Mujin Music",
     description: "Own your music.",
-    images: ["/images/og/parson.jpg"],
+    images: ["/images/og/mujin-music.jpg"],
   },
 };
 
-export const viewport: Viewport = { themeColor: "#000000" };
+export const viewport: Viewport = { themeColor: "#0A0A0B" };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body
-        className={`${inter.className} min-h-screen bg-black text-white antialiased`}
-      >
+      <body className="min-h-screen bg-black font-sans text-white antialiased">
         <SessionProvider>
           <NativeDragGuard />
           <AppBootstrap>{children}</AppBootstrap>
