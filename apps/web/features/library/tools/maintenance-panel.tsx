@@ -268,14 +268,14 @@ function MissingFilesSection() {
         <div className="mb-4 space-y-2">
           {offline.map((root) => (
             <div
-              className="flex items-center gap-3 rounded-lg border border-[#f5c542]/25 bg-[#f5c542]/[0.06] px-3 py-2.5 text-sm text-[#f5d27a]"
+              className="flex items-center gap-3 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2.5 text-sm text-[#f5d27a]"
               key={root.path}
             >
               <HardDrive className="h-4 w-4 shrink-0" />
               <span className="min-w-0 flex-1">
                 <span className="font-medium">Offline: </span>
                 <span className="font-mono text-xs">{root.path}</span>
-                <span className="block text-xs text-[#f5d27a]/70">
+                <span className="block text-xs text-amber-200/70">
                   Its files are kept until the drive is back.
                 </span>
               </span>
@@ -296,7 +296,7 @@ function MissingFilesSection() {
           {data.files.slice(0, 500).map((file) => (
             <li className="flex items-center gap-3 px-3 py-2" key={file.path}>
               <FolderX
-                className={`h-4 w-4 shrink-0 ${file.root_reachable ? "text-zinc-500" : "text-[#f5c542]"}`}
+                className={`h-4 w-4 shrink-0 ${file.root_reachable ? "text-zinc-500" : "text-amber-300"}`}
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm text-zinc-200">
@@ -337,7 +337,7 @@ function MissingFilesSection() {
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-start gap-3 rounded-lg border border-white/[0.06] bg-black/30 p-3 text-xs leading-5 text-zinc-400">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#3ddc97]" />
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-quality-high" />
             Files on offline drives and files that reappeared are kept. If the
             list changed since you opened it, nothing is forgotten.
           </div>

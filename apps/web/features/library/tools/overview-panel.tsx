@@ -150,17 +150,17 @@ export function OverviewPanel({
               {
                 label: "Identified",
                 value: identified.identified,
-                color: "#b26bff",
+                color: "var(--color-mujin-copper)",
               },
               {
                 label: "Awaiting lookup",
                 value: identified.awaiting,
-                color: "#38b6ff",
+                color: "var(--color-quality-enhanced)",
               },
               {
                 label: "Not identified",
                 value: identified.unidentified,
-                color: "#3f3f46",
+                color: "var(--color-mujin-surface-3)",
               },
             ]}
             total={identifiedTotal}
@@ -209,17 +209,17 @@ export function OverviewPanel({
               {
                 label: "Analyzed",
                 value: stats.analysis.analyzed,
-                color: "#3ddc97",
+                color: "var(--color-quality-high)",
               },
               {
                 label: "Partly",
                 value: stats.analysis.partial,
-                color: "#38b6ff",
+                color: "var(--color-quality-enhanced)",
               },
               {
                 label: "Not yet",
                 value: stats.analysis.awaiting,
-                color: "#3f3f46",
+                color: "var(--color-mujin-surface-3)",
               },
             ]}
             total={analysisTotal}
@@ -324,7 +324,7 @@ function QualityBar({ tiers }: { tiers: Breakdown[] }) {
         {segments.map((segment) => {
           const color = isQualityTier(segment.key)
             ? tierColors[segment.key]
-            : "#52525b";
+            : "var(--color-mujin-text-disabled)";
           return (
             <div
               className="h-full first:rounded-l-full last:rounded-r-full"
@@ -350,7 +350,7 @@ function QualityBar({ tiers }: { tiers: Breakdown[] }) {
               style={{
                 backgroundColor: isQualityTier(segment.key)
                   ? tierColors[segment.key]
-                  : "#52525b",
+                  : "var(--color-mujin-text-disabled)",
               }}
             />
             <span className="text-zinc-200">
@@ -476,7 +476,11 @@ function AttentionTile({
   onClick: () => void;
 }) {
   const accent =
-    tone === "warn" ? "#f5c542" : tone === "ok" ? "#3ddc97" : "#a1a1aa";
+    tone === "warn"
+      ? "#f5c542"
+      : tone === "ok"
+        ? "var(--color-quality-high)"
+        : "var(--color-mujin-text-secondary)";
   return (
     <button
       className="group flex items-center gap-4 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-4 text-left transition-colors hover:border-white/[0.14] hover:bg-white/[0.045]"

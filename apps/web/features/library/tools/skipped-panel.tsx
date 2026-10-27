@@ -442,7 +442,7 @@ function SkippedRow({
                 type="button"
               >
                 {copied ? (
-                  <Check className="h-3.5 w-3.5 text-[#3ddc97]" />
+                  <Check className="h-3.5 w-3.5 text-quality-high" />
                 ) : (
                   <ClipboardCopy className="h-3.5 w-3.5" />
                 )}

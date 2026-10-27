@@ -52,8 +52,14 @@ export function Waveform({
     >
       <defs>
         <linearGradient id="waveform-peak" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0" stopColor="#7c4dff" />
-          <stop offset="1" stopColor="#d6b8ff" />
+          <stop
+            offset="0"
+            style={{ stopColor: "var(--color-mujin-copper-pressed)" }}
+          />
+          <stop
+            offset="1"
+            style={{ stopColor: "var(--color-mujin-copper-hover)" }}
+          />
         </linearGradient>
       </defs>
       {peaks.map((peak, index) => {
@@ -178,7 +184,7 @@ function AnalysisBody({ analysis }: { analysis: SongAnalysis }) {
           <span>Analyzed {formatServerTime(analysis.analyzed_at)}</span>
         )}
         {analysis.stale && (
-          <span className="text-[#f5c542]">The file changed since</span>
+          <span className="text-amber-300">The file changed since</span>
         )}
       </div>
 

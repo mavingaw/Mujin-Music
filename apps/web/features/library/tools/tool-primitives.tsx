@@ -181,10 +181,10 @@ export function JobProgress({
       {running && (
         <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-white/[0.06]">
           {progress === null ? (
-            <div className="h-full w-1/3 animate-[tool-progress_1.4s_ease-in-out_infinite] rounded-full bg-[linear-gradient(90deg,transparent,#b26bff,transparent)]" />
+            <div className="h-full w-1/3 animate-[tool-progress_1.4s_ease-in-out_infinite] rounded-full bg-[linear-gradient(90deg,transparent,var(--color-mujin-copper),transparent)]" />
           ) : (
             <div
-              className="h-full rounded-full bg-[linear-gradient(90deg,#7c4dff,#b26bff)] transition-[width] duration-500"
+              className="h-full rounded-full bg-[linear-gradient(90deg,var(--color-mujin-copper-pressed),var(--color-mujin-copper))] transition-[width] duration-500"
               style={{ width: `${Math.max(2, progress * 100)}%` }}
             />
           )}

@@ -419,7 +419,7 @@ function GroupCard({
         <span
           className={cn(
             "flex items-center gap-1 text-[11px]",
-            group.confidence === "high" ? "text-[#3ddc97]" : "text-zinc-500",
+            group.confidence === "high" ? "text-quality-high" : "text-zinc-500",
           )}
         >
           {group.evidence.fingerprint_similarity !== null && (
