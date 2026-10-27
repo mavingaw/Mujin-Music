@@ -36,6 +36,12 @@ pub enum HlsError {
     /// Encrypted (DRM or AES) streams cannot be relayed.
     Encrypted,
     Empty,
+    /// The playlist has no HLS tags: a plain M3U list of stream URLs
+    /// (often named `.m3u8`), read from `url`.
+    NotHls {
+        url: Url,
+        text: String,
+    },
 }
 
 /// An opened HLS stream.
@@ -85,6 +91,9 @@ pub async fn open(
             .await
             .map_err(HlsError::Guard)?,
     };
+    if !playlist::is_hls_text(text.trim_start_matches('\u{feff}')) {
+        return Err(HlsError::NotHls { url, text });
+    }
     let mut codec = None;
     let mut bandwidth = None;
     if playlist::is_master(&text) {
@@ -126,6 +135,7 @@ pub async fn open(
         let item = live.next().await?;
         Some((item, live))
     })
+    .fuse()
     .boxed();
     Ok(HlsStream {
         body,
@@ -164,7 +174,7 @@ impl Live {
                 .collect(),
             Some(last) => {
                 let newest = segments.last().map(|segment| segment.sequence).unwrap_or(0);
-                if newest + 100 < last {
+                if newest.saturating_add(100) < last {
                     // The packager restarted its numbering: rejoin at the edge.
                     segments
                         .iter()
@@ -240,7 +250,11 @@ impl Live {
             // after an unchanged playlist), but go straight away the first
             // time so a short start window does not stall.
             if !self.first_poll {
-                let wait = (self.target / 2.0).clamp(1.0, 10.0);
+                let wait = if self.target.is_finite() {
+                    (self.target / 2.0).clamp(1.0, 10.0)
+                } else {
+                    1.0
+                };
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             }
             self.first_poll = false;
