@@ -79,7 +79,7 @@ fn client_attempt_key(request: &HttpRequest, scope: &str) -> String {
     format!("{scope}:{client}")
 }
 
-fn record_auth_attempt(
+pub(crate) fn record_auth_attempt(
     request: &HttpRequest,
     scope: &str,
     maximum: usize,
@@ -108,7 +108,7 @@ fn record_auth_attempt(
     Ok(key)
 }
 
-fn clear_auth_attempts(key: &str) {
+pub(crate) fn clear_auth_attempts(key: &str) {
     auth_attempts()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -898,6 +898,120 @@ pub async fn approve_pairing(
     }))
 }
 
+/// Who a new session is for.
+pub(crate) struct SessionIdentity {
+    pub user_id: i32,
+    pub username: String,
+    pub bitrate: i32,
+    pub role: String,
+    pub token_version: i32,
+}
+
+/// Creates a device session (refresh session row, access and refresh
+/// cookies, and tokens in the body for native clients). When `replaces`
+/// names the device's previous session, that session is revoked in the same
+/// transaction, so switching profiles leaves exactly one live session.
+pub(crate) async fn issue_session(
+    request: &HttpRequest,
+    pool: DbPool,
+    identity: SessionIdentity,
+    replaces: Option<(i32, String)>,
+) -> HttpResponse {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let generated_access_token = match generate_session_access_token(
+        identity.user_id,
+        &identity.username,
+        identity.bitrate,
+        &identity.role,
+        identity.token_version,
+        Some(&session_id),
+    ) {
+        Ok(token) => token,
+        Err(message) => {
+            return HttpResponse::InternalServerError().json(auth_error(message));
+        }
+    };
+    let (generated_refresh_token, refresh_expires_at) = match generate_refresh_token(
+        identity.user_id,
+        &identity.username,
+        &identity.role,
+        identity.token_version,
+        &session_id,
+    ) {
+        Ok(token) => token,
+        Err(message) => {
+            return HttpResponse::InternalServerError().json(auth_error(message));
+        }
+    };
+    let stored_session_id = session_id.clone();
+    let stored_refresh_token = generated_refresh_token.clone();
+    let user_id = identity.user_id;
+    match web::block(move || -> Result<(), String> {
+        let mut connection = pool.get().map_err(|error| error.to_string())?;
+        connection
+            .immediate_transaction(|connection| {
+                if let Some((previous_user, previous_session)) = replaces {
+                    revoke_refresh_sessions(connection, previous_user, &[previous_session])?;
+                }
+                insert_refresh_session(
+                    connection,
+                    &stored_session_id,
+                    user_id,
+                    &stored_refresh_token,
+                    refresh_expires_at,
+                )
+            })
+            .map_err(|error: diesel::result::Error| error.to_string())
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::error!(%error, "refresh session creation failed");
+            return HttpResponse::InternalServerError()
+                .json(auth_error("Authentication is temporarily unavailable"));
+        }
+        Err(error) => {
+            tracing::error!(%error, "refresh session worker failed");
+            return HttpResponse::InternalServerError()
+                .json(auth_error("Authentication is temporarily unavailable"));
+        }
+    }
+    let native = native_token_response_requested(request);
+    let response_refresh_token = if native {
+        generated_refresh_token.clone()
+    } else {
+        String::new()
+    };
+    let response_access_token = if native {
+        generated_access_token.clone()
+    } else {
+        String::new()
+    };
+    let access_cookie = build_token_cookie(
+        ACCESS_TOKEN_COOKIE,
+        generated_access_token.clone(),
+        true,
+        ACCESS_TOKEN_DAYS,
+    );
+    let refresh_cookie = build_token_cookie(
+        REFRESH_TOKEN_COOKIE,
+        generated_refresh_token,
+        true,
+        REFRESH_TOKEN_DAYS,
+    );
+    HttpResponse::Ok()
+        .cookie(access_cookie)
+        .cookie(refresh_cookie)
+        .json(ResponseAuthData {
+            status: true,
+            claims: access_token_claims(&generated_access_token),
+            access_token: response_access_token,
+            refresh_token: response_refresh_token,
+            message: None,
+        })
+}
+
 #[post("/login")]
 pub async fn login(
     form: web::Json<AuthData>,
@@ -940,95 +1054,19 @@ pub async fn login(
     match result {
         Ok(Ok(Some((user_id, user_bitrate, user_role, version)))) => {
             clear_auth_attempts(&attempt_key);
-            let session_id = uuid::Uuid::new_v4().to_string();
-            let generated_access_token = match generate_session_access_token(
-                user_id,
-                &form.username,
-                user_bitrate,
-                &user_role,
-                version,
-                Some(&session_id),
-            ) {
-                Ok(token) => token,
-                Err(message) => {
-                    return HttpResponse::InternalServerError().json(auth_error(message));
-                }
-            };
-            let (generated_refresh_token, refresh_expires_at) = match generate_refresh_token(
-                user_id,
-                &form.username,
-                &user_role,
-                version,
-                &session_id,
-            ) {
-                Ok(token) => token,
-                Err(message) => {
-                    return HttpResponse::InternalServerError().json(auth_error(message));
-                }
-            };
-            let session_pool = pool.get_ref().clone();
-            let stored_session_id = session_id.clone();
-            let stored_refresh_token = generated_refresh_token.clone();
-            match web::block(move || -> Result<(), String> {
-                let mut connection = session_pool.get().map_err(|error| error.to_string())?;
-                insert_refresh_session(
-                    &mut connection,
-                    &stored_session_id,
+            issue_session(
+                &request,
+                pool.get_ref().clone(),
+                SessionIdentity {
                     user_id,
-                    &stored_refresh_token,
-                    refresh_expires_at,
-                )
-                .map_err(|error| error.to_string())
-            })
+                    username: form.username.clone(),
+                    bitrate: user_bitrate,
+                    role: user_role,
+                    token_version: version,
+                },
+                None,
+            )
             .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::error!(%error, "login refresh session creation failed");
-                    return HttpResponse::InternalServerError()
-                        .json(auth_error("Authentication is temporarily unavailable"));
-                }
-                Err(error) => {
-                    tracing::error!(%error, "login refresh session worker failed");
-                    return HttpResponse::InternalServerError()
-                        .json(auth_error("Authentication is temporarily unavailable"));
-                }
-            }
-            let response_refresh_token = if native_token_response_requested(&request) {
-                generated_refresh_token.clone()
-            } else {
-                String::new()
-            };
-            let response_access_token = if native_token_response_requested(&request) {
-                generated_access_token.clone()
-            } else {
-                String::new()
-            };
-
-            let access_cookie = build_token_cookie(
-                ACCESS_TOKEN_COOKIE,
-                generated_access_token.clone(),
-                true,
-                ACCESS_TOKEN_DAYS,
-            );
-
-            let refresh_cookie = build_token_cookie(
-                REFRESH_TOKEN_COOKIE,
-                generated_refresh_token,
-                true,
-                REFRESH_TOKEN_DAYS,
-            );
-
-            HttpResponse::Ok()
-                .cookie(access_cookie)
-                .cookie(refresh_cookie)
-                .json(ResponseAuthData {
-                    status: true,
-                    claims: access_token_claims(&generated_access_token),
-                    access_token: response_access_token,
-                    refresh_token: response_refresh_token,
-                    message: None,
-                })
         }
         Ok(Ok(None)) => {
             HttpResponse::Unauthorized().json(auth_error("Invalid username or password"))

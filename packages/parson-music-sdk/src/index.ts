@@ -42,3 +42,5 @@ export * from "./resources/zones";
 export * from "./resources/works";
 export * from "./editorial/works";
 export * from "./resources/imports";
+export * from "./resources/profiles";
+export * from "./resources/scrobbling";

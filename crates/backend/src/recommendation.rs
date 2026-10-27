@@ -454,6 +454,106 @@ fn persist_playback_event(
     })
 }
 
+/// Weight of one listen imported from Last.fm or ListenBrainz: a little
+/// less than a play observed in Parson, whose context (skips, queue adds)
+/// is known.
+const IMPORTED_PLAY_WEIGHT: f64 = 2.0;
+/// An imported listen this close to one already in the history (the same
+/// song) is the same listen, e.g. one Parson itself scrobbled.
+const IMPORT_DUPLICATE_WINDOW_SECONDS: i64 = 300;
+
+/// Adds listens imported from a scrobbling service to a profile's listening
+/// history with their original timestamps, and lets them shape the
+/// profile's taste (track, artist, album and genre preferences). Returns how
+/// many were new.
+pub(crate) fn import_listens(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    listens: &[(String, i64)],
+    cache: &LibraryCache,
+) -> QueryResult<usize> {
+    connection.immediate_transaction(|connection| {
+        let mut added = 0;
+        for (song_id, listened_at) in listens {
+            let duplicate = diesel::sql_query(
+                "SELECT COUNT(*) AS count FROM listen_history_item
+                 WHERE user_id = ? AND song_id = ?
+                   AND listened_at BETWEEN datetime(?, 'unixepoch') AND datetime(?, 'unixepoch')",
+            )
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .bind::<Text, _>(song_id)
+            .bind::<BigInt, _>(listened_at - IMPORT_DUPLICATE_WINDOW_SECONDS)
+            .bind::<BigInt, _>(listened_at + IMPORT_DUPLICATE_WINDOW_SECONDS)
+            .get_result::<CountRow>(connection)?
+            .count
+                > 0;
+            if duplicate {
+                continue;
+            }
+            diesel::sql_query(
+                "INSERT INTO listen_history_item (user_id, song_id, listened_at)
+                 VALUES (?, ?, datetime(?, 'unixepoch'))",
+            )
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .bind::<Text, _>(song_id)
+            .bind::<BigInt, _>(*listened_at)
+            .execute(connection)?;
+            diesel::sql_query(
+                "INSERT INTO user_track_preference
+                 (user_id, song_id, qualified_plays, preference_score, last_positive_at, last_played_at)
+                 VALUES (?, ?, 1, ?, datetime(?, 'unixepoch'), datetime(?, 'unixepoch'))
+                 ON CONFLICT(user_id, song_id) DO UPDATE SET
+                   qualified_plays = qualified_plays + 1,
+                   preference_score = preference_score + excluded.preference_score,
+                   last_positive_at = MAX(COALESCE(last_positive_at, excluded.last_positive_at), excluded.last_positive_at),
+                   last_played_at = MAX(COALESCE(last_played_at, excluded.last_played_at), excluded.last_played_at)",
+            )
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .bind::<Text, _>(song_id)
+            .bind::<Double, _>(IMPORTED_PLAY_WEIGHT)
+            .bind::<BigInt, _>(*listened_at)
+            .bind::<BigInt, _>(*listened_at)
+            .execute(connection)?;
+            if let Some((artist_id, album_id)) = cache.song_map.get(song_id) {
+                upsert_entity_preference(
+                    connection,
+                    "user_artist_preference",
+                    "artist_id",
+                    user_id,
+                    artist_id,
+                    IMPORTED_PLAY_WEIGHT,
+                    0.0,
+                )?;
+                upsert_entity_preference(
+                    connection,
+                    "user_album_preference",
+                    "album_id",
+                    user_id,
+                    album_id,
+                    IMPORTED_PLAY_WEIGHT,
+                    0.0,
+                )?;
+                for genre in cache.album_genres.get(album_id).into_iter().flatten() {
+                    upsert_entity_preference(
+                        connection,
+                        "user_genre_preference",
+                        "genre",
+                        user_id,
+                        genre,
+                        IMPORTED_PLAY_WEIGHT,
+                        0.0,
+                    )?;
+                }
+            }
+            added += 1;
+        }
+        if added > 0 {
+            prune_listen_history(connection, user_id)?;
+        }
+        Ok(added)
+    })
+}
+
 fn schedule_playback_retention(
     connection: &mut SqliteConnection,
     user_id: i32,

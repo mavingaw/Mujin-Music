@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS scrobble_history_import;
+DROP INDEX IF EXISTS scrobble_queue_user_idx;
+DROP INDEX IF EXISTS scrobble_queue_due_idx;
+DROP TABLE IF EXISTS scrobble_queue;
+DROP TABLE IF EXISTS scrobble_connection;
+DROP TABLE IF EXISTS scrobble_service_config;
+ALTER TABLE user DROP COLUMN profile_owner_id;
+ALTER TABLE user DROP COLUMN quick_switch;
+ALTER TABLE user DROP COLUMN profile_pin;
+ALTER TABLE user DROP COLUMN profile_color;
+ALTER TABLE user DROP COLUMN profile_kind;

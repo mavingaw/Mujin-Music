@@ -1,0 +1,98 @@
+[
+  {
+    "method": "GET",
+    "url": "https://api.listenbrainz.org/1/validate-token",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "code": 200,
+          "message": "Token valid.",
+          "valid": true,
+          "user_name": "parson-listener"
+        }
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "url": "https://api.listenbrainz.org/1/submit-listens",
+    "replies": [{ "status": 200, "body": { "status": "ok" } }]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.listenbrainz.org/1/user/parson-listener/listens",
+    "query": [["max_ts", "1699900000"]],
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "payload": {
+            "count": 0,
+            "latest_listen_ts": 1699990000,
+            "listens": [],
+            "user_id": "parson-listener"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "url": "https://api.listenbrainz.org/1/user/parson-listener/listens",
+    "replies": [
+      {
+        "status": 200,
+        "body": {
+          "payload": {
+            "count": 3,
+            "latest_listen_ts": 1699990000,
+            "listens": [
+              {
+                "inserted_at": 1699990002,
+                "listened_at": 1699990000,
+                "recording_msid": "fd0cad33-ea33-453b-8155-1292379277db",
+                "track_metadata": {
+                  "additional_info": {
+                    "duration_ms": 214000,
+                    "submission_client": "Parson",
+                    "submission_client_version": "1.0.1",
+                    "tracknumber": 3
+                  },
+                  "artist_name": "Ilse Marten",
+                  "release_name": "Glass Orchard",
+                  "track_name": "Lanterns"
+                },
+                "user_name": "parson-listener"
+              },
+              {
+                "inserted_at": 1699980002,
+                "listened_at": 1699980000,
+                "recording_msid": "0a1b2c3d-ea33-453b-8155-1292379277db",
+                "track_metadata": {
+                  "additional_info": { "duration_ms": 251000 },
+                  "artist_name": "Ilse Marten",
+                  "release_name": "Glass Orchard",
+                  "track_name": "Copper Sky"
+                },
+                "user_name": "parson-listener"
+              },
+              {
+                "inserted_at": 1699900002,
+                "listened_at": 1699900000,
+                "recording_msid": "9f8e7d6c-ea33-453b-8155-1292379277db",
+                "track_metadata": {
+                  "additional_info": {},
+                  "artist_name": "Somebody Not In The Library",
+                  "track_name": "A Song Parson Does Not Have"
+                },
+                "user_name": "parson-listener"
+              }
+            ],
+            "user_id": "parson-listener"
+          }
+        }
+      }
+    ]
+  }
+]

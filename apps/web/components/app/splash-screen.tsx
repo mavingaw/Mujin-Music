@@ -24,7 +24,7 @@ export default function AppBootstrap({ children }: { children: ReactNode }) {
   const initializedAttempt = useRef<number | null>(null);
 
   useEffect(() => {
-    if (pathname.startsWith("/setup") || pathname === "/connect") {
+    if (pathname.startsWith("/setup") || pathname.startsWith("/connect")) {
       setLoading(false);
       return;
     }
