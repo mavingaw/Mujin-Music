@@ -178,7 +178,7 @@ function ServiceCard({
     >
       <header className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <ServiceMark service={service.service} />
-        <div className="min-w-0 flex-1 basis-40">
+        <div className="min-w-0 flex-1 basis-32">
           <h3 className="text-sm font-semibold text-white">{service.name}</h3>
           {connection ? (
             <a
