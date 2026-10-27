@@ -793,6 +793,36 @@ pub struct LibraryRootResponse {
     /// False when the folder is missing on this server, for example after a
     /// backup from another computer was restored here.
     available: bool,
+    /// For a missing folder: the closest folder above it that exists on this
+    /// server, where "Locate…" starts browsing (the music usually moved
+    /// nearby, for example to another disk under the same mount point).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locate_from: Option<String>,
+}
+
+impl LibraryRootResponse {
+    fn new(path: String, available: bool) -> Self {
+        let locate_from = (!available)
+            .then(|| nearest_existing_ancestor(Path::new(&path)))
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned());
+        Self {
+            path,
+            available,
+            locate_from,
+        }
+    }
+}
+
+/// The closest existing folder at or above `path` (an absolute path); `None`
+/// when not even the root exists, which can't happen on a real system.
+pub(crate) fn nearest_existing_ancestor(path: &Path) -> Option<std::path::PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    path.ancestors()
+        .find(|candidate| candidate.is_dir())
+        .map(Path::to_path_buf)
 }
 
 #[get("/roots")]
@@ -803,7 +833,7 @@ pub async fn library_roots() -> impl Responder {
             tokio::time::timeout(Duration::from_secs(2), tokio::fs::metadata(path.clone()))
                 .await
                 .is_ok_and(|metadata| metadata.is_ok_and(|metadata| metadata.is_dir()));
-        roots.push(LibraryRootResponse { path, available });
+        roots.push(LibraryRootResponse::new(path, available));
     }
     HttpResponse::Ok().json(roots)
 }
@@ -974,9 +1004,9 @@ pub(crate) async fn remove_root(
     HttpResponse::Ok().json(
         remaining
             .into_iter()
-            .map(|path| LibraryRootResponse {
-                available: Path::new(&path).is_dir(),
-                path,
+            .map(|path| {
+                let available = Path::new(&path).is_dir();
+                LibraryRootResponse::new(path, available)
             })
             .collect::<Vec<_>>(),
     )
@@ -3937,6 +3967,34 @@ pub(crate) async fn stream_cast_compatible(
         lifecycle,
     )
     .await
+}
+
+#[cfg(test)]
+mod locate_tests {
+    use super::{LibraryRootResponse, nearest_existing_ancestor};
+
+    #[test]
+    fn locate_starts_at_the_nearest_folder_that_still_exists() {
+        let root = std::env::temp_dir().join(format!("parson-locate-{}", uuid::Uuid::new_v4()));
+        let mount = root.join("mnt/music-disk");
+        std::fs::create_dir_all(&mount).unwrap();
+        let moved = mount.join("Old Library/FLAC");
+        assert_eq!(nearest_existing_ancestor(&moved), Some(mount.clone()));
+        assert_eq!(nearest_existing_ancestor(&mount), Some(mount.clone()));
+        assert_eq!(
+            nearest_existing_ancestor(std::path::Path::new("relative/x")),
+            None
+        );
+
+        let missing = LibraryRootResponse::new(moved.to_string_lossy().into_owned(), false);
+        assert_eq!(
+            missing.locate_from.as_deref(),
+            Some(mount.to_string_lossy().as_ref())
+        );
+        let present = LibraryRootResponse::new(mount.to_string_lossy().into_owned(), true);
+        assert_eq!(present.locate_from, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

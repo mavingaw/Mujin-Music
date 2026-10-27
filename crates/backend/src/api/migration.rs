@@ -100,6 +100,9 @@ pub struct FolderBackup {
     pub instance_id: Option<String>,
     pub product_version: Option<String>,
     pub library_roots: Vec<String>,
+    /// The old server's away-from-home setting, when it had one. A restore
+    /// offers to bring it along (off by default).
+    pub remote_access: Option<serde_json::Value>,
 }
 
 fn schedule_path(directory: &Path) -> PathBuf {
@@ -344,6 +347,9 @@ pub fn list_folder_backups(directory: &Path) -> Vec<FolderBackup> {
                 instance_id: text_field(&manifest, "instance_id")
                     .filter(|value| Uuid::parse_str(value).is_ok()),
                 product_version: text_field(&manifest, "product_version"),
+                remote_access: crate::api::data::remote_access_setting(
+                    manifest["remote_access"].to_string().as_bytes(),
+                ),
                 library_roots: manifest["library_roots"]
                     .as_array()
                     .map(|roots| {
@@ -451,12 +457,18 @@ struct RestoreFromFolderRequest {
     path: String,
     #[serde(default)]
     adopt_identity: bool,
+    #[serde(default)]
+    restore_remote_access: bool,
 }
 
 async fn stage_backup_from_folder(request: RestoreFromFolderRequest) -> Result<(), HttpResponse> {
     let path = backup_file_from_request(&request.path)
         .map_err(|message| bad_request(message, "invalid_backup"))?;
-    match web::block(move || validate_and_stage_restore(&path, request.adopt_identity)).await {
+    let options = RestoreOptions {
+        adopt_identity: request.adopt_identity,
+        restore_remote_access: request.restore_remote_access,
+    };
+    match web::block(move || validate_and_stage_restore(&path, options)).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => Err(bad_request(error, "invalid_backup")),
         Err(error) => {
@@ -653,7 +665,7 @@ async fn setup_restore_upload(
         Ok(false) => return setup_restore_forbidden(),
         Err(response) => return response,
     }
-    match stage_uploaded_backup(multipart, options.adopt_identity).await {
+    match stage_uploaded_backup(multipart, options.into_inner()).await {
         Ok(()) => restarting_response(),
         Err(response) => response,
     }
@@ -845,6 +857,25 @@ mod tests {
     }
 
     #[test]
+    fn folder_listings_show_the_away_from_home_setting_a_restore_can_bring() {
+        let folder = scratch("listing-remote");
+        let mut with_remote = manifest("Basement NAS");
+        with_remote["remote_access"] = serde_json::json!({
+            "mode": "router", "manual_url": null, "external_port": 41993
+        });
+        write_backup(
+            &folder,
+            "parson-backup-20261020T080000000Z.tar.zst",
+            with_remote,
+        );
+        let backups = list_folder_backups(&folder);
+        let remote = backups[0].remote_access.as_ref().expect("remote access");
+        assert_eq!(remote["mode"], "router");
+        assert_eq!(remote["external_port"], 41993);
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
     fn folder_listings_describe_backups_from_their_manifests() {
         let folder = scratch("listing");
         write_backup(
@@ -868,6 +899,7 @@ mod tests {
         );
         assert_eq!(backup.library_roots, vec!["/home/ana/Music".to_string()]);
         assert!(backup.size_bytes > 0);
+        assert_eq!(backup.remote_access, None);
 
         let picked = backup_file_from_request(&backup.path).unwrap();
         assert_eq!(picked, PathBuf::from(&backup.path));

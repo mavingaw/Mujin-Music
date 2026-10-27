@@ -108,6 +108,11 @@ export interface LibraryRoot {
    * backup from another computer was restored here. Older servers omit it.
    */
   available?: boolean;
+  /**
+   * For a missing folder: the closest folder above it that exists on this
+   * server, where "Locate…" starts browsing. Older servers omit it.
+   */
+  locate_from?: string | null;
 }
 
 export interface SetupStatus {

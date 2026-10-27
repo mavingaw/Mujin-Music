@@ -213,8 +213,11 @@ pub fn apply_relocation(
                         targets.push((column.to_string(), "kind = 'album'"));
                     }
                 }
-                // Metadata edits and external ids are keyed by entity id.
-                if names.contains(&"entity_id") && names.contains(&"entity_type") {
+                // Metadata edits, notes, tags and external ids are keyed by
+                // entity id; Radio bans by (kind, entity id).
+                if names.contains(&"entity_id")
+                    && (names.contains(&"entity_type") || names.contains(&"kind"))
+                {
                     targets.push(("entity_id".to_string(), "1 = 1"));
                 }
                 for (column, kind) in targets {
@@ -439,6 +442,10 @@ mod tests {
                  CREATE TABLE user_album_preference(user_id INTEGER, album_id TEXT);
                  CREATE TABLE metadata_override(entity_type TEXT, entity_id TEXT, field TEXT);
                  CREATE TABLE track_entity(id TEXT PRIMARY KEY, album_id TEXT);
+                 CREATE TABLE user_radio_ban(user_id INTEGER, kind TEXT, entity_id TEXT, PRIMARY KEY(user_id, kind, entity_id));
+                 CREATE TABLE user_tag_item(tag_id INTEGER, entity_type TEXT, entity_id TEXT);
+                 INSERT INTO user_radio_ban VALUES (1, 'song', 't2'), (1, 'album', 'a1'), (1, 'artist', 'x1');
+                 INSERT INTO user_tag_item VALUES (3, 'track', 't1');
                  INSERT INTO song VALUES ('t1'), ('t2'), ('n1');
                  INSERT INTO favorite_song VALUES (1, 't1'), (1, 'n1'), (2, 't2');
                  INSERT INTO _playlist_to_song VALUES (7, 't1', 0), (7, 't2', 1);
@@ -495,6 +502,16 @@ mod tests {
         assert_eq!(
             values("SELECT entity_id AS value FROM metadata_override ORDER BY entity_type"),
             vec!["b1", "n2"]
+        );
+        // Radio bans and tags (added with the radio and focus features)
+        // follow the moved tracks and albums too.
+        assert_eq!(
+            values("SELECT entity_id AS value FROM user_radio_ban ORDER BY kind"),
+            vec!["b1", "x1", "n2"]
+        );
+        assert_eq!(
+            values("SELECT entity_id AS value FROM user_tag_item"),
+            vec!["n1"]
         );
         // The catalog is the indexer's business.
         assert_eq!(values("SELECT id AS value FROM track_entity"), vec!["t1"]);

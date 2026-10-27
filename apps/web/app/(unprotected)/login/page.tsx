@@ -9,6 +9,10 @@ import { useSession } from "@/features/account/session-provider";
 import { toast } from "sonner";
 import Link from "next/link";
 import ParsonBrandMark from "@/components/icons/parson-brand-mark";
+import {
+  readServerIdentity,
+  signInHeading,
+} from "@/features/account/server-identity";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,14 +21,31 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [selectedLibrary, setSelectedLibrary] = useState("");
+  const [serverName, setServerName] = useState<string | null>(null);
+  const [host, setHost] = useState("");
 
   useEffect(() => {
+    setHost(window.location.host);
     const name = new URLSearchParams(window.location.search)
       .get("library")
       ?.trim();
-    if (!name) return;
-    setSelectedLibrary(name);
+    if (name) setSelectedLibrary(name);
+    // Name the server this page signs in to, from its own manifest.
+    let active = true;
+    void readServerIdentity()
+      .then((identity) => {
+        if (active) setServerName(identity.name);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, []);
+  const heading = signInHeading({
+    serverName,
+    requestedName: selectedLibrary,
+    host,
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,12 +79,17 @@ export default function LoginPage() {
       >
         <ParsonBrandMark className="mb-7 h-16 w-16 sm:hidden" />
         <div className="pb-2">
-          <h1 className="text-3xl font-bold tracking-tight">
-            {selectedLibrary ? `Sign in to ${selectedLibrary}` : "Welcome back"}
+          <h1 className="text-3xl font-bold tracking-tight break-words">
+            {heading.title}
           </h1>
-          {selectedLibrary && (
-            <p className="mt-2 text-sm text-zinc-500">{window.location.host}</p>
-          )}
+          {heading.address ? (
+            <p
+              className="mt-2 font-mono text-sm text-zinc-500"
+              data-testid="server-address"
+            >
+              {heading.address}
+            </p>
+          ) : null}
         </div>
         <Input
           aria-label="Username"

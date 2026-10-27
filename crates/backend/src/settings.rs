@@ -358,6 +358,11 @@ pub fn apply_staged_restore() -> std::io::Result<()> {
         &data_path(&["Discovery", "instance-id"]),
         &rollback,
     )?;
+    apply_restored_remote_access(
+        &data_path(&["Restore", "REMOTE_ACCESS"]),
+        &data_path(&REMOTE_ACCESS_FILE),
+        &rollback,
+    )?;
     fs::remove_file(marker)?;
     fs::remove_dir_all(staged)?;
     prune_restore_rollbacks(&recovery)?;
@@ -381,9 +386,74 @@ fn adopt_restored_identity(
             fs::create_dir_all(rollback)?;
             fs::copy(instance_id_path, rollback.join("instance-id"))?;
         }
+        let adopted_at_path = instance_id_path.with_file_name(IDENTITY_ADOPTED_FILE);
+        if adopted_at_path.is_file() {
+            fs::copy(&adopted_at_path, rollback.join(IDENTITY_ADOPTED_FILE))?;
+        }
         persist_secret(instance_id_path, identity)?;
+        // When this server took the library over. Two servers can answer
+        // with the same identity while the old one is still switched on; the
+        // newer takeover is the library's current home, so every app picks
+        // the same one instead of whichever answered first.
+        persist_secret(
+            &adopted_at_path,
+            &chrono::Utc::now().timestamp_millis().to_string(),
+        )?;
     }
     fs::remove_file(marker)
+}
+
+/// Where the away-from-home setting lives (see `remote_access`).
+pub const REMOTE_ACCESS_FILE: [&str; 2] = ["Network", "remote-access.json"];
+const IDENTITY_ADOPTED_FILE: &str = "identity-adopted-at";
+
+/// A restore staged with "also restore away-from-home access" brings the old
+/// server's setting along. Without that choice the new server keeps its own:
+/// the new machine may sit on another network, behind another router.
+fn apply_restored_remote_access(
+    marker: &Path,
+    destination: &Path,
+    rollback: &Path,
+) -> std::io::Result<()> {
+    let Ok(bytes) = fs::read(marker) else {
+        return Ok(());
+    };
+    // Only a setting that still parses is applied; anything else is dropped.
+    let valid = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .is_some_and(|value| value.get("mode").is_some_and(serde_json::Value::is_string));
+    if valid {
+        if destination.is_file() {
+            fs::create_dir_all(rollback)?;
+            fs::copy(destination, rollback.join("remote-access.json"))?;
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let temporary = destination.with_extension("json.restore");
+        fs::write(&temporary, &bytes)?;
+        fs::rename(&temporary, destination)?;
+    }
+    fs::remove_file(marker)
+}
+
+/// When this server took over a restored library's identity (Unix ms), or
+/// `None` for a server that still has the identity it was born with.
+pub fn identity_adopted_at() -> Option<i64> {
+    #[cfg(test)]
+    return None;
+
+    #[cfg(not(test))]
+    read_identity_adopted_at(&data_path(&["Discovery", IDENTITY_ADOPTED_FILE]))
+}
+
+fn read_identity_adopted_at(path: &Path) -> Option<i64> {
+    fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
 }
 
 fn apply_reset_at(root: &Path) -> std::io::Result<bool> {
@@ -819,6 +889,12 @@ mod tests {
             old
         );
         assert!(!marker.exists());
+        // The takeover is dated, so apps can tell the library's new home
+        // from the old server while both are still switched on.
+        let adopted_at =
+            super::read_identity_adopted_at(&root.join("Discovery/identity-adopted-at"))
+                .expect("takeover time");
+        assert!(adopted_at > 1_700_000_000_000);
 
         // No marker: the server keeps its own identity.
         super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
@@ -828,6 +904,41 @@ mod tests {
         fs::write(&marker, "not-a-uuid").unwrap();
         super::adopt_restored_identity(&marker, &identity, &rollback).unwrap();
         assert_eq!(fs::read_to_string(&identity).unwrap().trim(), adopted);
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_restore_brings_remote_access_only_when_asked() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("parson-remote-{}", uuid::Uuid::new_v4()));
+        let marker = root.join("Restore/REMOTE_ACCESS");
+        let destination = root.join("Network/remote-access.json");
+        let rollback = root.join("Recovery/before-restore-test");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        let current = r#"{"mode":"off","manual_url":null,"external_port":null}"#;
+        fs::write(&destination, current).unwrap();
+
+        // Not chosen: no marker, the new server keeps its own setting.
+        super::apply_restored_remote_access(&marker, &destination, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), current);
+
+        let restored =
+            r#"{"mode":"manual","manual_url":"https://music.example.com","external_port":null}"#;
+        fs::write(&marker, restored).unwrap();
+        super::apply_restored_remote_access(&marker, &destination, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), restored);
+        assert_eq!(
+            fs::read_to_string(rollback.join("remote-access.json")).unwrap(),
+            current
+        );
+        assert!(!marker.exists());
+
+        // A setting that doesn't parse is dropped, not applied.
+        fs::write(&marker, "{not json").unwrap();
+        super::apply_restored_remote_access(&marker, &destination, &rollback).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), restored);
         assert!(!marker.exists());
         fs::remove_dir_all(root).unwrap();
     }

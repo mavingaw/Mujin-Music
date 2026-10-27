@@ -14,7 +14,11 @@ import {
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { useState } from "react";
 import BackupPicker, { type PickedBackup } from "./backup-picker";
-import { readServerBootId, waitForRestart } from "./migration-presentation";
+import {
+  readServerBootId,
+  remoteAccessChoice,
+  waitForRestart,
+} from "./migration-presentation";
 
 type Phase =
   | { kind: "pick" }
@@ -40,13 +44,20 @@ export default function RestoreFlow({
 }) {
   const [picked, setPicked] = useState<PickedBackup | null>(null);
   const [adoptIdentity, setAdoptIdentity] = useState(mode === "setup");
+  // Off by default: the new server may be on another network.
+  const [restoreRemoteAccess, setRestoreRemoteAccess] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "pick" });
   const libraryName =
     picked?.kind === "folder" ? picked.backup.library_name : null;
+  const remoteAccess = remoteAccessChoice(picked);
 
   async function restore() {
     if (!picked) return;
-    const options = { adoptIdentity };
+    const remoteChoice = remoteAccessChoice(picked);
+    const options = {
+      adoptIdentity,
+      restoreRemoteAccess: Boolean(remoteChoice) && restoreRemoteAccess,
+    };
     setPhase({ kind: "working", label: "Checking the backup…" });
     try {
       const previousBootId = await readServerBootId().catch(() => null);
@@ -131,6 +142,23 @@ export default function RestoreFlow({
           </span>
         </span>
       </label>
+      {remoteAccess ? (
+        <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm">
+          <Checkbox
+            checked={restoreRemoteAccess}
+            className="mt-0.5"
+            onCheckedChange={(value) => setRestoreRemoteAccess(value === true)}
+          />
+          <span className="leading-5">
+            <span className="font-medium text-zinc-100">
+              {remoteAccess.label}
+            </span>
+            <span className="mt-0.5 block text-zinc-500">
+              {remoteAccess.detail}
+            </span>
+          </span>
+        </label>
+      ) : null}
       <p className="text-xs leading-5 text-zinc-500">
         Accounts, playlists, favourites, listening history, edits and artwork
         come back. Music files are not in a backup: if they live somewhere new

@@ -85,7 +85,9 @@ export function AwayFromHome({
                     styles.light,
                     check && check !== "busy"
                       ? check.ok
-                        ? styles.good
+                        ? route === "home"
+                          ? null
+                          : styles.good
                         : styles.bad
                       : null,
                   ]}
@@ -96,7 +98,9 @@ export function AwayFromHome({
                     {check === "busy"
                       ? "Checking…"
                       : check
-                        ? routeCheckText(check)
+                        ? routeCheckText(check, {
+                            onHomeNetwork: route === "home",
+                          })
                         : item.replace(/^https?:\/\//, "")}
                   </Text>
                 </View>

@@ -94,11 +94,18 @@ export async function desktopPlatform(): Promise<DesktopPlatform | null> {
   return electronInvoke<DesktopPlatform>("platform");
 }
 
-export async function selectMusicFolder(): Promise<string | null> {
+/**
+ * Opens the system folder picker. `near` (a folder that may no longer
+ * exist) opens it at the closest folder above that still does.
+ */
+export async function selectMusicFolder(near?: string): Promise<string | null> {
   if (typeof window === "undefined") {
     return null;
   }
-  return electronInvoke<string | null>("select_music_folder");
+  return electronInvoke<string | null>(
+    "select_music_folder",
+    near ? { near } : undefined,
+  );
 }
 
 export async function showTrackInFileManager(path: string): Promise<boolean> {

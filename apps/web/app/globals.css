@@ -161,6 +161,17 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Parson Desktop on Windows and Linux draws its own window controls at the
+   right of the header (see desktop-window-controls.tsx); keep the search
+   field clear of them at every window width. */
+html[data-window-controls] .app-titlebar {
+  padding-right: var(--titlebar-controls, 152px);
+}
+
+html[data-window-controls] .app-titlebar-search {
+  margin-right: 0;
+}
+
 @keyframes player-title-marquee {
   0% {
     transform: translateX(0);

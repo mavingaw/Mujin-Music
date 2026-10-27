@@ -8,6 +8,7 @@ import {
   hostUptime,
   parseConnectLink,
   parseHostInfo,
+  isHomeOnlyHost,
   usableRemoteOrigins,
 } from "./host";
 
@@ -155,4 +156,42 @@ test("uptime reads naturally", () => {
   expect(hostUptime(1_700_000_000 - 3 * 3_600, now)).toBe("3 hours");
   expect(hostUptime(1_700_000_000 - 86_400, now)).toBe("1 day");
   expect(hostUptime(0, now)).toBe("");
+});
+
+test("a LAN address is never saved as a way in from away from home", () => {
+  for (const host of [
+    "192.168.1.20",
+    "10.0.0.9",
+    "172.20.3.4",
+    "127.0.0.1",
+    "169.254.10.2",
+    "192.0.2.2",
+    "fd00::42",
+    "[fe80::1]",
+    "nas.local",
+    "nas",
+  ]) {
+    expect(isHomeOnlyHost(host)).toBe(true);
+  }
+  for (const host of ["music.example.com", "8.8.8.8", "2606:4700::1111"]) {
+    expect(isHomeOnlyHost(host)).toBe(false);
+  }
+  expect(
+    usableRemoteOrigins({
+      remote: [
+        {
+          origin: "http://192.0.2.2:2014",
+          kind: "manual",
+          label: "Your address",
+          verified: null,
+        },
+        {
+          origin: "http://100.101.102.103:1993",
+          kind: "vpn",
+          label: "Tailscale",
+          verified: true,
+        },
+      ],
+    }),
+  ).toEqual(["http://100.101.102.103:1993"]);
 });

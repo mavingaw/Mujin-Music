@@ -51,11 +51,10 @@ export function useLibraryDiscovery(enabled?: boolean) {
             if (!active) return;
             setLibraries((current) =>
               [
-                ...current.filter(
-                  (library) =>
-                    library.origin !== origin &&
-                    library.manifest.instanceId !== manifest.instanceId,
-                ),
+                // Keyed by address: two servers can share an identity (a
+                // library taken over by a restore while the old one runs);
+                // libraryRows picks between them the same way every time.
+                ...current.filter((library) => library.origin !== origin),
                 { manifest, origin },
               ].sort((left, right) =>
                 left.manifest.name.localeCompare(right.manifest.name),

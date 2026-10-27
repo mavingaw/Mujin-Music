@@ -15,14 +15,14 @@
 
 pub mod igd;
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-const CONFIG_FILE: [&str; 2] = ["Network", "remote-access.json"];
+use crate::settings::REMOTE_ACCESS_FILE as CONFIG_FILE;
 const LEASE_SECONDS: u32 = 60 * 60;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_URL_BYTES: usize = 512;
@@ -96,6 +96,10 @@ pub enum CheckOutcome {
     /// Something answered, but it is not Parson (a proxy misconfiguration,
     /// a router login page).
     NotParson,
+    /// The address is private, loopback or link-local (or a name that only
+    /// points to such addresses), so it can only work on the home network.
+    /// It is never passed as an away-from-home address.
+    HomeOnly,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -106,6 +110,12 @@ pub struct PathCheck {
     pub outcome: CheckOutcome,
     pub latency_ms: Option<u64>,
     pub detail: String,
+    /// Where the check ran. The server can only call its own addresses from
+    /// inside the home network, which can't prove they work from outside
+    /// (routers loop connections back, DNS can answer differently at home),
+    /// so this is always `"server"` here and the apps say so. The phone app
+    /// checks from wherever it is.
+    pub checked_from: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -140,6 +150,11 @@ pub struct Service {
     wake: tokio::sync::Notify,
     ssdp_targets: Vec<SocketAddr>,
     persist: bool,
+    /// Decides whether an address can only work at home (tests swap it to
+    /// reach fake servers on 127.0.0.1).
+    home_only: fn(&str) -> Option<String>,
+    /// Also follow names to their DNS answers (off in tests).
+    resolve_names: bool,
 }
 
 static SERVICE: OnceLock<Arc<Service>> = OnceLock::new();
@@ -185,7 +200,122 @@ pub fn normalize_manual_url(value: &str) -> Result<String, String> {
     if host.is_empty() || host == "localhost" || host.starts_with("127.") || host == "[::1]" {
         return Err("That address only works on this computer.".into());
     }
+    if let Some(reason) = home_only_reason(host) {
+        return Err(format!(
+            "{reason} Use the address people reach from the internet (your dynamic-DNS name or reverse proxy), or choose “Tailscale or another VPN”."
+        ));
+    }
     Ok(url.origin().ascii_serialization())
+}
+
+/// Why `ip` can't be reached from outside the home, or `None` for a public
+/// address.
+fn ip_home_only_reason(ip: IpAddr) -> Option<&'static str> {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            if ip.is_loopback() {
+                Some("only works on the server itself")
+            } else if ip.is_unspecified() || ip.is_broadcast() || a == 0 || a >= 240 {
+                Some("is not a usable internet address")
+            } else if ip.is_private() {
+                Some("is a private address on your home network")
+            } else if ip.is_link_local() {
+                Some("is a link-local address that only works on the local network")
+            } else if a == 100 && (64..128).contains(&b) {
+                Some("is a carrier-grade NAT or Tailscale address, not an internet address")
+            } else if (a == 192 && b == 0 && c == 2)
+                || (a == 198 && b == 51 && c == 100)
+                || (a == 203 && b == 0 && c == 113)
+                || (a == 198 && (b == 18 || b == 19))
+                || (a == 192 && b == 0 && c == 0)
+            {
+                Some("is reserved for documentation and testing, not the internet")
+            } else {
+                None
+            }
+        }
+        IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return ip_home_only_reason(IpAddr::V4(v4));
+            }
+            let first = ip.segments()[0];
+            if ip.is_loopback() {
+                Some("only works on the server itself")
+            } else if ip.is_unspecified() || ip.is_multicast() {
+                Some("is not a usable internet address")
+            } else if first & 0xfe00 == 0xfc00 {
+                Some("is a private address on your home network")
+            } else if first & 0xffc0 == 0xfe80 {
+                Some("is a link-local address that only works on the local network")
+            } else if ip.segments()[..2] == [0x2001, 0x0db8] || ip == Ipv6Addr::UNSPECIFIED {
+                Some("is reserved for documentation and testing, not the internet")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Why the host of an address can only work at home (a private, loopback
+/// or link-local IP, or a name only the home network knows), or `None`.
+pub fn home_only_reason(host: &str) -> Option<String> {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<IpAddr>() {
+        return ip_home_only_reason(ip).map(|reason| format!("{bare} {reason}."));
+    }
+    let name = bare.trim_end_matches('.').to_ascii_lowercase();
+    let local_suffix = [
+        ".local",
+        ".lan",
+        ".home",
+        ".home.arpa",
+        ".internal",
+        ".localdomain",
+    ]
+    .iter()
+    .find(|suffix| name.ends_with(*suffix));
+    if name == "localhost" || name.ends_with(".localhost") {
+        return Some(format!("{name} only works on the server itself."));
+    }
+    if let Some(suffix) = local_suffix {
+        return Some(format!(
+            "{name} is a {suffix} name that only your home network knows."
+        ));
+    }
+    if !name.contains('.') {
+        return Some(format!(
+            "{name} is a short name that only your home network knows."
+        ));
+    }
+    None
+}
+
+/// Like [`home_only_reason`], and also for a name whose DNS answers are all
+/// home-only addresses (a name that points at the server's LAN address).
+async fn resolved_home_only_reason(host: &str, port: u16) -> Option<String> {
+    if let Some(reason) = home_only_reason(host) {
+        return Some(reason);
+    }
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if bare.parse::<IpAddr>().is_ok() {
+        return None;
+    }
+    let resolved = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::net::lookup_host((bare.to_string(), port)),
+    )
+    .await
+    .ok()?
+    .ok()?
+    .map(|address| address.ip())
+    .collect::<Vec<_>>();
+    let first = *resolved.first()?;
+    let reason = resolved
+        .iter()
+        .map(|ip| ip_home_only_reason(*ip))
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("{bare} points to {first}, which {}.", reason[0]))
 }
 
 impl Service {
@@ -205,6 +335,8 @@ impl Service {
             wake: tokio::sync::Notify::new(),
             ssdp_targets,
             persist,
+            home_only: home_only_reason,
+            resolve_names: true,
         }
     }
 
@@ -448,6 +580,18 @@ impl Service {
         }
         let mut seen = std::collections::HashSet::new();
         addresses.retain(|address| seen.insert(address.origin.clone()));
+        // A home-only address (say, a LAN address saved before "My address"
+        // refused them) is never handed to phones as a way in from outside.
+        for address in &mut addresses {
+            if address.kind != "vpn"
+                && reqwest::Url::parse(&address.origin)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_string))
+                    .is_some_and(|host| (self.home_only)(&host).is_some())
+            {
+                address.verified = Some(false);
+            }
+        }
         addresses
     }
 
@@ -462,31 +606,52 @@ impl Service {
             .redirect(reqwest::redirect::Policy::limited(2))
             .build();
         let mut results = Vec::with_capacity(addresses.len());
+        let (home_only, resolve_names) = (self.home_only, self.resolve_names);
         let checks = addresses.iter().map(|address| {
             let client = client.as_ref().ok().cloned();
             let instance_id = instance_id.clone();
             async move {
+                let path = |outcome, latency_ms, detail| PathCheck {
+                    origin: address.origin.clone(),
+                    kind: address.kind,
+                    label: address.label.clone(),
+                    outcome,
+                    latency_ms,
+                    detail,
+                    checked_from: "server",
+                };
+                // A VPN address is private by design: it works away from
+                // home only for devices on the same VPN, and says so. Any
+                // other address must lead somewhere outside the home, so a
+                // private, loopback or link-local one never passes.
+                if address.kind != "vpn"
+                    && let Some(reason) = home_only_address(&address.origin, home_only, resolve_names).await
+                {
+                    return path(
+                        CheckOutcome::HomeOnly,
+                        None,
+                        format!("{reason} It only works on your home network, not away from home."),
+                    );
+                }
                 let started = Instant::now();
                 let (outcome, detail) = match client {
                     Some(client) => check_address(&client, &address.origin, &instance_id).await,
                     None => (CheckOutcome::Unreachable, "Could not start the check.".into()),
                 };
-                let detail = if address.kind == "router" && outcome == CheckOutcome::Unreachable {
-                    format!(
+                let detail = match (address.kind, outcome) {
+                    ("router", CheckOutcome::Unreachable) => format!(
                         "{detail} Checked from the server through the router: some routers can’t loop a connection back to their own public address, so open the Parson app on mobile data to be sure."
-                    )
-                } else {
-                    detail
+                    ),
+                    ("vpn", CheckOutcome::Reachable) => "Answers on the VPN address. Phones and computers reach it away from home while they are connected to the same VPN.".to_string(),
+                    (_, CheckOutcome::Reachable) => "Leads to this server when called from the server itself. The server can’t test from outside your home, so this doesn’t prove it works there: open the Parson app on mobile data and use “Check from here”.".to_string(),
+                    _ => detail,
                 };
-                PathCheck {
-                    origin: address.origin.clone(),
-                    kind: address.kind,
-                    label: address.label.clone(),
-                    latency_ms: (outcome == CheckOutcome::Reachable)
-                        .then(|| started.elapsed().as_millis() as u64),
+                path(
                     outcome,
+                    (outcome == CheckOutcome::Reachable)
+                        .then(|| started.elapsed().as_millis() as u64),
                     detail,
-                }
+                )
             }
         });
         results.extend(futures::future::join_all(checks).await);
@@ -497,6 +662,23 @@ impl Service {
         *self.last_check.lock().expect("remote access check") = Some(report.clone());
         report
     }
+}
+
+/// Why the host of `origin` can only work at home, if it can.
+async fn home_only_address(
+    origin: &str,
+    classify: fn(&str) -> Option<String>,
+    resolve_names: bool,
+) -> Option<String> {
+    let url = reqwest::Url::parse(origin).ok()?;
+    let host = url.host_str()?.to_string();
+    if let Some(reason) = classify(&host) {
+        return Some(reason);
+    }
+    if resolve_names {
+        return resolved_home_only_reason(&host, url.port_or_known_default()?).await;
+    }
+    None
 }
 
 /// Connects to `origin` and confirms it is this Parson server.
@@ -788,7 +970,10 @@ mod tests {
             manual_url: None,
             external_port: Some(41993),
         };
-        let service = Service::new(config.clone(), 1993, vec![router.ssdp], false);
+        let mut service = Service::new(config.clone(), 1993, vec![router.ssdp], false);
+        // The fake router reports a documentation address (203.0.113.0/24)
+        // standing in for a real public one.
+        service.home_only = |_| None;
         let renew = service.ensure_mapping(&config).await;
         assert_eq!(renew, Duration::from_secs(1800));
         let state = service.router();
@@ -864,6 +1049,70 @@ mod tests {
         assert!(state.message.unwrap().contains("different outside port"));
     }
 
+    #[test]
+    fn private_loopback_and_link_local_addresses_are_never_external() {
+        for host in [
+            "192.168.1.20",
+            "10.0.0.9",
+            "172.20.3.4",
+            "127.0.0.1",
+            "169.254.10.2",
+            "100.101.102.103",
+            "192.0.2.2",
+            "[fd00::42]",
+            "[fe80::1]",
+            "[::1]",
+            "[::ffff:192.168.1.2]",
+            "nas.local",
+            "music.lan",
+            "box.home.arpa",
+            "nas",
+            "localhost",
+        ] {
+            assert!(home_only_reason(host).is_some(), "{host} must be home-only");
+        }
+        for host in [
+            "music.example.com",
+            "8.8.8.8",
+            "[2606:4700::1111]",
+            "nas.tail1234.ts.net",
+        ] {
+            assert_eq!(
+                home_only_reason(host),
+                None,
+                "{host} is an internet address"
+            );
+        }
+        // "My address" refuses them up front, with the reason.
+        let error = normalize_manual_url("http://192.168.1.20:1993").unwrap_err();
+        assert!(error.contains("private address"), "{error}");
+        assert!(normalize_manual_url("http://[fe80::1]:1993").is_err());
+        assert!(normalize_manual_url("nas.local").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_lan_address_never_passes_the_away_from_home_check() {
+        // A real server on this machine, reached at a home-only address.
+        let lan = fake_parson("00000000-0000-4000-8000-000000000001", "Home").await;
+        let service = Service::new(
+            RemoteAccessConfig {
+                mode: RemoteAccessMode::Manual,
+                manual_url: Some(lan.clone()),
+                external_port: None,
+            },
+            1993,
+            Vec::new(),
+            false,
+        );
+        let report = service.check(&[]).await;
+        let result = &report.results[0];
+        assert_eq!(result.outcome, CheckOutcome::HomeOnly);
+        assert_eq!(result.latency_ms, None);
+        assert!(result.detail.contains("only works on your home network"));
+        // ...and it is not offered to phones as a verified way in.
+        assert_eq!(service.addresses(&[])[0].verified, Some(false));
+    }
+
     #[tokio::test]
     async fn the_check_confirms_each_address_reaches_this_server() {
         let this_server = fake_parson("00000000-0000-4000-8000-000000000001", "Home").await;
@@ -874,7 +1123,7 @@ mod tests {
             drop(listener);
             format!("http://{address}")
         };
-        let service = Service::new(
+        let mut service = Service::new(
             RemoteAccessConfig {
                 mode: RemoteAccessMode::Manual,
                 manual_url: Some(this_server.clone()),
@@ -884,6 +1133,9 @@ mod tests {
             Vec::new(),
             false,
         );
+        // The fake servers listen on 127.0.0.1; stand in for public ones.
+        service.home_only = |_| None;
+        service.resolve_names = false;
         let vpn = |origin: &str| crate::discovery::HostAddress {
             address: "100.101.102.103".into(),
             origin: origin.to_string(),
@@ -907,6 +1159,18 @@ mod tests {
             .find(|result| result.origin == another)
             .unwrap();
         assert!(other.detail.contains("Studio"));
+        // A check from the server never claims to have tested from outside.
+        let own = report
+            .results
+            .iter()
+            .find(|result| result.origin == this_server)
+            .unwrap();
+        assert_eq!(own.checked_from, "server");
+        assert!(
+            own.detail.contains("can’t test from outside"),
+            "{}",
+            own.detail
+        );
         // The phone app sees which addresses passed.
         let addresses = service.addresses(&[vpn(&another)]);
         assert_eq!(addresses[0].verified, Some(true));

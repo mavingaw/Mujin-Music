@@ -255,7 +255,7 @@ pub fn advertise(port: u16) -> Result<DiscoveryAdvertisement, String> {
     let instance_id = crate::settings::instance_id().map_err(|error| error.to_string())?;
     let name = crate::settings::library_name();
     let host = format!("parson-{}.local.", &instance_id[..8]);
-    let properties = HashMap::from([
+    let mut properties = HashMap::from([
         ("id".to_string(), instance_id),
         ("name".to_string(), name.clone()),
         ("version".to_string(), "1".to_string()),
@@ -265,6 +265,10 @@ pub fn advertise(port: u16) -> Result<DiscoveryAdvertisement, String> {
         ("pairing".to_string(), "required".to_string()),
         ("boot".to_string(), boot_id()[..12].to_string()),
     ]);
+    if let Some(adopted_at) = crate::settings::identity_adopted_at() {
+        // A takeover of a restored library: see `identityAdoptedAt`.
+        properties.insert("adopted".to_string(), adopted_at.to_string());
+    }
     let service = ServiceInfo::new(SERVICE_TYPE, &name, &host, (), port, properties)
         .map_err(|error| error.to_string())?
         .enable_addr_auto();

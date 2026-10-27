@@ -144,6 +144,17 @@ connection back to themselves. If that check fails, open the Parson app on
 mobile data: **Settings → Devices → Check from here** runs the same check from
 the phone.
 
+The server can only test its addresses from inside your home, so its check
+never says an address works _away_ from home. A VPN address that answers is
+shown as reachable over the VPN (for devices on the same VPN). Any other
+address that answers is shown as **Leads here, not yet confirmed from
+outside** until a phone confirms it on mobile data; no latency is shown for a
+check the server ran against itself. A private, loopback, link-local,
+carrier-grade NAT or documentation address (or a `.local`/`.lan` name, or a
+name that resolves only to such addresses) is reported as **Home network
+only**, is never offered to phones as an away-from-home address, and **My
+address** refuses it when you save it.
+
 What has been tested: the UPnP client was run against a protocol-level fake
 router. The fake answers SSDP and serves a real IGD description and the
 `AddPortMapping`/`GetExternalIPAddress`/`DeletePortMapping` SOAP actions,
@@ -177,7 +188,15 @@ copy was made, or why it failed (for example, the share is not mounted).
    answers with the old library's identity, so phones and computers that knew
    the old server find this one as the same library at its new address. They
    ask you to sign in once, because a backup never carries sign-in sessions.
-   Switch the old server off first.
+   Switch the old server off first. If both stay on for a while, every app
+   lists them the same way on every scan: the one it is connected to stays
+   "Connected", the new server is the library's home everywhere else
+   (servers report when they took a library over), and the other is listed
+   separately with a note to switch it off.
+   **Also restore away-from-home access** is offered when the backup has one
+   (your own address or a router forward). It is off
+   by default because the new server may sit on another network; turn it on
+   when the new server replaces the old one in the same place.
 4. Parson checks the backup, restarts itself to apply it, and keeps the data
    it replaced in `Recovery/before-restore-…` as a rollback copy. It
    re-executes itself in place, so systemd, launchd, Docker, the Windows tray
@@ -186,7 +205,8 @@ copy was made, or why it failed (for example, the share is not mounted).
    same terminal.
 5. If the music lives somewhere else on the new server, Settings → Library
    marks the old folder **Not found on this server**. Choose **Locate…** and
-   pick the new folder. Parson indexes it, finds each track at the same place
+   pick the new folder (the picker opens at the closest folder above the old
+   location that still exists). Parson indexes it, finds each track at the same place
    inside the folder, moves playlists, favourites, history, preferences and
    metadata edits over to it, and only then removes the old folder. It
    reports any tracks that were not in the new folder.

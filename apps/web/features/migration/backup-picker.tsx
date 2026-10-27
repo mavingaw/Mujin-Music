@@ -12,11 +12,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import {
-  backupTitle,
-  backupDetail,
-  formatBytes,
-} from "./migration-presentation";
+import { describeBackups, formatBytes } from "./migration-presentation";
 
 export type PickedBackup =
   { kind: "folder"; backup: FolderBackup } | { kind: "file"; file: File };
@@ -72,6 +68,7 @@ export default function BackupPicker({
   }
 
   const backups = listing?.backups ?? [];
+  const descriptions = describeBackups(backups);
   const where = listing?.path
     ? listing.path
     : listing?.suggested_folders.length
@@ -108,7 +105,7 @@ export default function BackupPicker({
             className="max-h-72 divide-y divide-white/[0.06] overflow-y-auto"
             role="listbox"
           >
-            {backups.map((backup) => {
+            {backups.map((backup, index) => {
               const active =
                 selected?.kind === "folder" &&
                 selected.backup.path === backup.path;
@@ -138,10 +135,10 @@ export default function BackupPicker({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-white">
-                        {backupTitle(backup)}
+                        {descriptions[index]?.title}
                       </span>
                       <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                        {backupDetail(backup)}
+                        {descriptions[index]?.detail}
                       </span>
                     </span>
                   </button>

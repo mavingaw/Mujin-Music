@@ -5,6 +5,11 @@ export type DiscoveryManifest = {
   name: string;
   product: string;
   serverVersion: string;
+  /**
+   * Set when this server took over a restored library's identity (Unix ms),
+   * so the library's new home can be told from an old server still running.
+   */
+  identityAdoptedAt?: number | null;
 };
 
 export type ServerIdentity = {
