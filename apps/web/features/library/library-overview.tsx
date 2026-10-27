@@ -1,5 +1,7 @@
 "use client";
 
+import { PersonAvatar } from "@/features/library/credits/person-avatar";
+
 import { Button } from "@/components/ui/button";
 import AlbumCard from "@/features/library/album-card";
 import ArtistMenu from "@/features/library/artist-menu";
@@ -1054,9 +1056,14 @@ function ArtistRow({ artist }: { artist: LibraryCatalogArtist }) {
     <ArtistMenu artistId={artist.id} artistName={artist.name}>
       <div className="group relative border-b border-white/6 transition-colors last:border-0 hover:bg-white/[0.035]">
         <Link
-          className="flex min-w-0 items-center gap-4 px-4 py-4 pr-28 sm:px-5 sm:pr-28"
+          className="flex min-w-0 items-center gap-4 px-4 py-3 pr-28 sm:px-5 sm:pr-28"
           href={`/artist?id=${artist.id}`}
         >
+          <PersonAvatar
+            imageUrl={artist.photoUrl}
+            name={artist.name}
+            size={44}
+          />
           <div className="min-w-0 flex-1">
             <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-zinc-100 group-hover:text-white">
               <span className="truncate">{artist.name}</span>

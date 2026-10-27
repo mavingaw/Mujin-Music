@@ -23,7 +23,14 @@ const SIGNAL_ICON = {
  * its own tags, and the evidence says why. Identifying the album is done
  * from Parson on the web.
  */
-export function UnverifiedMatchNotice({ check }: { check: ReleaseMatchCheck }) {
+export function UnverifiedMatchNotice({
+  check,
+  text = UNVERIFIED_MATCH_TEXT,
+}: {
+  check: ReleaseMatchCheck;
+  /** What the check means for this album's page. */
+  text?: string;
+}) {
   const summary = releaseMatchSummary(check);
   return (
     <View accessibilityLabel="Unverified match" style={styles.box}>
@@ -42,7 +49,7 @@ export function UnverifiedMatchNotice({ check }: { check: ReleaseMatchCheck }) {
         </Text>
         {summary ? <Text style={styles.muted}> · {summary}</Text> : null}
       </Text>
-      <Text style={styles.body}>{UNVERIFIED_MATCH_TEXT}</Text>
+      <Text style={styles.body}>{text}</Text>
       {releaseMatchSignals(check).map((signal) => {
         const { Icon, color } =
           SIGNAL_ICON[signal.outcome] ?? SIGNAL_ICON.unknown;

@@ -47,7 +47,7 @@ export function CredentialsGuide() {
           <li>
             Sign in at{" "}
             <a
-              className="text-sky-300 hover:text-sky-200"
+              className="text-mujin-copper hover:text-mujin-copper-hover"
               href="https://developer.tidal.com/dashboard"
               rel="noreferrer"
               target="_blank"
@@ -92,7 +92,7 @@ export function CredentialsGuide() {
             Qobuz has no self-service keys. Write to Qobuz&apos;s API team,
             using the contact in its{" "}
             <a
-              className="text-sky-300 hover:text-sky-200"
+              className="text-mujin-copper hover:text-mujin-copper-hover"
               href="https://github.com/Qobuz/api-documentation"
               rel="noreferrer"
               target="_blank"

@@ -9,7 +9,7 @@ function SourceMark({ sources }: { sources: AboutCredit["sources"] }) {
   if (sources.includes("edited")) {
     return (
       <span
-        className="rounded border border-sky-300/25 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-sky-200"
+        className="rounded border border-mujin-copper/25 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-mujin-copper-hover"
         title="From the album's edited credits list (frozen against lookups)"
       >
         Edited

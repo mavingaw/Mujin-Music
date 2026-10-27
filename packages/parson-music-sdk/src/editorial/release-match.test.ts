@@ -6,7 +6,9 @@ import {
   releaseMatchSignals,
   releaseMatchSummary,
   trackCountWarning,
+  UNVERIFIED_MATCH_TEXT,
   unverifiedMatch,
+  unverifiedMatchText,
 } from "./release-match";
 
 const single: ReleaseMatchCheck = {
@@ -103,4 +105,26 @@ describe("release match check", () => {
     expect(trackCountWarning({ track_count: 4 }, 4)).toBeNull();
     expect(trackCountWarning({ track_count: null }, 4)).toBeNull();
   });
+});
+
+test("a partial copy of an album with an article says the album's text still applies", () => {
+  expect(unverifiedMatchText(null)).toBe(UNVERIFIED_MATCH_TEXT);
+  expect(unverifiedMatchText({ background: null, review: null })).toBe(
+    UNVERIFIED_MATCH_TEXT,
+  );
+  const text = unverifiedMatchText({
+    background: null,
+    review: {
+      kind: "reception",
+      source: "wikipedia",
+      language: "en",
+      title: "The Slip (album)",
+      body: "Critical reception.",
+      url: "https://en.wikipedia.org/wiki/The_Slip_(album)",
+      license: "CC BY-SA 4.0",
+      license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+    },
+  });
+  expect(text).toContain("background and reception");
+  expect(text).not.toContain("release type.");
 });

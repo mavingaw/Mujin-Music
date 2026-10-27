@@ -36,8 +36,13 @@ export interface HomeDailyPick {
 export interface HomeArtist {
   id: string;
   name: string;
-  /** The artist's photo, or one of their covers. */
+  /** One of the artist's covers (the fallback picture). */
   image_url: string;
+  /**
+   * API path of the artist's photo (`/artists/{id}/image`) when online
+   * metadata found one; older servers leave this out.
+   */
+  photo_url?: string | null;
   album_count: number;
   reason: string | null;
 }
@@ -46,6 +51,8 @@ export interface HomeArtist {
 export interface HomeBestYears {
   artist: { id: string; name: string };
   image_url: string;
+  /** API path of the artist's photo, when there is one. */
+  photo_url?: string | null;
   from_year: number;
   to_year: number;
   albums: HomeAlbum[];
@@ -58,6 +65,14 @@ export interface HomeGenre {
   album_count: number;
   artist_count: number;
   covers: string[];
+  /** API paths of up to three of the genre's artists' photos. */
+  photos?: string[];
+}
+
+/** What the listener has actually played, all time. */
+export interface HomeListening {
+  plays: number;
+  listened_seconds: number;
 }
 
 export interface HomeLibraryProfile {
@@ -87,6 +102,8 @@ export interface HomeEssentials {
   similar_artists?: HomeArtist[];
   best_years?: HomeBestYears | null;
   genres?: HomeGenre[];
+  /** Plays and time listened from history; older servers leave this out. */
+  listening?: HomeListening;
 }
 
 /** Library artists sharing genres with an artist, for its page. */
@@ -136,6 +153,22 @@ export interface HomeStat {
 
 const number = new Intl.NumberFormat("en-US");
 
+/** "43 min" under an hour, else whole hours ("2,028 h"). */
+function durationValue(
+  seconds: number,
+  allowZero = false,
+): { value: string; unit: string } {
+  const safe = Math.max(0, seconds);
+  if (safe >= 3600) {
+    return { value: number.format(Math.round(safe / 3600)), unit: "h" };
+  }
+  const minutes = Math.round(safe / 60);
+  return {
+    value: number.format(allowZero ? minutes : Math.max(1, minutes)),
+    unit: "min",
+  };
+}
+
 /**
  * The stat cards under the greeting: Roon's artists / albums / tracks /
  * composers, plus what an audiophile asks next: how many hours, how much is
@@ -155,22 +188,17 @@ export function homeStats(feed: HomeEssentials): HomeStat[] {
     label: "Composers",
     value: number.format(profile.composer_count),
   });
-  const hours = profile.total_duration_seconds / 3600;
-  cards.push(
-    hours >= 1
-      ? {
-          label: "Listening time",
-          value: number.format(Math.round(hours)),
-          unit: "h",
-        }
-      : {
-          label: "Listening time",
-          value: number.format(
-            Math.max(1, Math.round(profile.total_duration_seconds / 60)),
-          ),
-          unit: "min",
-        },
-  );
+  // The library's own length, labelled as such: it is not time listened.
+  cards.push({
+    label: "Library length",
+    ...durationValue(profile.total_duration_seconds),
+  });
+  if (feed.listening) {
+    cards.push({
+      label: "You've listened",
+      ...durationValue(feed.listening.listened_seconds, true),
+    });
+  }
   const lossless = Math.round(
     (profile.lossless_tracks / Math.max(1, stats.song_count)) * 100,
   );

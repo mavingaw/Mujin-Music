@@ -1020,12 +1020,22 @@ pub async fn album_about(
         .as_ref()
         .is_some_and(|found| found.status == "unverified");
     let untrusted = placeholder || unverified;
+    // A partial copy of a known album: the edition is unconfirmed, but the
+    // release group's article (background and reception) still applies.
+    let group_texts = !placeholder
+        && unverified
+        && stored
+            .profile
+            .as_ref()
+            .is_some_and(crate::enrichment::worker::profile_is_group_only);
     if untrusted {
-        stored.profile = None;
-        stored.texts.clear();
-        stored.all_texts.clear();
-        stored.source_texts.clear();
         stored.credits.clear();
+        if !group_texts {
+            stored.profile = None;
+            stored.texts.clear();
+            stored.all_texts.clear();
+            stored.source_texts.clear();
+        }
     }
     let work_texts = if untrusted { Vec::new() } else { work_texts };
     let source_pool = image_pool.clone();

@@ -24,7 +24,9 @@ import { useZonePlayback } from "./zones/use-zone-playback";
 import { IdleFooter, PlayerFooter } from "./player-footer";
 import { getLibraryImageUrl } from "@/lib/images/image-url";
 import { generatedCover } from "@/features/library/artwork/generated-cover";
-import { nowPlayingFacts } from "./now-playing-facts";
+import { useNowPlayingFacts } from "./use-now-playing-facts";
+import { NowPlayingArtistBio } from "./now-playing-artist";
+import { useArtistAbout } from "@/features/library/credits/use-editorial";
 import PlayerQueue, { type QueueEditing } from "./player-queue";
 import { timelinePlaybackRate } from "./player-controls-state";
 import { useMediaSession } from "./use-media-session";
@@ -550,9 +552,14 @@ export default function PlayerBar() {
           ),
       }
     : null;
-  const nowPlayingDetails = live
-    ? undefined
-    : nowPlayingFacts(effectiveSong, album);
+  // Read from the server, so the table is the same after Next or
+  // auto-advance as for a track started from its album page.
+  const nowPlayingDetails = useNowPlayingFacts(effectiveSong, album, !live);
+  // The artist's biography for the full-screen view's "About the artist".
+  const bioArtistId = effectiveSong.artist_object.id || artist.id || null;
+  const artistAbout = useArtistAbout(
+    fullscreenOpen && !live && !isStreamingId(bioArtistId) ? bioArtistId : null,
+  ).data;
   const selectQueueItem = remote
     ? (index: number) => sendRemote({ command: "jump", queue_position: index })
     : playQueueItem;
@@ -704,6 +711,12 @@ export default function PlayerBar() {
           livePlaying={live ? livePlaying : null}
           details={nowPlayingDetails}
           upNext={upNext}
+          artistBio={
+            <NowPlayingArtistBio
+              about={artistAbout}
+              onNavigate={closeFullscreen}
+            />
+          }
         />
       )}
 

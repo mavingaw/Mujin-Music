@@ -39,6 +39,24 @@ export const UNVERIFIED_MATCH_TEXT =
   "Mujin Music kept your tags and did not use its cover, performers, works or " +
   "release type.";
 
+/**
+ * The unverified-match sentence for an album page. When the files are part
+ * of that release's album (a few tracks, or shortened copies), the album's
+ * own Wikipedia background and reception still describe them, and the page
+ * says so.
+ */
+export function unverifiedMatchText(
+  about: Pick<AlbumAbout, "background" | "review"> | null | undefined,
+): string {
+  if (!about?.background && !about?.review) return UNVERIFIED_MATCH_TEXT;
+  return (
+    "This edition does not line up with your files, so Mujin Music kept " +
+    "your tags and did not use its cover, performers or works. Your tracks " +
+    "are part of that album, so its Wikipedia background and reception, and " +
+    "its release type, still apply."
+  );
+}
+
 /** Evidence against first, then evidence for, then what could not be told. */
 export function releaseMatchSignals(
   check: ReleaseMatchCheck,

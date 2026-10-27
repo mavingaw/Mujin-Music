@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -29,6 +30,8 @@ export default function EntryScreen() {
   const [password, setPassword] = useState("");
   const [libraryPath, setLibraryPath] = useState("");
   const [showCustomFolder, setShowCustomFolder] = useState(false);
+  // First-run online metadata: on unless the person turns it off here.
+  const [onlineMetadata, setOnlineMetadata] = useState(true);
   const [passwordLoginOrigin, setPasswordLoginOrigin] = useState<string | null>(
     null,
   );
@@ -232,6 +235,30 @@ export default function EntryScreen() {
                     <Text style={styles.folderLabel}>Music folder</Text>
                     <Text style={styles.folderPath}>{libraryTarget}</Text>
                   </View>
+                  <View style={[styles.folderCard, styles.metadataCard]}>
+                    <View style={styles.metadataRow}>
+                      <Text style={[styles.folderLabel, { flex: 1 }]}>
+                        Artist photos, biographies and reviews
+                      </Text>
+                      <Switch
+                        accessibilityLabel="Look up artist photos, biographies and reviews online"
+                        ios_backgroundColor={palette.border}
+                        onValueChange={setOnlineMetadata}
+                        thumbColor="#F2EEE6"
+                        trackColor={{
+                          false: palette.border,
+                          true: palette.accent,
+                        }}
+                        value={onlineMetadata}
+                      />
+                    </View>
+                    <Text style={styles.folderPath}>
+                      Looks your artists and albums up on MusicBrainz, then
+                      reads biographies and reviews from Wikipedia and photos
+                      from Wikimedia Commons. Only artist and album names leave
+                      the server.
+                    </Text>
+                  </View>
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || !libraryTarget}
@@ -239,7 +266,11 @@ export default function EntryScreen() {
                       styles.primary,
                       (busy || !libraryTarget) && styles.disabledPrimary,
                     ]}
-                    onPress={() => void session.setupLibrary(libraryTarget)}
+                    onPress={() =>
+                      void session.setupLibrary(libraryTarget, {
+                        onlineMetadata,
+                      })
+                    }
                   >
                     <Text style={styles.primaryText}>Use this folder</Text>
                   </Pressable>
@@ -631,6 +662,8 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   folderLabel: { color: "white", fontSize: 14, fontWeight: "700" },
+  metadataCard: { marginTop: 12 },
+  metadataRow: { alignItems: "center", flexDirection: "row", gap: 12 },
   folderPath: { color: palette.muted, fontSize: 14, marginTop: 4 },
   error: { color: "#f6807a", textAlign: "center", marginTop: 16 },
   failureCard: {

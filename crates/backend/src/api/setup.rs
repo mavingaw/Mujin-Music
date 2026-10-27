@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use actix_web::{HttpRequest, HttpResponse, web};
 use diesel::{QueryDsl, RunQueryDsl};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api::auth::{current_session_claims, request_has_current_admin};
 use crate::api::error::{forbidden, internal_server_error, service_unavailable};
@@ -387,9 +387,37 @@ async fn setup_suggestions(
     }
 }
 
+/// The first-run "Where is your music?" step: the folder, and whether to
+/// look up artist photos, biographies and reviews online. The setup screen
+/// sends `online_metadata: true` unless the person unticks it; an older
+/// client that leaves it out keeps the server's current setting.
+#[derive(Debug, Deserialize)]
+struct SetupLibraryRequest {
+    path: String,
+    #[serde(default)]
+    online_metadata: Option<bool>,
+}
+
+/// Saves the first-run online-metadata choice. Returns whether it changed.
+fn apply_setup_online_metadata(
+    connection: &mut diesel::SqliteConnection,
+    online_metadata: Option<bool>,
+) -> diesel::QueryResult<bool> {
+    let Some(enabled) = online_metadata else {
+        return Ok(false);
+    };
+    let mut settings = crate::enrichment::store::load_settings(connection)?;
+    if settings.enabled == enabled {
+        return Ok(false);
+    }
+    settings.enabled = enabled;
+    crate::enrichment::store::save_settings(connection, &settings)?;
+    Ok(true)
+}
+
 async fn setup_library(
     http_request: HttpRequest,
-    request: web::Json<library::LibraryIndexRequest>,
+    request: web::Json<SetupLibraryRequest>,
     lifecycle: web::Data<LibraryLifecycle>,
     pool: web::Data<DbPool>,
 ) -> HttpResponse {
@@ -410,7 +438,35 @@ async fn setup_library(
         }
     }
 
-    library::index_library(request, lifecycle).await
+    let SetupLibraryRequest {
+        path,
+        online_metadata,
+    } = request.into_inner();
+    // Saved before the scan, so the choice holds even if the browser
+    // leaves while the library is still being read. The worker waits for
+    // the finished catalogue before it looks anything up.
+    let settings_pool = pool.get_ref().clone();
+    let changed = web::block(move || {
+        let mut connection = settings_pool.get().map_err(|error| error.to_string())?;
+        apply_setup_online_metadata(&mut connection, online_metadata)
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    match changed {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "could not save the online metadata choice"),
+        Err(error) => tracing::warn!(%error, "could not save the online metadata choice"),
+    }
+    let response = library::index_library(
+        web::Json(library::LibraryIndexRequest::new(path)),
+        lifecycle,
+    )
+    .await;
+    if online_metadata == Some(true) {
+        // Start looking things up as soon as the catalogue exists.
+        crate::enrichment::worker::wake().notify_all();
+    }
+    response
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -426,6 +482,37 @@ mod tests {
     use super::{setup_required, setup_response_details, setup_state_allowed, shallow_audio_count};
     use crate::library::state::LibraryReadinessState;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn first_run_setup_turns_online_metadata_on_or_leaves_it_alone() {
+        use diesel::Connection;
+        let mut connection = diesel::SqliteConnection::establish(":memory:").unwrap();
+        diesel::RunQueryDsl::execute(
+            diesel::sql_query(
+                "CREATE TABLE server_setting (key TEXT PRIMARY KEY, value_json TEXT NOT NULL,
+                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP)",
+            ),
+            &mut connection,
+        )
+        .unwrap();
+        let enabled = |connection: &mut diesel::SqliteConnection| {
+            crate::enrichment::store::load_settings(connection)
+                .unwrap()
+                .enabled
+        };
+        // Off until someone chooses.
+        assert!(!enabled(&mut connection));
+        // An older client that sends only the folder changes nothing.
+        assert!(!super::apply_setup_online_metadata(&mut connection, None).unwrap());
+        assert!(!enabled(&mut connection));
+        // The setup screen's default: on.
+        assert!(super::apply_setup_online_metadata(&mut connection, Some(true)).unwrap());
+        assert!(enabled(&mut connection));
+        assert!(!super::apply_setup_online_metadata(&mut connection, Some(true)).unwrap());
+        // Unticked on the setup screen: off.
+        assert!(super::apply_setup_online_metadata(&mut connection, Some(false)).unwrap());
+        assert!(!enabled(&mut connection));
+    }
 
     #[test]
     fn the_first_account_is_part_of_setup_even_when_a_library_exists() {

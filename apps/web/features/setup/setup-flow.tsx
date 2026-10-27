@@ -15,7 +15,8 @@ import {
   type SetupStatus,
   validPasswordLength,
 } from "@parson/music-sdk";
-import { ArchiveRestore, Folder, Loader2 } from "lucide-react";
+import { ArchiveRestore, Folder, Globe2, Loader2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -39,6 +40,9 @@ export default function SetupFlow() {
   const [password, setPassword] = useState("");
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  // On by default: artist photos, biographies and reviews are much of what
+  // makes the library feel alive. One untick turns it off.
+  const [onlineMetadata, setOnlineMetadata] = useState(true);
   const startingLibrary = useRef(false);
 
   const applyStatus = useCallback(
@@ -139,7 +143,7 @@ export default function SetupFlow() {
     setLibrarySetupPending(true);
     router.replace("/");
     try {
-      await indexSetupLibrary(path);
+      await indexSetupLibrary(path, { onlineMetadata });
       setLibrarySetupPending(false);
       router.refresh();
     } catch {
@@ -279,6 +283,11 @@ export default function SetupFlow() {
             </p>
           </div>
         </div>
+        {/* Read before the folder is chosen: it applies to either button. */}
+        <OnlineMetadataChoice
+          checked={onlineMetadata}
+          onChange={setOnlineMetadata}
+        />
         <Button
           className="mt-5 w-full bg-white text-black hover:bg-zinc-200"
           onClick={() => void useDefaultFolder()}
@@ -316,11 +325,52 @@ export default function SetupFlow() {
               setLibrarySetupPending(false);
               router.refresh();
             }}
+            onlineMetadata={onlineMetadata}
             setupMode
           />
         </section>
       )}
     </main>
+  );
+}
+
+/**
+ * The first-run choice to look up artist photos, biographies and album
+ * reviews online. It says plainly what leaves the server and where it goes.
+ */
+function OnlineMetadataChoice({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="mt-5 flex cursor-pointer gap-4 rounded-lg border border-white/[0.08] bg-black/20 p-4 transition-colors hover:bg-white/[0.04]">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/[0.06]">
+        <Globe2 aria-hidden className="h-5 w-5 text-mujin-copper" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center justify-between gap-3">
+          <span className="text-sm font-semibold text-white">
+            Artist photos, biographies and reviews
+          </span>
+          <Checkbox
+            aria-label="Look up artist photos, biographies and reviews online"
+            checked={checked}
+            className="data-[state=checked]:border-mujin-copper data-[state=checked]:bg-mujin-copper data-[state=checked]:text-mujin-on-copper"
+            onCheckedChange={(value) => onChange(value === true)}
+          />
+        </span>
+        <span className="mt-1 block text-[13px] leading-5 text-zinc-400">
+          Mujin Music looks your artists and albums up on MusicBrainz, then
+          reads biographies and album reviews from Wikipedia and photos from
+          Wikimedia Commons, with their sources and licences shown. Only artist
+          and album names leave this server. You can change this later in
+          Settings → Library.
+        </span>
+      </span>
+    </label>
   );
 }
 

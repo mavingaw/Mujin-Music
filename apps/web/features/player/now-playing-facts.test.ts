@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { nowPlayingFacts } from "./now-playing-facts";
+import { completeNowPlayingSong, nowPlayingFacts } from "./now-playing-facts";
 
 test("now playing facts collect album, year, composers and label", () => {
   const facts = nowPlayingFacts({
@@ -52,6 +52,79 @@ test("missing album data falls back to the player's album", () => {
   expect(facts.albumName).toBe("Fallback");
   expect(facts.year).toBeUndefined();
   expect(facts.composers).toEqual([]);
+  expect(facts.label).toBeNull();
+  expect(facts.trackCount).toBeUndefined();
+});
+
+test("after Next or auto-advance a lean queue entry keeps the full facts table", () => {
+  // What a queue entry reached by Next carries: no credits, no label, no
+  // track list, a placeholder date.
+  const lean = {
+    track_number: 3,
+    album_object: {
+      id: "goldberg",
+      name: "The Open Goldberg Variations",
+      first_release_date: "0000",
+    },
+  };
+  // The same song and album as the server knows them.
+  const fetchedSong = {
+    track_number: 3,
+    label: null,
+    credits: [
+      {
+        artist_id: "bach",
+        name: "Johann Sebastian Bach",
+        role: "composer",
+        instrument: null,
+      },
+    ],
+    album_object: {
+      id: "goldberg",
+      name: "The Open Goldberg Variations",
+      first_release_date: "2012",
+      songs: [],
+    },
+  };
+  const fetchedAlbum = {
+    id: "goldberg",
+    name: "The Open Goldberg Variations",
+    first_release_date: "2012-05-28",
+    label: "Open Goldberg",
+    songs: [{}, {}, {}, {}, {}],
+  };
+  expect(
+    nowPlayingFacts(completeNowPlayingSong(lean, fetchedSong, fetchedAlbum)),
+  ).toEqual({
+    albumId: "goldberg",
+    albumName: "The Open Goldberg Variations",
+    year: "2012",
+    composers: ["Johann Sebastian Bach"],
+    label: "Open Goldberg",
+    trackNumber: 3,
+    trackCount: 5,
+  });
+  // Before the server answers, the table shows what the entry has.
+  expect(nowPlayingFacts(completeNowPlayingSong(lean)).albumName).toBe(
+    "The Open Goldberg Variations",
+  );
+});
+
+test("another album's details never leak into the facts", () => {
+  const playing = {
+    track_number: 1,
+    album_object: { id: "a", name: "A", first_release_date: "1999" },
+  };
+  const facts = nowPlayingFacts(
+    completeNowPlayingSong(playing, null, {
+      id: "b",
+      name: "B",
+      first_release_date: "2010",
+      label: "Other",
+      songs: [{}, {}],
+    }),
+  );
+  expect(facts.year).toBe("1999");
   expect(facts.label).toBeNull();
   expect(facts.trackCount).toBeUndefined();
 });

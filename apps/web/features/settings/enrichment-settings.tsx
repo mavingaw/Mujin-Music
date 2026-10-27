@@ -134,8 +134,8 @@ function EditorialSources({
 }
 
 /**
- * Online metadata is off by default: Parson only contacts MusicBrainz and
- * Wikimedia after an administrator turns it on here.
+ * Online metadata: Mujin Music contacts MusicBrainz and Wikimedia only while
+ * it is on. First-run setup turns it on unless the person unticks it there.
  */
 export default function EnrichmentSettings() {
   const queryClient = useQueryClient();
@@ -185,7 +185,8 @@ export default function EnrichmentSettings() {
             Art Archive for albums without artwork, with their sources and
             licenses shown; and lyrics from LRCLIB for tracks whose files carry
             none. Lyrics in your files (embedded LRC, SYLT/USLT, or an .lrc
-            beside the track) always show. Off by default.
+            beside the track) always show. First-run setup turns it on unless
+            you untick it there; only artist and album names leave this server.
           </p>
         </div>
         <Button

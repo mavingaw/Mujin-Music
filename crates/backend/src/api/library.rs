@@ -1122,7 +1122,18 @@ pub async fn library_catalog_artists(
         .artists(query.offset.unwrap_or(0), query.limit.unwrap_or(50))
         .await
     {
-        Ok(artists) => HttpResponse::Ok().json(artists),
+        Ok(mut artists) => {
+            // Their photos, where online metadata found one, for the list's
+            // portraits.
+            let ids = artists.iter().map(|artist| artist.id.clone()).collect();
+            let photos = crate::api::editorial::credited_images(pool.get_ref().clone(), ids).await;
+            for artist in &mut artists {
+                artist.photo_url = photos
+                    .contains(&artist.id)
+                    .then(|| crate::api::editorial::artist_image_url(&artist.id));
+            }
+            HttpResponse::Ok().json(artists)
+        }
         Err(error) => service_unavailable(error.to_string(), "library_artists_unavailable"),
     }
 }

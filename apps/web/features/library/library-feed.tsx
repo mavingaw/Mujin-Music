@@ -257,7 +257,7 @@ function HomeHero({ feed }: { feed: HomeEssentials }) {
           {name ? `Hi, ${name}` : "Your library"}
         </h1>
         {stats.length > 0 && (
-          <dl className="mt-9 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.06] sm:grid-cols-3 lg:grid-cols-6">
+          <dl className="mt-9 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.06] sm:grid-cols-4 xl:grid-cols-7 [&>*:last-child:nth-child(odd)]:col-span-2 sm:[&>*:last-child:nth-child(odd)]:col-span-1">
             {stats.map((stat) => (
               <div
                 className="bg-mujin-base/80 px-5 py-4 backdrop-blur-md"

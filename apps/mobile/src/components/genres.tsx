@@ -1,4 +1,4 @@
-import { genreChipTitle } from "@parson/music-sdk";
+import { genreChipTitle, genreDisplayName } from "@parson/music-sdk";
 import type { GenreRef } from "@parson/music-sdk/types";
 import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -32,7 +32,7 @@ export function GenreChips({
           onPress={() => router.push(genreRoute(genre.slug))}
           style={styles.chip}
         >
-          <Text style={styles.text}>{genre.name}</Text>
+          <Text style={styles.text}>{genreDisplayName(genre.name)}</Text>
         </Pressable>
       ))}
     </View>

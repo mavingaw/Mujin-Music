@@ -307,7 +307,11 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const titleParts = titleWrapped ? splitQualifiedTitle(album.name) : null;
 
   const year = releaseYear(album, aboutQuery.data);
-  const typeLabel = releaseTypeLabel(album.primary_type);
+  // MusicBrainz' release type for a matched album (a few tracks of a long
+  // album are still that album); the guess from the files otherwise.
+  const typeLabel = releaseTypeLabel(
+    aboutQuery.data?.facts?.release_type || album.primary_type,
+  );
   const heroCover =
     albumCoverURL ?? generatedCover(album.name, artist?.name ?? "");
 

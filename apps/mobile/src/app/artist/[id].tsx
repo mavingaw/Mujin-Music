@@ -226,8 +226,17 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
     );
   const data = (artist.data ?? contributor) as Artist;
   const facts = lifeSpanFacts(about.data?.facts);
-  const portrait =
-    data.icon_url || (about.data?.image ? apiUrl(about.data.image.url) : null);
+  // The Commons photo first: the library's own artist picture is usually
+  // one of their covers, which reads as a cover, not a portrait.
+  const coverIsIcon = Boolean(
+    data.icon_url &&
+    (data.albums ?? []).some((album) => album.cover_url === data.icon_url),
+  );
+  const portrait = about.data?.image
+    ? apiUrl(about.data.image.url)
+    : data.icon_url && !coverIsIcon
+      ? data.icon_url
+      : null;
   const creditedAlbums = credits.data?.albums ?? [];
   return (
     <Screen>
@@ -280,7 +289,7 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
               </Text>
             ) : null}
             <GenreChips centered genres={about.data?.genres} />
-            {!data.icon_url && about.data?.image ? (
+            {about.data?.image ? (
               <Text style={styles.photoCredit}>
                 Photo: {about.data.image.author}, {about.data.image.license},
                 via Wikimedia Commons

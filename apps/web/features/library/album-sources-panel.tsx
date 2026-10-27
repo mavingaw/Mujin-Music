@@ -165,7 +165,7 @@ export function AlbumSourcesPanel({
             <li
               className={`rounded-lg border px-3 py-3 transition-colors ${
                 frozen
-                  ? "border-sky-300/20 bg-sky-300/[0.04]"
+                  ? "border-mujin-copper/20 bg-mujin-copper/[0.04]"
                   : "border-white/8 bg-white/[0.02]"
               }`}
               key={fact.field}
@@ -201,7 +201,7 @@ export function AlbumSourcesPanel({
                   {frozen ? (
                     <Lock
                       aria-hidden
-                      className="h-3.5 w-3.5 shrink-0 text-sky-300"
+                      className="h-3.5 w-3.5 shrink-0 text-mujin-copper"
                     />
                   ) : (
                     <LockOpen

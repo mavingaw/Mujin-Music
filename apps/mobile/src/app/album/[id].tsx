@@ -11,6 +11,7 @@ import {
   type ReleaseMatchCheck,
   type LibraryAlbum,
   unverifiedMatch,
+  unverifiedMatchText,
   isStreamingId,
   localAlbumFormat,
 } from "@parson/music-sdk";
@@ -209,6 +210,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
             {unverifiedMatch(about.data) ? (
               <UnverifiedMatchNotice
                 check={unverifiedMatch(about.data) as ReleaseMatchCheck}
+                text={unverifiedMatchText(about.data)}
               />
             ) : null}
             <View style={styles.actions}>

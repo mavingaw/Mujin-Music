@@ -52,3 +52,58 @@ export function nowPlayingFacts(
     trackCount: trackCount && trackCount > 1 ? trackCount : undefined,
   };
 }
+
+interface AlbumLike {
+  id?: string;
+  name?: string;
+  first_release_date?: string;
+  songs?: unknown[];
+  label?: string | null;
+}
+
+/**
+ * Fills what the playing song lacks from the song and album as the server
+ * knows them. A track reached by Next or by auto-advance often comes from a
+ * lean queue entry (no credits, no label, no track list), and the facts
+ * table must not shrink because of how the track was started.
+ */
+export function completeNowPlayingSong<T extends SongLike>(
+  playing: T,
+  fetchedSong?: SongLike | null,
+  fetchedAlbum?: AlbumLike | null,
+): SongLike {
+  const album = playing.album_object;
+  const fetchedSongAlbum = fetchedSong?.album_object;
+  const sameAlbum = (candidate?: { id?: string } | null) =>
+    !candidate?.id || !album.id || candidate.id === album.id;
+  const albumInfo = sameAlbum(fetchedAlbum) ? fetchedAlbum : null;
+  const songAlbum = sameAlbum(fetchedSongAlbum) ? fetchedSongAlbum : null;
+  const songs = [album.songs, albumInfo?.songs, songAlbum?.songs].find((list) =>
+    Boolean(list?.length),
+  );
+  return {
+    track_number: playing.track_number || fetchedSong?.track_number,
+    label:
+      playing.label?.trim() ||
+      fetchedSong?.label?.trim() ||
+      albumInfo?.label?.trim() ||
+      null,
+    credits: playing.credits?.length ? playing.credits : fetchedSong?.credits,
+    album_object: {
+      id: album.id || songAlbum?.id || albumInfo?.id,
+      name: album.name || songAlbum?.name || albumInfo?.name,
+      first_release_date:
+        validDate(album.first_release_date) ||
+        validDate(songAlbum?.first_release_date) ||
+        validDate(albumInfo?.first_release_date) ||
+        album.first_release_date,
+      songs,
+    },
+  };
+}
+
+function validDate(date?: string) {
+  return date && /^\d{4}/.test(date) && !date.startsWith("0000")
+    ? date
+    : undefined;
+}
