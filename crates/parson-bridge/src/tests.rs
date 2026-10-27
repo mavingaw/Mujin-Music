@@ -408,3 +408,100 @@ fn a_late_start_never_costs_the_clock_master_a_sample() {
         }
     }
 }
+
+#[test]
+fn a_rogue_bridge_cannot_forge_log_lines_or_flood_errors() {
+    use crate::protocol::{
+        BridgeMessage, Frame, PROTOCOL_VERSION, ServerMessage, read_frame, write_message,
+    };
+    use std::io::{BufReader, Write};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let address = listener.local_addr().expect("address");
+    let forged = format!("x\n<forged>\r\u{1b}[31m{}", "y".repeat(5_000));
+    let fake = {
+        let forged = forged.clone();
+        std::thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(socket.try_clone().expect("clone"));
+            let mut writer = socket;
+            let send = |writer: &mut std::net::TcpStream, message: &BridgeMessage| {
+                write_message(writer, message).and_then(|()| writer.flush())
+            };
+            let Ok(Frame::Message(ServerMessage::Hello { .. })) =
+                read_frame::<_, ServerMessage>(&mut reader)
+            else {
+                panic!("the server says hello first");
+            };
+            send(
+                &mut writer,
+                &BridgeMessage::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                    bridge_id: "rogue".into(),
+                    name: "Rogue".into(),
+                    host: "rogue.local".into(),
+                    platform: "test".into(),
+                    version: "0".into(),
+                    backend: None,
+                    note: None,
+                    devices: Vec::new(),
+                },
+            )
+            .expect("welcome");
+            send(
+                &mut writer,
+                &BridgeMessage::DeviceError {
+                    device: "dac\n<forged device>".into(),
+                    error: forged.clone(),
+                },
+            )
+            .expect("device error");
+            while let Ok(frame) = read_frame::<_, ServerMessage>(&mut reader) {
+                let reply = match frame {
+                    Frame::Message(ServerMessage::Ping { id, server_us }) => BridgeMessage::Pong {
+                        id,
+                        server_us,
+                        bridge_us: server_us,
+                    },
+                    Frame::Message(ServerMessage::Open { stream, .. }) => BridgeMessage::Failed {
+                        stream,
+                        error: forged.clone(),
+                    },
+                    _ => continue,
+                };
+                if send(&mut writer, &reply).is_err() {
+                    break;
+                }
+            }
+        })
+    };
+
+    let bridge = RemoteBridge::connect(address, "server-1", "Test server", Duration::from_secs(5))
+        .expect("connect");
+    let format = StreamFormat {
+        sample_rate: 44_100,
+        sample_format: SampleFormat::S16,
+        channels: 2,
+    };
+    let error = match bridge.open("dac", format, true) {
+        Ok(_) => panic!("the rogue bridge refuses every stream"),
+        Err(error) => error.to_string(),
+    };
+    let clean = |text: &str| !text.chars().any(char::is_control);
+    assert!(clean(&error), "no control characters: {error:?}");
+    assert!(error.starts_with("x<forged>[31m"), "{error:?}");
+    assert_eq!(error.chars().count(), 300, "capped: {}", error.len());
+    let errors = bridge.recent_errors();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    for shown in &errors {
+        assert!(clean(shown), "no control characters: {shown:?}");
+        // At most 300 characters of each bridge-supplied part.
+        assert!(shown.chars().count() <= 2 * 300 + 2, "capped: {}", shown.len());
+    }
+    assert!(
+        errors[0].starts_with("dac<forged device>: x<forged>"),
+        "{errors:?}"
+    );
+    bridge.disconnect();
+    fake.join().expect("fake bridge");
+}

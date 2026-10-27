@@ -16,6 +16,7 @@ const {
   reconnectDelay,
   rememberServer,
   saveConfig,
+  serializeConfig,
   isThisComputer,
   pickPrimary,
   serverRows,
@@ -466,5 +467,58 @@ test("Locate opens the folder picker near where the music used to be", () => {
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("what a hostile server says about itself is cleaned before it is saved", () => {
+  const hostile = {
+    origin: "http://10.0.0.66:1993/ignored/path?x=1",
+    instanceId: "../../etc/passwd\nforged",
+    name: `Evil\n[forged log line]\r\u001b[31m‮redro${"x".repeat(5000)}`,
+    serverVersion: "1.0.0\n<script>alert(1)</script>",
+    manual: "yes",
+    extra: { huge: "y".repeat(100_000) },
+    __proto__: { polluted: true },
+  };
+  const config = useRemoteServer(emptyConfig(), hostile, 1_700_000_000_000);
+  const [server] = config.servers;
+  assert.deepEqual(Object.keys(server).sort(), [
+    "id",
+    "instanceId",
+    "lastConnectedAt",
+    "manual",
+    "name",
+    "origin",
+    "serverVersion",
+  ]);
+  assert.equal(server.origin, "http://10.0.0.66:1993");
+  assert.equal(server.instanceId, "", "a path-like id is not an id");
+  assert.equal(server.id, "http://10.0.0.66:1993");
+  assert.equal(server.serverVersion, "");
+  assert.equal(server.manual, false);
+  assert.doesNotMatch(server.name, /[\u0000-\u001f\u007f‮]/u);
+  assert.ok(server.name.startsWith("Evil [forged log line]"), server.name);
+  assert.ok(Array.from(server.name).length <= 128);
+
+  const saved = serializeConfig({
+    ...config,
+    localInstanceId: "this-pc\n",
+    servers: [...config.servers, { ...hostile, lastConnectedAt: -1 }],
+  });
+  assert.ok(Buffer.byteLength(saved) < 4096, "no unknown fields are written");
+  assert.doesNotMatch(saved, /forged\n|<script>|polluted|huge/);
+  assert.equal(JSON.parse(saved).localInstanceId, "this-pc");
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "parson-hostile-"));
+  try {
+    saveConfig(directory, config);
+    const written = fs.readFileSync(
+      path.join(directory, "servers.json"),
+      "utf8",
+    );
+    assert.equal(written, serializeConfig(config));
+    assert.deepEqual(loadConfig(directory).config, parseConfig(config));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

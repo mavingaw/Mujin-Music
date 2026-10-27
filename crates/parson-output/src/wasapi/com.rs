@@ -515,25 +515,26 @@ impl ComWasapi {
         let hr = unsafe {
             (client.vtable::<IAudioClientVtbl>().GetMixFormat)(client.as_ptr(), &mut pointer)
         };
-        if hr < 0 || pointer.is_null() {
+        if hr < 0 {
             return None;
         }
-        // SAFETY: the pointer is non-null (checked above) and GetMixFormat
-        // returns at least a WAVEFORMATEX, which is read before it is freed.
-        let format = unsafe { std::ptr::read_unaligned(pointer as *const WAVEFORMATEX) };
+        let pointer = NonNull::new(pointer)?;
+        // SAFETY: `pointer` is non-null by type, and GetMixFormat returns at
+        // least a WAVEFORMATEX, which is read before it is freed.
+        let format = unsafe { std::ptr::read_unaligned(pointer.as_ptr() as *const WAVEFORMATEX) };
         let extensible = size_of::<WAVEFORMATEXTENSIBLE>() - size_of::<WAVEFORMATEX>();
         let valid_bits = if format.wFormatTag == WAVE_FORMAT_EXTENSIBLE
             && usize::from(format.cbSize) >= extensible
         {
             // SAFETY: `cbSize` says the extra fields of an extensible
             // format follow the header, so the whole struct is readable.
-            unsafe { std::ptr::read_unaligned(pointer as *const WAVEFORMATEXTENSIBLE) }
+            unsafe { std::ptr::read_unaligned(pointer.as_ptr() as *const WAVEFORMATEXTENSIBLE) }
                 .wValidBitsPerSample
         } else {
             format.wBitsPerSample
         };
         // SAFETY: allocated by COM for us to free.
-        unsafe { CoTaskMemFree(pointer) };
+        unsafe { CoTaskMemFree(pointer.as_ptr()) };
         Some(WaveFormat {
             sample_rate: format.nSamplesPerSec,
             channels: format.nChannels,

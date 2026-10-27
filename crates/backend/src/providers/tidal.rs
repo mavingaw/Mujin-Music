@@ -113,6 +113,14 @@ pub struct BrowserAuthorization {
     pub expires_at: i64,
 }
 
+/// A fresh OAuth `state` for a browser sign-in: 18 random bytes,
+/// URL-safe base64 (24 characters).
+pub fn random_state() -> String {
+    let mut state = [0_u8; 18];
+    rand::fill(&mut state);
+    URL_SAFE_NO_PAD.encode(state)
+}
+
 /// The S256 PKCE challenge for a verifier.
 pub fn code_challenge(verifier: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -589,10 +597,8 @@ impl TidalClient {
     ) -> (BrowserAuthorization, String) {
         let mut verifier = [0_u8; 48];
         rand::fill(&mut verifier);
-        let mut state = [0_u8; 18];
-        rand::fill(&mut state);
         let pending = BrowserAuthorization {
-            state: URL_SAFE_NO_PAD.encode(state),
+            state: random_state(),
             code_verifier: URL_SAFE_NO_PAD.encode(verifier),
             redirect_uri: redirect_uri.to_string(),
             expires_at: unix_now() + BROWSER_SIGN_IN_SECONDS,

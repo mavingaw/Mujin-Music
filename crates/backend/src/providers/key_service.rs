@@ -387,6 +387,7 @@ impl<T: Transport> Transport for InProcessKeyService<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tidal::random_state;
     use super::*;
 
     fn keys() -> ServiceKeys {
@@ -508,7 +509,7 @@ mod tests {
     #[test]
     fn the_relay_returns_only_to_a_parson_callback() {
         let back = "https://music.example.com/settings/services/tidal-callback";
-        let state = relay_state("abc123", back);
+        let state = relay_state(&random_state(), back);
         assert_eq!(relay_return_uri(&state).as_deref(), Some(back));
         let location =
             relay_location(&form(&[("code", "c0de/+"), ("state", &state)])).expect("relayed");
@@ -525,7 +526,7 @@ mod tests {
             "https://evil.test/x/settings/services/tidal-callback",
             "javascript:alert(1)/settings/services/tidal-callback",
         ] {
-            let state = relay_state("n", target);
+            let state = relay_state(&random_state(), target);
             assert!(relay_location(&form(&[("code", "c"), ("state", &state)])).is_err());
         }
         assert!(relay_location(&form(&[("state", &state)])).is_err());

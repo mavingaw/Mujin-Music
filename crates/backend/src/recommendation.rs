@@ -1587,22 +1587,22 @@ fn widen_selection(selected: &mut Vec<RankedCandidate>, context: WidenContext<'_
     // Last resort: anything in the library the listener has not rejected,
     // including songs played recently. A stable per-station jitter keeps the
     // order from being alphabetical.
-    let salt = seed.map(RadioSeed::id).unwrap_or("");
+    let station_key = seed.map(RadioSeed::id).unwrap_or("");
     let mut candidates = HashMap::new();
     for song_id in &cache.songs_flat {
         if Some(song_id.as_str()) == seed_song_id {
             continue;
         }
-        let jitter = (stable_hash(salt, song_id) % 1000) as f64 / 1000.0;
+        let jitter = (stable_hash(station_key, song_id) % 1000) as f64 / 1000.0;
         add_candidate(&mut candidates, song_id, 10.0 + jitter, "library");
     }
     extend(candidates, hard_exclusions, selected);
 }
 
-fn stable_hash(salt: &str, value: &str) -> u64 {
+fn stable_hash(station_key: &str, value: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    salt.hash(&mut hasher);
+    station_key.hash(&mut hasher);
     value.hash(&mut hasher);
     hasher.finish()
 }

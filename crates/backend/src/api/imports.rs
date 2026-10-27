@@ -1225,28 +1225,35 @@ async fn configure_service(
             )
         }
         ImportService::Deezer => {
-            let profile_id = body.profile_id.unwrap_or_default().trim().to_string();
-            let label = if profile_id.is_empty() {
-                "Public playlists".to_string()
+            let entered = body.profile_id.unwrap_or_default();
+            let entered = entered.trim();
+            // A Deezer profile id is a plain number; only digits reach the URL.
+            let profile_id = if entered.is_empty() {
+                None
+            } else if entered.chars().all(|c| c.is_ascii_digit())
+                && let Ok(id) = entered.parse::<u64>()
+            {
+                Some(id)
             } else {
-                if profile_id.len() > 20 || !profile_id.chars().all(|c| c.is_ascii_digit()) {
-                    return bad_request(
-                        "Use the number from your Deezer profile link.",
-                        "deezer_profile_invalid",
-                    );
-                }
-                match crate::imports::http::send_json::<DeezerUser>(
-                    http.get(format!("{}/user/{profile_id}", deezer::API_BASE)),
+                return bad_request(
+                    "Use the number from your Deezer profile link.",
+                    "deezer_profile_invalid",
+                );
+            };
+            let label = match profile_id {
+                None => "Public playlists".to_string(),
+                Some(id) => match crate::imports::http::send_json::<DeezerUser>(
+                    http.get(format!("{}/user/{id}", deezer::API_BASE)),
                 )
                 .await
                 {
                     Ok(DeezerUser { name: Some(name) }) => name,
                     Ok(_) => return provider_error(ProviderError::NotFound),
                     Err(error) => return provider_error(error),
-                }
+                },
             };
             (
-                serde_json::json!({ "profile_id": (!profile_id.is_empty()).then_some(profile_id) })
+                serde_json::json!({ "profile_id": profile_id.map(|id| id.to_string()) })
                     .to_string(),
                 Some(label),
             )
