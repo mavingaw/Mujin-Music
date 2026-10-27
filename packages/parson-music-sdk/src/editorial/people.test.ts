@@ -3,6 +3,8 @@ import {
   enrichmentStageLine,
   enrichmentWaitingLabel,
   personHue,
+  personTone,
+  PERSON_TONES,
   personInitials,
 } from "./people";
 
@@ -38,6 +40,8 @@ describe("personInitials", () => {
     expect(personHue("Carlos Kleiber")).toBe(personHue("carlos kleiber"));
     expect(personHue("Carlos Kleiber")).toBeGreaterThanOrEqual(0);
     expect(personHue("Carlos Kleiber")).toBeLessThan(360);
+    expect(PERSON_TONES).toContainEqual(personTone("Carlos Kleiber"));
+    expect(personTone("Carlos Kleiber")).toEqual(personTone("carlos kleiber"));
   });
 });
 

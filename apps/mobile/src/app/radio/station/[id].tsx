@@ -127,8 +127,8 @@ export default function StationScreen() {
                 style={styles.saveButton}
               >
                 <Heart
-                  color={station.saved ? "#fb7185" : "white"}
-                  fill={station.saved ? "#fb7185" : "transparent"}
+                  color={station.saved ? "#f6807a" : "white"}
+                  fill={station.saved ? "#f6807a" : "transparent"}
                   size={20}
                 />
               </Pressable>
@@ -228,20 +228,20 @@ const styles = StyleSheet.create({
     width: 48,
   },
   onAir: {
-    backgroundColor: "rgba(244,63,94,0.12)",
+    backgroundColor: "rgba(242,71,63,0.12)",
     borderRadius: 14,
     marginHorizontal: layout.horizontal,
     padding: 14,
   },
   onAirTitle: { color: "white", fontSize: 17, fontWeight: "700" },
-  onAirArtist: { color: "#d4d4d8", fontSize: 14, marginTop: 2 },
+  onAirArtist: { color: "#c7c2b9", fontSize: 14, marginTop: 2 },
   history: {
     color: palette.secondary,
     fontSize: 13,
     marginHorizontal: layout.horizontal,
     marginTop: 8,
   },
-  body: { color: "#e4e4e7", fontSize: 14, marginHorizontal: layout.horizontal },
+  body: { color: "#e9e5dd", fontSize: 14, marginHorizontal: layout.horizontal },
   note: {
     color: palette.muted,
     fontSize: 12,

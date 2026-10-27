@@ -1,4 +1,4 @@
-import { personHue, personInitials } from "@parson/music-sdk";
+import { personInitials, personTone } from "@parson/music-sdk";
 import { StyleSheet, Text, View, type ViewStyle } from "react-native";
 
 import { Artwork } from "@/components/artwork";
@@ -21,7 +21,7 @@ export function PersonAvatar({
     const path = /^https?:\/\//.test(imageUrl) ? imageUrl : apiUrl(imageUrl);
     return <Artwork path={path} rounded={size / 2} size={size} style={style} />;
   }
-  const hue = personHue(name);
+  const [tone] = personTone(name);
   return (
     <View
       accessibilityElementsHidden
@@ -32,7 +32,7 @@ export function PersonAvatar({
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: `hsl(${hue}, 30%, 28%)`,
+          backgroundColor: tone,
         },
         style,
       ]}

@@ -72,7 +72,7 @@ import { useSession } from "@/features/account/session-provider";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import FocusBar from "./focus/focus-bar";
 import FocusPanel from "./focus/focus-panel";
 import SmartPlaylistDialog from "./focus/smart-playlist-dialog";
@@ -145,7 +145,11 @@ function focusedAlbumEntry(album: FocusedAlbum): LibraryAlbumEntry {
     cover: album.coverPath,
     year: album.releaseYear,
     source: null,
-    formatLabel: album.quality === "hires" ? qualityBadgeLabel("hires") : null,
+    formatLabel:
+      album.formatLabel ??
+      (album.quality === "hires" ? qualityBadgeLabel("hires") : null),
+    hiRes: Boolean(album.hiRes) || album.quality === "hires",
+    lossless: Boolean(album.lossless),
   };
 }
 type FocusedSong = LibraryCatalogSong & { badge?: string | null };
@@ -377,17 +381,34 @@ export default function LibraryOverview() {
     return () => window.removeEventListener("popstate", syncFromHistory);
   }, []);
 
+  // The sidebar links straight to a view (/library?view=artists): follow
+  // the URL when it names a different view than the one shown.
+  const urlView = views.includes(requestedView as LibraryView)
+    ? (requestedView as LibraryView)
+    : "albums";
+  const urlFocus = searchParams.get("focus");
+  const shownView = useRef(view);
+  shownView.current = view;
+  useEffect(() => {
+    if (shownView.current === urlView) return;
+    setView(urlView);
+    setFocusState(decodeFocus(urlFocus, entityForView(urlView)));
+  }, [urlView, urlFocus]);
+
   const clearFocus = () => setFocus(emptyFocus(focus.entity));
 
   return (
-    <section className="mx-auto w-full max-w-266 space-y-7">
+    <section className="mx-auto w-full max-w-[1400px] space-y-7">
       <header className="flex items-end justify-between gap-5">
         <div>
-          <h1 className="text-3xl font-semibold text-white">Library</h1>
+          <p className="mj-eyebrow mb-2">My library</p>
+          <h1 className="mj-display text-[40px] text-mujin-text md:text-[52px]">
+            {libraryViewTitle(view)}
+          </h1>
           {browsing && countLabel && (
             <p
               aria-live="polite"
-              className="mt-1 text-sm tabular-nums text-zinc-500"
+              className="mj-tnum mt-2 text-sm text-mujin-text-tertiary"
             >
               {countLabel}
             </p>
@@ -647,6 +668,22 @@ function FocusEmpty({ onClear }: { onClear: () => void }) {
   );
 }
 
+function libraryViewTitle(view: LibraryView) {
+  return (
+    (
+      {
+        albums: "Albums",
+        songs: "Tracks",
+        artists: "Artists",
+        composers: "Composers",
+        compositions: "Compositions",
+        playlists: "Playlists",
+        banned: "Banned",
+      } as Record<string, string>
+    )[view] ?? "Library"
+  );
+}
+
 function LibraryTab({
   active,
   icon,
@@ -661,8 +698,10 @@ function LibraryTab({
   return (
     <button
       aria-selected={active}
-      className={`relative flex h-11 shrink-0 items-center gap-2 px-4 text-sm font-medium transition-colors [&_svg]:h-4 [&_svg]:w-4 ${
-        active ? "text-white" : "text-zinc-500 hover:text-zinc-200"
+      className={`relative flex h-11 shrink-0 items-center gap-2 px-4 text-[13px] font-medium transition-colors [&_svg]:h-4 [&_svg]:w-4 ${
+        active
+          ? "text-mujin-text [&_svg]:text-mujin-copper"
+          : "text-mujin-text-tertiary hover:text-mujin-text"
       }`}
       onClick={onClick}
       role="tab"
@@ -671,7 +710,7 @@ function LibraryTab({
       {icon}
       {label}
       {active && (
-        <span className="absolute inset-x-3 bottom-0 h-0.5 bg-white" />
+        <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-mujin-copper" />
       )}
     </button>
   );
@@ -712,7 +751,7 @@ function AlbumsView({
   }
   return (
     <>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-10 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-x-5 gap-y-9 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
         {albums.map((album) => (
           <AlbumCard
             key={album.key}
@@ -723,6 +762,9 @@ function AlbumsView({
             artist_name={album.artistName}
             first_release_date={album.year}
             formatLabel={album.formatLabel}
+            hiRes={album.hiRes}
+            lossless={album.lossless}
+            showYear
             source={album.source ?? undefined}
           />
         ))}
@@ -1061,7 +1103,7 @@ function LikedSongsPlaylistCard() {
           className="group flex min-w-0 items-center gap-4 overflow-hidden rounded-xl border border-white/8 bg-white/2.5 p-4 transition-colors hover:bg-white/6"
           href="/playlist?system=liked"
         >
-          <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-linear-to-br from-rose-500 to-fuchsia-800 text-white">
+          <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-[radial-gradient(120%_120%_at_20%_10%,#e6a27a_0%,#a85d30_45%,#2a1810_100%)] text-mujin-text">
             <Heart className="h-6 w-6 fill-current" />
           </div>
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-100">

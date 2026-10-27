@@ -63,7 +63,7 @@ function ServiceRow({ service }: { service: ImportService }) {
             style={[styles.chip, grant.available && styles.chipOn]}
           >
             {grant.available ? (
-              <Check color="#a7f3d0" size={11} />
+              <Check color="#d3e5c7" size={11} />
             ) : (
               <X color={palette.muted} size={11} />
             )}
@@ -260,7 +260,7 @@ const styles = StyleSheet.create({
   primaryText: { color: "black", fontWeight: "800" },
   disabled: { opacity: 0.45 },
   error: { color: palette.danger, fontSize: 13 },
-  errorText: { color: "#fda4af" },
+  errorText: { color: "#f9b3af" },
   jobRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -288,7 +288,7 @@ const styles = StyleSheet.create({
     marginLeft: "auto",
     flexShrink: 1,
   },
-  connected: { color: "#6ee7b7" },
+  connected: { color: "#bcd8a9" },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   chip: {
     flexDirection: "row",
@@ -301,10 +301,10 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   chipOn: {
-    borderColor: "rgba(52,211,153,0.3)",
-    backgroundColor: "rgba(52,211,153,0.08)",
+    borderColor: "rgba(163,201,139,0.3)",
+    backgroundColor: "rgba(163,201,139,0.08)",
   },
   chipText: { fontSize: 11, fontWeight: "600" },
-  chipTextOn: { color: "#a7f3d0" },
+  chipTextOn: { color: "#d3e5c7" },
   chipTextOff: { color: palette.muted, textDecorationLine: "line-through" },
 });

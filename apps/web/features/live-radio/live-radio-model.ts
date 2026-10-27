@@ -47,6 +47,16 @@ function hash(value: string) {
   return result >>> 0;
 }
 
+/** Brand tones for logo-less station tiles: [lit corner, deep corner]. */
+export const STATION_TONES: readonly [string, string][] = [
+  ["#8a5638", "#1e1410"], // copper
+  ["#4a6878", "#121a1f"], // steel
+  ["#56704a", "#141a12"], // sage
+  ["#86683f", "#1d1710"], // brass
+  ["#7a5a54", "#1c1514"], // clay
+  ["#4a4a52", "#111113"], // graphite
+];
+
 /** Initials and a stable gradient for stations without a logo. */
 export function stationMonogram(name: string): {
   initials: string;
@@ -61,12 +71,8 @@ export function stationMonogram(name: string): {
     words.length >= 2
       ? `${words[0]![0]}${words[1]![0]}`
       : (words[0]?.slice(0, 2) ?? "FM");
-  const hue = hash(name) % 360;
-  return {
-    initials: initials.toUpperCase(),
-    from: `hsl(${hue} 70% 46%)`,
-    to: `hsl(${(hue + 48) % 360} 65% 18%)`,
-  };
+  const [from, to] = STATION_TONES[hash(name) % STATION_TONES.length]!;
+  return { initials: initials.toUpperCase(), from, to };
 }
 
 const ORDERS: LiveOrder[] = [

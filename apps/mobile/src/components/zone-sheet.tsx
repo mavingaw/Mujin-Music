@@ -264,7 +264,7 @@ export function ZoneSheet({
                           {
                             color: zone.group.synced
                               ? palette.success
-                              : "#fbbf24",
+                              : "#daab6c",
                           },
                         ]}
                       >
@@ -332,7 +332,7 @@ export function ZoneSheet({
                   color: plan.allowed
                     ? plan.synced
                       ? palette.success
-                      : "#fbbf24"
+                      : "#daab6c"
                     : palette.secondary,
                 },
               ]}
@@ -608,6 +608,6 @@ const styles = StyleSheet.create({
     minWidth: 32,
     paddingHorizontal: 6,
   },
-  zoneButtonActive: { backgroundColor: "rgba(34,197,94,0.15)" },
+  zoneButtonActive: { backgroundColor: "rgba(163,201,139,0.15)" },
   zoneButtonText: { color: palette.success, fontSize: 12, fontWeight: "600" },
 });

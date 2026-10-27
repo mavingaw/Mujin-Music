@@ -260,7 +260,7 @@ function RemotePlaylistCard({
         <div
           className={`grid h-11 w-11 shrink-0 place-items-center rounded ${
             playlist.kind === "saved_tracks"
-              ? "bg-linear-to-br from-indigo-500 to-emerald-400 text-white"
+              ? "bg-[radial-gradient(120%_120%_at_20%_10%,#e6a27a_0%,#a85d30_45%,#2a1810_100%)] text-mujin-text"
               : "bg-white/5 text-zinc-500"
           }`}
         >
@@ -536,7 +536,9 @@ function Landing() {
   return (
     <div className="grid gap-9">
       <header>
-        <h1 className="text-3xl font-semibold text-white">Import playlists</h1>
+        <h1 className="mj-display text-[40px] text-mujin-text md:text-[48px]">
+          Import playlists
+        </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">
           Bring playlists from Spotify, Apple Music, YouTube Music, Deezer or
           any playlist file. Mujin Music matches every track to music you own

@@ -99,7 +99,7 @@ export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
     <>
       <button
         aria-label={`Zone: ${label}. Choose where music plays`}
-        className={`group/control relative flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors ${remoteZone ? "bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25" : "text-zinc-400 hover:bg-white/10 hover:text-white"}`}
+        className={`group/control relative flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors ${remoteZone ? "bg-mujin-copper/[0.16] text-mujin-copper hover:bg-mujin-copper/25" : "text-mujin-text-secondary hover:bg-white/[0.07] hover:text-mujin-text"}`}
         data-zone-picker
         onClick={() => setOpen(true)}
         onContextMenu={(event) => {
@@ -113,12 +113,12 @@ export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
       >
         <ZoneIcon zone={current ?? { kind: "web" }} />
         {!compact && (
-          <span className="hidden max-w-28 truncate lg:inline">{label}</span>
+          <span className="hidden max-w-32 truncate lg:inline">{label}</span>
         )}
         {remoteZone?.group && (
           <span
             aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${remoteZone.group.synced ? "bg-emerald-400" : "bg-amber-400"}`}
+            className={`h-1.5 w-1.5 rounded-full ${remoteZone.group.synced ? "bg-quality-high" : "bg-amber-400"}`}
           />
         )}
       </button>

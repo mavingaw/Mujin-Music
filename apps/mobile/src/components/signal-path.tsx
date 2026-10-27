@@ -536,7 +536,7 @@ function StageRow({
     >
       <View style={styles.rail}>
         <View style={styles.iconRing}>
-          <Icon color="#d4d4d8" size={16} />
+          <Icon color="#c7c2b9" size={16} />
         </View>
         {!last ? <View style={styles.railLine} /> : null}
       </View>
@@ -576,12 +576,12 @@ const styles = StyleSheet.create({
   badgeFormat: { flexShrink: 1, color: palette.secondary, fontSize: 13 },
   hiRes: {
     borderWidth: 1,
-    borderColor: "#c9a2ff",
+    borderColor: "#e6a27a",
     borderRadius: 4,
     paddingHorizontal: 3,
   },
   hiResText: {
-    color: "#c9a2ff",
+    color: "#e6a27a",
     fontSize: 9,
     fontWeight: "800",
     letterSpacing: 0.5,

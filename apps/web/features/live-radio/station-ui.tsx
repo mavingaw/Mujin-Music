@@ -214,7 +214,7 @@ function PlayOverlay({ station }: { station: LiveStation }) {
       <button
         aria-label={playing ? `Pause ${station.name}` : `Play ${station.name}`}
         className={cn(
-          "absolute bottom-2.5 right-2.5 grid h-11 w-11 place-items-center rounded-full bg-white text-black shadow-xl shadow-black/50 transition-all duration-200 hover:scale-105 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60",
+          "absolute bottom-2.5 right-2.5 grid h-11 w-11 place-items-center rounded-full mj-primary shadow-xl shadow-black/50 motion-safe:hover:scale-105 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60",
           current
             ? "translate-y-0 opacity-100"
             : "translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100",

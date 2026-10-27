@@ -8,6 +8,9 @@ use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_
 use crate::persistence::connection::DbPool;
 
 use super::album::ResponseAlbum;
+use super::home_discovery::{
+    BestYears, DailyPicks, HomeAlbum, HomeArtist, HomeGenre, LibraryProfile, ListeningContext,
+};
 use super::song::{ResponseSong, SongInfo, fetch_random_songs, fetch_song_info_from_cache};
 use super::user::fetch_recommended_song_ids;
 
@@ -27,6 +30,32 @@ struct HomeResponse {
     shuffle: Vec<ResponseSong>,
     albums: Vec<ResponseAlbum>,
     stats: LibraryStats,
+    /// Lossless / high-resolution share, composers, genres and hours.
+    profile: LibraryProfile,
+    recently_added: Vec<HomeAlbum>,
+    daily_picks: DailyPicks,
+    new_for_you: Vec<HomeAlbum>,
+    similar_artists: Vec<HomeArtist>,
+    best_years: Option<BestYears>,
+    genres: Vec<HomeGenre>,
+}
+
+/// Album ids, newest first, by when the catalog first saw them.
+fn recently_added_album_ids(pool: &DbPool, limit: i64) -> Vec<String> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        id: String,
+    }
+    use diesel::RunQueryDsl;
+    let Ok(mut connection) = pool.get() else {
+        return Vec::new();
+    };
+    diesel::sql_query("SELECT id FROM album_entity ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .bind::<diesel::sql_types::BigInt, _>(limit)
+        .load::<Row>(&mut connection)
+        .map(|rows| rows.into_iter().map(|row| row.id).collect())
+        .unwrap_or_default()
 }
 
 fn hydrate(song_ids: impl IntoIterator<Item = String>, cache: &LibraryCache) -> Vec<ResponseSong> {
@@ -171,8 +200,9 @@ async fn home(
     };
 
     let history =
-        crate::recommendation::recent_playback_ids(user_id as i32, &pool, SECTION_SIZE as i64)
+        crate::recommendation::recent_playback_ids(user_id as i32, &pool, SECTION_SIZE as i64 * 4)
             .unwrap_or_default();
+    let context = ListeningContext::from_history(&history, &cache);
     let continue_listening = hydrate(history, &cache);
 
     let recommendation_ids =
@@ -201,6 +231,16 @@ async fn home(
         albums = discovery_albums(&cache);
     }
 
+    let user_key = user_id.to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let added_ids = {
+        let pool = pool.get_ref().clone();
+        web::block(move || recently_added_album_ids(&pool, 64))
+            .await
+            .unwrap_or_default()
+    };
+    let recently_added = super::home_discovery::recently_added(&cache, &added_ids);
+
     HttpResponse::Ok().json(HomeResponse {
         continue_listening,
         recommended,
@@ -211,7 +251,33 @@ async fn home(
             album_count: cache.album_count(),
             artist_count: cache.artists.len(),
         },
+        profile: super::home_discovery::library_profile(&cache),
+        recently_added,
+        daily_picks: super::home_discovery::daily_picks(&cache, &context, &user_key, &today),
+        new_for_you: super::home_discovery::new_for_you(&cache, &context),
+        similar_artists: super::home_discovery::similar_artists(
+            &cache, &context, &user_key, &today,
+        ),
+        best_years: super::home_discovery::best_years(&cache, &context, &user_key, &today),
+        genres: super::home_discovery::genre_tiles(&cache),
     })
+}
+
+/// Artists in the library sharing genres with this one (artist page).
+#[get("/{id}/similar")]
+pub async fn get_similar_artists(
+    id: web::Path<String>,
+    lifecycle: web::Data<LibraryLifecycle>,
+) -> HttpResponse {
+    let cache = match lifecycle.cache().await {
+        Ok(cache) => cache,
+        Err(readiness) => return library_unavailable_response(readiness),
+    };
+    HttpResponse::Ok().json(super::home_discovery::similar_to(
+        &cache,
+        &id.into_inner(),
+        super::home_discovery::ROW_SIZE,
+    ))
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {

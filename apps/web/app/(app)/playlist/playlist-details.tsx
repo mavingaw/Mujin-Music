@@ -282,7 +282,7 @@ function UserPlaylistDetails() {
           songs={tracks}
         />
         <div className="min-w-0 flex-1">
-          <h1 className="break-words text-4xl font-black text-white sm:text-5xl">
+          <h1 className="break-words text-4xl mj-display text-mujin-text sm:text-5xl">
             {playlist.data.name}
           </h1>
           {playlist.data.description && (

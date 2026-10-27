@@ -668,10 +668,10 @@ function Stepper({
 
 /** Roon's quality-light colours: purple, blue, green, yellow. */
 const QUALITY_COLORS: Record<ZoneStreamQuality, string> = {
-  lossless: "#e879f9",
-  enhanced: "#38bdf8",
-  high: "#34d399",
-  low: "#fcd34d",
+  lossless: "#e6a27a",
+  enhanced: "#8fc3e0",
+  high: "#a3c98b",
+  low: "#e6c599",
 };
 
 /** The quality light, then source, each step in order, and the output. */
@@ -761,7 +761,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   stageKicker: {
-    color: "#71717a",
+    color: "#8e8a84",
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: 1.2,
@@ -850,7 +850,7 @@ const styles = StyleSheet.create({
     width: 32,
   },
   problem: {
-    color: "#fbbf24",
+    color: "#daab6c",
     fontSize: 12,
     paddingHorizontal: 20,
     paddingBottom: 8,

@@ -51,7 +51,7 @@ import { FocusBar } from "@/components/focus";
 import { RelatedPeople } from "@/components/related-people";
 import { apiUrl } from "@/lib/runtime";
 import { joinMeta } from "@/lib/credit-links";
-import { palette } from "@/constants/colors";
+import { fonts, palette } from "@/constants/colors";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   immediateBorderlessPressFeedback,
@@ -316,7 +316,11 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
                   style={styles.play}
                   onPress={() => songs[0] && playback.playSong(songs[0], songs)}
                 >
-                  <Play color="black" fill="black" size={27} />
+                  <Play
+                    color={palette.accentText}
+                    fill={palette.accentText}
+                    size={27}
+                  />
                 </Pressable>
               </View>
             ) : null}
@@ -578,10 +582,10 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
   },
   title: {
-    color: "white",
-    fontSize: 34,
-    fontWeight: "900",
-    letterSpacing: -1,
+    color: palette.text,
+    fontFamily: fonts.display,
+    fontSize: 40,
+    lineHeight: 46,
     textAlign: "center",
   },
   description: {
@@ -610,7 +614,7 @@ const styles = StyleSheet.create({
     borderRadius: 29,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.accent,
   },
   grid: {
     flexDirection: "row",
@@ -675,7 +679,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "rgba(255,255,255,0.07)",
   },
-  badgeHires: { color: "#fcd34d", backgroundColor: "rgba(252,211,77,0.14)" },
+  badgeHires: { color: "#e6c599", backgroundColor: "rgba(230,197,153,0.14)" },
   creditRole: { color: palette.muted, fontSize: 12, marginTop: 2 },
   errorState: { flex: 1, alignItems: "center", justifyContent: "center" },
   error: { color: palette.secondary },

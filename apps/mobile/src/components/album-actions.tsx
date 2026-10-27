@@ -431,5 +431,5 @@ const styles = StyleSheet.create({
   },
   saveText: { color: "black", fontWeight: "800" },
   disabled: { opacity: 0.45 },
-  error: { color: "#ff9b9b", paddingHorizontal: 16, paddingVertical: 8 },
+  error: { color: "#f6807a", paddingHorizontal: 16, paddingVertical: 8 },
 });

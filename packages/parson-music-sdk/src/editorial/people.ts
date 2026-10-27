@@ -48,6 +48,25 @@ export function personHue(name: string) {
   return hash % 360;
 }
 
+/**
+ * Muted Mujin Music tones for initials avatars ([lit stop, deep stop]):
+ * copper, steel, sage, brass, clay, graphite.
+ */
+export const PERSON_TONES: readonly [string, string][] = [
+  ["#8a5638", "#2a1a12"],
+  ["#4f6d7d", "#18232a"],
+  ["#5b7550", "#1a2217"],
+  ["#8a6c43", "#261d12"],
+  ["#7d5d57", "#251b19"],
+  ["#55555d", "#18181b"],
+];
+
+/** A stable brand tone for a person without a photo. */
+export function personTone(name: string): [string, string] {
+  const [from, to] = PERSON_TONES[personHue(name) % PERSON_TONES.length]!;
+  return [from, to];
+}
+
 type WaitingText = { artist: string; album: string };
 
 const MUSICBRAINZ_WAITING: WaitingText = {

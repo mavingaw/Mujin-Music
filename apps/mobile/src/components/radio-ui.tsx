@@ -14,7 +14,7 @@ import { palette } from "@/constants/colors";
 import { immediateBorderlessPressFeedback } from "@/lib/press-feedback";
 import { usePlayer, usePlayerPosition } from "@/providers/player-provider";
 
-const sky = "#38bdf8";
+const sky = "#8fc3e0";
 
 const countdown = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -96,7 +96,7 @@ export function RadioQueueHeader({ hasPicks }: { hasPicks: boolean }) {
         accessibilityLabel="Radio: keep playing similar music when the queue ends"
         onValueChange={radio.setEnabled}
         thumbColor="white"
-        trackColor={{ false: "#3f3f46", true: sky }}
+        trackColor={{ false: "#34343a", true: sky }}
         value={radio.enabled}
       />
     </View>
@@ -263,7 +263,7 @@ export function RadioSettingsRows() {
           accessibilityLabel="Continue with Radio"
           onValueChange={radio.setEnabled}
           thumbColor="white"
-          trackColor={{ false: "#3f3f46", true: sky }}
+          trackColor={{ false: "#34343a", true: sky }}
           value={radio.enabled}
         />
       </View>
@@ -278,7 +278,7 @@ export function RadioSettingsRows() {
           accessibilityLabel="Coming up notice"
           onValueChange={radio.setComingUpNotice}
           thumbColor="white"
-          trackColor={{ false: "#3f3f46", true: sky }}
+          trackColor={{ false: "#34343a", true: sky }}
           value={radio.comingUpNotice}
         />
       </View>

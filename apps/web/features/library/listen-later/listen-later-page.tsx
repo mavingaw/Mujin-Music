@@ -266,7 +266,7 @@ export default function ListenLaterPage() {
             <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               <Clock className="h-3.5 w-3.5" /> Browse
             </p>
-            <h1 className="text-4xl font-black text-white sm:text-5xl">
+            <h1 className="text-4xl mj-display text-mujin-text sm:text-5xl">
               Listen Later
             </h1>
             <p className="mt-3 text-sm text-zinc-400">
@@ -295,7 +295,7 @@ export default function ListenLaterPage() {
           <div className="mb-8 flex flex-wrap items-center gap-2">
             <button
               aria-label="Play Listen Later"
-              className="grid h-12 w-12 place-items-center rounded-full bg-white text-black transition-transform hover:scale-105 disabled:opacity-60"
+              className="grid h-12 w-12 place-items-center rounded-full mj-primary motion-safe:hover:scale-105 disabled:opacity-60"
               disabled={starting || loading || !items.length}
               onClick={() => void playAll(false)}
               type="button"
@@ -303,7 +303,7 @@ export default function ListenLaterPage() {
               {starting ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
               ) : (
-                <Play className="ml-0.5 h-6 w-6 fill-black" />
+                <Play className="ml-0.5 h-6 w-6 fill-current" />
               )}
             </button>
             <button

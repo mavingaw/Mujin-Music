@@ -191,14 +191,14 @@ function RecordingCard({
           </div>
           <button
             aria-label={`${playing ? "Pause" : "Play"} ${recording.album.name}`}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full mj-primary motion-safe:hover:scale-105"
             onClick={() => play(0)}
             type="button"
           >
             {playing ? (
-              <Pause className="h-5 w-5 fill-black" />
+              <Pause className="h-5 w-5 fill-current" />
             ) : (
-              <Play className="ml-0.5 h-5 w-5 fill-black" />
+              <Play className="ml-0.5 h-5 w-5 fill-current" />
             )}
           </button>
         </div>
@@ -299,7 +299,7 @@ export default function WorkDetails() {
           <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
             {parent ? "Movement" : "Composition"}
           </p>
-          <h1 className="text-balance text-4xl font-black leading-[1.02] text-white sm:text-5xl">
+          <h1 className="text-balance text-4xl mj-display leading-[1.02] text-mujin-text sm:text-5xl">
             {work.title}
           </h1>
           {work.composer && (

@@ -43,6 +43,10 @@ import { PersonAvatar } from "@/features/library/credits/person-avatar";
 import { lifeSpanFacts } from "@/features/library/credits/credit-roles";
 import { GenreChips } from "@/features/library/genres/genre-chips";
 import { useQuery } from "@tanstack/react-query";
+import { getSimilarArtists } from "@parson/music-sdk";
+import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
+import PlayIcon from "@/components/icons/play";
+import { ArtistCircle, ShelfRow } from "@/features/library/home/home-sections";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
 import AlbumMenu from "@/features/library/album-menu";
@@ -84,6 +88,7 @@ function LibraryArtistDetails({
   const router = useRouter();
   const pathname = usePathname();
   const { session } = useSession();
+  const playback = useZonePlayback();
   const id = searchParams?.get("id");
   const requestedTab = searchParams?.get("tab") as ArtistTab | null;
   const roleFilter = searchParams?.get("role") ?? null;
@@ -271,73 +276,96 @@ function LibraryArtistDetails({
         ? about.facts.kind
         : "Artist";
 
+  const mosaicCovers = albums
+    .map((album) => getLibraryImageUrl(album.cover_url, getBaseURL))
+    .filter((url): url is string => Boolean(url));
+  const playArtist = () => {
+    if (!artist) return;
+    const ordered = [...albums].sort((left, right) =>
+      (left.first_release_date || "").localeCompare(
+        right.first_release_date || "",
+      ),
+    );
+    const items = ordered.flatMap((album) =>
+      (album.songs ?? []).map((song) => ({ song, album, artist })),
+    );
+    if (items.length) void playback.playQueue(items);
+  };
+
   return (
-    <div className="tidal-route relative text-zinc-50">
+    <div className="relative isolate text-mujin-text">
       <header
         aria-label={`${name} header`}
-        className="relative isolate mb-8 overflow-hidden rounded-2xl border border-white/8 bg-zinc-900/60"
+        className="relative isolate mb-10 flex min-h-[360px] items-end overflow-hidden border-b border-white/[0.06] md:min-h-[440px]"
       >
         {heroImageURL ? (
           <div aria-hidden className="absolute inset-0 -z-10">
             <Image
               alt=""
-              className="scale-125 object-cover object-[50%_25%] opacity-50 blur-2xl"
+              className="object-cover object-[50%_25%] opacity-70"
               fill
-              sizes="920px"
+              priority
+              sizes="100vw"
               src={heroImageURL}
             />
-            <div className="absolute inset-0 bg-linear-to-t from-black/85 via-black/45 to-black/10" />
+            <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_0%,rgba(10,10,11,0.75)_40%,rgba(10,10,11,0.15)_100%),linear-gradient(to_right,rgba(10,10,11,0.8),transparent_70%)]" />
           </div>
+        ) : mosaicCovers.length > 0 ? (
+          <ArtistMosaic covers={mosaicCovers} />
         ) : (
           <div
             aria-hidden
-            className="absolute inset-0 -z-10 bg-linear-to-br from-zinc-800/70 via-zinc-900/60 to-black"
+            className="absolute inset-0 -z-10 bg-[radial-gradient(90%_120%_at_15%_0%,rgba(217,139,95,0.16),transparent_60%),linear-gradient(to_bottom,var(--color-mujin-surface-1),var(--color-mujin-base))]"
           />
         )}
-        <div className="flex flex-col gap-6 px-6 pb-7 pt-10 sm:flex-row sm:items-end sm:px-8 sm:pt-16">
-          <figure className="shrink-0">
-            {heroImageURL ? (
-              <div className="relative h-36 w-36 overflow-hidden rounded-full border border-white/15 shadow-2xl shadow-black/60 sm:h-48 sm:w-48">
-                <Image
-                  src={heroImageURL}
-                  alt={name}
-                  fill
-                  className="object-cover object-[50%_20%]"
-                  sizes="192px"
-                  priority
-                />
-              </div>
-            ) : (
+        <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-6 px-5 pb-9 pt-24 sm:flex-row sm:items-end sm:px-8 lg:px-12">
+          {heroImageURL ? null : mosaicCovers.length === 0 ? (
+            <figure className="shrink-0">
               <PersonAvatar
                 className="shadow-2xl shadow-black/60"
                 name={name}
-                size={160}
+                size={150}
               />
-            )}
-          </figure>
+            </figure>
+          ) : null}
           <div className="min-w-0 pb-1">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
-              {kicker}
-            </p>
-            <h1 className="min-w-0 wrap-break-word text-4xl font-black leading-none text-white sm:text-6xl">
+            <p className="mj-eyebrow mb-3">{kicker}</p>
+            <h1 className="mj-display min-w-0 wrap-break-word text-[48px] text-mujin-text sm:text-[72px] lg:text-[88px]">
               {name}
             </h1>
             {(subtitle || lifeSpan) && (
-              <p className="mt-3 text-sm text-zinc-300">
+              <p className="mt-3 text-[14px] text-mujin-text-secondary">
                 {[subtitle, lifeSpan].filter(Boolean).join(" · ")}
               </p>
             )}
+            {artist && (
+              <p className="mj-tnum mt-2 text-[13px] text-mujin-text-tertiary">
+                {albums.length} {albums.length === 1 ? "album" : "albums"} in
+                your library
+                {artistYears(albums) ? ` · ${artistYears(albums)}` : ""}
+              </p>
+            )}
             {about?.credited_as?.length ? (
-              <p className="mt-2 text-sm text-zinc-400">
+              <p className="mt-2 text-sm text-mujin-text-tertiary">
                 Also credited as{" "}
-                <span className="text-zinc-200">
+                <span className="text-mujin-text-secondary">
                   {about.credited_as.join(", ")}
                 </span>
               </p>
             ) : null}
-            <GenreChips className="mt-3" genres={about?.genres} />
+            <GenreChips className="mt-4" genres={about?.genres} />
             {artist && (
-              <div className="mt-4 flex flex-wrap items-center gap-2">
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                {albums.some((album) => album.songs?.length) && (
+                  <button
+                    className="mj-primary inline-flex h-11 items-center gap-2 rounded-full pl-4 pr-5 text-[13.5px] font-semibold shadow-[0_10px_30px_-10px_rgba(217,139,95,0.6)]"
+                    onClick={playArtist}
+                    type="button"
+                  >
+                    <PlayIcon className="h-4 w-4" fill="currentColor" />
+                    Play now
+                  </button>
+                )}
                 <StartRadioButton
                   label={`Start ${artist.name} radio`}
                   seed={{ kind: "artist", id: artist.id }}
@@ -358,10 +386,10 @@ function LibraryArtistDetails({
               </div>
             )}
             {!artistIconURL && about?.image && (
-              <p className="mt-2 text-xs text-zinc-400">
+              <p className="mt-3 text-xs text-mujin-text-tertiary">
                 Photo:{" "}
                 <a
-                  className="hover:text-zinc-200 hover:underline"
+                  className="hover:text-mujin-text hover:underline"
                   href={about.image.page_url}
                   rel="noreferrer"
                   target="_blank"
@@ -371,7 +399,7 @@ function LibraryArtistDetails({
                 ,{" "}
                 {about.image.license_url ? (
                   <a
-                    className="hover:text-zinc-200 hover:underline"
+                    className="hover:text-mujin-text hover:underline"
                     href={about.image.license_url}
                     rel="noreferrer license"
                     target="_blank"
@@ -388,20 +416,20 @@ function LibraryArtistDetails({
         </div>
       </header>
 
-      <div className="relative z-10">
+      <div className="relative z-10 mx-auto max-w-[1240px] px-5 pb-24 sm:px-8 lg:px-12">
         {tabs.length > 1 && (
           <div
             aria-label="Artist sections"
-            className="mb-8 flex gap-5 overflow-x-auto shadow-[inset_0_-1px_0_rgba(255,255,255,0.1)] [scrollbar-width:none] sm:gap-6"
+            className="mb-9 flex gap-6 overflow-x-auto shadow-[inset_0_-1px_0_rgba(242,238,230,0.08)] [scrollbar-width:none] sm:gap-8"
             role="tablist"
           >
             {tabs.map((tab) => (
               <button
                 aria-selected={activeTab === tab.key}
-                className={`shrink-0 whitespace-nowrap border-b-2 pb-3 text-sm font-semibold uppercase tracking-[0.08em] transition-colors ${
+                className={`shrink-0 whitespace-nowrap border-b-2 pb-3 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${
                   activeTab === tab.key
-                    ? "border-white text-white"
-                    : "border-transparent text-zinc-500 hover:text-zinc-200"
+                    ? "border-mujin-copper text-mujin-text"
+                    : "border-transparent text-mujin-text-tertiary hover:text-mujin-text"
                 }`}
                 key={tab.key}
                 onClick={() => navigate(tab.key)}
@@ -554,7 +582,83 @@ function LibraryArtistDetails({
             )}
           </div>
         )}
+        {artist &&
+          (activeTab === "overview" || activeTab === "discography") && (
+            <SimilarArtistsRow artistId={artist.id} name={artist.name} />
+          )}
       </div>
+    </div>
+  );
+}
+
+/** "Similar artists" from shared genres in the library. */
+function SimilarArtistsRow({
+  artistId,
+  name,
+}: {
+  artistId: string;
+  name: string;
+}) {
+  const similar = useQuery({
+    queryKey: ["artist-similar", artistId],
+    queryFn: () => getSimilarArtists(artistId),
+    staleTime: 5 * 60_000,
+  });
+  if (!similar.data?.length) return null;
+  return (
+    <section className="mt-16">
+      <ShelfRow
+        eyebrow={`If you like ${name}`}
+        size="sm"
+        title="Similar artists"
+      >
+        {similar.data.map((other) => (
+          <ArtistCircle artist={other} key={other.id} />
+        ))}
+      </ShelfRow>
+    </section>
+  );
+}
+
+/** "2006–2012": the span of an artist's dated releases. */
+function artistYears(albums: Album[]) {
+  const years = albums
+    .map((album) => Number(/^\d{4}/.exec(album.first_release_date || "")?.[0]))
+    .filter((year) => Number.isFinite(year) && year > 0);
+  if (!years.length) return "";
+  const first = Math.min(...years);
+  const last = Math.max(...years);
+  return first === last ? String(first) : `${first}–${last}`;
+}
+
+/**
+ * Without a photo, the hero is a mosaic of the artist's covers: large,
+ * slightly tilted, softened into the canvas.
+ */
+function ArtistMosaic({ covers }: { covers: string[] }) {
+  const tiles = Array.from(
+    { length: 8 },
+    (_, index) => covers[index % covers.length]!,
+  );
+  return (
+    <div aria-hidden className="absolute inset-0 -z-10 overflow-hidden">
+      <div className="absolute -inset-x-[10%] -top-[30%] bottom-0 grid rotate-[-6deg] grid-cols-4 gap-3 opacity-55 saturate-[0.85]">
+        {tiles.map((cover, index) => (
+          <div
+            className="relative aspect-square overflow-hidden rounded-md"
+            key={`${cover}-${index}`}
+          >
+            <Image
+              alt=""
+              className="object-cover"
+              fill
+              sizes="25vw"
+              src={cover}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_5%,rgba(10,10,11,0.82)_45%,rgba(10,10,11,0.45)_100%),linear-gradient(to_right,rgba(10,10,11,0.9),rgba(10,10,11,0.2)_75%)]" />
     </div>
   );
 }

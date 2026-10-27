@@ -10,6 +10,7 @@ import {
   paramsFromSearch,
   searchFromParams,
   searchTitle,
+  STATION_TONES,
   stationMonogram,
   stationQueueItem,
 } from "./live-radio-model";
@@ -119,6 +120,11 @@ test("monograms are stable and readable", () => {
   expect(stationMonogram("Radio Paradise").initials).toBe("RP");
   expect(stationMonogram("KEXP").initials).toBe("KE");
   expect(stationMonogram("!!!").initials).toBe("FM");
+  for (const name of ["Radio Paradise", "KEXP", "FIP", "SomaFM Drone Zone"]) {
+    expect(STATION_TONES.map(([from]) => from)).toContain(
+      stationMonogram(name).from,
+    );
+  }
   expect(stationMonogram("Radio Paradise")).toEqual(
     stationMonogram("Radio Paradise"),
   );

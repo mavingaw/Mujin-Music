@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
   },
   composer: { color: "white", fontSize: 16, fontWeight: "700", marginTop: 10 },
   facts: { color: palette.secondary, fontSize: 13, marginTop: 6 },
-  parent: { color: "#d4d4d8", fontSize: 13, marginTop: 8 },
+  parent: { color: "#c7c2b9", fontSize: 13, marginTop: 8 },
   block: { marginBottom: 6 },
   part: {
     color: palette.secondary,

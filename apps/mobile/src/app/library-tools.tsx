@@ -340,7 +340,7 @@ function Attention({ label, value }: { label: string; value: number }) {
       <View
         style={[
           styles.dot,
-          { backgroundColor: value > 0 ? "#f5c542" : palette.success },
+          { backgroundColor: value > 0 ? "#daab6c" : palette.success },
         ]}
       />
       <Text style={styles.legendLabel}>{label}</Text>

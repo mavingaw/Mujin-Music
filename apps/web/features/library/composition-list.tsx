@@ -324,7 +324,7 @@ export function RecordingRow({
         </span>
         <button
           aria-label={`Play ${recording.albumName ?? "recording"}`}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-black hover:bg-zinc-200"
+          className="mj-primary grid h-8 w-8 shrink-0 place-items-center rounded-full"
           onClick={onPlay}
           type="button"
         >

@@ -144,7 +144,7 @@ export function AwardTags({ awards }: { awards: string[] | undefined }) {
     <View style={styles.awards}>
       {awards.map((award) => (
         <View key={award} style={styles.award}>
-          <Award color="#fde68a" size={13} />
+          <Award color="#f0dcc2" size={13} />
           <Text style={styles.awardText}>{award}</Text>
         </View>
       ))}
@@ -237,11 +237,11 @@ const styles = StyleSheet.create({
     gap: 5,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(253, 230, 138, 0.3)",
+    borderColor: "rgba(240, 220, 194, 0.3)",
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  awardText: { color: "#fde68a", fontSize: 12, fontWeight: "700" },
+  awardText: { color: "#f0dcc2", fontSize: 12, fontWeight: "700" },
   credit: { gap: 2 },
   creditTrack: { color: "white", fontWeight: "700", fontSize: 14 },
   creditLine: { color: palette.secondary, fontSize: 13, lineHeight: 19 },

@@ -60,7 +60,7 @@ export function SmartPlaylistBanner({
 
   return (
     <View style={styles.banner}>
-      <Sparkles color="#fde68a" size={18} />
+      <Sparkles color="#f0dcc2" size={18} />
       <View style={{ flex: 1 }}>
         <Text style={styles.title}>Smart playlist</Text>
         <Text numberOfLines={2} style={styles.meta}>
@@ -116,7 +116,7 @@ const styles = StyleSheet.create({
   },
   title: { color: "white", fontWeight: "800" },
   meta: { color: palette.secondary, fontSize: 12, marginTop: 2 },
-  error: { color: "#fca5a5", fontSize: 12, marginTop: 4 },
+  error: { color: "#f9b3af", fontSize: 12, marginTop: 4 },
   icon: {
     width: 40,
     height: 40,

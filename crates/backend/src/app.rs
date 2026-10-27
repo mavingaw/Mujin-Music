@@ -64,6 +64,32 @@ pub struct LocalCatalogAlbum {
     pub release_year: String,
     pub song_count: usize,
     pub first_song_id: Option<String>,
+    /// Quality badge text ("24/96", "16/44.1", "MP3"), when the format is known.
+    pub format_label: Option<String>,
+    /// Lossless above CD resolution.
+    pub hi_res: bool,
+    pub lossless: bool,
+}
+
+impl LocalCatalogAlbum {
+    pub fn new(artist: &crate::domain::Artist, album: &crate::domain::Album) -> Self {
+        let quality = crate::library::quality::album_quality(album);
+        Self {
+            id: album.id.clone(),
+            name: album.name.clone(),
+            artist_id: artist.id.clone(),
+            artist_name: artist.name.clone(),
+            cover_path: album.cover_url.clone(),
+            release_year: album.first_release_date.chars().take(4).collect(),
+            song_count: album.songs.len(),
+            first_song_id: album.songs.first().map(|song| song.id.clone()),
+            format_label: quality
+                .as_ref()
+                .and_then(crate::library::quality::quality_label),
+            hi_res: quality.as_ref().is_some_and(|quality| quality.hi_res),
+            lossless: quality.as_ref().is_some_and(|quality| quality.lossless),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -208,16 +234,7 @@ fn catalog_album_page(
                 continue;
             }
             if position >= offset && albums.len() < limit {
-                albums.push(LocalCatalogAlbum {
-                    id: album.id.clone(),
-                    name: album.name.clone(),
-                    artist_id: artist.id.clone(),
-                    artist_name: artist.name.clone(),
-                    cover_path: album.cover_url.clone(),
-                    release_year: album.first_release_date.chars().take(4).collect(),
-                    song_count: album.songs.len(),
-                    first_song_id: album.songs.first().map(|song| song.id.clone()),
-                });
+                albums.push(LocalCatalogAlbum::new(artist, album));
             }
             position += 1;
             if albums.len() >= limit {
@@ -315,16 +332,7 @@ pub(crate) fn focus_album(cache: &LibraryCache, id: &str) -> Option<LocalFocusAl
         .max_by_key(|quality| quality_rank(*quality))
         .flatten();
     Some(LocalFocusAlbum {
-        album: LocalCatalogAlbum {
-            id: album.id.clone(),
-            name: album.name.clone(),
-            artist_id: artist.id.clone(),
-            artist_name: artist.name.clone(),
-            cover_path: album.cover_url.clone(),
-            release_year: album.first_release_date.chars().take(4).collect(),
-            song_count: album.songs.len(),
-            first_song_id: album.songs.first().map(|song| song.id.clone()),
-        },
+        album: LocalCatalogAlbum::new(artist, album),
         quality,
     })
 }
@@ -807,16 +815,7 @@ impl LocalApp {
         let albums = artist
             .albums
             .iter()
-            .map(|album| LocalCatalogAlbum {
-                id: album.id.clone(),
-                name: album.name.clone(),
-                artist_id: artist.id.clone(),
-                artist_name: artist.name.clone(),
-                cover_path: album.cover_url.clone(),
-                release_year: album.first_release_date.chars().take(4).collect(),
-                song_count: album.songs.len(),
-                first_song_id: album.songs.first().map(|song| song.id.clone()),
-            })
+            .map(|album| LocalCatalogAlbum::new(artist, album))
             .collect();
         let songs = artist
             .albums
@@ -983,16 +982,7 @@ impl LocalApp {
         let artist = cache
             .album_owner(id)
             .ok_or_else(|| "The album artist is unavailable.".to_string())?;
-        let summary = LocalCatalogAlbum {
-            id: album.id.clone(),
-            name: album.name.clone(),
-            artist_id: artist.id.clone(),
-            artist_name: artist.name.clone(),
-            cover_path: album.cover_url.clone(),
-            release_year: album.first_release_date.chars().take(4).collect(),
-            song_count: album.songs.len(),
-            first_song_id: album.songs.first().map(|song| song.id.clone()),
-        };
+        let summary = LocalCatalogAlbum::new(artist, album);
         let songs = album
             .songs
             .iter()

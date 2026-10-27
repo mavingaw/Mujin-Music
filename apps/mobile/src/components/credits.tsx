@@ -206,7 +206,7 @@ export function NoteBlock({
 const styles = StyleSheet.create({
   creditedAs: { color: palette.muted, fontSize: 13, fontWeight: "400" },
   block: { paddingHorizontal: 20, gap: 8 },
-  body: { color: "#d4d4d8", fontSize: 15, lineHeight: 23 },
+  body: { color: "#c7c2b9", fontSize: 15, lineHeight: 23 },
   placeholder: { color: palette.muted, fontSize: 15, lineHeight: 23 },
   more: { color: palette.secondary, fontSize: 14, fontWeight: "700" },
   save: { color: "white", fontSize: 14, fontWeight: "800" },

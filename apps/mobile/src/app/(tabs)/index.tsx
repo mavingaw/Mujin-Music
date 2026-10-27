@@ -1,4 +1,8 @@
-import { getHomeEssentials } from "@parson/music-sdk";
+import {
+  getHomeEssentials,
+  getProfiles,
+  greetingForHour,
+} from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { ChevronRight, Radio } from "lucide-react-native";
@@ -20,7 +24,17 @@ import {
   SectionTitle,
   SongRow,
 } from "@/components/music-ui";
+import {
+  ArtistCircles,
+  BestYearsCard,
+  DailyPicksCard,
+  GenreTiles,
+  HomeAlbumRail,
+  HomeGreeting,
+  HomeSectionHeader,
+} from "@/components/home-sections";
 import { layout, palette } from "@/constants/colors";
+import { useSession } from "@/providers/session-provider";
 
 function LiveRadioEntry() {
   const router = useRouter();
@@ -32,7 +46,7 @@ function LiveRadioEntry() {
       style={styles.radioEntry}
     >
       <View style={styles.radioIcon}>
-        <Radio color="white" size={22} />
+        <Radio color={palette.accentText} size={22} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.radioTitle}>Live Radio</Text>
@@ -45,7 +59,24 @@ function LiveRadioEntry() {
   );
 }
 
+function firstName(name: string) {
+  const first = name.trim().split(/\s+/)[0] ?? "";
+  return first ? first.charAt(0).toLocaleUpperCase() + first.slice(1) : "";
+}
+
 export default function HomeScreen() {
+  const session = useSession();
+  const profiles = useQuery({
+    queryKey: ["profiles", session.claims?.sub],
+    queryFn: getProfiles,
+    staleTime: 60_000,
+  });
+  const profileName =
+    profiles.data?.profiles.find(
+      (profile) => profile.id === profiles.data?.currentId,
+    )?.name ??
+    session.claims?.username ??
+    "";
   const home = useQuery({
     queryKey: ["home"],
     queryFn: getHomeEssentials,
@@ -70,8 +101,15 @@ export default function HomeScreen() {
             paddingBottom: layout.tabBar + layout.miniPlayer + 34,
           }}
         >
-          <PageTitle>Home</PageTitle>
-          <LiveRadioEntry />
+          {home.data ? (
+            <HomeGreeting
+              feed={home.data}
+              greeting={greetingForHour(new Date().getHours())}
+              name={firstName(profileName)}
+            />
+          ) : (
+            <PageTitle>Home</PageTitle>
+          )}
           {home.isPending ? (
             <ActivityIndicator color="white" style={{ marginTop: 70 }} />
           ) : home.error ? (
@@ -85,6 +123,22 @@ export default function HomeScreen() {
             </Pressable>
           ) : home.data ? (
             <>
+              {home.data.daily_picks?.picks.length ? (
+                <DailyPicksCard
+                  date={home.data.daily_picks.date}
+                  picks={home.data.daily_picks.picks}
+                />
+              ) : null}
+              {home.data.recently_added?.length ? (
+                <>
+                  <HomeSectionHeader
+                    eyebrow="Your library"
+                    title="Recently added"
+                  />
+                  <HomeAlbumRail albums={home.data.recently_added} />
+                </>
+              ) : null}
+              <LiveRadioEntry />
               <SectionTitle>Recently played</SectionTitle>
               {home.data.continue_listening.slice(0, 8).map((song) => (
                 <SongRow
@@ -94,10 +148,40 @@ export default function HomeScreen() {
                   showAlbum={false}
                 />
               ))}
+              {home.data.new_for_you?.length ? (
+                <>
+                  <HomeSectionHeader
+                    eyebrow="Newest releases you own"
+                    title="New for you"
+                  />
+                  <HomeAlbumRail albums={home.data.new_for_you} />
+                </>
+              ) : null}
+              {home.data.similar_artists?.length ? (
+                <>
+                  <HomeSectionHeader
+                    eyebrow={
+                      home.data.similar_artists.find((artist) => artist.reason)
+                        ?.reason ?? "From your library"
+                    }
+                    title="Similar artists"
+                  />
+                  <ArtistCircles artists={home.data.similar_artists} />
+                </>
+              ) : null}
+              {home.data.best_years?.albums.length ? (
+                <BestYearsCard prime={home.data.best_years} />
+              ) : null}
               <SectionTitle>Recommended songs</SectionTitle>
               {recommendedSongs.slice(0, 10).map((song) => (
                 <SongRow key={song.id} song={song} queue={recommendedSongs} />
               ))}
+              {home.data.genres?.length ? (
+                <>
+                  <HomeSectionHeader eyebrow="Browse" title="Genres" />
+                  <GenreTiles genres={home.data.genres} />
+                </>
+              ) : null}
               <SectionTitle>Albums you might like</SectionTitle>
               <AlbumRail albums={home.data.albums.slice(0, 6)} />
             </>
@@ -111,19 +195,20 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   radioEntry: {
     alignItems: "center",
-    backgroundColor: "rgba(244,63,94,0.12)",
-    borderColor: "rgba(244,63,94,0.25)",
+    backgroundColor: "rgba(217,139,95,0.10)",
+    borderColor: "rgba(217,139,95,0.25)",
     borderRadius: layout.radius,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     gap: 12,
     marginBottom: 6,
     marginHorizontal: layout.horizontal,
+    marginTop: 24,
     padding: 14,
   },
   radioIcon: {
     alignItems: "center",
-    backgroundColor: "#e11d48",
+    backgroundColor: palette.accent,
     borderRadius: 12,
     height: 42,
     justifyContent: "center",

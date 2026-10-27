@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
   chipText: { color: "white", fontSize: 13, fontWeight: "700" },
   empty: { color: palette.secondary, marginTop: 40, textAlign: "center" },
   notice: {
-    color: "#fde68a",
+    color: "#f0dcc2",
     fontSize: 13,
     marginHorizontal: layout.horizontal,
     marginTop: 8,

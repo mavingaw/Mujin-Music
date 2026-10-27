@@ -58,7 +58,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { SongRow } from "@/components/music-ui";
-import { palette } from "@/constants/colors";
+import { fonts, palette } from "@/constants/colors";
 import {
   playerAudioPresets,
   usePlayer,
@@ -122,6 +122,24 @@ type Player = ReturnType<typeof usePlayer>;
 type PlayerSong = NonNullable<Player["current"]>;
 type Router = ReturnType<typeof useRouter>;
 type SyncedLine = { at: number; text: string };
+
+/** "The Open Goldberg Variations · 2012 · Bach" under the artist. */
+function nowPlayingMeta(song: {
+  album_object?: { name?: string; first_release_date?: string } | null;
+  credits?: { role: string; name: string }[];
+}) {
+  const year = /^\d{4}/.exec(song.album_object?.first_release_date ?? "")?.[0];
+  const composer = song.credits?.find(
+    (credit) => credit.role === "composer",
+  )?.name;
+  return [
+    song.album_object?.name,
+    year && year !== "0000" ? year : null,
+    composer,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 function PlayerHeader({
   panel,
@@ -263,6 +281,11 @@ function NowPlayingPanel({
               song.artist
             )}
           </Text>
+          {!live && nowPlayingMeta(song) ? (
+            <Text numberOfLines={1} style={styles.meta}>
+              {nowPlayingMeta(song)}
+            </Text>
+          ) : null}
           {live ? (
             <View style={styles.liveRow}>
               <LiveTag />
@@ -352,9 +375,13 @@ function NowPlayingPanel({
           onPress={player.toggle}
         >
           {player.isPlaying ? (
-            <PauseGlyph color="black" size={30} />
+            <PauseGlyph color={palette.accentText} size={30} />
           ) : (
-            <Play color="black" fill="black" size={34} />
+            <Play
+              color={palette.accentText}
+              fill={palette.accentText}
+              size={34}
+            />
           )}
         </Pressable>
         <Pressable
@@ -931,6 +958,9 @@ export default function PlayerScreen() {
       </View>
     );
   const song = player.current;
+  const backdropUri = isLiveRadioId(song.id)
+    ? null
+    : imageUrl(song.album_object?.cover_url);
   const songBanned = bans.isBanned({ kind: "song", id: song.id });
   /** Heart cycle: not liked, liked, banned, then back to not liked. */
   const toggleFavorite = async () => {
@@ -965,6 +995,29 @@ export default function PlayerScreen() {
         colors={["#26262B", "#0A0A0B", "#050506"]}
         style={[styles.page, playerDragStyle]}
       >
+        {backdropUri ? (
+          <>
+            <Image
+              blurRadius={60}
+              contentFit="cover"
+              pointerEvents="none"
+              source={{
+                uri: backdropUri,
+                headers: imageRequestHeaders(backdropUri),
+              }}
+              style={styles.backdrop}
+            />
+            <LinearGradient
+              colors={[
+                "rgba(5,5,6,0.25)",
+                "rgba(5,5,6,0.7)",
+                "rgba(5,5,6,0.96)",
+              ]}
+              pointerEvents="none"
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        ) : null}
         <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
           <PlayerHeader
             panel={panel}
@@ -1071,7 +1124,7 @@ const styles = StyleSheet.create({
   liveRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 6 },
   liveBar: { height: 44, justifyContent: "center", paddingHorizontal: 4 },
   liveLine: {
-    backgroundColor: "#f43f5e",
+    backgroundColor: "#f2473f",
     borderRadius: 2,
     height: 3,
     opacity: 0.85,
@@ -1087,7 +1140,7 @@ const styles = StyleSheet.create({
   },
   panelHeader: { color: "white", fontSize: 15, fontWeight: "800" },
   playbackError: {
-    color: "#fb7185",
+    color: "#f6807a",
     fontSize: 13,
     textAlign: "center",
   },
@@ -1102,10 +1155,19 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   title: {
-    color: "white",
-    fontSize: 24,
-    fontWeight: "900",
-    letterSpacing: -0.5,
+    color: palette.text,
+    fontFamily: fonts.display,
+    fontSize: 30,
+    lineHeight: 36,
+  },
+  meta: { color: palette.tertiary, fontSize: 12.5, marginTop: 6 },
+  backdrop: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    opacity: 0.5,
   },
   artist: { color: palette.secondary, fontSize: 16, marginTop: 5 },
   sliderHitbox: {
@@ -1135,7 +1197,7 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: 34,
-    backgroundColor: "white",
+    backgroundColor: palette.accent,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1157,7 +1219,7 @@ const styles = StyleSheet.create({
   panelText: { color: "white", fontWeight: "800" },
   panel: { flex: 1, paddingTop: 18 },
   radioLabel: {
-    color: "#7dd3fc",
+    color: "#a9d1e6",
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 1.2,
@@ -1234,5 +1296,5 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: "white", fontWeight: "900", fontSize: 18 },
   emptyDetail: { color: palette.secondary, lineHeight: 20, marginTop: 8 },
-  drawerError: { color: "#ff9b9b", paddingHorizontal: 16, paddingVertical: 8 },
+  drawerError: { color: "#f6807a", paddingHorizontal: 16, paddingVertical: 8 },
 });

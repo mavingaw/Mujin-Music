@@ -9,12 +9,12 @@ import { Linking, StyleSheet, Text, View } from "react-native";
 
 import { palette } from "@/constants/colors";
 
-const AMBER = "#fcd34d";
+const AMBER = "#e6c599";
 
 const SIGNAL_ICON = {
-  match: { Icon: Check, color: "#6ee7b7" },
+  match: { Icon: Check, color: "#bcd8a9" },
   partial: { Icon: CircleHelp, color: AMBER },
-  mismatch: { Icon: X, color: "#fda4af" },
+  mismatch: { Icon: X, color: "#f9b3af" },
   unknown: { Icon: CircleHelp, color: palette.muted },
 } as const;
 
@@ -67,8 +67,8 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(252,211,77,0.28)",
-    backgroundColor: "rgba(252,211,77,0.07)",
+    borderColor: "rgba(230,197,153,0.28)",
+    backgroundColor: "rgba(230,197,153,0.07)",
     padding: 14,
     gap: 6,
   },
@@ -85,6 +85,6 @@ const styles = StyleSheet.create({
   body: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
   signal: { flexDirection: "row", alignItems: "flex-start", gap: 7 },
   signalIcon: { marginTop: 3 },
-  signalText: { flex: 1, color: "#d4d4d8", fontSize: 13, lineHeight: 19 },
+  signalText: { flex: 1, color: "#c7c2b9", fontSize: 13, lineHeight: 19 },
   hint: { color: palette.muted, fontSize: 12, lineHeight: 17, marginTop: 4 },
 });

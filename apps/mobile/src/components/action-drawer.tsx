@@ -331,7 +331,7 @@ const styles = StyleSheet.create({
     backgroundColor: "black",
   },
   drawer: {
-    backgroundColor: "#18181b",
+    backgroundColor: "#17171a",
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingTop: 10,

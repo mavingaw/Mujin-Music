@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.08)",
   },
   chipActive: { backgroundColor: "white" },
-  chipText: { color: "#d4d4d8", fontSize: 12, fontWeight: "700" },
+  chipText: { color: "#c7c2b9", fontSize: 12, fontWeight: "700" },
   chipTextActive: { color: "black" },
   group: { marginTop: 10 },
   groupTitle: {
@@ -348,8 +348,8 @@ const styles = StyleSheet.create({
   },
   workTitle: { color: "white", fontSize: 14, fontWeight: "600" },
   workMeta: { color: palette.muted, fontSize: 12, marginTop: 2 },
-  workTitleMissing: { color: "#d4d4d8", fontWeight: "500" },
-  owned: { color: "#6ee7b7", fontSize: 12, fontWeight: "700" },
+  workTitleMissing: { color: "#c7c2b9", fontWeight: "500" },
+  owned: { color: "#bcd8a9", fontSize: 12, fontWeight: "700" },
   notOwned: { color: palette.muted, fontSize: 11 },
   groupCount: { color: palette.muted, fontSize: 13, fontWeight: "600" },
   more: {

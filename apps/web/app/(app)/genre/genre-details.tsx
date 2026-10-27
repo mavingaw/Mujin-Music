@@ -185,7 +185,9 @@ function GenreIndex() {
           <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
             <Tags className="h-3.5 w-3.5" /> Library
           </p>
-          <h1 className="text-4xl font-black text-white sm:text-5xl">Genres</h1>
+          <h1 className="text-4xl mj-display text-mujin-text sm:text-5xl">
+            Genres
+          </h1>
           {tree.data && (
             <p className="mt-3 text-sm text-zinc-400">
               {SOURCE_NOTE[tree.data.source]}
@@ -312,7 +314,7 @@ export default function GenreDetails() {
               </span>
             ))}
           </nav>
-          <h1 className="text-balance text-4xl font-black leading-none text-white sm:text-6xl">
+          <h1 className="text-balance text-4xl mj-display leading-none text-mujin-text sm:text-6xl">
             {page.name}
           </h1>
           <p className="mt-3 text-sm text-zinc-300">

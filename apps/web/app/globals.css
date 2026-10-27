@@ -129,6 +129,201 @@
   --color-quality-high: #a3c98b;
   --color-quality-low: #7e7a74;
   --color-quality-clipping: #f2473f;
+
+  /*
+   * Off-brand Tailwind hues fold into the brand palette, so no stray purple,
+   * indigo or sky accent can appear: violet/indigo/purple/fuchsia/pink take
+   * copper, sky/blue/cyan the 'enhanced' steel blue, teal/emerald/green/lime
+   * the 'high quality' sage, amber/yellow/orange a warm brass, rose/red the
+   * clipping red.
+   */
+  --color-indigo-50: #fbf2ec;
+  --color-indigo-100: #f7e2d4;
+  --color-indigo-200: #f0c3a6;
+  --color-indigo-300: #e6a27a;
+  --color-indigo-400: #d98b5f;
+  --color-indigo-500: #bf7246;
+  --color-indigo-600: #a85d30;
+  --color-indigo-700: #7e4524;
+  --color-indigo-800: #553a2a;
+  --color-indigo-900: #3a271d;
+  --color-indigo-950: #221711;
+  --color-violet-50: #fbf2ec;
+  --color-violet-100: #f7e2d4;
+  --color-violet-200: #f0c3a6;
+  --color-violet-300: #e6a27a;
+  --color-violet-400: #d98b5f;
+  --color-violet-500: #bf7246;
+  --color-violet-600: #a85d30;
+  --color-violet-700: #7e4524;
+  --color-violet-800: #553a2a;
+  --color-violet-900: #3a271d;
+  --color-violet-950: #221711;
+  --color-purple-50: #fbf2ec;
+  --color-purple-100: #f7e2d4;
+  --color-purple-200: #f0c3a6;
+  --color-purple-300: #e6a27a;
+  --color-purple-400: #d98b5f;
+  --color-purple-500: #bf7246;
+  --color-purple-600: #a85d30;
+  --color-purple-700: #7e4524;
+  --color-purple-800: #553a2a;
+  --color-purple-900: #3a271d;
+  --color-purple-950: #221711;
+  --color-fuchsia-50: #fbf2ec;
+  --color-fuchsia-100: #f7e2d4;
+  --color-fuchsia-200: #f0c3a6;
+  --color-fuchsia-300: #e6a27a;
+  --color-fuchsia-400: #d98b5f;
+  --color-fuchsia-500: #bf7246;
+  --color-fuchsia-600: #a85d30;
+  --color-fuchsia-700: #7e4524;
+  --color-fuchsia-800: #553a2a;
+  --color-fuchsia-900: #3a271d;
+  --color-fuchsia-950: #221711;
+  --color-pink-50: #fbf2ec;
+  --color-pink-100: #f7e2d4;
+  --color-pink-200: #f0c3a6;
+  --color-pink-300: #e6a27a;
+  --color-pink-400: #d98b5f;
+  --color-pink-500: #bf7246;
+  --color-pink-600: #a85d30;
+  --color-pink-700: #7e4524;
+  --color-pink-800: #553a2a;
+  --color-pink-900: #3a271d;
+  --color-pink-950: #221711;
+  --color-sky-50: #f1f6f9;
+  --color-sky-100: #e3eef4;
+  --color-sky-200: #c9e0ec;
+  --color-sky-300: #a9d1e6;
+  --color-sky-400: #8fc3e0;
+  --color-sky-500: #6ea7c6;
+  --color-sky-600: #548aa8;
+  --color-sky-700: #436e86;
+  --color-sky-800: #2f4654;
+  --color-sky-900: #1f2e37;
+  --color-sky-950: #131c21;
+  --color-blue-50: #f1f6f9;
+  --color-blue-100: #e3eef4;
+  --color-blue-200: #c9e0ec;
+  --color-blue-300: #a9d1e6;
+  --color-blue-400: #8fc3e0;
+  --color-blue-500: #6ea7c6;
+  --color-blue-600: #548aa8;
+  --color-blue-700: #436e86;
+  --color-blue-800: #2f4654;
+  --color-blue-900: #1f2e37;
+  --color-blue-950: #131c21;
+  --color-cyan-50: #f1f6f9;
+  --color-cyan-100: #e3eef4;
+  --color-cyan-200: #c9e0ec;
+  --color-cyan-300: #a9d1e6;
+  --color-cyan-400: #8fc3e0;
+  --color-cyan-500: #6ea7c6;
+  --color-cyan-600: #548aa8;
+  --color-cyan-700: #436e86;
+  --color-cyan-800: #2f4654;
+  --color-cyan-900: #1f2e37;
+  --color-cyan-950: #131c21;
+  --color-teal-50: #f4f8f1;
+  --color-teal-100: #e8f1e2;
+  --color-teal-200: #d3e5c7;
+  --color-teal-300: #bcd8a9;
+  --color-teal-400: #a3c98b;
+  --color-teal-500: #87ad6f;
+  --color-teal-600: #6d9157;
+  --color-teal-700: #567245;
+  --color-teal-800: #3d4d33;
+  --color-teal-900: #293423;
+  --color-teal-950: #181f14;
+  --color-emerald-50: #f4f8f1;
+  --color-emerald-100: #e8f1e2;
+  --color-emerald-200: #d3e5c7;
+  --color-emerald-300: #bcd8a9;
+  --color-emerald-400: #a3c98b;
+  --color-emerald-500: #87ad6f;
+  --color-emerald-600: #6d9157;
+  --color-emerald-700: #567245;
+  --color-emerald-800: #3d4d33;
+  --color-emerald-900: #293423;
+  --color-emerald-950: #181f14;
+  --color-green-50: #f4f8f1;
+  --color-green-100: #e8f1e2;
+  --color-green-200: #d3e5c7;
+  --color-green-300: #bcd8a9;
+  --color-green-400: #a3c98b;
+  --color-green-500: #87ad6f;
+  --color-green-600: #6d9157;
+  --color-green-700: #567245;
+  --color-green-800: #3d4d33;
+  --color-green-900: #293423;
+  --color-green-950: #181f14;
+  --color-lime-50: #f4f8f1;
+  --color-lime-100: #e8f1e2;
+  --color-lime-200: #d3e5c7;
+  --color-lime-300: #bcd8a9;
+  --color-lime-400: #a3c98b;
+  --color-lime-500: #87ad6f;
+  --color-lime-600: #6d9157;
+  --color-lime-700: #567245;
+  --color-lime-800: #3d4d33;
+  --color-lime-900: #293423;
+  --color-lime-950: #181f14;
+  --color-amber-50: #faf6f0;
+  --color-amber-100: #f5ece0;
+  --color-amber-200: #f0dcc2;
+  --color-amber-300: #e6c599;
+  --color-amber-400: #daab6c;
+  --color-amber-500: #c99550;
+  --color-amber-600: #a87a3a;
+  --color-amber-700: #82602e;
+  --color-amber-800: #55432b;
+  --color-amber-900: #3a2d1d;
+  --color-amber-950: #221b11;
+  --color-yellow-50: #faf6f0;
+  --color-yellow-100: #f5ece0;
+  --color-yellow-200: #f0dcc2;
+  --color-yellow-300: #e6c599;
+  --color-yellow-400: #daab6c;
+  --color-yellow-500: #c99550;
+  --color-yellow-600: #a87a3a;
+  --color-yellow-700: #82602e;
+  --color-yellow-800: #55432b;
+  --color-yellow-900: #3a2d1d;
+  --color-yellow-950: #221b11;
+  --color-orange-50: #faf6f0;
+  --color-orange-100: #f5ece0;
+  --color-orange-200: #f0dcc2;
+  --color-orange-300: #e6c599;
+  --color-orange-400: #daab6c;
+  --color-orange-500: #c99550;
+  --color-orange-600: #a87a3a;
+  --color-orange-700: #82602e;
+  --color-orange-800: #55432b;
+  --color-orange-900: #3a2d1d;
+  --color-orange-950: #221b11;
+  --color-rose-50: #fdeeed;
+  --color-rose-100: #fbdcda;
+  --color-rose-200: #f9b3af;
+  --color-rose-300: #f6807a;
+  --color-rose-400: #f2473f;
+  --color-rose-500: #d9372f;
+  --color-rose-600: #b82c25;
+  --color-rose-700: #8c241f;
+  --color-rose-800: #5e2421;
+  --color-rose-900: #401817;
+  --color-rose-950: #260e0d;
+  --color-red-50: #fdeeed;
+  --color-red-100: #fbdcda;
+  --color-red-200: #f9b3af;
+  --color-red-300: #f6807a;
+  --color-red-400: #f2473f;
+  --color-red-500: #d9372f;
+  --color-red-600: #b82c25;
+  --color-red-700: #8c241f;
+  --color-red-800: #5e2421;
+  --color-red-900: #401817;
+  --color-red-950: #260e0d;
 }
 
 @theme inline {
@@ -211,20 +406,170 @@ body {
   transition: fill 240ms ease;
 }
 
-.app-content-shell {
-  position: fixed;
-  top: 56px;
-  right: 8px;
-  bottom: 80px;
-  left: 8px;
-  border: 1px solid rgb(255 255 255 / 0.1);
-  border-radius: 18px;
+/*
+ * App shell geometry. Phones: a top bar, a bottom tab bar and a floating
+ * mini player. Tablets: an icon rail. Desktop: Roon-style grouped sidebar,
+ * top bar and a docked transport footer that spans the window.
+ */
+:root {
+  --shell-sidebar: 0px;
+  --shell-header: 56px;
+  --shell-footer: calc(64px + env(safe-area-inset-bottom));
 }
 
 @media (min-width: 768px) {
-  .app-content-shell {
-    bottom: 8px;
-    left: 88px;
+  :root {
+    --shell-sidebar: 76px;
+    --shell-header: 64px;
+    --shell-footer: 88px;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --shell-sidebar: 244px;
+  }
+}
+
+.app-content-shell {
+  position: fixed;
+  top: var(--shell-header);
+  right: 0;
+  bottom: var(--shell-footer);
+  left: var(--shell-sidebar);
+}
+
+/* Small caps label above a title ("ALBUM", "DAILY PICKS"). */
+.mj-eyebrow {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--color-mujin-text-tertiary);
+}
+
+/* Large gallery titles: Jost Light at display sizes. */
+.mj-display {
+  font-family: var(--font-display);
+  font-weight: 300;
+  letter-spacing: -0.01em;
+  line-height: 1.04;
+}
+
+.mj-title {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+.mj-tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Artwork sits on the canvas with a soft contact shadow and a hairline. */
+.mj-artwork {
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 1px rgb(242 238 230 / 0.06),
+    0 18px 40px -18px rgb(0 0 0 / 0.85);
+}
+
+/* Blurred-art backdrop for heroes and Now Playing. */
+.mj-art-backdrop {
+  position: absolute;
+  inset: -64px;
+  background-position: center;
+  background-size: cover;
+  filter: blur(64px) saturate(1.25);
+  opacity: 0.55;
+  transform: scale(1.1);
+}
+
+.mj-hero-fade {
+  background:
+    linear-gradient(
+      to bottom,
+      rgb(10 10 11 / 0.25) 0%,
+      rgb(10 10 11 / 0.55) 55%,
+      var(--color-mujin-base) 100%
+    ),
+    radial-gradient(
+      120% 90% at 18% 0%,
+      transparent 0%,
+      rgb(10 10 11 / 0.45) 100%
+    );
+}
+
+/* Copper primary action ("Play now"). */
+.mj-primary {
+  background: var(--color-mujin-copper);
+  color: var(--color-mujin-on-copper);
+  transition:
+    background-color 180ms cubic-bezier(0.2, 0, 0, 1),
+    transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.mj-primary:hover {
+  background: var(--color-mujin-copper-hover);
+}
+
+.mj-primary:active {
+  background: var(--color-mujin-copper-pressed);
+}
+
+/* Cards lift a little on hover; the play button fades in. */
+.mj-card {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.mj-card .mj-card-play {
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 180ms cubic-bezier(0.2, 0, 0, 1),
+    transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.mj-card:hover .mj-card-play,
+.mj-card:focus-within .mj-card-play {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (hover: none) {
+  .mj-card .mj-card-play {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The signal light: a dot in the live quality colour with a soft halo. */
+.mj-signal-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mujin-quality, #d98b5f);
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--mujin-quality, #d98b5f) 18%, transparent);
+}
+
+/* Restrained motion everywhere: honour the system setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+
+  .mj-card .mj-card-play {
+    transform: none;
   }
 }
 
@@ -393,14 +738,14 @@ html[data-window-controls] .app-titlebar-search {
 }
 
 ::selection {
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
+  background: rgb(217 139 95 / 0.32);
+  color: #f2eee6;
 }
 
 @layer base {
   a:focus-visible:not([role^="menuitem"]),
   button:focus-visible:not([role^="menuitem"]) {
-    outline: 2px solid rgba(255, 255, 255, 0.3);
+    outline: 2px solid rgb(217 139 95 / 0.75);
     outline-offset: 3px;
   }
 }
@@ -480,4 +825,15 @@ html[data-window-controls] .app-titlebar-search {
   to {
     transform: translateX(400%);
   }
+}
+
+/* Jost is drawn at 300–500 only: headings never go heavier than Medium. */
+:is(h1, h2).font-semibold,
+:is(h1, h2).font-bold {
+  font-weight: 500;
+}
+
+:is(h1, h2).font-black,
+:is(h1, h2).font-extrabold {
+  font-weight: 400;
 }

@@ -319,7 +319,7 @@ export default function HistoryPage() {
             <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               <HistoryIcon className="h-3.5 w-3.5" /> Browse
             </p>
-            <h1 className="text-4xl font-black text-white sm:text-5xl">
+            <h1 className="text-4xl mj-display text-mujin-text sm:text-5xl">
               History
             </h1>
             <p className="mt-3 text-sm text-zinc-400">

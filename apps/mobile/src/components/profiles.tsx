@@ -337,7 +337,7 @@ const styles = StyleSheet.create({
   },
   primaryText: { color: "black", fontWeight: "800" },
   disabled: { opacity: 0.4 },
-  error: { color: "#fda4af" },
+  error: { color: "#f9b3af" },
   colors: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   swatch: {
     borderRadius: 18,

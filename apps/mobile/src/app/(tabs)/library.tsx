@@ -685,7 +685,7 @@ export default function LibraryScreen() {
                   onPress={() => setSection("liked")}
                 >
                   <LinearGradient
-                    colors={["#f43f5e", "#86198f"]}
+                    colors={["#f2473f", "#7e4524"]}
                     style={[
                       styles.squarePlaylistCover,
                       { width: playlistCardSize, height: playlistCardSize },
@@ -899,7 +899,7 @@ const styles = StyleSheet.create({
   offlineTitle: { color: "white", fontWeight: "800", fontSize: 14 },
   offlineText: { color: palette.secondary, fontSize: 13, marginTop: 4 },
   offlineError: {
-    color: "#fca5a5",
+    color: "#f9b3af",
     fontSize: 12,
     lineHeight: 17,
     marginTop: 8,

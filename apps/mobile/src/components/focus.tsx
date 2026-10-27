@@ -22,7 +22,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { palette } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
-const GOLD = "#fcd34d";
+const GOLD = "#e6c599";
 
 function GroupList({
   group,
@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(252,211,77,0.4)",
+    borderColor: "rgba(230,197,153,0.4)",
   },
   hiresOn: { backgroundColor: GOLD, borderColor: GOLD },
   hiresText: {

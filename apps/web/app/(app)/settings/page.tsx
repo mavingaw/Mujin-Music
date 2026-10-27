@@ -98,20 +98,23 @@ function SettingsContent() {
   const availableTabs = allowedTabs;
 
   return (
-    <div className="mx-auto w-full max-w-250 px-5 py-9 pb-36 sm:px-7">
-      <h1 className="mb-9 text-3xl font-semibold text-white">Settings</h1>
-      <section className="grid items-start gap-8 md:grid-cols-[170px_minmax(0,1fr)]">
+    <div className="mx-auto w-full max-w-[1180px] px-5 pb-36 pt-8 sm:px-8 md:pt-12 lg:px-12">
+      <p className="mj-eyebrow mb-2">Mujin Music</p>
+      <h1 className="mj-display mb-10 text-[40px] text-mujin-text md:text-[52px]">
+        Settings
+      </h1>
+      <section className="grid items-start gap-8 md:grid-cols-[200px_minmax(0,1fr)] lg:gap-12">
         <nav
           aria-label="Settings sections"
-          className="flex gap-1 overflow-x-auto border-b border-white/8 pb-2 md:grid md:border-0 md:pb-0"
+          className="flex gap-1 overflow-x-auto border-b border-white/[0.08] pb-2 md:sticky md:top-6 md:grid md:border-0 md:border-r md:pb-0 md:pr-4"
         >
           {availableTabs.map((tab) => (
             <button
               aria-current={activeTab === tab ? "page" : undefined}
-              className={`shrink-0 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors ${
+              className={`relative shrink-0 rounded-lg px-3 py-2 text-left text-[13.5px] font-medium transition-colors ${
                 activeTab === tab
-                  ? "bg-white/8 text-white"
-                  : "text-zinc-500 hover:bg-white/4 hover:text-zinc-200"
+                  ? "bg-mujin-copper/[0.12] text-mujin-text"
+                  : "text-mujin-text-tertiary hover:bg-white/[0.04] hover:text-mujin-text"
               }`}
               key={tab}
               onClick={() => setActiveTab(tab)}

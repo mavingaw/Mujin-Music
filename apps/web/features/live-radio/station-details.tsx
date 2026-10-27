@@ -263,7 +263,7 @@ export default function StationDetails() {
             unoptimized
           />
         ) : (
-          <div className="h-full bg-[radial-gradient(60%_80%_at_30%_0%,rgba(244,63,94,0.25),transparent_70%)]" />
+          <div className="h-full bg-[radial-gradient(60%_80%_at_30%_0%,rgba(217,139,95,0.22),transparent_70%)]" />
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/70 to-black" />
       </div>
@@ -288,7 +288,7 @@ export default function StationDetails() {
                 <span className="text-zinc-500">· Added by URL</span>
               )}
             </p>
-            <h1 className="mt-2 text-balance text-4xl font-black leading-[1.05] tracking-tight text-white sm:text-6xl">
+            <h1 className="mt-2 text-balance text-4xl mj-display leading-[1.05] text-mujin-text sm:text-6xl">
               {station.name}
             </h1>
             {place && (

@@ -71,10 +71,10 @@ export function ReviewScoresBlock({ scores }: { scores: ReviewScores }) {
                   <Star
                     color={
                       index < stars.full + stars.half
-                        ? "#fcd34d"
+                        ? "#e6c599"
                         : "rgba(255,255,255,0.18)"
                     }
-                    fill={index < stars.full ? "#fcd34d" : "transparent"}
+                    fill={index < stars.full ? "#e6c599" : "transparent"}
                     key={index}
                     size={13}
                   />
@@ -149,7 +149,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   scoresTitle: {
-    color: "#d4d4d8",
+    color: "#c7c2b9",
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 1.2,
@@ -161,7 +161,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  publication: { color: "#d4d4d8", fontSize: 13, flex: 1 },
+  publication: { color: "#c7c2b9", fontSize: 13, flex: 1 },
   stars: { flexDirection: "row", gap: 2 },
   rating: { color: "white", fontSize: 13, fontWeight: "700" },
   attribution: { color: palette.muted, fontSize: 11, lineHeight: 16 },

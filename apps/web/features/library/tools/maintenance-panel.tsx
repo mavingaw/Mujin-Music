@@ -268,7 +268,7 @@ function MissingFilesSection() {
         <div className="mb-4 space-y-2">
           {offline.map((root) => (
             <div
-              className="flex items-center gap-3 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2.5 text-sm text-[#f5d27a]"
+              className="flex items-center gap-3 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2.5 text-sm text-amber-200"
               key={root.path}
             >
               <HardDrive className="h-4 w-4 shrink-0" />

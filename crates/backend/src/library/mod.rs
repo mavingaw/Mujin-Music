@@ -11,6 +11,7 @@ pub mod indexer;
 pub mod matching;
 pub mod normalize;
 pub mod probe;
+pub mod quality;
 pub mod search;
 pub mod state;
 pub mod storage;
