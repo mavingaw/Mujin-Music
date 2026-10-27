@@ -272,7 +272,15 @@ mod tests {
         let zone = "upnp:living-room";
 
         // Nobody started it: nothing is recorded.
-        service.track_zone_listen(zone, "Living Room", 1, "song-lanterns", 0, true, Some(&cache));
+        service.track_zone_listen(
+            zone,
+            "Living Room",
+            1,
+            "song-lanterns",
+            0,
+            true,
+            Some(&cache),
+        );
         assert!(service.lock().zone_listens.is_empty());
 
         // Grace (profile 2) starts it from her phone.
