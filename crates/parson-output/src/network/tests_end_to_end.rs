@@ -95,8 +95,10 @@ fn airplay_receiver_gets_exact_alac_with_sync_and_timing() {
     let status = wait(&player, PlayerState::Ended, Duration::from_secs(15));
     assert_eq!(status.state, PlayerState::Ended, "{status:?}");
     drop(player);
+    // The resent packet travels on its own socket and thread, so on a busy
+    // machine it can land after the teardown: wait for it too.
     let state = receiver.wait_for(Duration::from_secs(3), |state| {
-        state.torn_down && state.timing_ok
+        state.torn_down && state.timing_ok && state.resent >= 1
     });
     // The first OPTIONS is the listing's probe of the manual address.
     assert_eq!(
