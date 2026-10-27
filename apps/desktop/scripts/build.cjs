@@ -73,7 +73,7 @@ if (targetPlatform === "linux") {
   cleanOutput(
     (name) =>
       (name.startsWith("win") && name.endsWith("-unpacked")) ||
-      name.endsWith("-setup.exe") ||
+      (name.startsWith("Mujin-Music-Setup-") && name.endsWith(".exe")) ||
       name.endsWith("-portable.exe"),
   );
   const args = [

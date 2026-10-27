@@ -64,6 +64,18 @@ const {
 // product name says. (`--server-host` moves itself to "Parson Server".)
 app.setPath("userData", path.join(app.getPath("appData"), "Parson"));
 
+// Windows knows the app by its AppUserModelID in the taskbar, notifications
+// and the media overlay (System Media Transport Controls, which Chromium
+// feeds from the web app's Media Session: title, artist, artwork, play,
+// pause, next, previous and the hardware media keys). It must be the id the
+// installer gives the Start menu shortcut, `build.appId` in package.json;
+// otherwise Electron uses "electron.app.Mujin Music", and the overlay shows
+// an unknown app without the Mujin Music name and icon.
+const WINDOWS_APP_USER_MODEL_ID = "music.mujin.desktop";
+if (process.platform === "win32") {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
+
 // `Parson --server-host` is the background process that keeps the server
 // running (macOS LaunchAgent, Linux without systemd). It has no window.
 const SERVER_HOST = process.argv.includes("--server-host");

@@ -50,6 +50,14 @@ Copy-Item -LiteralPath $builtExecutable -Destination $staging
 Copy-Item -LiteralPath (Join-Path $workspace "crates\windows-server\README.md") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $workspace "LICENSE") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $workspace "THIRD_PARTY_NOTICES.md") -Destination $staging
+# Inbound Windows Firewall rule for private networks (see README.md).
+foreach ($name in @(
+    "firewall.ps1",
+    "Allow through Windows Firewall.cmd",
+    "Remove from Windows Firewall.cmd"
+)) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $staging
+}
 
 $archive = Join-Path $output "Mujin-Music-Server-$Version-win-x64.zip"
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $archive -CompressionLevel Optimal

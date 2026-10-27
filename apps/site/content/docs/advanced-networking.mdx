@@ -23,6 +23,8 @@ The value must be a bare origin with no path. It enables secure cookies and allo
 
 Allow inbound TCP to the configured Mujin Music port only from networks that should connect. Local discovery also needs multicast DNS on the LAN. Do not expose the data directory, database files, logs, or session key as shared files.
 
+On Windows, the Mujin Music Desktop installer adds inbound allow rules for the app and its background server on **private** networks, and the uninstaller removes them. The server-only package includes **Allow through Windows Firewall.cmd** and **Remove from Windows Firewall.cmd** for the same rule. Speakers (Sonos, UPnP, Chromecast) fetch music from the server over the same port, so a blocked server shows up as speakers that are found but stay silent. Windows treats new networks as **Public**: set your home network to **Private**, or the rules do not apply.
+
 ## Tailscale or another VPN
 
 A private VPN is often the lowest-friction remote option. Install it on the host and client, connect using the host's VPN DNS name or address, and keep the Windows host running. Discovery may not cross the VPN, so use a manual endpoint.
