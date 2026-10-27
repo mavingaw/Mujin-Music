@@ -72,7 +72,7 @@ export default function RestoreFlow({
       if (!result.restarting) await restartServer();
       setPhase({
         kind: "working",
-        label: "Restoring your library. Parson is restarting…",
+        label: "Restoring your library. Mujin Music is restarting…",
       });
       const back = await waitForRestart({
         previousBootId,
@@ -162,8 +162,8 @@ export default function RestoreFlow({
       <p className="text-xs leading-5 text-zinc-500">
         Accounts, playlists, favourites, listening history, edits and artwork
         come back. Music files are not in a backup: if they live somewhere new
-        on this server, point Parson at them in Settings → Library afterwards.
-        The current data here is kept as a rollback copy.
+        on this server, point Mujin Music at them in Settings → Library
+        afterwards. The current data here is kept as a rollback copy.
       </p>
       {phase.kind === "error" ? (
         <p className="text-sm text-red-300" role="alert">

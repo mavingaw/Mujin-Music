@@ -770,7 +770,7 @@ export function zoneKindLabel(kind: ZoneKind): string {
     case "device":
       return "Audio device";
     case "bridge":
-      return "Parson Bridge";
+      return "Mujin Bridge";
     case "airplay":
       return "AirPlay";
     case "linked":
@@ -815,7 +815,7 @@ export function zoneOutputsSummary(
   if (bridges.length) {
     const devices = bridges.reduce((sum, bridge) => sum + bridge.devices, 0);
     parts.push(
-      `${bridges.length} Parson ${bridges.length === 1 ? "Bridge" : "Bridges"} (${devices} ${devices === 1 ? "output" : "outputs"})`,
+      `${bridges.length} Mujin ${bridges.length === 1 ? "Bridge" : "Bridges"} (${devices} ${devices === 1 ? "output" : "outputs"})`,
     );
   }
   const airplay = (outputs?.airplay?.receivers ?? []).filter(
@@ -888,7 +888,7 @@ export function volumeModeLabel(mode: ZoneVolumeMode): string {
     case "hardware":
       return "Device volume (bit-perfect)";
     case "software":
-      return "Parson volume (not bit-perfect)";
+      return "Mujin Music volume (not bit-perfect)";
     case "fixed":
       return "Fixed volume (set it on the amplifier)";
   }
@@ -926,7 +926,7 @@ const STREAM_QUALITY_TEXT: Record<
   enhanced: {
     label: "Enhanced",
     description:
-      "Parson processes the audio because you asked it to (leveling or DSP).",
+      "Mujin Music processes the audio because you asked it to (leveling or DSP).",
   },
   high: {
     label: "High quality",
@@ -1032,7 +1032,7 @@ export function groupingPlan(zones: Zone[]): {
     return {
       allowed: true,
       synced: true,
-      reason: `Parson Bridge group: sample-synced to ${zones[0]?.name ?? "the first zone"}'s DAC clock, which stays bit-perfect.`,
+      reason: `Mujin Bridge group: sample-synced to ${zones[0]?.name ?? "the first zone"}'s DAC clock, which stays bit-perfect.`,
     };
   }
   return {

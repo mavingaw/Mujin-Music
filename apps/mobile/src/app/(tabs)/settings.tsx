@@ -677,8 +677,8 @@ function ServerSettings({
     <>
       <Text style={styles.heading}>Libraries</Text>
       <Text style={styles.value}>
-        Each Parson server is a library. Switch between them here; this phone
-        stays signed in to each one.
+        Each Mujin Music server is a library. Switch between them here; this
+        phone stays signed in to each one.
       </Text>
       <View style={{ marginTop: 14 }}>
         <LibraryList

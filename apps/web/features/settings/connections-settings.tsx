@@ -11,7 +11,7 @@ export default function ConnectionsSettings() {
       <div>
         <h2 className="text-base font-semibold text-white">Connections</h2>
         <p className="mt-1 max-w-xl text-sm text-zinc-500">
-          One Parson server holds your library; every app (desktop, phone,
+          One Mujin Music server holds your library; every app (desktop, phone,
           browser) is a remote for it. Connect more devices here.
         </p>
       </div>

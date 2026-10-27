@@ -187,7 +187,7 @@ function servicesFromRecords(records, fallbackAddress = "") {
     services.push({
       instance,
       instanceId: txt.id || "",
-      name: txt.name || label.replace(/\\(.)/g, "$1") || "Parson",
+      name: txt.name || label.replace(/\\(.)/g, "$1") || "Mujin Music",
       host,
       port: srv.port,
       origin: `http://${host.includes(":") ? `[${host}]` : host}:${srv.port}`,

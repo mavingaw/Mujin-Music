@@ -48,13 +48,15 @@ export default function AppSidebar() {
         <div className="flex h-full flex-col px-4 md:items-center md:px-0">
           <Link
             href="/"
-            aria-label="Parson home"
+            aria-label="Mujin Music home"
             draggable={false}
             className="mt-3 flex h-12 select-none items-center gap-3 md:w-12 md:justify-center"
             onClick={() => handleNavigate("/")}
           >
-            <ParsonBrandMark className="h-16 w-16 shrink-0 text-white" />
-            <span className="text-base font-semibold md:hidden">Parson</span>
+            <ParsonBrandMark className="h-10 w-10 shrink-0" />
+            <span className="text-base font-semibold md:hidden">
+              Mujin Music
+            </span>
           </Link>
 
           <nav className="mt-2 flex w-full flex-col gap-2 md:items-center">

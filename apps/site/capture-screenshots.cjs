@@ -167,7 +167,7 @@ async function ensureServer() {
     }
   }
   child.kill("SIGTERM");
-  throw new Error("Timed out waiting for the Parson showcase route");
+  throw new Error("Timed out waiting for the Mujin Music showcase route");
 }
 
 async function settle(page) {

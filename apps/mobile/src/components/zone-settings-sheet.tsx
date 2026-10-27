@@ -378,15 +378,15 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
                 update({ volume_control: value as ZoneVolumeControl })
               }
               options={[
-                { value: "parson", label: "Parson" },
+                { value: "parson", label: "Mujin Music" },
                 { value: "home_assistant", label: "Home Assistant" },
               ]}
               selected={draft.volume_control}
             />
             <Text style={styles.note}>
               {draft.volume_control === "home_assistant"
-                ? "Volume changes go to Home Assistant as events for an automation to carry out, such as an amplifier on an IR blaster. Parson leaves the audio at full level."
-                : "Parson sets the volume itself."}
+                ? "Volume changes go to Home Assistant as events for an automation to carry out, such as an amplifier on an IR blaster. Mujin Music leaves the audio at full level."
+                : "Mujin Music sets the volume itself."}
             </Text>
           </Section>
         ) : null}

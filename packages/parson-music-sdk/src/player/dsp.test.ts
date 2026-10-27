@@ -345,7 +345,7 @@ describe("where the DSP chain can run", () => {
       support: {
         available: true,
         reason: null,
-        engine: "Parson DSP, 64-bit float",
+        engine: "Mujin Music DSP, 64-bit float",
         crossfeed: true,
         sample_rates: [44_100, 48_000, 96_000],
         output_bits: 32,
@@ -354,7 +354,7 @@ describe("where the DSP chain can run", () => {
     expect(availability.available).toBeTrue();
     expect(availability.precision).toBe("64-bit float");
     expect(availability.engine).toBe(
-      "Parson DSP, 64-bit float, on the server before USB DAC",
+      "Mujin Music DSP, 64-bit float, on the server before USB DAC",
     );
     expect(availability.sampleRates).toEqual([44_100, 48_000, 96_000]);
     expect(availability.crossfeed.available).toBeTrue();
@@ -366,8 +366,8 @@ describe("where the DSP chain can run", () => {
       deviceName: "USB DAC",
       support: {
         available: false,
-        reason: "Parson could not read the formats USB DAC accepts.",
-        engine: "Parson DSP, 64-bit float",
+        reason: "Mujin Music could not read the formats USB DAC accepts.",
+        engine: "Mujin Music DSP, 64-bit float",
         crossfeed: false,
         sample_rates: [],
         output_bits: null,
@@ -381,7 +381,7 @@ describe("where the DSP chain can run", () => {
       support: {
         available: true,
         reason: null,
-        engine: "Parson DSP, 64-bit float",
+        engine: "Mujin Music DSP, 64-bit float",
         crossfeed: false,
         sample_rates: [48_000],
         output_bits: 16,

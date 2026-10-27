@@ -6,9 +6,9 @@ import PlatformDownloadButton from "../components/platform-download-button";
 import StickyDownloadButton from "../components/sticky-download-button";
 
 export const metadata: Metadata = {
-  title: { absolute: "Parson - Your music. Instantly." },
+  title: { absolute: "Mujin Music - Your music. Instantly." },
   description:
-    "Choose a folder and start listening. Parson is a local-first music server and player for Windows, macOS, Linux, and the web.",
+    "Choose a folder and start listening. Mujin Music is a local-first music server and player for Windows, macOS, Linux, and the web.",
 };
 
 function GitHubIcon() {
@@ -25,14 +25,14 @@ export default function Home() {
       <header className="landing-header">
         <div className="landing-header-inner">
           <Link href="/" className="landing-wordmark">
-            Parson
+            Mujin Music
           </Link>
           <nav aria-label="Main navigation">
             <StickyDownloadButton />
             <Link href="/docs">Docs</Link>
             <a
               className="landing-github-icon"
-              href="https://github.com/ParsonLabs/Parson"
+              href="https://github.com/mavingaw/parson-jin"
               rel="noreferrer"
               target="_blank"
               aria-label="GitHub"
@@ -56,7 +56,7 @@ export default function Home() {
             <PlatformDownloadButton />
             <a
               className="landing-text-link"
-              href="https://github.com/ParsonLabs/Parson"
+              href="https://github.com/mavingaw/parson-jin"
               rel="noreferrer"
               target="_blank"
             >
@@ -91,7 +91,7 @@ export default function Home() {
               <FolderOpen />
               <div>
                 <h3>Choose your library</h3>
-                <p>Point Parson at your music.</p>
+                <p>Point Mujin Music at your music.</p>
               </div>
             </article>
             <article>
@@ -128,11 +128,21 @@ export default function Home() {
 
       <footer className="landing-footer">
         <div className="landing-container">
-          <span>© ParsonLabs</span>
+          <span>
+            Mujin Music · Based on{" "}
+            <a
+              href="https://github.com/ParsonLabs/Parson"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Parson
+            </a>{" "}
+            © ParsonLabs
+          </span>
           <nav>
             <Link href="/docs">Docs</Link>
             <a
-              href="https://github.com/ParsonLabs/Parson"
+              href="https://github.com/mavingaw/parson-jin"
               rel="noreferrer"
               target="_blank"
             >

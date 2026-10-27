@@ -55,7 +55,7 @@ export function UnverifiedMatchNotice({ check }: { check: ReleaseMatchCheck }) {
       })}
       <Text style={styles.hint}>
         An administrator can choose the right release with Identify album in
-        Parson on the web.
+        Mujin Music on the web.
       </Text>
     </View>
   );

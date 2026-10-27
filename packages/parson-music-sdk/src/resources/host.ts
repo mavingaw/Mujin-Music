@@ -80,7 +80,7 @@ export function parseHostInfo(value: unknown): HostInfo | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   const instanceId = boundedText(raw.instanceId);
-  const name = boundedText(raw.name) ?? "Parson";
+  const name = boundedText(raw.name) ?? "Mujin Music";
   const port = Number(raw.port);
   if (!instanceId || !Number.isInteger(port) || port < 1 || port > 65_535)
     return null;

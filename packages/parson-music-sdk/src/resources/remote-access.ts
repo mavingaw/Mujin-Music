@@ -133,7 +133,7 @@ export function summarizeRemoteAccess(
       tone: "off",
       title: "Home network only",
       detail:
-        "Parson apps reach this library on your home network. Choose a way in below to listen away from home.",
+        "Mujin Music apps reach this library on your home network. Choose a way in below to listen away from home.",
     };
   }
   if (!check) {
@@ -156,7 +156,7 @@ export function summarizeRemoteAccess(
     return {
       tone: "warn",
       title: "Leads here, not yet confirmed from outside",
-      detail: `${best.label} reaches this server when the server calls it, but the server can’t test from outside your home. Open the Parson app on mobile data and use “Check from here” to confirm.`,
+      detail: `${best.label} reaches this server when the server calls it, but the server can’t test from outside your home. Open the Mujin Music app on mobile data and use “Check from here” to confirm.`,
     };
   }
   const homeOnly = check.results.find(

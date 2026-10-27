@@ -42,7 +42,7 @@ const FORGET_AFTER: Duration = Duration::from_secs(10 * 60);
 pub const RENDER_MEDIA_PATH: &str = "/api/v1/zones/render/";
 
 /// What Parson has (and has not) tested UPnP and OpenHome against.
-pub const UPNP_VERIFICATION: &str = "Built to the UPnP AV and OpenHome specifications and tested end to end against Parson's protocol-level fake renderer (SSDP, device description, SOAP control, gapless queueing and the media fetch, with what it streams checked). Not yet tested with a real network streamer.";
+pub const UPNP_VERIFICATION: &str = "Built to the UPnP AV and OpenHome specifications and tested end to end against Mujin Music's protocol-level fake renderer (SSDP, device description, SOAP control, gapless queueing and the media fetch, with what it streams checked). Not yet tested with a real network streamer.";
 
 /// How the controller finds renderers.
 #[derive(Clone, Debug)]
@@ -347,7 +347,7 @@ impl UpnpRenderer {
             } else {
                 NetworkCapsSource::Assumed
             },
-            stream_format: "the file, or FLAC Parson makes from it, over HTTP".to_string(),
+            stream_format: "the file, or FLAC Mujin Music makes from it, over HTTP".to_string(),
             accepts: self
                 .caps
                 .limits
@@ -377,13 +377,13 @@ impl Renderer for UpnpRenderer {
         let mut notes = Vec::new();
         if !self.caps.rate_reported && self.caps.limits.flac {
             notes.push(format!(
-                "This renderer does not report its highest sample rate; Parson assumes {}/24-bit. Set a lower maximum in Device setup if hi-res tracks stutter.",
+                "This renderer does not report its highest sample rate; Mujin Music assumes {}/24-bit. Set a lower maximum in Device setup if hi-res tracks stutter.",
                 super::format_rate(self.caps.limits.max_sample_rate)
             ));
         }
         if let Some((minimum, maximum)) = self.volume_db {
             notes.push(format!(
-                "Volume is the renderer's own amplifier ({minimum:.1} dB to {maximum:.1} dB), so the audio Parson sends stays untouched."
+                "Volume is the renderer's own amplifier ({minimum:.1} dB to {maximum:.1} dB), so the audio Mujin Music sends stays untouched."
             ));
         }
         let gapless = self.lock().gapless;
@@ -395,7 +395,7 @@ impl Renderer for UpnpRenderer {
         }
         if self.control == Control::OpenHome {
             notes.push(
-                "Played through the renderer's OpenHome playlist: Parson queues the next track in it for gapless playback."
+                "Played through the renderer's OpenHome playlist: Mujin Music queues the next track in it for gapless playback."
                     .to_string(),
             );
         }

@@ -261,7 +261,7 @@ impl Session {
                 send(
                     &writer,
                     &BridgeMessage::Refused {
-                        reason: "this bridge is in use by another Parson server".into(),
+                        reason: "this bridge is in use by another Mujin Music server".into(),
                     },
                 );
                 return Err(std::io::Error::other("in use by another server"));
@@ -275,7 +275,7 @@ impl Session {
                 let _ = old.socket.shutdown(Shutdown::Both);
             }
         }
-        tracing::info!(%server_name, "Parson server connected");
+        tracing::info!(%server_name, "Mujin Music server connected");
         // The server pings every second.
         connection.set_read_timeout(Some(Duration::from_secs(15)))?;
         let devices = backend.as_deref().map(wire_devices).unwrap_or_default();

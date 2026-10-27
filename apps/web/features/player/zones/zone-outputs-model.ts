@@ -78,6 +78,6 @@ export function addBridgeError(error: unknown): string {
   if (code === "invalid_bridge_address")
     return "Enter a host name or address, like pi.local or 192.168.1.20.";
   if (code === "bridges_disabled")
-    return "Parson Bridge support is turned off on this server (PARSON_BRIDGES=off).";
-  return code || "Could not reach a Parson Bridge at that address.";
+    return "Mujin Bridge support is turned off on this server (PARSON_BRIDGES=off).";
+  return code || "Could not reach a Mujin Bridge at that address.";
 }

@@ -286,7 +286,7 @@ pub async fn relocate_library_root(
     };
     if Path::new(&to) == Path::new(&from) {
         return bad_request(
-            "That is the folder Parson already looks in.",
+            "That is the folder Mujin Music already looks in.",
             "library_path_same",
         );
     }

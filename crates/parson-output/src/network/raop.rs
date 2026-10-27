@@ -98,7 +98,7 @@ impl RaopTxt {
             .as_deref()
             .is_some_and(|pw| pw.eq_ignore_ascii_case("true"))
         {
-            return Some("This receiver is password protected; Parson does not implement AirPlay passwords. Turn the password off on the receiver to play to it.".into());
+            return Some("This receiver is password protected; Mujin Music does not implement AirPlay passwords. Turn the password off on the receiver to play to it.".into());
         }
         let flags = self
             .sf
@@ -106,17 +106,17 @@ impl RaopTxt {
             .and_then(|sf| u64::from_str_radix(sf.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
         if flags & 0x8 != 0 || flags & 0x10 != 0 {
-            return Some("This receiver asks for a password or PIN pairing, which Parson does not implement. Allow access for everyone on the network in the receiver's AirPlay settings.".into());
+            return Some("This receiver asks for a password or PIN pairing, which Mujin Music does not implement. Allow access for everyone on the network in the receiver's AirPlay settings.".into());
         }
         if Self::list_has(self.et.as_ref(), "0") == Some(false) {
             return Some(format!(
-                "This receiver only accepts encrypted AirPlay (types {}), and Parson sends unencrypted RAOP; it does not implement Apple's RSA or FairPlay keys.",
+                "This receiver only accepts encrypted AirPlay (types {}), and Mujin Music sends unencrypted RAOP; it does not implement Apple's RSA or FairPlay keys.",
                 self.et.as_deref().unwrap_or("")
             ));
         }
         if Self::list_has(self.cn.as_ref(), "1") == Some(false) {
             return Some(
-                "This receiver does not accept ALAC, which Parson sends over AirPlay.".into(),
+                "This receiver does not accept ALAC, which Mujin Music sends over AirPlay.".into(),
             );
         }
         if self
@@ -125,7 +125,7 @@ impl RaopTxt {
             .is_some_and(|tp| !tp.to_ascii_uppercase().contains("UDP"))
         {
             return Some(
-                "This receiver only takes AirPlay over TCP; Parson sends RTP over UDP.".into(),
+                "This receiver only takes AirPlay over TCP; Mujin Music sends RTP over UDP.".into(),
             );
         }
         None
@@ -406,13 +406,13 @@ struct Rtsp {
 
 fn status_message(receiver: &str, method: &str, status: u16) -> String {
     match status {
-        401 => format!("{receiver} asked for a password, which Parson does not implement"),
+        401 => format!("{receiver} asked for a password, which Mujin Music does not implement"),
         403 => format!(
             "{receiver} refused the connection (its AirPlay access may be limited to certain devices)"
         ),
         453 => format!("{receiver} is busy: another sender is playing to it"),
         470 => format!(
-            "{receiver} requires AirPlay pairing (HomeKit or device verification), which Parson does not implement"
+            "{receiver} requires AirPlay pairing (HomeKit or device verification), which Mujin Music does not implement"
         ),
         _ => format!("{receiver} answered RTSP {status} to {method}"),
     }
@@ -1147,7 +1147,7 @@ impl Backend for RaopBackend {
                         Some("unreachable") | Some("unresolved") => {
                             device.caps = None;
                             device.probe_error = Some(format!(
-                                "Parson could not reach an AirPlay receiver at {}.",
+                                "Mujin Music could not reach an AirPlay receiver at {}.",
                                 receiver.address
                             ));
                         }

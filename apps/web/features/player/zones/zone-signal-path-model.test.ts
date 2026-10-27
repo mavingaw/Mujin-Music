@@ -51,7 +51,7 @@ test("step icons follow the server's wording", () => {
   );
   expect(
     stepIcon(
-      "Renderer reports: decoding FLAC 96 kHz/24-bit, exactly what Parson sends",
+      "Renderer reports: decoding FLAC 96 kHz/24-bit, exactly what Mujin Music sends",
     ),
   ).toBe("decode");
   expect(

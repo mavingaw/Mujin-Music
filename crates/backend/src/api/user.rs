@@ -321,7 +321,7 @@ async fn delete_user(
             "cannot_delete_current_user",
         ),
         Ok(Err(DeleteUserError::LastAdministrator)) => bad_request(
-            "Parson must keep at least one administrator.",
+            "Mujin Music must keep at least one administrator.",
             "last_administrator_required",
         ),
         Ok(Err(DeleteUserError::Database(error))) => {

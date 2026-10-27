@@ -137,7 +137,7 @@ pub struct SignalProcessing {
     pub status: Option<parson_output::dsp::DspStatus>,
 }
 
-pub const SERVER_DSP_ENGINE: &str = "Parson DSP, 64-bit float";
+pub const SERVER_DSP_ENGINE: &str = "Mujin Music DSP, 64-bit float";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ServerSignalPath {
@@ -406,7 +406,7 @@ fn source_stage(format: &SignalFormat, indexed: bool) -> SignalStage {
         ),
         None => (
             None,
-            "Parson could not identify this file's codec, so it cannot say whether the source is lossless.".to_string(),
+            "Mujin Music could not identify this file's codec, so it cannot say whether the source is lossless.".to_string(),
         ),
     };
     let detail = if indexed {
@@ -472,7 +472,7 @@ fn describe_planned_leg(
             stages.push(SignalStage {
                 id: "server",
                 kind: StageKind::Transport,
-                title: "Parson server".into(),
+                title: "Mujin Music server".into(),
                 detail: "Original file, streamed byte for byte".into(),
                 quality: Some(SignalQuality::Lossless),
                 explanation: "The server sends the file exactly as it is on disk, with byte-range seeking. Nothing is decoded or re-encoded on the server.".into(),
@@ -633,7 +633,7 @@ fn describe_planned_leg(
     stages.push(SignalStage {
         id: "server",
         kind: StageKind::Transport,
-        title: "Parson server".into(),
+        title: "Mujin Music server".into(),
         detail: "Transcoded stream, cached for seeking".into(),
         quality: Some(SignalQuality::Lossless),
         explanation: "The encoded stream is written to the transcode cache as it is produced, so later plays and seeks reuse it.".into(),
@@ -820,7 +820,7 @@ fn describe_lossless_conversion(
     stages.push(SignalStage {
         id: "server",
         kind: StageKind::Transport,
-        title: "Parson server".into(),
+        title: "Mujin Music server".into(),
         detail: format!("{bit_depth}-bit {label}, cached for seeking"),
         quality: Some(SignalQuality::Lossless),
         explanation: format!(
@@ -883,7 +883,7 @@ fn describe_dop(
     stages.push(SignalStage {
         id: "server",
         kind: StageKind::Transport,
-        title: "Parson server".into(),
+        title: "Mujin Music server".into(),
         detail: "DoP in a 24-bit WAV, with byte-range seeking".into(),
         quality: Some(SignalQuality::Lossless),
         explanation: "The DoP stream is built from the file as it is sent, with exact byte ranges for seeking.".into(),
@@ -1027,7 +1027,7 @@ pub fn describe_native_leg(
         Some(dsd) if dsd.mode != parson_output::DsdMode::Pcm => stages.push(SignalStage {
             id: "native-dsd-read",
             kind: StageKind::Decode,
-            title: "Parson server".into(),
+            title: "Mujin Music server".into(),
             detail: format!("{} read from the file, not decoded", dsd.dsd_label),
             quality: Some(SignalQuality::Lossless),
             explanation: "The server reads the one-bit DSD stream straight from the file and puts it in time order. It is never turned into PCM, filtered or scaled.".into(),
@@ -1036,7 +1036,7 @@ pub fn describe_native_leg(
             stages.push(SignalStage {
                 id: "native-decode",
                 kind: StageKind::Decode,
-                title: "Parson server".into(),
+                title: "Mujin Music server".into(),
                 detail: "DSD decoded to PCM".into(),
                 quality: Some(SignalQuality::Lossless),
                 explanation: "The server decodes the file itself and writes the samples to the device, so no browser, phone or system mixer handles them.".into(),
@@ -1057,7 +1057,7 @@ pub fn describe_native_leg(
         None => stages.push(SignalStage {
             id: "native-decode",
             kind: StageKind::Decode,
-            title: "Parson server".into(),
+            title: "Mujin Music server".into(),
             detail: format!("{codec} decoded to PCM"),
             quality: Some(SignalQuality::Lossless),
             explanation: format!(
@@ -1367,7 +1367,7 @@ pub fn describe_native_leg(
         stages.push(SignalStage {
             id: "native-transport",
             kind: StageKind::Transport,
-            title: format!("{} · Parson audio transport", target.host),
+            title: format!("{} · Mujin Music audio transport", target.host),
             detail: target.mode_label.to_string(),
             quality: Some(if plan.exclusive {
                 SignalQuality::Lossless
@@ -1539,12 +1539,12 @@ fn network_stages(
         }),
         explanation: if airplay {
             format!(
-                "The server on {} sends the result of its chain to {endpoint} over AirPlay 1 (RAOP): uncompressed ALAC frames at 44.1kHz/16bit in RTP packets, with timing and sync on their own ports. The samples arrive intact, but AirPlay is High quality at best, as Roon also rates it: the format is fixed at 44.1kHz/16bit (so higher-resolution files are converted above), and the receiver applies its own volume and output processing, which Parson can neither see nor turn off.",
+                "The server on {} sends the result of its chain to {endpoint} over AirPlay 1 (RAOP): uncompressed ALAC frames at 44.1kHz/16bit in RTP packets, with timing and sync on their own ports. The samples arrive intact, but AirPlay is High quality at best, as Roon also rates it: the format is fixed at 44.1kHz/16bit (so higher-resolution files are converted above), and the receiver applies its own volume and output processing, which Mujin Music can neither see nor turn off.",
                 target.host
             )
         } else {
             format!(
-                "The server on {} serves the samples its chain produced as uncompressed PCM ({}) at {format}, and tells the renderer at {endpoint} over {} to fetch it. TCP carries every byte unchanged, so the renderer's network input receives exactly what Parson computed; the renderer's own pace keeps the chain in real time.",
+                "The server on {} serves the samples its chain produced as uncompressed PCM ({}) at {format}, and tells the renderer at {endpoint} over {} to fetch it. TCP carries every byte unchanged, so the renderer's network input receives exactly what Mujin Music computed; the renderer's own pace keeps the chain in real time.",
                 target.host,
                 network.stream_format,
                 if network.protocol == NetworkProtocol::OpenHome {
@@ -1562,11 +1562,11 @@ fn network_stages(
         ),
         NetworkCapsSource::Protocol => "AirPlay 1 only carries 44.1kHz/16bit.".to_string(),
         NetworkCapsSource::KnownModel => format!(
-            "Parson applies the maker's published limits for {}.",
+            "Mujin Music applies the maker's published limits for {}.",
             network.model.as_deref().unwrap_or(target.device_name)
         ),
         NetworkCapsSource::Assumed => format!(
-            "{} takes WAV but does not say which rates; Parson assumes up to 192kHz/24bit. If a track does not play, lower Max sample rate for it in Settings → Audio outputs.",
+            "{} takes WAV but does not say which rates; Mujin Music assumes up to 192kHz/24bit. If a track does not play, lower Max sample rate for it in Settings → Audio outputs.",
             target.device_name
         ),
     };
@@ -1582,11 +1582,11 @@ fn network_stages(
         SignalQuality::Lossless
     };
     let boundary = if airplay {
-        "What the receiver does after decoding (its volume, any processing) is outside what Parson can see.".to_string()
+        "What the receiver does after decoding (its volume, any processing) is outside what Mujin Music can see.".to_string()
     } else if network.reports_format {
-        "Parson cannot see past the renderer's network input, but this renderer reports what it decodes; the stage below shows its report while it plays.".to_string()
+        "Mujin Music cannot see past the renderer's network input, but this renderer reports what it decodes; the stage below shows its report while it plays.".to_string()
     } else {
-        "Parson cannot see past the renderer's network input: whatever its firmware does next (volume, resampling, room correction) is not shown, and this renderer does not report what it decodes.".to_string()
+        "Mujin Music cannot see past the renderer's network input: whatever its firmware does next (volume, resampling, room correction) is not shown, and this renderer does not report what it decodes.".to_string()
     };
     let output = SignalStage {
         id: "native-output",
@@ -1595,7 +1595,7 @@ fn network_stages(
         detail: format!("{identity}, {format}"),
         quality: Some(quality),
         explanation: format!(
-            "{} receives {format} from Parson. {limits} {boundary} {}",
+            "{} receives {format} from Mujin Music. {limits} {boundary} {}",
             target.device_name, network.verification
         ),
     };
@@ -1603,7 +1603,7 @@ fn network_stages(
 }
 
 /// Said wherever an emulated card appears, so no run on it reads as a DAC.
-pub const KERNEL_EMULATOR_NOTE: &str = "This card's kernel side is Parson's kernel-ABI emulator, not a kernel driver: libasound's hw path, the driver's format negotiation and its /proc/asound reports run for real, but no DAC hardware is attached, so this proves the path rather than a particular DAC.";
+pub const KERNEL_EMULATOR_NOTE: &str = "This card's kernel side is Mujin Music's kernel-ABI emulator, not a kernel driver: libasound's hw path, the driver's format negotiation and its /proc/asound reports run for real, but no DAC hardware is attached, so this proves the path rather than a particular DAC.";
 
 /// Adds what the operating system reports the hardware is running at, read
 /// while the track plays, as the last stage of a native path. When it
@@ -1656,7 +1656,7 @@ pub fn add_hardware_report(
     };
     let who = match hardware.reporter {
         HardwareReporter::Kernel if hardware.kernel_emulator => format!(
-            "Read through the kernel's ALSA interface ({}), answered here by Parson's kernel-ABI emulator rather than a kernel driver",
+            "Read through the kernel's ALSA interface ({}), answered here by Mujin Music's kernel-ABI emulator rather than a kernel driver",
             hardware.source
         ),
         HardwareReporter::Kernel => format!("Read from the kernel driver ({})", hardware.source),
@@ -1679,7 +1679,7 @@ pub fn add_hardware_report(
             "Confirmed by the renderer",
             SignalQuality::Lossless,
             format!(
-                "{who} while this track plays: {device_name} is decoding {} at {}, exactly the rate and depth Parson sends ({opened}), and calls it lossless. This is the renderer's own account; Parson cannot inspect its DAC.",
+                "{who} while this track plays: {device_name} is decoding {} at {}, exactly the rate and depth Mujin Music sends ({opened}), and calls it lossless. This is the renderer's own account; Mujin Music cannot inspect its DAC.",
                 params.format,
                 format_rate(params.rate)
             ),
@@ -1689,7 +1689,7 @@ pub fn add_hardware_report(
             "Converted by the renderer",
             SignalQuality::HighQuality,
             format!(
-                "{who} while this track plays: Parson sends {opened}, but {device_name} reports {} at {}. The renderer converts the stream itself, so the path is not bit-perfect past its network input.",
+                "{who} while this track plays: Mujin Music sends {opened}, but {device_name} reports {} at {}. The renderer converts the stream itself, so the path is not bit-perfect past its network input.",
                 params.format,
                 format_rate(params.rate)
             ),
@@ -1699,23 +1699,23 @@ pub fn add_hardware_report(
             "Confirmed by the driver",
             SignalQuality::Lossless,
             format!(
-                "{who} while this track plays: {device_name} is running exactly the format the server opened ({opened}). Nothing between Parson and the hardware converted it."
+                "{who} while this track plays: {device_name} is running exactly the format the server opened ({opened}). Nothing between Mujin Music and the hardware converted it."
             ),
         )
     } else if let Some(converting) = converting {
         (
-            "Converted below Parson",
+            "Converted below Mujin Music",
             SignalQuality::HighQuality,
             format!(
-                "{who} while this track plays: the samples pass through {converting}, which can convert, mix or scale them before {device_name} (the bottom of the chain runs {running}; the server opened {opened}). Point Parson at a PCM without those plugins, or at the card itself, for a bit-perfect path."
+                "{who} while this track plays: the samples pass through {converting}, which can convert, mix or scale them before {device_name} (the bottom of the chain runs {running}; the server opened {opened}). Point Mujin Music at a PCM without those plugins, or at the card itself, for a bit-perfect path."
             ),
         )
     } else {
         (
-            "Converted below Parson",
+            "Converted below Mujin Music",
             SignalQuality::HighQuality,
             format!(
-                "{who} while this track plays: the server opened {opened}, but the hardware runs {running}. Something between Parson and {device_name} converted the stream, so it is not bit-perfect."
+                "{who} while this track plays: the server opened {opened}, but the hardware runs {running}. Something between Mujin Music and {device_name} converted the stream, so it is not bit-perfect."
             ),
         )
     };
@@ -1918,7 +1918,10 @@ mod tests {
         };
         add_hardware_report(&mut path, "DragonFly Red", &wrong, &stream);
         assert_eq!(path.quality, SignalQuality::HighQuality);
-        assert_eq!(path.stages.last().unwrap().title, "Converted below Parson");
+        assert_eq!(
+            path.stages.last().unwrap().title,
+            "Converted below Mujin Music"
+        );
     }
 
     #[test]
@@ -2032,7 +2035,7 @@ mod tests {
         let audio = flac(96_000, 24, 2);
         let plan = native_plan(&audio, &usb_dac(), true);
         let bench = NativeOutputTarget {
-            device_name: "Parson Bench DAC (kernel ABI emulator)",
+            device_name: "Mujin Music Bench DAC (kernel ABI emulator)",
             mode_label: "ALSA hw:1,0 exclusive",
             usb_id: Some("1209:0001"),
             usb_speed: Some("high speed"),
@@ -2071,7 +2074,7 @@ mod tests {
         assert!(
             stage
                 .explanation
-                .contains("answered here by Parson's kernel-ABI emulator")
+                .contains("answered here by Mujin Music's kernel-ABI emulator")
         );
         assert!(!stage.explanation.contains("Read from the kernel driver"));
     }
@@ -2107,7 +2110,7 @@ mod tests {
             momentary_hz: None,
             kernel_emulator: false,
         };
-        add_hardware_report(&mut path, "Parson capture", &report, &stream);
+        add_hardware_report(&mut path, "Mujin Music capture", &report, &stream);
         let stage = path.stages.last().unwrap();
         assert_eq!(stage.title, "Confirmed by the driver");
         assert_eq!(
@@ -2128,9 +2131,9 @@ mod tests {
             chain: Some(converting),
             ..report
         };
-        add_hardware_report(&mut path, "Parson capture", &report, &stream);
+        add_hardware_report(&mut path, "Mujin Music capture", &report, &stream);
         let stage = path.stages.last().unwrap();
-        assert_eq!(stage.title, "Converted below Parson");
+        assert_eq!(stage.title, "Converted below Mujin Music");
         assert!(stage.explanation.contains("Linear conversion PCM"));
         assert_eq!(path.quality, SignalQuality::HighQuality);
     }
@@ -2415,7 +2418,7 @@ mod tests {
             .expect("a transport stage");
         let transport = &path.stages[at];
         assert_eq!(transport.kind, StageKind::Transport);
-        assert_eq!(transport.title, "studio-pc · Parson audio transport");
+        assert_eq!(transport.title, "studio-pc · Mujin Music audio transport");
         assert_eq!(transport.detail, "ALSA hw:1,0 exclusive");
         assert_eq!(transport.quality, Some(SignalQuality::Lossless));
         assert_eq!(path.stages[at + 1].id, "native-output");
@@ -2444,7 +2447,7 @@ mod tests {
         );
 
         let configured = NativeOutputTarget {
-            device_name: "Parson capture",
+            device_name: "Mujin Music capture",
             mode_label: "ALSA PCM parson_capture, no conversions",
             config_pcm: true,
             ..DAC

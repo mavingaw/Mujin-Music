@@ -35,7 +35,7 @@ describe("DSP engine shortcut", () => {
 const support: OutputDspSupport = {
   available: true,
   reason: null,
-  engine: "Parson DSP, 64-bit float",
+  engine: "Mujin Music DSP, 64-bit float",
   crossfeed: true,
   sample_rates: [44_100, 48_000, 88_200, 96_000],
   output_bits: 32,
@@ -65,7 +65,7 @@ describe("where the DSP engine runs", () => {
       support: {
         ...support,
         available: false,
-        reason: "Parson could not read the formats USB DAC accepts.",
+        reason: "Mujin Music could not read the formats USB DAC accepts.",
       },
     });
     expect(blocked.available).toBeFalse();

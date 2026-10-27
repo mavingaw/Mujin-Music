@@ -19,7 +19,7 @@ const CONNECTION_SERVICES: [&str; 3] = [
     "urn:schemas-upnp-org:service:WANPPPConnection:1",
 ];
 const MAX_DESCRIPTION_BYTES: usize = 256 * 1024;
-pub const MAPPING_DESCRIPTION: &str = "Parson remote access";
+pub const MAPPING_DESCRIPTION: &str = "Mujin Music remote access";
 
 /// A router that accepted SSDP and exposes a WAN connection service.
 #[derive(Clone, Debug, PartialEq, Eq)]

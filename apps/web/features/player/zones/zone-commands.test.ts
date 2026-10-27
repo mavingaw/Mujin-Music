@@ -174,7 +174,7 @@ describe("local zone reporting", () => {
     ).toBe("Firefox on Windows");
     expect(clientZoneIdentity(chromeMac, true)).toEqual({
       kind: "desktop",
-      name: "Parson on macOS",
+      name: "Mujin Music on macOS",
       device: "Desktop app",
     });
     expect(clientZoneIdentity(chromeMac, false).kind).toBe("web");

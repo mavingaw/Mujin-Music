@@ -19,13 +19,13 @@ test("the menu-bar item shows Running, Launch at startup and Quit", () => {
     autostart: true,
   });
   assert.deepEqual(labels({ status: "running", port: 1993, autostart: true }), [
-    "Parson Server — Running on port 1993",
-    "Open Parson",
+    "Mujin Music Server — Running on port 1993",
+    "Open Mujin Music",
     "Connect a phone or another computer…",
     "Restart server",
     "Launch at startup",
     "Open logs",
-    "Quit Parson Server",
+    "Quit Mujin Music Server",
   ]);
   const autostart = menu.find((item) => item.action === "toggle-autostart");
   assert.equal(autostart.type, "checkbox");
@@ -35,7 +35,10 @@ test("the menu-bar item shows Running, Launch at startup and Quit", () => {
 
 test("a stopped server offers Start and hides phone pairing", () => {
   const menu = hostMenuModel({ status: "failed", autostart: false });
-  assert.equal(menu[0].label, "Parson Server — Stopped after repeated errors");
+  assert.equal(
+    menu[0].label,
+    "Mujin Music Server — Stopped after repeated errors",
+  );
   assert.ok(menu.some((item) => item.action === "start"));
   assert.ok(!menu.some((item) => item.action === "restart"));
   assert.equal(

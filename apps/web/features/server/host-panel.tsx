@@ -82,7 +82,7 @@ function ReachabilityNote({ info }: { info: HostInfo }) {
   const copy = {
     ready: {
       tone: "good",
-      text: "Visible on your network. Parson apps on the same Wi-Fi find it automatically.",
+      text: "Visible on your network. Mujin Music apps on the same Wi-Fi find it automatically.",
     },
     "not-advertising": {
       tone: "warn",
@@ -152,7 +152,7 @@ export default function HostPanel() {
               </div>
             ) : link && reachable ? (
               <QrCode
-                label={`QR code that opens ${primary} in ${target === "app" ? "the Parson app" : "a browser"}`}
+                label={`QR code that opens ${primary} in ${target === "app" ? "the Mujin Music app" : "a browser"}`}
                 value={link}
               />
             ) : (
@@ -168,7 +168,7 @@ export default function HostPanel() {
           >
             {(
               [
-                ["app", "Parson app", Smartphone],
+                ["app", "Mujin Music app", Smartphone],
                 ["browser", "Browser", Globe],
               ] as const
             ).map(([value, label, Icon]) => (
@@ -200,12 +200,12 @@ export default function HostPanel() {
             className="mt-1 truncate text-2xl font-semibold tracking-tight text-white"
             id="host-heading"
           >
-            {info?.name ?? "This Parson server"}
+            {info?.name ?? "This Mujin Music server"}
           </h2>
           <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
             {target === "app"
-              ? "Point your phone’s camera at the code to open this library in the Parson app, already connected. Then approve it with the pairing code below."
-              : "Point your phone’s camera at the code to open Parson in its browser. Nothing to install."}
+              ? "Point your phone’s camera at the code to open this library in the Mujin Music app, already connected. Then approve it with the pairing code below."
+              : "Point your phone’s camera at the code to open Mujin Music in its browser. Nothing to install."}
           </p>
 
           {host.isError ? (
@@ -256,7 +256,7 @@ export default function HostPanel() {
               ) : null}
               <p className="mt-5 text-xs text-zinc-500">
                 {[
-                  info.serverVersion ? `Parson ${info.serverVersion}` : "",
+                  info.serverVersion ? `Mujin Music ${info.serverVersion}` : "",
                   info.startedAt
                     ? `running for ${hostUptime(info.startedAt)}`
                     : "",

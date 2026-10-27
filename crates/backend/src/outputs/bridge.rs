@@ -31,12 +31,12 @@ const RETRY: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// What the zone picker says about bridge zones.
-pub const BRIDGE_NOTE: &str = "Parson Bridge: Parson decodes each file here and sends the samples to the bridge uncompressed over your network; the bridge plays them on the DAC exclusively, as sent (ALSA on Linux, WASAPI exclusive mode on Windows, CoreAudio hog mode on macOS). Tested against simulated DACs, ALSA's null device and protocol-level fakes of WASAPI and the macOS audio HAL, not yet on real hardware.";
+pub const BRIDGE_NOTE: &str = "Mujin Bridge: Mujin Music decodes each file here and sends the samples to the bridge uncompressed over your network; the bridge plays them on the DAC exclusively, as sent (ALSA on Linux, WASAPI exclusive mode on Windows, CoreAudio hog mode on macOS). Tested against simulated DACs, ALSA's null device and protocol-level fakes of WASAPI and the macOS audio HAL, not yet on real hardware.";
 
 /// What a bridge zone says about how it plays, by the bridge's audio API,
 /// including what has and has not been tested.
 pub fn bridge_note(backend: Option<&str>) -> String {
-    const SENT: &str = "Parson Bridge: Parson decodes each file here and sends the samples to the bridge uncompressed over your network;";
+    const SENT: &str = "Mujin Bridge: Mujin Music decodes each file here and sends the samples to the bridge uncompressed over your network;";
     match backend {
         Some("WASAPI") => format!(
             "{SENT} the bridge plays them in WASAPI exclusive mode at the file's own rate and depth, with no Windows mixer, resampler or volume in between. The WASAPI path is tested against a protocol-level fake of Windows' audio stack (exact formats, buffer alignment, event-driven buffers, exclusive ownership), not yet on real hardware."
@@ -50,7 +50,7 @@ pub fn bridge_note(backend: Option<&str>) -> String {
         _ => BRIDGE_NOTE.to_string(),
     }
 }
-pub const GROUP_SYNC_NOTE: &str = "Parson Bridge group: one stream, sample-synced to the first zone's DAC clock (within a quarter millisecond). The first zone stays bit-perfect; the others follow by repeating or skipping a single frame now and then.";
+pub const GROUP_SYNC_NOTE: &str = "Mujin Bridge group: one stream, sample-synced to the first zone's DAC clock (within a quarter millisecond). The first zone stays bit-perfect; the others follow by repeating or skipping a single frame now and then.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -416,9 +416,9 @@ impl BridgeHub {
         let placement = Placement {
             prefix: format!("{BRIDGE_PREFIX}{}:", info.bridge_id),
             kind: ZoneKind::Bridge,
-            host: Some(format!("{} · Parson Bridge", info.name)),
+            host: Some(format!("{} · Mujin Bridge", info.name)),
             machine: Some(info.name.clone()),
-            route: Some(format!("on {} via Parson Bridge", info.name)),
+            route: Some(format!("on {} via Mujin Bridge", info.name)),
             step: None,
             notes: vec![bridge_note(info.backend.as_deref())],
             playable_only: false,
@@ -439,7 +439,7 @@ impl BridgeHub {
                 hub.notify();
             }
         });
-        tracing::info!(name = info.name, %address, "connected to Parson Bridge");
+        tracing::info!(name = info.name, %address, "connected to Mujin Bridge");
         if let Some(entry) = lock(&self.entries).get_mut(address) {
             entry.link = Some(link);
             entry.devices = Some(devices);

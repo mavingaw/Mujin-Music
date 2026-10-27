@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 export default function GlobalError({ reset }: { reset: () => void }) {
   useEffect(() => {
-    document.title = "Parson could not load";
+    document.title = "Mujin Music could not load";
   }, []);
 
   return (
@@ -13,7 +13,7 @@ export default function GlobalError({ reset }: { reset: () => void }) {
         <main className="flex min-h-screen items-center justify-center px-6">
           <div className="max-w-md text-center">
             <h1 className="text-2xl font-semibold">
-              Parson could not load this screen
+              Mujin Music could not load this screen
             </h1>
             <p className="mt-3 text-sm leading-6 text-zinc-400">
               Your library was not changed. Try loading the app again.

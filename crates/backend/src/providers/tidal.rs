@@ -1394,7 +1394,8 @@ impl StreamingProvider for TidalClient {
                         .is_some_and(|value| value != "NONE")
                     {
                         return Err(ProviderError::Unavailable(
-                            "TIDAL returned an encrypted stream, which Parson cannot play.".into(),
+                            "TIDAL returned an encrypted stream, which Mujin Music cannot play."
+                                .into(),
                         ));
                     }
                     let url = manifest
@@ -1764,7 +1765,7 @@ mod tests {
         let (client, transport) = client();
         let album = client.album(&context(), "300100").await.expect("album");
         let review = album.review.expect("review");
-        assert_eq!(review.source.as_deref(), Some("Parson sandbox"));
+        assert_eq!(review.source.as_deref(), Some("Mujin Music sandbox"));
         assert!(
             review
                 .text

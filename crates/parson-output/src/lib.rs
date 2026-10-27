@@ -79,8 +79,8 @@ impl Driver {
             (Self::Simulated, true) => "Simulated exclusive output",
             (Self::Simulated, false) => "Simulated shared output",
             (Self::AirPlay, _) => "AirPlay (RAOP), ALAC 44.1kHz 16bit",
-            (Self::Bridge, true) => "Parson Bridge, exclusive",
-            (Self::Bridge, false) => "Parson Bridge, shared",
+            (Self::Bridge, true) => "Mujin Bridge, exclusive",
+            (Self::Bridge, false) => "Mujin Bridge, shared",
         }
     }
 
@@ -92,7 +92,7 @@ impl Driver {
             Self::CoreAudio => "CoreAudio",
             Self::Simulated => "Simulated",
             Self::AirPlay => "AirPlay",
-            Self::Bridge => "Parson Bridge",
+            Self::Bridge => "Mujin Bridge",
         }
     }
 

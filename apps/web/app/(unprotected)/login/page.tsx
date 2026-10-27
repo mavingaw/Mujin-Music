@@ -77,7 +77,7 @@ export default function LoginPage() {
         onSubmit={submit}
         className="w-full max-w-md space-y-4 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-right-2 motion-safe:duration-200"
       >
-        <ParsonBrandMark className="mb-7 h-16 w-16 sm:hidden" />
+        <ParsonBrandMark className="mb-7 h-14 w-14 sm:hidden" />
         <div className="pb-2">
           <h1 className="text-3xl font-bold tracking-tight break-words">
             {heading.title}

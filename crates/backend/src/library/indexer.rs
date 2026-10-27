@@ -10961,7 +10961,7 @@ mod external_library_tests {
             .expect("external indexing tests require an explicit PARSON_DATA_DIR");
         assert!(
             data_directory.join(".parson-test-data").is_file(),
-            "refusing to run an external indexing test against a normal Parson data directory; \
+            "refusing to run an external indexing test against a normal Mujin Music data directory; \
              create .parson-test-data inside an isolated PARSON_DATA_DIR"
         );
     }

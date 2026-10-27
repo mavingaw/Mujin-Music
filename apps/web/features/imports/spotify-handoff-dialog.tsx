@@ -90,7 +90,7 @@ export default function SpotifyHandoffDialog({
           <DialogDescription>
             Spotify Connect will play the next {count} track
             {count === 1 ? "" : "s"} from Spotify&apos;s catalogue on your own
-            device. Needs Spotify Premium. Parson pauses here and streams
+            device. Needs Spotify Premium. Mujin Music pauses here and streams
             nothing to Spotify.
           </DialogDescription>
         </DialogHeader>

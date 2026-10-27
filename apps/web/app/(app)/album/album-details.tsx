@@ -523,7 +523,7 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
                       void refreshEnrichment("album", album.id).then(
                         () =>
                           toast.success(
-                            "Parson will look this album up again shortly.",
+                            "Mujin Music will look this album up again shortly.",
                           ),
                         () => toast("Could not queue the lookup."),
                       )

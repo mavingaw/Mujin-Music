@@ -54,7 +54,7 @@ export default function LibraryFeed() {
   if (feedQuery.isError) {
     return (
       <HomeMessage
-        title="Parson could not load your home feed"
+        title="Mujin Music could not load your home feed"
         body="Your library is safe. Check the server connection and try again."
         action="Try again"
         onAction={() => void feedQuery.refetch()}

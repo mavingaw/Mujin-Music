@@ -64,7 +64,7 @@ export function signalPathStages(stream: ZoneStreamInfo): SignalStage[] {
 export function signalPathCaveat(zone: Pick<Zone, "kind">): string | null {
   switch (zone.kind) {
     case "sonos":
-      return "Anything the speaker does after it receives the stream (Trueplay, EQ, its own volume) happens inside the Sonos and is not shown. This path comes from the exact conversion plan behind the stream URL Sonos is given. Parson's Sonos support is tested against a protocol-level Sonos simulator, not yet on Sonos hardware.";
+      return "Anything the speaker does after it receives the stream (Trueplay, EQ, its own volume) happens inside the Sonos and is not shown. This path comes from the exact conversion plan behind the stream URL Sonos is given. Mujin Music's Sonos support is tested against a protocol-level Sonos simulator, not yet on Sonos hardware.";
     case "upnp":
       return "What the renderer does after it receives the stream is not shown. UPnP support is tested against a protocol-level renderer simulator, not yet on renderer hardware.";
     case "chromecast":
@@ -72,7 +72,7 @@ export function signalPathCaveat(zone: Pick<Zone, "kind">): string | null {
     case "device":
       return "The DAC's own filters and analog stage are not shown. Device output is tested against simulated DACs and ALSA's null device, not yet on a USB DAC.";
     case "bridge":
-      return "Parson decodes here and sends the samples to the bridge uncompressed; the bridge writes them to the DAC as sent. The DAC's own filters and analog stage are not shown. Parson Bridge is tested against simulated DACs over real network sockets, not yet on a USB DAC.";
+      return "Mujin Music decodes here and sends the samples to the bridge uncompressed; the bridge writes them to the DAC as sent. The DAC's own filters and analog stage are not shown. Mujin Bridge is tested against simulated DACs over real network sockets, not yet on a USB DAC.";
     case "airplay":
       return "AirPlay carries 44.1 kHz/16-bit ALAC by design, so hi-res files are converted first. What the receiver does after that is not shown. AirPlay is tested against a protocol-level receiver and ffmpeg's ALAC decoder, not yet on Apple hardware.";
     default:

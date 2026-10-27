@@ -106,7 +106,8 @@ function SpotifyForm() {
       </ol>
       {!allowed && (
         <p className="rounded-md border border-amber-400/20 bg-amber-400/8 px-3 py-2 text-xs leading-5 text-amber-200">
-          Spotify only redirects to https or http://127.0.0.1. Open Parson at{" "}
+          Spotify only redirects to https or http://127.0.0.1. Open Mujin Music
+          at{" "}
           <a className="underline" href={`${loopback}/settings`}>
             {loopback}
           </a>{" "}
@@ -390,8 +391,8 @@ export function ServiceCard({
           <p className="flex items-start gap-2 text-xs leading-5 text-zinc-500">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" />
             <span>
-              {service.requirements} Credentials stay on this Parson server, are
-              never shown again and are left out of backups.
+              {service.requirements} Credentials stay on this Mujin Music
+              server, are never shown again and are left out of backups.
               {service.terms_url && (
                 <>
                   {" "}

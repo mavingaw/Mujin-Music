@@ -29,7 +29,7 @@ export function mobileZoneName(
   if (name) return name.slice(0, 80);
   const model = modelName?.trim();
   const platform = os === "ios" ? "iOS" : os === "android" ? "Android" : os;
-  return model ? `${model} (${platform})` : `Parson on ${platform}`;
+  return model ? `${model} (${platform})` : `Mujin Music on ${platform}`;
 }
 
 export function mobileZoneStatus(

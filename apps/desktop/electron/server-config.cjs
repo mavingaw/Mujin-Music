@@ -600,11 +600,11 @@ function probeMessage(result, origin) {
     case "ok":
       return "";
     case "incompatible":
-      return `${host} runs a version of Parson this app can’t talk to. Update both to the same version.`;
+      return `${host} runs a version of Mujin Music this app can’t talk to. Update both to the same version.`;
     case "not-parson":
-      return `${host} answered, but it isn’t a Parson server. Check the address and port (Parson uses ${DEFAULT_PORT}).`;
+      return `${host} answered, but it isn’t a Mujin Music server. Check the address and port (Mujin Music uses ${DEFAULT_PORT}).`;
     default:
-      return `No Parson server answered at ${host}. Make sure it is running and on the same network, and that a firewall allows port ${new URL(origin).port || DEFAULT_PORT}.`;
+      return `No Mujin Music server answered at ${host}. Make sure it is running and on the same network, and that a firewall allows port ${new URL(origin).port || DEFAULT_PORT}.`;
   }
 }
 

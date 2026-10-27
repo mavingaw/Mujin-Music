@@ -428,15 +428,15 @@ function ZoneSettingsForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="parson">Parson</SelectItem>
+                  <SelectItem value="parson">Mujin Music</SelectItem>
                   <SelectItem value="home_assistant">Home Assistant</SelectItem>
                 </SelectContent>
               </Select>
             </Row>
             <p className="text-[11px] leading-4 text-zinc-500">
               {draft.volume_control === "home_assistant"
-                ? "Volume up, down, set and mute go to Home Assistant as events on this zone's volume request entity; an automation carries them out, for example on an amplifier with an IR blaster. Parson leaves the audio at full level."
-                : "Parson sets the volume itself. Hand it to Home Assistant when an amplifier Parson cannot reach should follow the volume controls."}
+                ? "Volume up, down, set and mute go to Home Assistant as events on this zone's volume request entity; an automation carries them out, for example on an amplifier with an IR blaster. Mujin Music leaves the audio at full level."
+                : "Mujin Music sets the volume itself. Hand it to Home Assistant when an amplifier Mujin Music cannot reach should follow the volume controls."}
             </p>
           </Section>
         )}
@@ -486,8 +486,8 @@ function ZoneSettingsForm({
                     Exclusive mode (bit-perfect)
                     <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">
                       Opens the device directly at each file&apos;s own sample
-                      rate and bit depth. Other apps cannot use it while Parson
-                      plays.
+                      rate and bit depth. Other apps cannot use it while Mujin
+                      Music plays.
                     </span>
                   </span>
                 </label>

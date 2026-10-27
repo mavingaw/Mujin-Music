@@ -1797,7 +1797,7 @@ mod tests {
             &app,
             test::TestRequest::patch().uri(&uri).set_json(json!({
                 "title": "  Late Night (mine)  ",
-                "description": "Edited in Parson",
+                "description": "Edited in Mujin Music",
                 "track_ids": ["tidal:300104", "tidal:300101", "tidal:300102", "tidal:300301"],
             })),
         )
@@ -1821,7 +1821,7 @@ mod tests {
             ]
         );
         assert_eq!(edited["playlist"]["tracks"][3]["title"], "Low Tide Hymn");
-        assert_eq!(edited["playlist"]["description"], "Edited in Parson");
+        assert_eq!(edited["playlist"]["description"], "Edited in Mujin Music");
         assert_eq!(edited["track_count"], 4);
 
         // Saving the service playlist again asks before replacing edits.
@@ -1873,7 +1873,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{made}");
         assert_eq!(made["made_in_parson"], true);
         assert_eq!(made["track_count"], 5);
-        assert_eq!(made["owner"], "You, in Parson");
+        assert_eq!(made["owner"], "You, in Mujin Music");
         let id = made["id"].as_str().expect("id");
         let made_raw = id.strip_prefix("qobuz:").expect("qobuz id");
         assert!(made_raw.starts_with("parson-"));
@@ -3628,7 +3628,7 @@ mod tests {
             transport.requests().iter().all(
                 |request| request.method == Method::Get || !request.url.contains("/playlists/")
             ),
-            "Parson never writes to service playlists"
+            "Mujin Music never writes to service playlists"
         );
 
         let (_, body) = call!(
@@ -3858,7 +3858,7 @@ mod tests {
             } else {
                 let pending = hub.start_tidal_sign_in(1).await.expect("device code");
                 println!(
-                    "Approve Parson on TIDAL: {} (code {})",
+                    "Approve Mujin Music on TIDAL: {} (code {})",
                     pending
                         .verification_uri_complete
                         .as_deref()
@@ -3910,7 +3910,7 @@ mod tests {
 
     fn partner_keys() -> crate::providers::key_service::ServiceKeys {
         crate::providers::key_service::ServiceKeys {
-            issuer: "Parson".into(),
+            issuer: "Mujin Music".into(),
             public_url: KEY_SERVICE.into(),
             tidal_client_id: Some("parson-tidal-client".into()),
             tidal_device_code: false,
@@ -3966,7 +3966,7 @@ mod tests {
         assert_eq!(qobuz["id"], "qobuz");
         assert_eq!(qobuz["server_credentials_available"], true, "{body}");
         assert_eq!(qobuz["server_credentials_source"], "key_service");
-        assert_eq!(qobuz["key_service"]["issuer"], "Parson");
+        assert_eq!(qobuz["key_service"]["issuer"], "Mujin Music");
         assert_eq!(qobuz["key_service"]["offers"], true);
         assert_eq!(qobuz["key_service"]["error"], Value::Null);
         assert_eq!(qobuz["credentials"]["configured"], false);

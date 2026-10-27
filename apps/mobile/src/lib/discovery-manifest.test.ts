@@ -32,7 +32,7 @@ describe("discovery manifests", () => {
       { ...manifest, serverVersion: null },
     ]) {
       expect(() => parseDiscoveryManifest(value)).toThrow(
-        "This is not a compatible Parson library.",
+        "This is not a compatible Mujin Music library.",
       );
     }
   });

@@ -80,7 +80,7 @@ export function LibraryList({
             accessibilityHint={
               row.current
                 ? "This is the library you are using"
-                : "Switches to this Parson library"
+                : "Switches to this Mujin Music library"
             }
             accessibilityLabel={`${row.name}, ${row.nearby ? "online" : "not seen nearby"}`}
             accessibilityRole="button"

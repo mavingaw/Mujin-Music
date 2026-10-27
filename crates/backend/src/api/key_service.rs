@@ -114,7 +114,7 @@ mod tests {
 
     fn keys() -> ServiceKeys {
         ServiceKeys {
-            issuer: "Parson".into(),
+            issuer: "Mujin Music".into(),
             public_url: "https://keys.parson.test/key-service".into(),
             tidal_client_id: Some("parson-tidal".into()),
             tidal_device_code: false,

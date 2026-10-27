@@ -2,6 +2,7 @@
 
 import BitrateForm from "@/features/settings/bitrate-form";
 import AccountSettings from "@/features/settings/account-settings";
+import AboutSettings from "@/features/settings/about-settings";
 import AdvancedSettings from "@/features/settings/advanced-settings";
 import LibrarySettings from "@/features/settings/library-settings";
 import UserForm from "@/features/settings/user-form";
@@ -30,6 +31,7 @@ const settingsTabs = [
   "home-assistant",
   "users",
   "advanced",
+  "about",
 ] as const;
 type SettingsTab = (typeof settingsTabs)[number];
 
@@ -44,6 +46,7 @@ const labels: Record<SettingsTab, string> = {
   "home-assistant": "Home Assistant",
   users: "Users",
   advanced: "Advanced",
+  about: "About",
 };
 
 export default function SettingsPage() {
@@ -68,6 +71,7 @@ function SettingsContent() {
         "services",
         "data",
         "home-assistant",
+        "about",
       ] as const);
   const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
     allowedTabs.includes(requestedTab as SettingsTab)
@@ -148,6 +152,7 @@ function SettingsContent() {
           )}
           {isAdmin && activeTab === "users" && <UserForm />}
           {isAdmin && activeTab === "advanced" && <AdvancedSettings />}
+          {activeTab === "about" && <AboutSettings />}
         </div>
       </section>
     </div>

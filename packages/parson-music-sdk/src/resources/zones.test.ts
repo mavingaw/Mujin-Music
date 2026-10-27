@@ -716,7 +716,7 @@ test("bridge zones group sample-synced and bridges are managed by address", asyn
     group: { id: "bridge-group:1", synced: true, sync_note: "", members: [] },
   });
   expect(groupingPlan([group, kitchen]).allowed).toBeFalse();
-  expect(zoneKindLabel("bridge")).toBe("Parson Bridge");
+  expect(zoneKindLabel("bridge")).toBe("Mujin Bridge");
   expect(zoneKindLabel("airplay")).toBe("AirPlay");
   expect(zoneIconName({ kind: "airplay" })).toBe("speaker");
   expect(
@@ -782,7 +782,7 @@ test("bridge zones group sample-synced and bridges are managed by address", asyn
       },
       chromecast: { enabled: true, note: null, devices: [] },
     }),
-  ).toBe("1 Parson Bridge (2 outputs)");
+  ).toBe("1 Mujin Bridge (2 outputs)");
   await removeBridge("pi.local:1994");
   expect(remove).toHaveBeenCalledWith("/zones/bridges/pi.local%3A1994");
 });

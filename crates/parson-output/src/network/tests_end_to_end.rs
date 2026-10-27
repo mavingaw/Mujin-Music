@@ -37,7 +37,7 @@ fn wait(player: &Player, wanted: PlayerState, timeout: Duration) -> PlayerStatus
 fn track() -> TrackInfo {
     TrackInfo {
         title: "Ramp & Roll".into(),
-        artist: Some("Parson Bench".into()),
+        artist: Some("Mujin Music Bench".into()),
         album: Some("Fixtures".into()),
         duration_ms: Some(1_000),
     }

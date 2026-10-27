@@ -106,8 +106,8 @@ function GenreAlbums({
       )}
       {provider === "tidal" && (
         <p className="max-w-2xl text-[13px] leading-5 text-zinc-500">
-          TIDAL lists albums by genre only on its genre pages, so Parson files
-          an album you add from here under {genre.name} in your library.
+          TIDAL lists albums by genre only on its genre pages, so Mujin Music
+          files an album you add from here under {genre.name} in your library.
         </p>
       )}
       {page.isPending ? (

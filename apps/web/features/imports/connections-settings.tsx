@@ -16,10 +16,10 @@ export default function ConnectionsSettings() {
               Music services
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-500">
-              Connect a service to import its playlists into Parson, matched to
-              music you own. Each card lists exactly what that service&apos;s
-              terms allow. Parson never streams audio from these services, and
-              you can disconnect at any time.
+              Connect a service to import its playlists into Mujin Music,
+              matched to music you own. Each card lists exactly what that
+              service&apos;s terms allow. Mujin Music never streams audio from
+              these services, and you can disconnect at any time.
             </p>
           </div>
           <Button asChild variant="outline">

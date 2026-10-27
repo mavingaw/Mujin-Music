@@ -120,7 +120,7 @@ export function DeliveredFormat({
         )}
         <DropdownMenuSeparator className="my-2.5" />
         <p className="text-[11.5px] leading-4 text-zinc-500">
-          Read from the stream itself as Parson relays it, not from the
+          Read from the stream itself as Mujin Music relays it, not from the
           service&apos;s catalog.
         </p>
       </DropdownMenuContent>

@@ -71,7 +71,7 @@ export function ServerCredentialsPanel() {
           <p className="mt-1 text-[13px] leading-5 text-zinc-400">
             Add them once and every listener on this server signs in with just
             their TIDAL approval or Qobuz email and password. Use credentials
-            you are entitled to use; Parson does not provide any.
+            you are entitled to use; Mujin Music does not provide any.
           </p>
         </div>
       </div>
@@ -145,7 +145,7 @@ function describe(credential: StreamingServerCredential) {
     return `${id} · set by environment variables`;
   }
   if (credential.source === "key_service") {
-    return `${id} · from the Parson key service. Nothing to set up; add your own only to override it.`;
+    return `${id} · from the Mujin Music key service. Nothing to set up; add your own only to override it.`;
   }
   return `${id}${credential.updated_at ? ` · saved ${formatLastSync(credential.updated_at)}` : ""}`;
 }

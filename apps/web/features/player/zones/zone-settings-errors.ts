@@ -7,7 +7,7 @@ export function errorText(error: unknown, fallback: string): string {
     set_private_on_the_device_itself:
       "A zone can only be made private from the device it runs on.",
     only_parson_apps_can_be_private:
-      "Only Parson apps can be private; speakers are shared by everyone.",
+      "Only Mujin Music apps can be private; speakers are shared by everyone.",
     crossfade_not_supported_here: "This zone cannot crossfade.",
     leveling_not_supported_here: "This zone cannot level volume.",
     comfort_outside_safety_limits:

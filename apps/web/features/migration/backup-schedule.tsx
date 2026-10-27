@@ -83,8 +83,8 @@ export default function BackupSchedule() {
     <section className="border-t border-white/8 pt-8">
       <h2 className="text-base font-semibold text-white">Scheduled backups</h2>
       <p className="mt-1 max-w-xl text-sm text-zinc-500">
-        Parson backs up accounts, playlists, history and edits on its own. Add a
-        folder on another drive or a NAS share so a copy survives if this
+        Mujin Music backs up accounts, playlists, history and edits on its own.
+        Add a folder on another drive or a NAS share so a copy survives if this
         machine doesn’t, and so a new server can restore it.
       </p>
 

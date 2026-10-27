@@ -115,8 +115,7 @@ pub struct ServiceDescriptor {
     pub terms_url: &'static str,
 }
 
-const NO_PLAYBACK: &str =
-    "Parson never streams audio from this service. Imported tracks play from your own library.";
+const NO_PLAYBACK: &str = "Mujin Music never streams audio from this service. Imported tracks play from your own library.";
 
 fn grant(capability: ProviderCapability, available: bool, detail: &'static str) -> CapabilityGrant {
     CapabilityGrant {
@@ -148,7 +147,7 @@ pub fn service_descriptor(service: ImportService) -> ServiceDescriptor {
                 grant(
                     Handoff,
                     true,
-                    "Spotify Connect: start a Parson queue on one of your own Spotify devices. Requires Spotify Premium; Spotify plays it, not Parson.",
+                    "Spotify Connect: start a Mujin Music queue on one of your own Spotify devices. Requires Spotify Premium; Spotify plays it, not Mujin Music.",
                 ),
             ],
             accepts: vec![
@@ -232,7 +231,7 @@ pub fn service_descriptor(service: ImportService) -> ServiceDescriptor {
                 grant(
                     Handoff,
                     false,
-                    "Deezer offers 30-second previews only to third parties; Parson does not use them.",
+                    "Deezer offers 30-second previews only to third parties; Mujin Music does not use them.",
                 ),
             ],
             accepts: vec!["deezer.com/…/playlist/…", "deezer.com/…/profile/…"],

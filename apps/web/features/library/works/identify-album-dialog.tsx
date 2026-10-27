@@ -206,9 +206,9 @@ export function IdentifyAlbumDialog({
             )}
           {search.data && search.data.releases.length === 0 && (
             <p className="py-6 text-sm text-zinc-500">
-              No releases found. Parson already searches by each word of the
-              title; try the original title, the conductor or performer, or a
-              catalogue number.
+              No releases found. Mujin Music already searches by each word of
+              the title; try the original title, the conductor or performer, or
+              a catalogue number.
             </p>
           )}
           <ul aria-label="MusicBrainz releases" className="space-y-1">

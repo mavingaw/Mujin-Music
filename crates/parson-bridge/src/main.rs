@@ -10,19 +10,19 @@ use parson_bridge::protocol::DEFAULT_PORT;
 use parson_output::Backend;
 use parson_output::simulated::SimulatedBackend;
 
-const USAGE: &str = "parson-bridge: makes this machine's DACs and audio outputs Parson zones.
+const USAGE: &str = "parson-bridge: makes this machine's DACs and audio outputs Mujin Music zones.
 
 USAGE:
     parson-bridge [--name NAME] [--port PORT] [--bind ADDRESS] [--simulated] [--no-mdns]
     parson-bridge --list
 
 OPTIONS:
-    --name NAME      Name shown in Parson (default: this computer's name)
+    --name NAME      Name shown in Mujin Music (default: this computer's name)
     --port PORT      TCP port to listen on (default: 1994)
     --bind ADDRESS   Address to listen on (default: 0.0.0.0)
     --simulated      Two simulated DACs instead of real devices (demos, tests)
     --no-mdns        Do not advertise on the local network; add the bridge
-                     in Parson by address instead
+                     in Mujin Music by address instead
     --list           Print the audio devices and their formats, then exit
 
 Environment: PARSON_BRIDGE_ID overrides the stable bridge id;
@@ -46,7 +46,7 @@ fn host_name() -> String {
     }
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "Parson Bridge".to_string())
+        .unwrap_or_else(|_| "Mujin Bridge".to_string())
 }
 
 /// A random id, kept in the user's config directory so zone settings in
@@ -247,7 +247,7 @@ fn main() {
         name = config.name,
         address = %endpoint.address(),
         devices = backend.as_ref().map(|backend| backend.devices().len()).unwrap_or(0),
-        "Parson Bridge is ready; Parson finds it on the local network"
+        "Mujin Bridge is ready; Mujin Music finds it on the local network"
     );
     loop {
         std::thread::park();

@@ -24,10 +24,10 @@ const backup = {
 test("backups describe where they came from", () => {
   expect(backupTitle(backup)).toMatch(/^Home Library · 20 Oct 2026/);
   expect(backupDetail(backup)).toBe(
-    "1.2 MB · Parson 1.0.1 · music was in /home/ana/Music",
+    "1.2 MB · Mujin Music 1.0.1 · music was in /home/ana/Music",
   );
   expect(backupTitle({ ...backup, library_name: null, created_at: null })).toBe(
-    "Parson library",
+    "Mujin Music library",
   );
   expect(formatBytes(0)).toBe("0 B");
 });

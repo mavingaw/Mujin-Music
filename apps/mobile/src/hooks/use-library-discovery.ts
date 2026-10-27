@@ -72,9 +72,9 @@ export function useLibraryDiscovery(enabled?: boolean) {
           const permission = PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES;
           if (!(await PermissionsAndroid.check(permission))) {
             await PermissionsAndroid.request(permission, {
-              title: "Find your Parson library",
+              title: "Find your Mujin Music library",
               message:
-                "Allow nearby-device access so Parson can find music libraries on this network.",
+                "Allow nearby-device access so Mujin Music can find music libraries on this network.",
               buttonPositive: "Allow",
               buttonNegative: "Not now",
             });

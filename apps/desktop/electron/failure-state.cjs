@@ -1,17 +1,17 @@
 const FAILURE_COPY = Object.freeze({
   database_migration_failed: {
     title: "Database update failed",
-    body: "Parson couldn’t update its library database. Your music files were not changed. Open the logs before trying again.",
+    body: "Mujin Music couldn’t update its library database. Your music files were not changed. Open the logs before trying again.",
     action: "Open logs",
   },
   host_unavailable: {
-    title: "Local Parson host unavailable",
+    title: "Local Mujin Music host unavailable",
     body: "The local music service did not start. Check the technical details, then try again.",
     action: "Try again",
   },
   webview_failed: {
-    title: "Parson’s window could not load",
-    body: "The app window failed to load the local Parson interface. Restart the view; if it happens again, open the logs.",
+    title: "Mujin Music’s window could not load",
+    body: "The app window failed to load the local Mujin Music interface. Restart the view; if it happens again, open the logs.",
     action: "Try again",
   },
 });

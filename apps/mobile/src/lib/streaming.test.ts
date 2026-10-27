@@ -208,7 +208,7 @@ test("a key service means a subscription is all a listener needs", () => {
     server_credentials_source: "key_service",
     key_service: {
       url: "https://keys.parson.test",
-      issuer: "Parson",
+      issuer: "Mujin Music",
       offers: true,
       device_code: false,
       error: null,
@@ -216,7 +216,7 @@ test("a key service means a subscription is all a listener needs", () => {
   } as unknown as StreamingProviderStatus;
   expect(needsOwnCredentials(provider)).toBeFalse();
   expect(signInThroughText(provider)).toBe(
-    "Signs in through Parson's licensed Qobuz app · Use your own",
+    "Signs in through Mujin Music's licensed Qobuz app · Use your own",
   );
   expect(keysNoticeText([provider])).toContain(
     "Sign in to Qobuz with just your subscription",

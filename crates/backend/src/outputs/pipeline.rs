@@ -91,7 +91,7 @@ impl std::fmt::Display for PlanFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownFormat => f.write_str(
-                "Parson does not know this track's sample rate yet. Rescan the library, then try again.",
+                "Mujin Music does not know this track's sample rate yet. Rescan the library, then try again.",
             ),
             Self::Plan(error) => write!(f, "This track cannot be played on the device: {error}."),
         }

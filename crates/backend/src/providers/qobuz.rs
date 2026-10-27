@@ -571,20 +571,20 @@ impl QobuzClient {
             .form("request_ts", timestamp.to_string());
         let reply = self.transport.send(request).await.map_err(|error| {
             ProviderError::Unavailable(format!(
-                "Parson's key service could not be reached to sign this Qobuz stream ({error})."
+                "Mujin Music's key service could not be reached to sign this Qobuz stream ({error})."
             ))
         })?;
         match reply.status {
             200..=299 => {}
             400 | 401 | 403 | 404 => {
                 return Err(ProviderError::InvalidCredentials(
-                    "Parson's key service declined to sign this Qobuz stream.".into(),
+                    "Mujin Music's key service declined to sign this Qobuz stream.".into(),
                 ));
             }
             429 => return Err(ProviderError::RateLimited),
             status => {
                 return Err(ProviderError::Unavailable(format!(
-                    "Parson's key service is unavailable (HTTP {status}). Try again shortly."
+                    "Mujin Music's key service is unavailable (HTTP {status}). Try again shortly."
                 )));
             }
         }
@@ -1363,7 +1363,7 @@ mod tests {
         let artist = client.artist(&context(), "51003").await.expect("artist");
         let bio = artist.bio.expect("biography");
         assert_eq!(bio.text, "Sora Ueda is a fictional pianist from Kanazawa.");
-        assert_eq!(bio.source.as_deref(), Some("Parson sandbox"));
+        assert_eq!(bio.source.as_deref(), Some("Mujin Music sandbox"));
         assert_eq!(artist.similar.len(), 3);
         assert!(
             artist

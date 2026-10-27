@@ -99,7 +99,7 @@ describe("convolution", () => {
       support: {
         available: true,
         reason: null,
-        engine: "Parson DSP, 64-bit float",
+        engine: "Mujin Music DSP, 64-bit float",
         crossfeed: true,
         sample_rates: [44_100],
         output_bits: 24,

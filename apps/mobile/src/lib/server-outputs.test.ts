@@ -149,7 +149,7 @@ test("DSD support, hardware and the driver's report are summarised", () => {
       hardwareVerified: false,
       hardwareReporter: "driver",
     }),
-  ).toBe("Driver: S32_LE 44.1kHz 2ch, converted after Parson");
+  ).toBe("Driver: S32_LE 44.1kHz 2ch, converted after Mujin Music");
   expect(
     serverDriverLine({
       hardwareReport: null,

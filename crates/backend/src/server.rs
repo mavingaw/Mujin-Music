@@ -347,7 +347,7 @@ async fn host_details() -> HttpResponse {
             .insert_header((actix_web::http::header::CACHE_CONTROL, "no-store"))
             .json(info),
         Err(error) => {
-            tracing::error!(%error, "could not describe this Parson host");
+            tracing::error!(%error, "could not describe this Mujin Music host");
             HttpResponse::InternalServerError().finish()
         }
     }
@@ -357,7 +357,7 @@ async fn nearby_servers() -> HttpResponse {
     match crate::discovery::discover_nearby(Duration::from_millis(1_500)).await {
         Ok(servers) => HttpResponse::Ok().json(servers),
         Err(error) => {
-            tracing::warn!(%error, "nearby Parson discovery failed");
+            tracing::warn!(%error, "nearby Mujin Music discovery failed");
             HttpResponse::ServiceUnavailable().json(serde_json::json!({
                 "error": "discovery_unavailable",
                 "message": "Nearby discovery is unavailable on this device."
@@ -419,7 +419,7 @@ pub async fn build_server_with_shutdown_timeout(
     // A server that holds TIDAL or Qobuz keys can serve them to other
     // Parson servers as a key service.
     let key_service_app = crate::providers::key_service::ServiceKeys::from_env().map(|keys| {
-        tracing::info!(url = %keys.public_url, "serving the Parson key service");
+        tracing::info!(url = %keys.public_url, "serving the Mujin Music key service");
         web::Data::new(key_service::KeyServiceApp::new(keys))
     });
     let library = web::Data::from(local_app.library);
@@ -454,7 +454,7 @@ pub async fn build_server_with_shutdown_timeout(
     let worker_count = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get().clamp(2, 4))
         .unwrap_or(2);
-    tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Parson server");
+    tracing::info!(address = %bind_address, port = bind_port, worker_count, "starting Mujin Music server");
 
     let server = HttpServer::new(move || {
         App::new()
@@ -589,7 +589,7 @@ pub async fn run() -> std::io::Result<()> {
     let result = tokio::select! {
         result = &mut server => result,
         () = restart_requested() => {
-            tracing::info!("restarting the Parson server");
+            tracing::info!("restarting the Mujin Music server");
             let graceful = tokio::spawn(handle.stop(true));
             let result = server.await;
             let _ = graceful.await;

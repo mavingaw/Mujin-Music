@@ -5,11 +5,11 @@ description: Use the web player from another device and troubleshoot local or re
 
 ## Connect on a trusted local network
 
-1. Start the Parson desktop app or server.
+1. Start the Mujin Music desktop app or server.
 2. Connect the host and the other device to the same trusted network.
 3. Open `http://computer-name:1993` in a current browser, replacing
-   `computer-name` with the Parson host's name.
-4. Sign in with a Parson account.
+   `computer-name` with the Mujin Music host's name.
+4. Sign in with a Mujin Music account.
 
 If the hostname does not resolve, use the host's local IP address, such as
 `http://192.168.1.20:1993`. The first account and library setup must be
@@ -17,7 +17,7 @@ completed on the host before connecting other devices.
 
 ## Local connection behaviour
 
-The Parson host serves the web UI, API, artwork, and audio. It must remain
+The Mujin Music host serves the web UI, API, artwork, and audio. It must remain
 running and awake while another device streams. Playback stops if the host
 sleeps, shuts down, changes network, or loses access to the music folder.
 
@@ -29,14 +29,14 @@ your network.
 
 - Confirm `http://127.0.0.1:1993/health` works on the host.
 - Confirm both devices are on the same network and client isolation is disabled.
-- Allow Parson through the host firewall on trusted/private networks.
+- Allow Mujin Music through the host firewall on trusted/private networks.
 - Try the host's numeric local IP address instead of its hostname.
 - Do not expose an unfinished first-run setup to an untrusted network.
 
 ## Remote access
 
 Remote access is possible through an HTTPS reverse proxy, Tailscale, or another
-trusted VPN. ParsonLabs does not relay this traffic: the browser connects to
+trusted VPN. Nobody else relays this traffic: the browser connects to
 your own host. Prefer HTTPS for any connection beyond a trusted local network,
 and see [Advanced networking](/docs/advanced-networking).
 

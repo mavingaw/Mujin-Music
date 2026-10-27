@@ -3,7 +3,7 @@ title: Advanced networking
 description: Hostnames, HTTPS, reverse proxies, firewalls, VPNs, and manual discovery.
 ---
 
-Normal trusted-LAN use needs none of this page. Parson listens on port `1993` by default and advertises itself locally.
+Normal trusted-LAN use needs none of this page. Mujin Music listens on port `1993` by default and advertises itself locally.
 
 ## Custom hostname
 
@@ -11,17 +11,17 @@ Point a DNS name at the Windows host, then connect clients using the complete or
 
 ## Reverse proxy and TLS
 
-Terminate TLS at a reverse proxy such as Caddy, nginx, or Traefik and proxy the complete origin to Parson. Set:
+Terminate TLS at a reverse proxy such as Caddy, nginx, or Traefik and proxy the complete origin to Mujin Music. Set:
 
 ```text
 PARSON_PUBLIC_URL=https://music.example.com
 ```
 
-The value must be a bare origin with no path. It enables secure cookies and allows that browser origin. Proxy WebSocket upgrades as well as normal HTTP and range requests. Do not expose Parson directly over plain HTTP to the internet.
+The value must be a bare origin with no path. It enables secure cookies and allows that browser origin. Proxy WebSocket upgrades as well as normal HTTP and range requests. Do not expose Mujin Music directly over plain HTTP to the internet.
 
 ## Firewall rules
 
-Allow inbound TCP to the configured Parson port only from networks that should connect. Local discovery also needs multicast DNS on the LAN. Do not expose the data directory, database files, logs, or session key as shared files.
+Allow inbound TCP to the configured Mujin Music port only from networks that should connect. Local discovery also needs multicast DNS on the LAN. Do not expose the data directory, database files, logs, or session key as shared files.
 
 ## Tailscale or another VPN
 
@@ -36,7 +36,7 @@ http://192.168.1.20:1993
 https://music.example.com
 ```
 
-Parson rejects embedded usernames/passwords and ignores URL paths.
+Mujin Music rejects embedded usernames/passwords and ignores URL paths.
 
 ## Custom discovery behavior
 

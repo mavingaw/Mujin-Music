@@ -84,7 +84,7 @@ test("an emulated card says it has no DAC behind it", () => {
   const hardware = {
     bus: "usb",
     usb_id: "1209:0001",
-    product: "Parson Bench DAC (kernel ABI emulator)",
+    product: "Mujin Music Bench DAC (kernel ABI emulator)",
     speed: "high speed",
     caps_source: "driver" as const,
     altsets: [],

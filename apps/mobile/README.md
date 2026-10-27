@@ -1,6 +1,6 @@
-# Parson Mobile
+# Mujin Music Mobile
 
-Expo client for Parson servers on the local network.
+Expo client for Mujin Music servers on the local network.
 
 ## Development
 

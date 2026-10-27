@@ -51,7 +51,7 @@ export function useStreamingRadio() {
               track_ids: playable.map((track) => track.id),
             })
               .then(async (copy) => {
-                toast.success(`Saved ${copy.title} in Parson`);
+                toast.success(`Saved ${copy.title} in Mujin Music`);
                 await queryClient.invalidateQueries({
                   queryKey: ["streaming", "playlist-copies"],
                 });

@@ -36,8 +36,8 @@ describe("a zone's DSP chain", () => {
   test("the engine's support comes from the zone's own endpoint", () => {
     const support = {
       available: false,
-      reason: "Parson could not read the formats USB DAC accepts.",
-      engine: "Parson DSP, 64-bit float",
+      reason: "Mujin Music could not read the formats USB DAC accepts.",
+      engine: "Mujin Music DSP, 64-bit float",
       crossfeed: false,
       sample_rates: [],
       output_bits: null,

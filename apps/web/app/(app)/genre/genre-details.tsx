@@ -352,7 +352,7 @@ export default function GenreDetails() {
             <p className="text-sm text-zinc-500">
               {waiting ??
                 (!page.canonical
-                  ? "This genre comes from your files' tags; Parson has no description for it."
+                  ? "This genre comes from your files' tags; Mujin Music has no description for it."
                   : page.enrichment.enabled
                     ? "No Wikipedia description was found for this genre."
                     : "Turn on online metadata in Settings to add a description from Wikipedia.")}

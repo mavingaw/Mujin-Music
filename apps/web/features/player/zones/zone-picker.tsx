@@ -70,11 +70,11 @@ function errorMessage(error: unknown, fallback: string): string {
   const known: Record<string, string> = {
     zone_has_no_parson_queue: "That zone has nothing queued to transfer.",
     zone_cannot_receive_transfer:
-      "Chromecast playback starts from the Parson mobile app.",
+      "Chromecast playback starts from the Mujin Music mobile app.",
     chromecast_groups_are_made_in_google_home:
       "Group Chromecast speakers in the Google Home app.",
     bridges_disabled:
-      "Parson Bridge support is turned off on this server (PARSON_BRIDGES=off).",
+      "Mujin Bridge support is turned off on this server (PARSON_BRIDGES=off).",
     end_of_queue: "That was the last track in the queue.",
     sonos_disabled: "Sonos support is turned off on this server.",
     private_zones_cannot_be_grouped:
@@ -350,7 +350,7 @@ function ZoneFooterNotes() {
           {sonos.enabled
             ? sonos.players
               ? `${sonos.players} Sonos ${sonos.players === 1 ? "room" : "rooms"} on this network. Stereo pairs count as one room.`
-              : "No Sonos found. Sonos must be on the same network as the Parson server, and the server must accept connections from it (UDP 1900 for discovery and the server port for audio)."
+              : "No Sonos found. Sonos must be on the same network as the Mujin Music server, and the server must accept connections from it (UDP 1900 for discovery and the server port for audio)."
             : "Sonos support is turned off on this server (PARSON_SONOS=off)."}
         </p>
       )}
@@ -366,7 +366,7 @@ function ZoneFooterNotes() {
           {devices.enabled && devices.backend
             ? `${devices.devices} audio ${devices.devices === 1 ? "device" : "devices"} on the server's computer (${devices.backend}). Each one is its own zone.`
             : (devices.note ??
-              "Audio devices of this computer show as zones in the Parson desktop app.")}
+              "Audio devices of this computer show as zones in the Mujin Music desktop app.")}
         </p>
       )}
     </div>

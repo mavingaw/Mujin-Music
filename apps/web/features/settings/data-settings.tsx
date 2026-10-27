@@ -111,7 +111,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
           delete: "Backup wasn’t deleted.",
           cache: "Cache wasn’t cleared.",
           reset: "Reset wasn’t prepared.",
-          restart: "Parson didn’t restart.",
+          restart: "Mujin Music didn’t restart.",
         };
         toast.error(errors[action]);
       }
@@ -263,7 +263,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
             {status.data?.restore_pending && (
               <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
                 <span className="flex-1">
-                  A validated restore is ready. Restart Parson to apply it.
+                  A validated restore is ready. Restart Mujin Music to apply it.
                 </span>
                 <Button
                   disabled={Boolean(busy)}
@@ -352,19 +352,21 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
 
       {isAdmin && (
         <section className="border-t border-red-500/20 pt-8">
-          <h2 className="text-base font-semibold text-red-300">Reset Parson</h2>
+          <h2 className="text-base font-semibold text-red-300">
+            Reset Mujin Music
+          </h2>
           <Button
             className="mt-5"
             disabled={Boolean(busy)}
             onClick={() => setResetOpen(true)}
             variant="destructive"
           >
-            Reset Parson
+            Reset Mujin Music
           </Button>
           {status.data?.reset_pending && (
             <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
               <span className="flex-1">
-                Reset is ready. Restart Parson to finish.
+                Reset is ready. Restart Mujin Music to finish.
               </span>
               <Button
                 disabled={Boolean(busy)}
@@ -497,7 +499,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Reset Parson?</DialogTitle>
+            <DialogTitle>Reset Mujin Music?</DialogTitle>
             <DialogDescription>
               This removes every account, setting, playlist, history entry, and
               the library index after restart. Your music files and safety
@@ -542,7 +544,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
               variant="destructive"
             >
               {spinner("reset")}
-              Reset Parson
+              Reset Mujin Music
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -559,8 +561,8 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
             <DialogTitle>Restore a backup</DialogTitle>
             <DialogDescription>
               Replaces this server’s accounts, playlists, history and edits with
-              the backup’s, then restarts Parson. The current data is kept as a
-              rollback copy.
+              the backup’s, then restarts Mujin Music. The current data is kept
+              as a rollback copy.
             </DialogDescription>
           </DialogHeader>
           {restoreOpen ? (

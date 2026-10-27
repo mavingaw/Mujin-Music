@@ -1,26 +1,27 @@
-# Parson
+# Mujin Music
 
 Your music. Instantly.
 
-Parson is a local-first music app for your own collection.
+Mujin Music is a local-first music app for your own collection. Based on
+[Parson](https://github.com/ParsonLabs/Parson) by ParsonLabs.
 
 Choose a folder. Start listening.
 
-![Parson](apps/site/public/screenshots/01-home.png)
+![Mujin Music](apps/site/public/screenshots/01-home.png)
 
 [Download](https://parson.dev) ·
 [Docs](https://parson.dev/docs) ·
-[Releases](https://github.com/ParsonLabs/Parson/releases/latest)
+[Releases](https://github.com/mavingaw/parson-jin/releases/latest)
 
 ## Start
 
-Install Parson, create your account, and choose your music folder.
+Install Mujin Music, create your account, and choose your music folder.
 
 Desktop apps include everything needed to run your library.
 
 ## Download
 
-Get Windows, macOS and Linux packages from the [latest release](https://github.com/ParsonLabs/Parson/releases/latest).
+Get Windows, macOS and Linux packages from the [latest release](https://github.com/mavingaw/parson-jin/releases/latest).
 
 The server container is `ghcr.io/parsonlabs/parson:latest`. Versioned image tags are also published for pinned deployments.
 
@@ -43,11 +44,11 @@ Open `http://localhost:1993`, create your account, and choose `/music`.
 
 ## Server and remotes
 
-The Parson server holds your library. Parson Desktop, the Android app, and any browser are remotes for it. Parson Desktop can run the server itself, or be a remote for a server on your NAS or another computer. See [docs/server.md](docs/server.md) for headless installs on Linux, NAS, Docker and Windows, and for how to connect phones.
+The Mujin Music server holds your library. Mujin Music Desktop, the Android app, and any browser are remotes for it. Mujin Music Desktop can run the server itself, or be a remote for a server on your NAS or another computer. See [docs/server.md](docs/server.md) for headless installs on Linux, NAS, Docker and Windows, and for how to connect phones.
 
 ## Privacy
 
-Parson does not upload analytics or crash reports.
+Mujin Music does not upload analytics or crash reports.
 
 Music, accounts, playlists, history, and recommendations stay on infrastructure
 you control. External requests are limited to services you use, such as lyrics,
@@ -85,7 +86,7 @@ bun --filter parson-music-web dev
 ## Security
 
 Report vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/ParsonLabs/Parson/security/advisories/new).
+[GitHub Security Advisories](https://github.com/mavingaw/parson-jin/security/advisories/new).
 
 Deployment guidance is in the
 [privacy and security documentation](https://parson.dev/docs/accounts-privacy-security).
@@ -93,3 +94,9 @@ Deployment guidance is in the
 ## License
 
 [GPL-3.0-only](LICENSE)
+
+Mujin Music is based on [Parson](https://github.com/ParsonLabs/Parson) by
+ParsonLabs and keeps its GPL-3.0-only licence and copyright notices. Third-party
+components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The Mujin Music fonts (Jost, Inter, JetBrains Mono) are under the SIL Open
+Font License 1.1; each ships with its `OFL.txt` in `apps/web/public/fonts`.

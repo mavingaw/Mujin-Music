@@ -1,6 +1,6 @@
 ---
 title: Library
-description: Add folders and understand how Parson turns imperfect files into a useful music library.
+description: Add folders and understand how Mujin Music turns imperfect files into a useful music library.
 ---
 
 ## Adding your music
@@ -11,33 +11,33 @@ You can select one or more:
 
 - local folders and local drives;
 - removable or external drives; and
-- network folders already mounted and readable by the Windows account running Parson.
+- network folders already mounted and readable by the Windows account running Mujin Music.
 
-Parson reads files in place. It does not rename, move, or rewrite the source audio.
+Mujin Music reads files in place. It does not rename, move, or rewrite the source audio.
 
 ### When a folder is unavailable
 
-An unavailable root fails that refresh, but Parson preserves the last known-good catalog from other roots—and the previous available catalog—rather than replacing everything with an empty library. Reconnect or remount the folder, then refresh it. Tracks on the offline root cannot play until the path is readable again.
+An unavailable root fails that refresh, but Mujin Music preserves the last known-good catalog from other roots—and the previous available catalog—rather than replacing everything with an empty library. Reconnect or remount the folder, then refresh it. Tracks on the offline root cannot play until the path is readable again.
 
-## How Parson organizes music
+## How Mujin Music organizes music
 
-Parson uses tags first, then bounded, deterministic inference when tags are incomplete or inconsistent. Folder names are evidence, not an instruction to mirror the disk layout.
+Mujin Music uses tags first, then bounded, deterministic inference when tags are incomplete or inconsistent. Folder names are evidence, not an instruction to mirror the disk layout.
 
 ### Artists and album artists
 
-Track artists are the performers credited on a recording. Album artists own the release in the library. When album-artist tags are present, Parson uses them. When they are missing, it considers the artists shared across tracks in the same album folder and known aliases. Featuring credits stay attached to tracks without fragmenting the album artist unnecessarily.
+Track artists are the performers credited on a recording. Album artists own the release in the library. When album-artist tags are present, Mujin Music uses them. When they are missing, it considers the artists shared across tracks in the same album folder and known aliases. Featuring credits stay attached to tracks without fragmenting the album artist unnecessarily.
 
 ### Credits, biographies and reviews
 
 Composer, lyricist, arranger, conductor, performer (with instrument), ensemble, producer, remixer, mixer and engineer tags become credits. They appear on the album's **Credits** tab, under each track title ("Composed by …") and in **View credits…** on a track. Every name links to that person's **Credits** tab, which lists everything they composed, produced or played on in your library, filterable by role. People who only appear in credits get a contributor page instead of a discography.
 
-**Online metadata** (Settings → Library, off by default) adds MusicBrainz relationship credits, release facts such as label and catalog number, Wikipedia biographies, album background and critical reception, and freely licensed artist photos from Wikimedia Commons. Wikipedia text always shows its article and CC BY-SA license; reviews are the article's reception section, not a paid review service. When MusicBrainz has two artists with the same name and nothing in your tags tells them apart, Parson shows no biography rather than a wrong one. You can also keep a private note on any album or artist.
+**Online metadata** (Settings → Library, off by default) adds MusicBrainz relationship credits, release facts such as label and catalog number, Wikipedia biographies, album background and critical reception, and freely licensed artist photos from Wikimedia Commons. Wikipedia text always shows its article and CC BY-SA license; reviews are the article's reception section, not a paid review service. When MusicBrainz has two artists with the same name and nothing in your tags tells them apart, Mujin Music shows no biography rather than a wrong one. You can also keep a private note on any album or artist.
 
-**Editorial sources** (in the same settings) lists the Wikipedias Parson reads, English, German and French first. Turn each on or off and use the arrows to set the order: the first one on gives each page its main text, and the others are fetched too, so an album's review and background and an artist's biography have a **Source** switcher (English, Deutsch, Français …) that remembers your pick per page in that browser. When an album's article has a review scores table, the album page shows it under **Professional ratings**: each publication with its stars or grade (AllMusic 5/5, _The Penguin Guide to Jazz_ 4/4, _Pitchfork_ 10/10 …), credited to the article it comes from. These are the ratings Wikipedia cites, not reviews licensed from those publications.
+**Editorial sources** (in the same settings) lists the Wikipedias Mujin Music reads, English, German and French first. Turn each on or off and use the arrows to set the order: the first one on gives each page its main text, and the others are fetched too, so an album's review and background and an artist's biography have a **Source** switcher (English, Deutsch, Français …) that remembers your pick per page in that browser. When an album's article has a review scores table, the album page shows it under **Professional ratings**: each publication with its stars or grade (AllMusic 5/5, _The Penguin Guide to Jazz_ 4/4, _Pitchfork_ 10/10 …), credited to the article it comes from. These are the ratings Wikipedia cites, not reviews licensed from those publications.
 
 ### One person, every name
 
-The same person is often credited under different names: tags may say "Q-Tip" where MusicBrainz credits "Jonathan Davis". With online metadata on, Parson learns the names MusicBrainz knows each person by (their own name, the names releases credit them as, and their aliases) and merges a tag credit into the MusicBrainz person by id or by one of those names. The album's Credits tab then lists them once ("Q-Tip, as Jonathan Davis"), their page collects every credit and album under both names, and a page opened under the other name moves to the merged one. A name two different MusicBrainz people share (Q-Tip and Korn's Jonathan Davis) is only merged on albums whose own MusicBrainz credits say who it is.
+The same person is often credited under different names: tags may say "Q-Tip" where MusicBrainz credits "Jonathan Davis". With online metadata on, Mujin Music learns the names MusicBrainz knows each person by (their own name, the names releases credit them as, and their aliases) and merges a tag credit into the MusicBrainz person by id or by one of those names. The album's Credits tab then lists them once ("Q-Tip, as Jonathan Davis"), their page collects every credit and album under both names, and a page opened under the other name moves to the merged one. A name two different MusicBrainz people share (Q-Tip and Korn's Jonathan Davis) is only merged on albums whose own MusicBrainz credits say who it is.
 
 ### Focus on a discography
 
@@ -60,11 +60,11 @@ An album with no artwork in its folder or tags shows the front cover of the rele
 
 ### Works and recordings
 
-With online metadata on, Parson also learns which **work** each track performs from MusicBrainz: the piece, its composer, form, key, catalogue number (Op. 125, BWV 1007, K. 550 …) and when it was composed, and which movement of the piece the track is. Movements of one piece are grouped under a heading in the album's track list. **Go to work** in a track's menu opens the work page, which lists every recording of it in your library with its conductor, orchestra and soloists, grouped by album, conductor or performer, and marks recordings that only include some movements. A composer's page has a **Compositions** tab with the composer's whole catalogue: every work MusicBrainz lists for them (up to 4,000, movements included), each marked with how many recordings you have or **Not in your library**, and a **Composed** year. The works Wikidata lists as the composer's notable works come first, as **Notable compositions** (also on the Overview tab), and Wikidata fills in the year, key and form of works MusicBrainz describes less fully. Switch between **All works**, **In your library** and **Notable**, and filter by form, period and key; each form lists its first works with **Show all**. Works you do not have still open a work page. When MusicBrainz links a piece to its Wikipedia article, the work page shows that article's introduction under **About**, and an album of the piece offers it as **About the work** next to the album's own review and background, so classical albums get text even when the release has no article.
+With online metadata on, Mujin Music also learns which **work** each track performs from MusicBrainz: the piece, its composer, form, key, catalogue number (Op. 125, BWV 1007, K. 550 …) and when it was composed, and which movement of the piece the track is. Movements of one piece are grouped under a heading in the album's track list. **Go to work** in a track's menu opens the work page, which lists every recording of it in your library with its conductor, orchestra and soloists, grouped by album, conductor or performer, and marks recordings that only include some movements. A composer's page has a **Compositions** tab with the composer's whole catalogue: every work MusicBrainz lists for them (up to 4,000, movements included), each marked with how many recordings you have or **Not in your library**, and a **Composed** year. The works Wikidata lists as the composer's notable works come first, as **Notable compositions** (also on the Overview tab), and Wikidata fills in the year, key and form of works MusicBrainz describes less fully. Switch between **All works**, **In your library** and **Notable**, and filter by form, period and key; each form lists its first works with **Show all**. Works you do not have still open a work page. When MusicBrainz links a piece to its Wikipedia article, the work page shows that article's introduction under **About**, and an album of the piece offers it as **About the work** next to the album's own review and background, so classical albums get text even when the release has no article.
 
 ### Genres
 
-Parson reads genres from your files' tags (`GENRE` in FLAC and Ogg, `TCON` in MP3, `©gen` in MP4/M4A) and, with online metadata on, the genres MusicBrainz lists for the album's release group and for each artist. Every name is matched to a small genre tree with aliases, so "Bop" becomes Jazz › Bebop and "Hip-Hop", "hiphop" and "Rap" all mean Hip Hop; genres the tree does not know are kept as they are. Albums and artists show their genres as chips. Each chip opens a genre page with a description from Wikipedia (with its CC BY-SA attribution), its sub-genres and related genres, and the artists, composers and albums in your library in that genre or any genre below it. **Genres** in the sidebar lists the whole tree.
+Mujin Music reads genres from your files' tags (`GENRE` in FLAC and Ogg, `TCON` in MP3, `©gen` in MP4/M4A) and, with online metadata on, the genres MusicBrainz lists for the album's release group and for each artist. Every name is matched to a small genre tree with aliases, so "Bop" becomes Jazz › Bebop and "Hip-Hop", "hiphop" and "Rap" all mean Hip Hop; genres the tree does not know are kept as they are. Albums and artists show their genres as chips. Each chip opens a genre page with a description from Wikipedia (with its CC BY-SA attribution), its sub-genres and related genres, and the artists, composers and albums in your library in that genre or any genre below it. **Genres** in the sidebar lists the whole tree.
 
 In **Settings → Online metadata**, **Genres from** chooses between online genres and file tags; each falls back to the other when an album has none. An administrator can choose an album's genres by hand with **Edit** next to its genre chips; that choice wins until it is reset.
 
@@ -74,9 +74,9 @@ Biographies, album background and reviews come straight from the Wikipedia artic
 
 Albums whose tags do not name a MusicBrainz release are searched for by title and album artist. The search is forgiving: it also looks for the words of the title in any order and folds spellings together, so "Symphonien Nr. 5 & 7" finds "Symphonien nos. 5 & 7", and classical titles such as "Beethoven: Symphony No. 9" also match without the composer.
 
-Before anything from a release found this way is used, Parson checks it against your files: the number of tracks, each track's length, the year (and label) in your tags, and whether the conductor and orchestra your tags name are credited on the release. A release that does not pass, such as a 7-inch single with the album's title or a reissue of another orchestra's recording, is not applied: the album keeps its own tags, cover and credits, and its page shows an **Unverified match** notice with the closest release and the evidence for and against it. A release named in your tags, or chosen by hand, is always used.
+Before anything from a release found this way is used, Mujin Music checks it against your files: the number of tracks, each track's length, the year (and label) in your tags, and whether the conductor and orchestra your tags name are credited on the release. A release that does not pass, such as a 7-inch single with the album's title or a reissue of another orchestra's recording, is not applied: the album keeps its own tags, cover and credits, and its page shows an **Unverified match** notice with the closest release and the evidence for and against it. A release named in your tags, or chosen by hand, is always used.
 
-When Parson finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. Results that fit your files are marked, and choosing a release with a different number of tracks asks you to confirm first, because tracks are then paired by title. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
+When Mujin Music finds no confident match, or the wrong one, an administrator can choose **Identify album…** in the album's menu, search MusicBrainz by title and artist, and pick the right release. Results that fit your files are marked, and choosing a release with a different number of tracks asks you to confirm first, because tracks are then paired by title. That choice wins over tags and automatic matching until it is cleared. Placeholder names such as "Unknown Artist" or "Various Artists" are never matched automatically.
 
 When your files name a composer or conductor, releases that credit them are listed first, and you can show only those.
 
@@ -84,13 +84,13 @@ When your files name a composer or conductor, releases that credit them are list
 
 Under **Edit album → Metadata preference** an administrator chooses, for each fact, whether the album shows its file tags or the matched MusicBrainz release: original release date, this edition's date, label, catalog number, country, barcode, cover, performers and other credits. When the chosen source has nothing, the other fills in, and the album page marks every fact with where it came from. Library-wide defaults are under **Settings → Library → Metadata preference**; out of the box, edition facts and covers come from your tags and credits add what MusicBrainz knows.
 
-Parson reads release facts that taggers such as Picard write: `CATALOGNUMBER`, `RELEASECOUNTRY`, `ORIGINALDATE` or `ORIGINALYEAR` (ID3 `TDOR`/`TORY`) and `BARCODE`. The year next to the album title is the original release, never the year of a reissue. A release found automatically may be another pressing, so its catalog number, country, barcode and edition date only appear where you choose Online for that field.
+Mujin Music reads release facts that taggers such as Picard write: `CATALOGNUMBER`, `RELEASECOUNTRY`, `ORIGINALDATE` or `ORIGINALYEAR` (ID3 `TDOR`/`TORY`) and `BARCODE`. The year next to the album title is the original release, never the year of a reissue. A release found automatically may be another pressing, so its catalog number, country, barcode and edition date only appear where you choose Online for that field.
 
 Typing a value freezes it: looking the album up again, or identifying it, never changes it until you unfreeze it. The **Credits** tab has **Edit credits** to add or remove a person, change a role or instrument, or limit a credit to chosen tracks. An edited list replaces the tag and MusicBrainz credits on the album and on every person's page, and it is frozen the same way. None of this writes to your files.
 
 ### Albums and editions
 
-Albums are identified from normalized album title plus resolved album artist. Parson recognizes edition qualifiers such as deluxe, anniversary, remastered, expanded, special, collector's, limited, legacy, reissue, regional, mono/stereo, and bonus editions. It links confident variants into a release group while preserving the edition's visible title and tracks.
+Albums are identified from normalized album title plus resolved album artist. Mujin Music recognizes edition qualifiers such as deluxe, anniversary, remastered, expanded, special, collector's, limited, legacy, reissue, regional, mono/stereo, and bonus editions. It links confident variants into a release group while preserving the edition's visible title and tracks.
 
 An original release and its deluxe edition remain separate albums. If an edition has no suitable cover, it may inherit the original release's artwork; its own good square cover always wins.
 
@@ -104,7 +104,7 @@ An album artist such as **Various Artists**, a compilation folder, or strong mul
 
 ### Singles, remixes, live releases, and bootlegs
 
-Parson classifies releases using a combination of album title, folder hierarchy, track count, track-title markers, embedded genres, and album artist. Categories include Album, EP, Single, Remix, Compilation, Live, Demos & Rarities, Bootleg, Soundtrack, Promotional, Acapella, and Bonus Audio. A single weak word is not enough when the rest of the evidence disagrees.
+Mujin Music classifies releases using a combination of album title, folder hierarchy, track count, track-title markers, embedded genres, and album artist. Categories include Album, EP, Single, Remix, Compilation, Live, Demos & Rarities, Bootleg, Soundtrack, Promotional, Acapella, and Bonus Audio. A single weak word is not enough when the rest of the evidence disagrees.
 
 Full-length, multi-song remix projects are shown as Remix Albums. Bundles of alternate versions of one lead recording are separated into Remix EPs and Remix Singles. DVD bonus-audio releases use the DVD Companion EP subtype, so content style does not obscure the release form.
 
@@ -114,8 +114,8 @@ A playable file still enters the library when its folder is not a conventional a
 
 ### Missing or malformed tags
 
-Parson normalizes Unicode, whitespace, dates, artist identities, track numbers, and common separators. Missing values fall back to safe labels such as **Unknown Artist**. Invalid dates and numbers are ignored. A file that cannot be parsed is skipped and recorded as a bounded scan warning; it does not fail the whole library.
+Mujin Music normalizes Unicode, whitespace, dates, artist identities, track numbers, and common separators. Missing values fall back to safe labels such as **Unknown Artist**. Invalid dates and numbers are ignored. A file that cannot be parsed is skipped and recorded as a bounded scan warning; it does not fail the whole library.
 
 ## Avoiding accidental merges
 
-Two recordings are treated as duplicates only when their release slot, normalized title, artist context, and duration agree closely. Editions stay distinct from originals. If two albums still merge or one album splits, correct the album/album-artist tags or use Parson's metadata editor, then rescan. See [Troubleshooting](/docs/troubleshooting#an-album-is-split).
+Two recordings are treated as duplicates only when their release slot, normalized title, artist context, and duration agree closely. Editions stay distinct from originals. If two albums still merge or one album splits, correct the album/album-artist tags or use Mujin Music's metadata editor, then rescan. See [Troubleshooting](/docs/troubleshooting#an-album-is-split).

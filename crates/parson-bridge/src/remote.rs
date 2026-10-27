@@ -325,7 +325,7 @@ impl RemoteBridge {
             devices,
         }) = welcome
         else {
-            return Err(format!("{address} is not a Parson Bridge"));
+            return Err(format!("{address} is not a Mujin Bridge"));
         };
         if protocol != PROTOCOL_VERSION {
             return Err(format!(
@@ -939,7 +939,7 @@ impl Backend for SyncGroup {
     }
 
     fn name(&self) -> &'static str {
-        "Parson Bridge group"
+        "Mujin Bridge group"
     }
 
     fn devices(&self) -> Vec<DeviceInfo> {

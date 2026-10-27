@@ -7,18 +7,18 @@ description: Downloads, requirements, updates, removal, and application data.
 
 Choose the file for your platform and architecture.
 
-[Download the latest release](https://github.com/ParsonLabs/Parson/releases/latest) and choose the installer for your platform and architecture.
+[Download the latest release](https://github.com/mavingaw/parson-jin/releases/latest) and choose the installer for your platform and architecture.
 
-View [all releases](https://github.com/ParsonLabs/Parson/releases).
+View [all releases](https://github.com/mavingaw/parson-jin/releases).
 
 ## Requirements
 
-| App                | Requirement                                                          |
-| ------------------ | -------------------------------------------------------------------- |
-| Parson for Windows | Windows 10 version 2004 (build 19041) or newer; Windows 11 supported |
-| Parson for Linux   | x64 or ARM64; glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
-| Parson for macOS   | macOS 13 Ventura or newer; Intel or Apple Silicon                    |
-| Web player         | A current browser that can reach the Parson host                     |
+| App                     | Requirement                                                          |
+| ----------------------- | -------------------------------------------------------------------- |
+| Mujin Music for Windows | Windows 10 version 2004 (build 19041) or newer; Windows 11 supported |
+| Mujin Music for Linux   | x64 or ARM64; glibc 2.35+ (Ubuntu 22.04+, Debian 12+, or equivalent) |
+| Mujin Music for macOS   | macOS 13 Ventura or newer; Intel or Apple Silicon                    |
+| Web player              | A current browser that can reach the Mujin Music host                |
 
 Windows includes Electron's Chromium runtime, matching the Linux desktop rendering and audio surface. Some audio formats may need FFmpeg available to the server when they cannot be played directly by the client.
 
@@ -34,8 +34,8 @@ install is needed.
 Download the AppImage for your architecture, make it executable, and run it:
 
 ```bash
-chmod +x Parson_*_x86_64.AppImage
-./Parson_*_x86_64.AppImage
+chmod +x Mujin-Music-*-x86_64.AppImage
+./Mujin-Music-*-x86_64.AppImage
 ```
 
 The Debian package is available for systems that prefer package installation.
@@ -43,27 +43,27 @@ The Debian package is available for systems that prefer package installation.
 ## Install on macOS
 
 Choose Apple Silicon for M-series Macs or Intel x64 for Intel Macs. Open the
-DMG, drag Parson to Applications, and open it. macOS may ask you to confirm
+DMG, drag Mujin Music to Applications, and open it. macOS may ask you to confirm
 opening an application downloaded outside the App Store.
 
 Phones and tablets can use the web player.
 
 ## Update behaviour
 
-Updates do not replace your music or intentionally clear Parson data. Database
+Updates do not replace your music or intentionally clear Mujin Music data. Database
 migrations can make older application versions unable to read newer data; see
 [Updates and migrations](/docs/updates-and-migrations).
 
 ## Uninstall
 
-On Windows, uninstall Parson from **Settings → Apps → Installed apps**. On
-macOS, quit Parson and move it from **Applications** to the Trash. On Linux,
+On Windows, uninstall Mujin Music from **Settings → Apps → Installed apps**. On
+macOS, quit Mujin Music and move it from **Applications** to the Trash. On Linux,
 remove the Debian package or delete the AppImage and its desktop integration.
-Your music files are never owned by Parson and remain where they are.
+Your music files are never owned by Mujin Music and remain where they are.
 
 Application data remains so a reinstall can recover the library and accounts.
 Remove the platform-specific data directory below only when you intend to erase
-Parson's database, accounts, playlists, likes, history, lyrics cache, settings,
+Mujin Music's database, accounts, playlists, likes, history, lyrics cache, settings,
 logs, and cached artwork.
 
 ## Application data
@@ -75,5 +75,7 @@ Windows: %LOCALAPPDATA%\Parson
 macOS:   ~/Library/Application Support/Parson
 Linux:   ~/.local/share/Parson
 ```
+
+The folder keeps the name `Parson`, from the project Mujin Music is based on, so existing libraries carry over unchanged.
 
 Important subfolders are `Database`, `Cache`, `Secrets`, `Logs`, `Discovery`, and `Updates`. `PARSON_DATA_DIR` can move the whole data directory in advanced installations.

@@ -151,7 +151,7 @@ export default function BackupPicker({
             {failed
               ? "The server could not look there."
               : where
-                ? `No Parson backups in ${where}.`
+                ? `No Mujin Music backups in ${where}.`
                 : "No backups found yet."}{" "}
             Type the folder that holds them (a NAS share must be mounted on the
             server), or upload a backup file.

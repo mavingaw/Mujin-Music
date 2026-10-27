@@ -157,7 +157,7 @@ export default function SetupFlow() {
     return (
       <SetupFrame title="The server isn’t ready yet">
         <p className="text-sm text-zinc-400">
-          Check that Parson is running, then try again.
+          Check that Mujin Music is running, then try again.
         </p>
         <Button
           className="mt-6 bg-white text-black hover:bg-zinc-200"
@@ -181,9 +181,9 @@ export default function SetupFlow() {
         <h1 className="mt-3 text-3xl font-semibold">Restore a backup</h1>
         <p className="mt-3 max-w-lg text-sm leading-6 text-zinc-400">
           Bring your library over from the old server: back it up there
-          (Settings → Data), then pick that backup here. Parson finds backups in
-          its own folder, in the scheduled backup folder and in any folder or
-          mounted NAS share you type.
+          (Settings → Data), then pick that backup here. Mujin Music finds
+          backups in its own folder, in the scheduled backup folder and in any
+          folder or mounted NAS share you type.
         </p>
         <div className="mt-8">
           <RestoreFlow
@@ -200,7 +200,7 @@ export default function SetupFlow() {
     return (
       <SetupFrame
         description="Create the first account for this library."
-        title="Welcome to Parson"
+        title="Welcome to Mujin Music"
       >
         <form className="mt-8 grid gap-4" onSubmit={createAccount}>
           <Input
@@ -245,7 +245,7 @@ export default function SetupFlow() {
               <ArchiveRestore className="h-5 w-5 shrink-0 text-zinc-300" />
               <span className="min-w-0">
                 <span className="block text-sm font-medium text-white">
-                  Moving from another Parson server?
+                  Moving from another Mujin Music server?
                 </span>
                 <span className="block text-xs text-zinc-500">
                   Restore a backup: accounts, playlists and history come along.

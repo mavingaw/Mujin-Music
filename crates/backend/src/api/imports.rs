@@ -975,7 +975,7 @@ async fn spotify_authorize(
     }
     if !spotify::valid_redirect_uri(&redirect_uri) {
         return bad_request(
-            "Spotify only accepts https or http://127.0.0.1 redirect URIs. Open Parson at http://127.0.0.1 or over https to connect.",
+            "Spotify only accepts https or http://127.0.0.1 redirect URIs. Open Mujin Music at http://127.0.0.1 or over https to connect.",
             "spotify_redirect_uri_invalid",
         );
     }

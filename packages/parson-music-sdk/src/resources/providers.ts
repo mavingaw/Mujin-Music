@@ -168,7 +168,7 @@ export function describeRadio(
 ): string {
   return radio.origin === "service"
     ? `${STREAMING_PROVIDER_NAMES[provider]} radio`
-    : `Parson radio from ${STREAMING_PROVIDER_NAMES[provider]} similar artists`;
+    : `Mujin Music radio from ${STREAMING_PROVIDER_NAMES[provider]} similar artists`;
 }
 
 export interface StreamingSearchResults {
@@ -278,7 +278,7 @@ export function accountProof(
     return {
       tone: "unproven",
       label: "Sandbox only",
-      detail: `Checked against recorded ${provider.name} replies (${when}), not the real service. This proves Parson's side only.`,
+      detail: `Checked against recorded ${provider.name} replies (${when}), not the real service. This proves Mujin Music's side only.`,
     };
   }
   if (check.verified) {
@@ -480,7 +480,7 @@ export function streamingSignInPath(
       return {
         kind: "subscription",
         via: "key_service",
-        issuer: provider.key_service?.issuer ?? "Parson's key service",
+        issuer: provider.key_service?.issuer ?? "Mujin Music's key service",
       };
     }
     return { kind: "subscription", via: "server" };

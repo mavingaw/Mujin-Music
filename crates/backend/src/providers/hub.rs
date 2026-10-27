@@ -125,7 +125,7 @@ fn validated_redirect_uri(value: &str, origins: &[String]) -> HubResult<String> 
         Ok(value.to_string())
     } else {
         Err(HubError::Invalid(
-            "The redirect URI must point at this server, the address you opened Parson on.",
+            "The redirect URI must point at this server, the address you opened Mujin Music on.",
         ))
     }
 }
@@ -768,7 +768,7 @@ impl StreamingHub {
                     state.error = None;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "could not read the Parson key service");
+                    tracing::warn!(%error, "could not read the Mujin Music key service");
                     // A refresh failure keeps the last good manifest.
                     state.error = Some(error);
                 }
@@ -2245,7 +2245,7 @@ impl StreamingHub {
     ) -> HubResult<PlaylistCopy> {
         if raw_id.starts_with(PARSON_PLAYLIST_PREFIX) {
             return Err(HubError::Invalid(
-                "This playlist was made in Parson and has no service playlist to save again.",
+                "This playlist was made in Mujin Music and has no service playlist to save again.",
             ));
         }
         if !replace_edits {
@@ -2255,7 +2255,7 @@ impl StreamingHub {
                 .await?;
             if existing.is_some_and(|row| row.edited_at.is_some()) {
                 return Err(HubError::Conflict(
-                    "You edited this copy in Parson. Saving it again replaces your edits with the service playlist.",
+                    "You edited this copy in Mujin Music. Saving it again replaces your edits with the service playlist.",
                 ));
             }
         }
@@ -2346,7 +2346,7 @@ impl StreamingHub {
             description: description
                 .map(|text| text.trim().to_string())
                 .filter(|text| !text.is_empty()),
-            owner: Some("You, in Parson".to_string()),
+            owner: Some("You, in Mujin Music".to_string()),
             own: true,
             track_count: tracks.len() as u32,
             duration: tracks.iter().map(|track| track.duration).sum(),
@@ -3010,7 +3010,7 @@ fn describe_delivery(delivery: &DeliveredStream) -> String {
         }
         if delivery.sandbox {
             detail.push_str(
-                " Sandbox: Parson's test encoder (ffmpeg's built-in AAC) cannot \
+                " Sandbox: Mujin Music's test encoder (ffmpeg's built-in AAC) cannot \
                  reach every announced bitrate, so this check is working as \
                  intended.",
             );
@@ -3079,7 +3079,7 @@ pub fn user_message(error: &HubError) -> String {
                 "Could not reach the service. Check the server's internet connection.".into()
             }
         },
-        HubError::Database(_) => "Parson could not save this change.".into(),
+        HubError::Database(_) => "Mujin Music could not save this change.".into(),
         HubError::Invalid(message) | HubError::Conflict(message) => (*message).to_string(),
         HubError::CredentialsRequired(ProviderId::Tidal) => {
             "This server has no TIDAL client yet. Ask the server owner to add one in Settings > Services, or use your own client ID.".into()

@@ -759,7 +759,7 @@ export function dspAvailability(target: DspTarget): DspAvailability {
     return {
       available: false,
       reason:
-        "A Cast receiver fetches and decodes the stream itself, so Parson cannot process it.",
+        "A Cast receiver fetches and decodes the stream itself, so Mujin Music cannot process it.",
       engine: "Not available while casting",
       precision: "",
       crossfeed: { available: false, reason: null },
@@ -773,7 +773,7 @@ export function dspAvailability(target: DspTarget): DspAvailability {
     if (!support) {
       return {
         available: false,
-        reason: `This server does not run a DSP engine for ${target.deviceName}. Update Parson on the server.`,
+        reason: `This server does not run a DSP engine for ${target.deviceName}. Update Mujin Music on the server.`,
         engine: "Server output",
         precision: "",
         crossfeed: { available: false, reason: null },

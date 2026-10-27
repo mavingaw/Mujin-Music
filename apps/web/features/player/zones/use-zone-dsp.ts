@@ -53,7 +53,7 @@ export function zoneDspSupport(zone: Zone): OutputDspSupport | null {
   return {
     available: true,
     reason: null,
-    engine: "Parson DSP, 64-bit float",
+    engine: "Mujin Music DSP, 64-bit float",
     crossfeed: true,
     sample_rates: [],
     output_bits: null,
