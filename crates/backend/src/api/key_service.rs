@@ -109,6 +109,7 @@ mod tests {
     use super::{KeyServiceApp, configure};
     use crate::providers::key_service::{ServiceKeys, parse_manifest, relay_state};
     use crate::providers::qobuz::file_url_signature;
+    use crate::providers::tidal::random_state;
     use crate::providers::unix_now;
 
     fn keys() -> ServiceKeys {
@@ -178,7 +179,8 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 
         let back = "https://music.example.com/settings/services/tidal-callback";
-        let state = relay_state("n0nce", back);
+        let nonce = random_state();
+        let state = relay_state(&nonce, back);
         let relayed = test::call_service(
             &service,
             test::TestRequest::get()
@@ -194,7 +196,7 @@ mod tests {
             .get("location")
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        assert!(location.starts_with(&format!("{back}?code=abc&state=n0nce.")));
+        assert!(location.starts_with(&format!("{back}?code=abc&state={nonce}.")));
         assert_eq!(
             relayed
                 .headers()
@@ -203,7 +205,7 @@ mod tests {
             Some("no-referrer")
         );
 
-        let foreign = relay_state("n0nce", "https://evil.test/steal");
+        let foreign = relay_state(&random_state(), "https://evil.test/steal");
         let refused = test::call_service(
             &service,
             test::TestRequest::get()

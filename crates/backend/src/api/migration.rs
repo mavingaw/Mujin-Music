@@ -199,24 +199,97 @@ fn same_directory(left: &Path, right: &Path) -> bool {
     }
 }
 
-/// Checks that `value` names an existing folder this server can write to.
-fn validate_destination(value: &str, local_backups: &Path) -> Result<PathBuf, String> {
+/// Folders that hold the operating system itself. No backup belongs there,
+/// and the server never lists or writes them on a request's say-so.
+fn is_system_folder(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        const SYSTEM: &[&str] = &[
+            "/proc",
+            "/sys",
+            "/dev",
+            "/etc",
+            "/boot",
+            "/run",
+            "/bin",
+            "/sbin",
+            "/lib",
+            "/lib32",
+            "/lib64",
+            "/usr",
+            "/System",
+            "/private/etc",
+        ];
+        path == Path::new("/") || SYSTEM.iter().any(|system| path.starts_with(system))
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("SystemRoot").is_some_and(|root| {
+            Path::new(&root)
+                .canonicalize()
+                .is_ok_and(|root| path.starts_with(root))
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// The trust boundary for a folder an administrator names (a backup
+/// destination, a folder to look for backups in, the folder of a backup to
+/// restore). The path is resolved once (`..`, symlinks) and only the
+/// resolved folder is used afterwards. It must be an existing folder
+/// outside the operating system and outside this server's own data folder,
+/// except for the server's own backup folder (`backups`).
+fn resolve_chosen_folder(value: &str, data_dir: &Path, backups: &Path) -> Result<PathBuf, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.len() > MAX_DESTINATION_PATH_BYTES {
-        return Err("Enter the folder to copy backups to.".to_string());
+        return Err("Enter a folder.".to_string());
     }
-    let path = PathBuf::from(trimmed);
+    let path = Path::new(trimmed);
     if !path.is_absolute() {
         return Err(
             "Use a full folder path, for example /mnt/nas/parson-backups or \\\\nas\\backups."
                 .to_string(),
         );
     }
-    if !path.is_dir() {
-        return Err(format!(
-            "{trimmed} isn’t a folder this server can see. If it is a NAS share, check that it is mounted on the server."
-        ));
+    let folder = path
+        .canonicalize()
+        .ok()
+        .filter(|folder| folder.is_dir())
+        .ok_or_else(|| {
+            format!(
+                "{trimmed} isn’t a folder this server can see. If it is a NAS share, check that it is mounted on the server."
+            )
+        })?;
+    let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let in_backups = folder.starts_with(resolved(backups));
+    if folder.starts_with(resolved(data_dir)) && !in_backups {
+        return Err(
+            "That folder belongs to Parson’s own data. Choose another drive or a NAS share."
+                .to_string(),
+        );
     }
+    if is_system_folder(&folder) {
+        return Err("That is a system folder. Choose another drive or a NAS share.".to_string());
+    }
+    Ok(folder)
+}
+
+/// [`resolve_chosen_folder`] against this server's data folder.
+fn chosen_folder(value: &str) -> Result<PathBuf, String> {
+    resolve_chosen_folder(value, &settings::data_path(&[]), &backup_directory())
+}
+
+/// Checks that `value` names an existing folder this server can write to.
+fn validate_destination(value: &str, local_backups: &Path) -> Result<PathBuf, String> {
+    if value.trim().is_empty() {
+        return Err("Enter the folder to copy backups to.".to_string());
+    }
+    let path = resolve_chosen_folder(value, &settings::data_path(&[]), local_backups)?;
+    let trimmed = value.trim();
     if same_directory(&path, local_backups) {
         return Err(
             "That is the folder Parson already keeps its own backups in. Choose another drive or a NAS share."
@@ -387,9 +460,10 @@ fn suggested_backup_folders() -> Vec<String> {
         .collect()
 }
 
-/// Resolves a backup the client picked from a folder listing.
+/// Resolves a backup the client picked from a folder listing: a Parson
+/// backup file, in a folder [`chosen_folder`] accepts.
 fn backup_file_from_request(value: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value.trim());
+    let path = Path::new(value.trim());
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -397,10 +471,15 @@ fn backup_file_from_request(value: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() || safe_backup_filename(name).is_none() {
         return Err("Choose a Parson backup file (parson-backup-….tar.zst).".to_string());
     }
-    if !path.is_file() {
+    let folder = path
+        .parent()
+        .and_then(Path::to_str)
+        .ok_or("Choose a Parson backup file.")?;
+    let file = chosen_folder(folder)?.join(name);
+    if !file.is_file() {
         return Err("That backup is no longer there.".to_string());
     }
-    Ok(path)
+    Ok(file)
 }
 
 #[derive(Deserialize)]
@@ -430,8 +509,8 @@ async fn folder_listing(path: String, exclude_instance: Option<String>) -> HttpR
             }
             backups.sort_by(|left, right| right.filename.cmp(&left.filename));
             backups.dedup_by(|left, right| left.filename == right.filename);
-        } else if trimmed.len() <= MAX_DESTINATION_PATH_BYTES {
-            backups = list_folder_backups(Path::new(&trimmed));
+        } else if let Ok(folder) = chosen_folder(&trimmed) {
+            backups = list_folder_backups(&folder);
         }
         if let Some(own) = exclude_instance.as_deref() {
             backups.retain(|backup| backup.instance_id.as_deref() != Some(own));
@@ -701,7 +780,8 @@ pub fn configure_setup(cfg: &mut web::ServiceConfig) {
 mod tests {
     use super::{
         BackupFrequency, BackupSchedule, backup_file_from_request, list_folder_backups,
-        load_schedule_from, mirror_backup, prune_destination, schedule_path, validate_destination,
+        load_schedule_from, mirror_backup, prune_destination, resolve_chosen_folder, schedule_path,
+        validate_destination,
     };
     use std::fs;
     use std::io::Cursor;
@@ -902,9 +982,123 @@ mod tests {
         assert_eq!(backup.remote_access, None);
 
         let picked = backup_file_from_request(&backup.path).unwrap();
-        assert_eq!(picked, PathBuf::from(&backup.path));
+        assert_eq!(picked, PathBuf::from(&backup.path).canonicalize().unwrap());
+        // The same file named through `..` resolves to the same place.
+        let detour = folder
+            .join("..")
+            .join(folder.file_name().unwrap())
+            .join(&backup.filename);
+        assert_eq!(
+            backup_file_from_request(&detour.to_string_lossy()).unwrap(),
+            picked
+        );
         assert!(backup_file_from_request(&folder.join("notes.txt").to_string_lossy()).is_err());
         assert!(backup_file_from_request("parson-backup-20261020T080000000Z.tar.zst").is_err());
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn chosen_folders_resolve_once_and_stay_out_of_parson_data_and_the_system() {
+        let data = scratch("chosen-data");
+        let backups = data.join("Backups");
+        fs::create_dir_all(&backups).unwrap();
+        fs::create_dir_all(data.join("Config")).unwrap();
+        let nas = scratch("chosen-nas");
+        let resolve = |value: &str| resolve_chosen_folder(value, &data, &backups);
+        let canonical = |path: &Path| path.canonicalize().unwrap();
+
+        // An ordinary folder elsewhere resolves to its canonical form.
+        assert_eq!(resolve(&nas.to_string_lossy()).unwrap(), canonical(&nas));
+        let detour = nas.join("..").join(nas.file_name().unwrap()).join(".");
+        assert_eq!(resolve(&detour.to_string_lossy()).unwrap(), canonical(&nas));
+
+        // `..` cannot walk into the server's own data folder.
+        let into_data = nas
+            .join("..")
+            .join(data.file_name().unwrap())
+            .join("Config");
+        assert!(
+            resolve(&into_data.to_string_lossy())
+                .unwrap_err()
+                .contains("own data")
+        );
+        assert!(resolve(&data.to_string_lossy()).is_err());
+
+        // Neither can a symlink planted elsewhere.
+        #[cfg(unix)]
+        {
+            let link = nas.join("innocent-looking");
+            std::os::unix::fs::symlink(data.join("Config"), &link).unwrap();
+            assert!(
+                resolve(&link.to_string_lossy())
+                    .unwrap_err()
+                    .contains("own data")
+            );
+            // A link to the server's own backups is fine and resolves there.
+            let to_backups = nas.join("backups-link");
+            std::os::unix::fs::symlink(&backups, &to_backups).unwrap();
+            assert_eq!(
+                resolve(&to_backups.to_string_lossy()).unwrap(),
+                canonical(&backups)
+            );
+            // System folders, however they are spelled.
+            for system in ["/", "/etc", "/usr/../etc", "/proc/self/..", "/dev/."] {
+                assert!(
+                    resolve(system).unwrap_err().contains("system folder"),
+                    "{system}"
+                );
+            }
+        }
+
+        // The server's own backup folder is where a reinstall looks.
+        assert_eq!(
+            resolve(&backups.to_string_lossy()).unwrap(),
+            canonical(&backups)
+        );
+        // Only existing, absolute folders.
+        assert!(resolve("").is_err());
+        assert!(resolve("relative/folder").is_err());
+        assert!(resolve(&nas.join("missing").to_string_lossy()).is_err());
+        fs::write(nas.join("file"), b"x").unwrap();
+        assert!(resolve(&nas.join("file").to_string_lossy()).is_err());
+        assert!(resolve(&format!("/{}", "a".repeat(5000))).is_err());
+        fs::remove_dir_all(data).unwrap();
+        fs::remove_dir_all(nas).unwrap();
+    }
+
+    #[actix_web::test]
+    async fn only_administrators_reach_the_folder_routes() {
+        use actix_web::{App, http::StatusCode, test as actix_test, web};
+        use actix_web_httpauth::middleware::HttpAuthentication;
+        let app = actix_test::init_service(
+            App::new().service(
+                web::scope("/data/admin")
+                    .wrap(HttpAuthentication::with_fn(crate::api::auth::admin_guard))
+                    .configure(crate::api::data::configure_admin),
+            ),
+        )
+        .await;
+        let listener =
+            crate::api::auth::generate_access_token(7, "listener", 0, "user", 0).unwrap();
+        for token in [None, Some(listener.as_str())] {
+            for request in [
+                actix_test::TestRequest::get().uri("/data/admin/backups/folder?path=/etc"),
+                actix_test::TestRequest::post()
+                    .uri("/data/admin/restore/from-folder")
+                    .set_json(serde_json::json!({"path": "/etc/parson-backup-x.tar.zst"})),
+                actix_test::TestRequest::put()
+                    .uri("/data/admin/backups/schedule")
+                    .set_json(serde_json::json!({"frequency": "daily", "destination": "/etc"})),
+            ] {
+                let request = match token {
+                    Some(token) => {
+                        request.insert_header(("Authorization", format!("Bearer {token}")))
+                    }
+                    None => request,
+                };
+                let response = actix_test::call_service(&app, request.to_request()).await;
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            }
+        }
     }
 }

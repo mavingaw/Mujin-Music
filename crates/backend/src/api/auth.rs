@@ -371,7 +371,7 @@ fn media_token_from_service_request(req: &ServiceRequest) -> Option<String> {
 }
 
 #[cfg(test)]
-fn generate_access_token(
+pub(crate) fn generate_access_token(
     user_id: i32,
     username: &str,
     bitrate: i32,

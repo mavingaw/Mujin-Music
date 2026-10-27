@@ -48,26 +48,60 @@ function isLoopbackOrigin(origin) {
   }
 }
 
+// Control characters and bidirectional overrides: a server's name comes
+// from the network (its manifest, mDNS) and must not reorder or break lines
+// in the chooser, the window title or the saved file.
+const UNSAFE_TEXT = /[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/;
+// Far beyond any real clock (year 275760 is the Date limit).
+const MAX_TIMESTAMP = 8.64e15;
+// 20 servers of a few hundred bytes each fit many times over.
+const MAX_CONFIG_BYTES = 256 * 1024;
+
+/** Display text: no control characters, single spaces, at most `max`. */
 function text(value, max = 256) {
   if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  return trimmed.length <= max ? trimmed : trimmed.slice(0, max);
+  const cleaned = value.replace(UNSAFE_TEXT, " ").replace(/\s+/g, " ").trim();
+  return Array.from(cleaned).slice(0, max).join("").trim();
 }
 
+/** An id such as a server's instance UUID, or "" when it is not one. */
+function identifier(value, max = 128) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  return trimmed.length <= max && IDENTIFIER.test(trimmed) ? trimmed : "";
+}
+
+function version(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  return trimmed.length <= 64 && VERSION.test(trimmed) ? trimmed : "";
+}
+
+function timestamp(value) {
+  return Number.isInteger(value) && value >= 0 && value <= MAX_TIMESTAMP
+    ? value
+    : 0;
+}
+
+/**
+ * A saved server built only from known fields, each validated: whatever a
+ * server or the network says about itself is normalised before it is shown
+ * or written to disk.
+ */
 function sanitizeServer(value) {
   if (!value || typeof value !== "object") return null;
   const origin = normalizeServerAddress(value.origin);
   if (!origin) return null;
-  const instanceId = text(value.instanceId, 128);
+  const instanceId = identifier(value.instanceId);
   return {
     id: instanceId || origin,
     instanceId,
-    name: text(value.name) || new URL(origin).hostname,
+    name: text(value.name, 128) || new URL(origin).hostname,
     origin,
-    serverVersion: text(value.serverVersion, 64),
-    lastConnectedAt: Number.isFinite(value.lastConnectedAt)
-      ? value.lastConnectedAt
-      : 0,
+    serverVersion: version(value.serverVersion),
+    lastConnectedAt: timestamp(value.lastConnectedAt),
     manual: value.manual === true,
   };
 }
@@ -103,7 +137,7 @@ function parseConfig(value) {
     version: CONFIG_VERSION,
     mode,
     activeServerId,
-    localInstanceId: text(value.localInstanceId, 128),
+    localInstanceId: identifier(value.localInstanceId),
     servers,
   };
 }
@@ -125,18 +159,27 @@ function loadConfig(userData) {
   }
 }
 
+/**
+ * The file contents for a config: only the fields `parseConfig` keeps, each
+ * validated, so nothing a server sent is written verbatim.
+ */
+function serializeConfig(config) {
+  const contents = `${JSON.stringify(parseConfig(config), null, 2)}\n`;
+  if (Buffer.byteLength(contents, "utf8") > MAX_CONFIG_BYTES) {
+    throw new Error("The server list is too large to save");
+  }
+  return contents;
+}
+
 function saveConfig(userData, config) {
   const target = configPath(userData);
+  const contents = serializeConfig(config);
   fs.mkdirSync(userData, { recursive: true });
   const temporary = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(
-    temporary,
-    `${JSON.stringify(parseConfig(config), null, 2)}\n`,
-    {
-      encoding: "utf8",
-      mode: 0o600,
-    },
-  );
+  fs.writeFileSync(temporary, contents, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   fs.renameSync(temporary, target);
 }
 
@@ -587,6 +630,7 @@ module.exports = {
   reconnectDelay,
   rememberServer,
   saveConfig,
+  serializeConfig,
   serverRows,
   startupPlan,
   useLocalServer,

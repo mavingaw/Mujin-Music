@@ -1627,13 +1627,13 @@ mod tests {
         )
         .expect("row");
         drop(connection);
-        for secret in ["recorded-access-token", "recorded-refresh-token", "s3cret"] {
+        for plaintext in ["recorded-access-token", "recorded-refresh-token", "s3cret"] {
             for blob in [&sealed.sealed_session, &sealed.sealed_credentials] {
                 assert!(
                     !blob
-                        .windows(secret.len())
-                        .any(|window| window == secret.as_bytes()),
-                    "{secret} is stored sealed"
+                        .windows(plaintext.len())
+                        .any(|window| window == plaintext.as_bytes()),
+                    "{plaintext} is stored sealed"
                 );
             }
         }
@@ -2702,8 +2702,12 @@ mod tests {
         };
         assert_eq!(blobs.len(), 2);
         for blob in &blobs {
-            for secret in [&b"server-app-secret"[..], b"server-tidal-client"] {
-                assert!(!blob.windows(secret.len()).any(|window| window == secret));
+            for plaintext in [&b"server-app-secret"[..], b"server-tidal-client"] {
+                assert!(
+                    !blob
+                        .windows(plaintext.len())
+                        .any(|window| window == plaintext)
+                );
             }
         }
         let restarted = hub(pool.clone(), false).0;

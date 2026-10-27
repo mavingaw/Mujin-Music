@@ -24,6 +24,22 @@ function sandbox(t) {
   return { home, bundled };
 }
 
+/**
+ * A file's text and mode, read through one open handle so both describe the
+ * same file (no check-then-use race between a stat and a read).
+ */
+function readWithMode(file) {
+  const handle = fs.openSync(file, "r");
+  try {
+    return {
+      text: fs.readFileSync(handle, "utf8"),
+      mode: fs.fstatSync(handle).mode,
+    };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
 /** A fake command runner that records calls and answers from a script. */
 function fakeRunner(answers = {}) {
   const calls = [];
@@ -216,8 +232,9 @@ test("systemd: first install enables, starts and leaves the key for the server",
   const unit = fs.readFileSync(service.paths.unit, "utf8");
   assert.match(unit, new RegExp(`ExecStart="${bundled}"`));
   const hostFile = path.join(home, ".local/share/Parson/server.env");
-  assert.match(fs.readFileSync(hostFile, "utf8"), new RegExp(token));
-  assert.equal(fs.statSync(hostFile).mode & 0o777, 0o600);
+  const host = readWithMode(hostFile);
+  assert.match(host.text, new RegExp(token));
+  assert.equal(host.mode & 0o777, 0o600);
   assert.deepEqual(await service.status(), {
     kind: "systemd-user",
     label: "systemd user service",
@@ -259,8 +276,9 @@ test("systemd from an AppImage runs a copy that outlives the mount", async (t) =
     home,
     ".local/share/parson-server/parson-music-server",
   );
-  assert.equal(fs.readFileSync(copy, "utf8"), "server-binary");
-  assert.equal(fs.statSync(copy).mode & 0o111, 0o111);
+  const first = readWithMode(copy);
+  assert.equal(first.text, "server-binary");
+  assert.equal(first.mode & 0o111, 0o111);
   assert.match(
     fs.readFileSync(service.paths.unit, "utf8"),
     /parson-server\/parson-music-server/,
@@ -284,7 +302,9 @@ test("systemd from an AppImage runs a copy that outlives the mount", async (t) =
     autostart: true,
   });
   assert.equal(result.restarted, true);
-  assert.equal(fs.readFileSync(copy, "utf8"), "server-binary-v2");
+  const replaced = readWithMode(copy);
+  assert.equal(replaced.text, "server-binary-v2");
+  assert.equal(replaced.mode & 0o111, 0o111);
   assert.ok(calls.includes("systemctl --user restart parson-server.service"));
 });
 

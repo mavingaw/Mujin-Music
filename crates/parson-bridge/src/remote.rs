@@ -186,6 +186,9 @@ impl Link {
                 self.wake.notify_all();
             }
             BridgeMessage::Failed { stream, error } => {
+                // The bridge is not authenticated: clean its text once here
+                // so every log line and error shown to users stays one line.
+                let error = clean_bridge_text(&error);
                 let mut streams = self.streams();
                 let replaced = error == crate::endpoint::REPLACED;
                 if replaced && !streams.contains_key(&stream) {
@@ -236,7 +239,11 @@ impl Link {
                 self.wake.notify_all();
             }
             BridgeMessage::DeviceError { device, error } => {
-                self.push_error(format!("{device}: {error}"));
+                self.push_error(format!(
+                    "{}: {}",
+                    clean_bridge_text(&device),
+                    clean_bridge_text(&error)
+                ));
             }
             BridgeMessage::Welcome { .. } | BridgeMessage::Refused { .. } => {}
         }
@@ -252,6 +259,19 @@ impl Link {
         }
         errors.push_back(error);
     }
+}
+
+/// The most characters of bridge-supplied text the server keeps.
+const MAX_BRIDGE_TEXT: usize = 300;
+
+/// Bridge-supplied text with control characters (newlines, escapes)
+/// removed and its length capped, so a rogue bridge on the LAN cannot forge
+/// log lines or flood the errors shown to users.
+pub(crate) fn clean_bridge_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_BRIDGE_TEXT)
+        .collect()
 }
 
 /// A connected Parson Bridge.

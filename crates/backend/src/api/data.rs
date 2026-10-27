@@ -1754,7 +1754,7 @@ mod tests {
             serde_json::to_string(&public_index(&library, &details)).expect("public index");
         assert!(serialized.contains("\"contains_personal_data\":false"));
         assert!(serialized.contains("\"sample_rate\":96000"));
-        for secret in [
+        for private_value in [
             "/home/alice",
             "private-name",
             "listen_history",
@@ -1764,8 +1764,8 @@ mod tests {
             "192.168.1.20",
         ] {
             assert!(
-                !serialized.contains(secret),
-                "leaked {secret}: {serialized}"
+                !serialized.contains(private_value),
+                "leaked {private_value}: {serialized}"
             );
         }
     }
