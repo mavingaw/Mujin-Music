@@ -518,6 +518,24 @@ async fn run_refresh_scan(
     result
 }
 
+/// Runs the refresh scan for library tools (rescan, retry). Returns the
+/// number of roots that failed, or why the scan could not run.
+pub(crate) async fn refresh_for_tools(
+    lifecycle: web::Data<LibraryLifecycle>,
+    message: &'static str,
+) -> Result<usize, String> {
+    let Some(scan_lease) = lifecycle.try_begin_scan() else {
+        return Err(
+            "A library scan is already running. Try again when it has finished.".to_string(),
+        );
+    };
+    match tokio::spawn(run_refresh_scan(lifecycle.clone(), scan_lease, message)).await {
+        Ok(Ok(result)) => Ok(result.failures.len()),
+        Ok(Err(failure)) => Err(failure.message),
+        Err(error) => Err(format!("The scan stopped unexpectedly: {error}")),
+    }
+}
+
 async fn run_automatic_refresh_scan(
     lifecycle: Arc<LibraryLifecycle>,
     scan_lease: LibraryScanLease,

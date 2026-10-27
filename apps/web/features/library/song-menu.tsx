@@ -25,6 +25,8 @@ import {
   type WorkSummary,
 } from "@parson/music-sdk";
 import { useSongWorks } from "@/features/library/works/use-works";
+import { LibraryToolsSubmenu } from "@/features/library/tools/library-tools-menu";
+import { SongAnalysisDialog } from "@/features/library/tools/song-analysis-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Disc3,
@@ -90,6 +92,7 @@ export default function SongMenu({
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createTagOpen, setCreateTagOpen] = useState(false);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
   const entityLinks = songMenuEntityLinkVisibility(context);
   const songWorks = useSongWorks(song_id, open && work === undefined);
   const piece = work === undefined ? trackWorkTarget(songWorks.data) : work;
@@ -265,6 +268,12 @@ export default function SongMenu({
               </Link>
             </ContextMenuItem>
           )}
+          {context !== "player" && (
+            <LibraryToolsSubmenu
+              onShowAnalysis={() => setAnalysisOpen(true)}
+              scope={{ scope: "songs", ids: [song_id] }}
+            />
+          )}
           {onRemoveFromPlaylist && <ContextMenuSeparator />}
           {onRemoveFromPlaylist && (
             <ContextMenuItem
@@ -277,6 +286,13 @@ export default function SongMenu({
           )}
         </ContextMenuContent>
       </ContextMenu>
+      {analysisOpen && (
+        <SongAnalysisDialog
+          onOpenChange={setAnalysisOpen}
+          open={analysisOpen}
+          songId={song_id}
+        />
+      )}
       <CreatePlaylistDialog
         initialSongIds={[song_id]}
         onOpenChange={setCreateOpen}

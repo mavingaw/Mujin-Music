@@ -20,7 +20,8 @@ import {
   removeLibraryRoot,
 } from "@parson/music-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Folder, Loader2, Trash2 } from "lucide-react";
+import { ChevronRight, Folder, Loader2, Trash2, Wrench } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { LibraryFolderBrowser } from "./library-folder-browser";
@@ -198,6 +199,27 @@ export default function LibrarySettings() {
           {busy === "refresh" && <Loader2 className="h-4 w-4 animate-spin" />}
           {busy === "refresh" ? "Checking…" : "Check for changes"}
         </Button>
+      </section>
+
+      <section className="border-t border-white/[0.08] pt-7">
+        <Link
+          className="group flex items-center gap-4 rounded-xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(178,107,255,0.10),rgba(255,255,255,0.02))] px-4 py-4 transition-colors hover:border-white/[0.16]"
+          href="/library/tools"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#b26bff]/15 text-[#b26bff]">
+            <Wrench className="h-5 w-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-white">
+              Library tools
+            </span>
+            <span className="block text-xs leading-5 text-zinc-400">
+              Skipped files, duplicates, album versions, the Albumizer, rescans
+              and audio analysis.
+            </span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-zinc-500 transition-colors group-hover:text-white" />
+        </Link>
       </section>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>

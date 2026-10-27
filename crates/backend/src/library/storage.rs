@@ -22,6 +22,7 @@ pub async fn fetch_library() -> Result<Arc<Vec<Artist>>, Box<dyn Error + Send + 
         let pool = crate::persistence::connection::connect()?;
         let mut library = crate::library::indexer::export_library_from_database(&pool)?;
         apply_metadata_layers(&mut library, fetched_covers(&pool), metadata_edits(&pool));
+        apply_tool_layers(&mut library, &pool);
         Ok::<_, Box<dyn Error + Send + Sync>>(library)
     })
     .await
@@ -40,18 +41,46 @@ pub async fn fetch_library() -> Result<Arc<Vec<Artist>>, Box<dyn Error + Send + 
     Ok(library)
 }
 
+/// The catalog with every library-tools choice applied except hidden album
+/// versions, so the versions page can list the versions it hides.
+pub async fn fetch_library_with_all_versions() -> Result<Vec<Artist>, Box<dyn Error + Send + Sync>>
+{
+    let mut library = tokio::task::spawn_blocking(|| {
+        let pool = crate::persistence::connection::connect()?;
+        let mut library = crate::library::indexer::export_library_from_database(&pool)?;
+        apply_metadata_layers(&mut library, fetched_covers(&pool), metadata_edits(&pool));
+        let mut layers = tool_layers(&pool);
+        for choice in layers.version_choices.values_mut() {
+            choice.hide_others = false;
+        }
+        crate::library::tools::layers::apply(&mut library, &layers);
+        Ok::<_, Box<dyn Error + Send + Sync>>(library)
+    })
+    .await
+    .map_err(|error| std::io::Error::other(format!("Library load task failed: {error}")))??;
+    crate::library::normalize::normalize_library_data(&mut library);
+    Ok(library)
+}
+
 pub async fn store_library(library: Vec<Artist>) -> Arc<Vec<Artist>> {
     #[cfg(not(test))]
     let library = {
         let mut library = library;
-        let (covers, edits) = tokio::task::spawn_blocking(|| {
+        let (covers, edits, tools) = tokio::task::spawn_blocking(|| {
             crate::persistence::connection::connect()
-                .map(|pool| (fetched_covers(&pool), metadata_edits(&pool)))
+                .map(|pool| {
+                    (
+                        fetched_covers(&pool),
+                        metadata_edits(&pool),
+                        tool_layers(&pool),
+                    )
+                })
                 .unwrap_or_default()
         })
         .await
         .unwrap_or_default();
         apply_metadata_layers(&mut library, covers, edits);
+        crate::library::tools::layers::apply(&mut library, &tools);
         library
     };
     let library = Arc::new(library);
@@ -81,6 +110,28 @@ fn fetched_covers(
             std::collections::HashMap::new()
         }
     }
+}
+
+/// Library-tools choices (preferred copies, Albumizer albums, hidden
+/// copies and versions). Errors leave the catalog as the files describe it.
+fn tool_layers(
+    pool: &crate::persistence::connection::DbPool,
+) -> crate::library::tools::layers::ToolLayers {
+    let loaded = pool
+        .get()
+        .map_err(|error| error.to_string())
+        .and_then(|mut connection| {
+            crate::library::tools::layers::ToolLayers::load(&mut connection)
+                .map_err(|error| error.to_string())
+        });
+    loaded.unwrap_or_else(|error| {
+        tracing::debug!(%error, "no library tools layer");
+        Default::default()
+    })
+}
+
+fn apply_tool_layers(library: &mut Vec<Artist>, pool: &crate::persistence::connection::DbPool) {
+    crate::library::tools::layers::apply(library, &tool_layers(pool));
 }
 
 /// Choices and edits that change what the catalog shows: each album's
