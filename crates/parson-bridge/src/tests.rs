@@ -496,7 +496,11 @@ fn a_rogue_bridge_cannot_forge_log_lines_or_flood_errors() {
     for shown in &errors {
         assert!(clean(shown), "no control characters: {shown:?}");
         // At most 300 characters of each bridge-supplied part.
-        assert!(shown.chars().count() <= 2 * 300 + 2, "capped: {}", shown.len());
+        assert!(
+            shown.chars().count() <= 2 * 300 + 2,
+            "capped: {}",
+            shown.len()
+        );
     }
     assert!(
         errors[0].starts_with("dac<forged device>: x<forged>"),
