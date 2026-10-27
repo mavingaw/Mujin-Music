@@ -5,6 +5,7 @@ import {
   buildThemeCache,
   readThemeCache,
   THEME_CACHE_KEY,
+  THEME_STYLE_ID,
 } from "./theme-cache";
 
 function runBoot(cache: string | null, prefersDark: boolean, path = "/") {
@@ -78,5 +79,10 @@ describe("theme cache", () => {
     ).toHaveLength(0);
     expect(runBoot(null, true).appended).toHaveLength(0);
     expect(runBoot("not json", true).appended).toHaveLength(0);
+  });
+
+  test("the boot script reads the same cache key and style id as the app", () => {
+    expect(THEME_BOOT_SCRIPT).toContain(JSON.stringify(THEME_CACHE_KEY));
+    expect(THEME_BOOT_SCRIPT).toContain(JSON.stringify(THEME_STYLE_ID));
   });
 });
