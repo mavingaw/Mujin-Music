@@ -191,10 +191,10 @@ function PresetCard({
           )}
         >
           <span className="block font-[family-name:var(--font-display)] text-[0.95rem] font-light leading-none text-mujin-text">
-            Kind of Blue
+            Night Swim
           </span>
           <span className="mt-1 block text-[0.6rem] text-mujin-text-secondary">
-            Miles Davis · 1959
+            Mira Sol · 2024
           </span>
           <div className="mt-2.5 flex gap-1.5">
             {[0, 1, 2].map((tile) => (
@@ -756,7 +756,7 @@ export default function AppearanceSettings() {
                   className="block text-[1.35rem] leading-tight text-mujin-text"
                   style={{ fontFamily: FONT_SAMPLE_STACKS[font] }}
                 >
-                  Kind of Blue
+                  Night Swim
                 </span>
                 <span className="mt-1 block text-xs text-mujin-text-tertiary">
                   {font === "mujin" && appearance.preset === "material-you"

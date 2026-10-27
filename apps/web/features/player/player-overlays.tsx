@@ -616,7 +616,7 @@ export function FullscreenPlayer({
                 >
                   <div
                     className={cn(
-                      "relative mx-auto aspect-square w-full max-w-[min(78vw,340px,max(120px,calc(100dvh-360px)))] shrink-0 overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1",
+                      "relative mx-auto aspect-square w-full max-w-[min(78vw,340px,max(120px,calc(100dvh-590px)))] shrink-0 overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1",
                       layout === "art-left" &&
                         "md:mx-0 md:max-w-[min(560px,calc(100dvh-230px))] md:justify-self-end",
                       layout === "art-centred" &&
