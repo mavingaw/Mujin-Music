@@ -415,7 +415,8 @@ fn a_late_start_never_costs_the_clock_master_a_sample() {
 #[test]
 fn a_rogue_bridge_cannot_forge_log_lines_or_flood_errors() {
     use crate::protocol::{
-        BridgeMessage, Frame, PROTOCOL_VERSION, ServerMessage, read_frame, write_message,
+        BridgeMessage, Frame, PROTOCOL_VERSION, ServerMessage, WireDevice, read_frame,
+        write_message,
     };
     use std::io::{BufReader, Write};
 
@@ -447,7 +448,24 @@ fn a_rogue_bridge_cannot_forge_log_lines_or_flood_errors() {
                     version: "0".into(),
                     backend: None,
                     note: None,
-                    devices: Vec::new(),
+                    devices: [
+                        ("dac", "DAC\n<forged name>"),
+                        ("dac\n<forged id>", "Forged"),
+                    ]
+                    .into_iter()
+                    .map(|(id, name)| WireDevice {
+                        id: id.into(),
+                        name: name.into(),
+                        description: "USB\r\u{1b}[31m".into(),
+                        sample_rates: vec![44_100],
+                        formats: vec![SampleFormat::S16],
+                        max_channels: 2,
+                        hardware_volume: None,
+                        busy: false,
+                        dsd_formats: Vec::new(),
+                        dsd_rates: Vec::new(),
+                    })
+                    .collect(),
                 },
             )
             .expect("welcome");
@@ -486,6 +504,13 @@ fn a_rogue_bridge_cannot_forge_log_lines_or_flood_errors() {
         sample_format: SampleFormat::S16,
         channels: 2,
     };
+    // Device names are cleaned; a device whose id is not clean text (the id
+    // is sent back to open it, so it is never rewritten) is left out.
+    let devices = bridge.devices();
+    assert_eq!(devices.len(), 1, "{devices:?}");
+    assert_eq!(devices[0].id, "dac");
+    assert_eq!(devices[0].name, "DAC<forged name>");
+    assert_eq!(devices[0].detail, "USB[31m");
     let error = match bridge.open("dac", format, true) {
         Ok(_) => panic!("the rogue bridge refuses every stream"),
         Err(error) => error.to_string(),
