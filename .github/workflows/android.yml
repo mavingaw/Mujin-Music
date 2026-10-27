@@ -6,6 +6,14 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      abi:
+        description: Native ABI to build (armeabi-v7a for 32-bit devices such as the Echo Show 8)
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+        default: arm64-v8a
 
 permissions:
   contents: read
@@ -16,7 +24,7 @@ concurrency:
 
 jobs:
   apk:
-    name: Android app (arm64-v8a)
+    name: Android app (${{ inputs.abi || 'arm64-v8a' }})
     runs-on: ubuntu-latest
     # One ABI keeps the native build (Reanimated, Worklets, Screens, the audio
     # engine) to about a quarter of a universal build: arm64-v8a covers every
@@ -24,7 +32,7 @@ jobs:
     # the NDK, takes roughly 25-35 minutes; with a warm Gradle cache, less.
     timeout-minutes: 60
     env:
-      ANDROID_ABI: arm64-v8a
+      ANDROID_ABI: ${{ inputs.abi || 'arm64-v8a' }}
       EXPO_NO_TELEMETRY: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
