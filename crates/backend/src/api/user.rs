@@ -1563,6 +1563,7 @@ mod tests {
         remove_favorite_song,
     };
     use crate::api::auth::Claims;
+    use crate::test_support::{generated_password, wrong_password};
 
     fn favorite_pool() -> web::Data<crate::persistence::connection::DbPool> {
         let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
@@ -1591,14 +1592,14 @@ mod tests {
         web::Data::new(std::sync::Arc::new(pool))
     }
 
-    fn username_pool() -> web::Data<crate::persistence::connection::DbPool> {
+    fn username_pool(password: &str) -> web::Data<crate::persistence::connection::DbPool> {
         let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
         let pool = Pool::builder()
             .max_size(1)
             .build(manager)
             .expect("username test pool");
-        let password_hash = crate::api::auth::hash_password("synthetic-current-password")
-            .expect("fixture password hash");
+        let password_hash =
+            crate::api::auth::hash_password(password).expect("fixture password hash");
         let mut connection = pool.get().expect("username test connection");
         connection
             .batch_execute(
@@ -1710,7 +1711,8 @@ mod tests {
 
     #[actix_web::test]
     async fn username_endpoint_updates_claims_cookie_and_native_token() {
-        let database = username_pool();
+        let password = generated_password();
+        let database = username_pool(&password);
         let app = actix_test::init_service(
             App::new()
                 .app_data(database.clone())
@@ -1722,7 +1724,7 @@ mod tests {
             .uri("/me/username")
             .insert_header(("X-Parson-Client", "native"))
             .set_json(serde_json::json!({
-                "current_password": "synthetic-current-password",
+                "current_password": password,
                 "username": "new-handle"
             }))
             .to_request();
@@ -1768,7 +1770,7 @@ mod tests {
             .uri("/login")
             .set_json(serde_json::json!({
                 "username": "old-handle",
-                "password": "synthetic-current-password"
+                "password": password
             }))
             .to_request();
         let old_login = actix_test::call_service(&app, old_login).await;
@@ -1779,7 +1781,7 @@ mod tests {
             .insert_header(("X-Parson-Client", "native"))
             .set_json(serde_json::json!({
                 "username": "new-handle",
-                "password": "synthetic-current-password"
+                "password": password
             }))
             .to_request();
         let new_login = actix_test::call_service(&app, new_login).await;
@@ -1853,6 +1855,7 @@ mod tests {
     fn username_changes_preserve_identity_and_enforce_password_and_uniqueness() {
         use diesel::{Connection, RunQueryDsl};
 
+        let password = generated_password();
         let mut connection = SqliteConnection::establish(":memory:").expect("user database");
         connection
             .batch_execute(
@@ -1866,8 +1869,8 @@ mod tests {
                  );",
             )
             .expect("username fixture schema");
-        let password_hash = crate::api::auth::hash_password("synthetic-current-password")
-            .expect("fixture password hash");
+        let password_hash =
+            crate::api::auth::hash_password(&password).expect("fixture password hash");
         diesel::sql_query(
             "INSERT INTO user
                 (id, username, password, bitrate, role, token_version)
@@ -1879,13 +1882,8 @@ mod tests {
         .execute(&mut connection)
         .expect("username fixture users");
 
-        let changed = change_username_row(
-            &mut connection,
-            7,
-            "new-handle",
-            "synthetic-current-password",
-        )
-        .expect("change username");
+        let changed = change_username_row(&mut connection, 7, "new-handle", &password)
+            .expect("change username");
         assert_eq!(changed.username, "new-handle");
         assert_eq!(changed.bitrate, 256);
         assert_eq!(changed.role, "user");
@@ -1909,17 +1907,12 @@ mod tests {
                 &mut connection,
                 7,
                 "another-handle",
-                "incorrect-synthetic-password"
+                &wrong_password(&password)
             ),
             Err(ChangeUsernameError::IncorrectPassword)
         ));
         assert!(matches!(
-            change_username_row(
-                &mut connection,
-                7,
-                "reserved-handle",
-                "synthetic-current-password"
-            ),
+            change_username_row(&mut connection, 7, "reserved-handle", &password),
             Err(ChangeUsernameError::Duplicate)
         ));
     }

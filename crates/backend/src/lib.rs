@@ -37,5 +37,7 @@ pub mod signal_path;
 #[cfg(feature = "server")]
 pub mod sonos;
 pub mod startup;
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(feature = "server")]
 pub mod zones;

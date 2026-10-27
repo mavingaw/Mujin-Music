@@ -90,6 +90,11 @@ pub fn secure_cookies() -> bool {
     secure_cookies_for(public_url.as_deref())
 }
 
+/// The configured public origin (`PARSON_PUBLIC_URL`), when it is set and valid.
+pub fn public_url() -> Option<String> {
+    configured_public_url().ok().flatten()
+}
+
 pub fn allowed_origins() -> Vec<String> {
     allowed_origins_for(configured_public_url().ok().flatten())
 }

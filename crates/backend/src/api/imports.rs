@@ -1242,15 +1242,17 @@ async fn configure_service(
             };
             let label = match profile_id {
                 None => "Public playlists".to_string(),
-                Some(id) => match crate::imports::http::send_json::<DeezerUser>(
-                    http.get(format!("{}/user/{id}", deezer::API_BASE)),
-                )
-                .await
-                {
-                    Ok(DeezerUser { name: Some(name) }) => name,
-                    Ok(_) => return provider_error(ProviderError::NotFound),
-                    Err(error) => return provider_error(error),
-                },
+                Some(id) => {
+                    let url = match deezer::user_url(deezer::API_BASE, id) {
+                        Ok(url) => url,
+                        Err(error) => return provider_error(error),
+                    };
+                    match crate::imports::http::send_json::<DeezerUser>(http.get(url)).await {
+                        Ok(DeezerUser { name: Some(name) }) => name,
+                        Ok(_) => return provider_error(ProviderError::NotFound),
+                        Err(error) => return provider_error(error),
+                    }
+                }
             };
             (
                 serde_json::json!({ "profile_id": profile_id.map(|id| id.to_string()) })

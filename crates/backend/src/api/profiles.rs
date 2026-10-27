@@ -778,7 +778,15 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::Arc;
 
-    fn pool() -> DbPool {
+    use crate::test_support::{generated_password, wrong_password};
+
+    /// The passwords of the two seeded accounts, made up for each test.
+    struct Passwords {
+        admin: String,
+        listener: String,
+    }
+
+    fn pool() -> (DbPool, Passwords) {
         let pool = Arc::new(
             Pool::builder()
                 .max_size(1)
@@ -789,8 +797,12 @@ mod tests {
         connection
             .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
             .expect("migrations");
-        let admin = hash_password("admin-password").unwrap();
-        let listener = hash_password("listener-password").unwrap();
+        let passwords = Passwords {
+            admin: generated_password(),
+            listener: generated_password(),
+        };
+        let admin = hash_password(&passwords.admin).unwrap();
+        let listener = hash_password(&passwords.listener).unwrap();
         connection
             .batch_execute("PRAGMA foreign_keys = ON;")
             .unwrap();
@@ -804,7 +816,7 @@ mod tests {
         .execute(&mut connection)
         .unwrap();
         drop(connection);
-        pool
+        (pool, passwords)
     }
 
     fn claims(user_id: i32, session: &str) -> Claims {
@@ -851,7 +863,7 @@ mod tests {
 
     #[actix_web::test]
     async fn a_household_creates_lists_and_switches_profiles() {
-        let pool = pool();
+        let (pool, _) = pool();
         let app = app!(pool);
 
         let created = actix_test::call_service(
@@ -936,7 +948,7 @@ mod tests {
 
     #[actix_web::test]
     async fn pins_and_passwords_guard_switching() {
-        let pool = pool();
+        let (pool, passwords) = pool();
         let app = app!(pool);
         // Dad (admin) asks for his password until he sets a PIN.
         let wrong = actix_test::call_service(
@@ -945,7 +957,7 @@ mod tests {
                 actix_test::TestRequest::post(),
                 "/profiles/1/switch",
                 2,
-                Some(json!({"password": "nope-nope"})),
+                Some(json!({"password": wrong_password(&passwords.admin)})),
             ),
         )
         .await;
@@ -956,7 +968,7 @@ mod tests {
                 actix_test::TestRequest::post(),
                 "/profiles/1/switch",
                 2,
-                Some(json!({"password": "admin-password"})),
+                Some(json!({"password": passwords.admin})),
             ),
         )
         .await;
@@ -1039,7 +1051,7 @@ mod tests {
 
     #[actix_web::test]
     async fn only_owners_and_admins_manage_profiles() {
-        let pool = pool();
+        let (pool, _) = pool();
         let app = app!(pool);
         let created: Value = actix_test::call_and_read_body_json(
             &app,
@@ -1121,7 +1133,7 @@ mod tests {
 
     #[actix_web::test]
     async fn a_managed_profile_cannot_add_profiles_and_hidden_accounts_need_a_password() {
-        let pool = pool();
+        let (pool, passwords) = pool();
         let app = app!(pool);
         let created: Value = actix_test::call_and_read_body_json(
             &app,
@@ -1188,7 +1200,7 @@ mod tests {
                 actix_test::TestRequest::post(),
                 "/profiles/2/switch",
                 kid,
-                Some(json!({"password": "listener-password"})),
+                Some(json!({"password": passwords.listener})),
             ),
         )
         .await;

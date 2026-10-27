@@ -1794,6 +1794,7 @@ mod tests {
         record_auth_attempt, refresh, registration_role, request_has_current_admin, start_pairing,
         token_from_service_request, valid_password, valid_username, verify_password,
     };
+    use crate::test_support::{generated_password, wrong_password};
     use actix_web::{
         App, HttpResponse,
         cookie::Cookie,
@@ -2074,15 +2075,13 @@ mod tests {
 
     #[test]
     fn hash_password_verifies_original_password() {
-        let password_hash = match hash_password("correct horse battery staple") {
+        let password = generated_password();
+        let password_hash = match hash_password(&password) {
             Ok(hash) => hash,
             Err(e) => panic!("test setup failed to hash password: {}", e),
         };
 
-        assert!(verify_password(
-            "correct horse battery staple",
-            &password_hash
-        ));
+        assert!(verify_password(&password, &password_hash));
     }
 
     #[test]
@@ -2094,24 +2093,20 @@ mod tests {
             "fictional legacy test password",
             legacy_hash
         ));
-        assert!(!verify_password(
-            "a different fictional password",
-            legacy_hash
-        ));
+        assert!(!verify_password(&generated_password(), legacy_hash));
     }
 
     #[test]
     fn verify_password_rejects_wrong_or_malformed_hashes() {
-        let password_hash = match hash_password("correct horse battery staple") {
+        let password = generated_password();
+        let password_hash = match hash_password(&password) {
             Ok(hash) => hash,
             Err(e) => panic!("test setup failed to hash password: {}", e),
         };
 
-        assert!(!verify_password("wrong password", &password_hash));
-        assert!(!verify_password(
-            "correct horse battery staple",
-            "not-a-valid-hash"
-        ));
+        assert!(!verify_password(&wrong_password(&password), &password_hash));
+        assert!(!verify_password(&generated_password(), &password_hash));
+        assert!(!verify_password(&password, "not-a-valid-hash"));
     }
 
     #[actix_web::test]
