@@ -61,7 +61,7 @@ export default function LastfmCallback() {
 
   return (
     <main className="flex min-h-screen items-center justify-center px-6">
-      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#0b0b0d] p-8 text-center shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)]">
+      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-mujin-raised p-8 text-center shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)]">
         <div className="mx-auto flex w-fit items-center gap-3">
           <ServiceMark service="lastfm" size={52} />
         </div>
@@ -99,7 +99,7 @@ export default function LastfmCallback() {
           className="mt-6 inline-flex h-10 items-center justify-center rounded-full bg-white px-5 text-sm font-semibold text-black hover:bg-zinc-200"
           href="/settings?tab=scrobbling"
         >
-          Back to Parson
+          Back to Mujin Music
         </Link>
       </div>
     </main>

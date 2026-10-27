@@ -78,7 +78,7 @@ function Switch({
       aria-label={label}
       className={cn(
         "relative h-6 w-10 shrink-0 rounded-full transition-colors disabled:opacity-50",
-        checked ? "bg-sky-400" : "bg-zinc-700",
+        checked ? "bg-mujin-copper" : "bg-zinc-700",
       )}
       disabled={disabled}
       onClick={() => onChange(!checked)}
@@ -259,7 +259,7 @@ export default function ListenLaterPage() {
 
   return (
     <div className="relative text-zinc-50">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-linear-to-b from-sky-500/12 via-sky-500/[0.03] to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-linear-to-b from-mujin-copper/12 via-mujin-copper/[0.03] to-transparent" />
       <div className="relative mx-auto max-w-6xl px-5 pb-24 pt-10 sm:px-8">
         <header className="mb-8 flex flex-wrap items-end justify-between gap-6">
           <div className="min-w-0">
@@ -431,7 +431,7 @@ export default function ListenLaterPage() {
           </p>
         ) : empty ? (
           <div className="mx-auto mt-6 max-w-md rounded-2xl border border-white/8 bg-white/2 px-8 py-12 text-center">
-            <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-sky-400/15 text-sky-200">
+            <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-mujin-copper/15 text-mujin-copper-hover">
               <Clock className="h-8 w-8" />
             </div>
             <h2 className="text-xl font-bold text-white">

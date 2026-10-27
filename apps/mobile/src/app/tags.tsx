@@ -39,7 +39,7 @@ export default function TagsScreen() {
               <ActivityIndicator color="white" style={{ marginTop: 40 }} />
             ) : (
               <View style={styles.empty}>
-                <Hash color="#a78bfa" size={36} />
+                <Hash color={palette.accent} size={36} />
                 <Text style={[styles.emptyTitle, { marginTop: 14 }]}>
                   No tags yet
                 </Text>
@@ -52,7 +52,7 @@ export default function TagsScreen() {
           }
           ListHeaderComponent={
             <BrowseHeader
-              accent="#a78bfa"
+              accent={palette.accent}
               kicker="Browse"
               subtitle={
                 tags.data

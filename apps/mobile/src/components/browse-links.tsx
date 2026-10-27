@@ -10,10 +10,10 @@ const LINKS: { href: Href; label: string; icon: LucideIcon; tint: string }[] = [
     href: "/listen-later",
     label: "Listen Later",
     icon: Clock,
-    tint: "#38bdf8",
+    tint: palette.accent,
   },
-  { href: "/tags", label: "Tags", icon: Hash, tint: "#a78bfa" },
-  { href: "/history", label: "History", icon: History, tint: "#818cf8" },
+  { href: "/tags", label: "Tags", icon: Hash, tint: palette.accent },
+  { href: "/history", label: "History", icon: History, tint: palette.accent },
 ];
 
 /** Roon's BROWSE shortcuts: Listen Later, Tags and History. */

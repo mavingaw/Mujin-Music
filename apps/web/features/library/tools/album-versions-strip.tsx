@@ -48,7 +48,7 @@ export function AlbumVersionsStrip({ albumId }: { albumId: string }) {
           className="flex items-center gap-2 text-lg font-semibold text-white"
           id="album-versions-heading"
         >
-          <Layers className="h-4 w-4 text-[#b26bff]" />
+          <Layers className="h-4 w-4 text-mujin-copper" />
           Versions in your library
         </h2>
         <Link
@@ -71,7 +71,7 @@ export function AlbumVersionsStrip({ albumId }: { albumId: string }) {
                   src={version.cover_url}
                 />
                 {version.preferred && (
-                  <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#d6b8ff] backdrop-blur">
+                  <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-mujin-copper-hover backdrop-blur">
                     <Star className="h-3 w-3 fill-current" />
                     Preferred
                   </span>

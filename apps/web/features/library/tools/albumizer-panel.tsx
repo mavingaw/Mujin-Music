@@ -374,8 +374,8 @@ function AlbumEditor({
         <DialogHeader>
           <DialogTitle>{draft.id ? "Edit album" : "Make an album"}</DialogTitle>
           <DialogDescription>
-            The album exists in Parson only; the files and their tags are not
-            changed.
+            The album exists in Mujin Music only; the files and their tags are
+            not changed.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -445,9 +445,9 @@ function AlbumEditor({
                   aria-label={`Use the cover of ${track.title}`}
                   aria-pressed={draft.coverSongId === track.id}
                   className={cn(
-                    "rounded-md ring-2 ring-offset-2 ring-offset-[#0b0b0b] transition",
+                    "rounded-md ring-2 ring-offset-2 ring-offset-mujin-base transition",
                     draft.coverSongId === track.id
-                      ? "ring-[#b26bff]"
+                      ? "ring-mujin-copper"
                       : "ring-transparent",
                   )}
                   key={track.id}

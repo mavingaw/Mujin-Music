@@ -274,7 +274,7 @@ export default function LibrarySettings() {
           className="group flex items-center gap-4 rounded-xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(178,107,255,0.10),rgba(255,255,255,0.02))] px-4 py-4 transition-colors hover:border-white/[0.16]"
           href="/library/tools"
         >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#b26bff]/15 text-[#b26bff]">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-mujin-copper/15 text-mujin-copper">
             <Wrench className="h-5 w-5" />
           </span>
           <span className="min-w-0 flex-1">

@@ -452,7 +452,7 @@ function Landing() {
         >
           radio-browser.info
         </a>
-        . Streams play through your Parson server; stations never see your
+        . Streams play through your Mujin Music server; stations never see your
         devices.
       </p>
     </>

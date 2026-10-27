@@ -196,7 +196,9 @@ function AnalysisBody({ analysis }: { analysis: SongAnalysis }) {
                   {copy.path}
                 </span>
                 {copy.playing && (
-                  <span className="text-[11px] text-[#d6b8ff]">Playing</span>
+                  <span className="text-[11px] text-mujin-copper-hover">
+                    Playing
+                  </span>
                 )}
               </li>
             ))}

@@ -312,7 +312,7 @@ export default function HistoryPage() {
 
   return (
     <div className="relative text-zinc-50">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-linear-to-b from-indigo-500/12 via-indigo-500/[0.03] to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-linear-to-b from-mujin-copper/12 via-mujin-copper/[0.03] to-transparent" />
       <div className="relative mx-auto max-w-6xl px-5 pb-24 pt-10 sm:px-8">
         <header className="mb-7 flex flex-wrap items-end justify-between gap-5">
           <div>
@@ -430,7 +430,7 @@ export default function HistoryPage() {
             </p>
           ) : data.totals.plays === 0 ? (
             <div className="mx-auto mt-6 max-w-md rounded-2xl border border-white/8 bg-white/2 px-8 py-12 text-center">
-              <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-indigo-400/15 text-indigo-200">
+              <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-full bg-mujin-copper/15 text-mujin-copper-hover">
                 <HistoryIcon className="h-8 w-8" />
               </div>
               <h2 className="text-xl font-bold text-white">
@@ -555,7 +555,7 @@ export default function HistoryPage() {
                               </span>
                               <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-white/[0.05]">
                                 <span
-                                  className="block h-full rounded-full bg-sky-400/80"
+                                  className="block h-full rounded-full bg-mujin-copper/80"
                                   style={{ width: `${share * 100}%` }}
                                 />
                               </span>
@@ -585,7 +585,7 @@ export default function HistoryPage() {
           <div className="space-y-8">
             {days.map((day) => (
               <section key={day.key}>
-                <div className="sticky top-0 z-10 -mx-2 mb-2 flex items-baseline justify-between gap-3 bg-[#0a0a0a]/90 px-2 py-2 backdrop-blur">
+                <div className="sticky top-0 z-10 -mx-2 mb-2 flex items-baseline justify-between gap-3 bg-mujin-base/90 px-2 py-2 backdrop-blur">
                   <h2 className="text-lg font-bold text-white">{day.label}</h2>
                   <span className="text-xs tabular-nums text-zinc-500">
                     {day.items.length}{" "}
@@ -730,7 +730,7 @@ function TimelineRow({
           </button>
         )}
         {entry.source === "generated" && (
-          <span className="flex items-center gap-1 rounded-full border border-sky-300/20 px-2 py-0.5 text-[11px] text-sky-200">
+          <span className="flex items-center gap-1 rounded-full border border-mujin-copper/20 px-2 py-0.5 text-[11px] text-mujin-copper-hover">
             <Radio className="h-3 w-3" /> Radio
           </span>
         )}

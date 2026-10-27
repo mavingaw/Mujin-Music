@@ -93,7 +93,7 @@ export default function HistoryScreen() {
               <ActivityIndicator color="white" style={{ marginTop: 40 }} />
             ) : (
               <View style={styles.empty}>
-                <HistoryIcon color="#818cf8" size={36} />
+                <HistoryIcon color={palette.accent} size={36} />
                 <Text style={[styles.emptyTitle, { marginTop: 14 }]}>
                   No plays in this period
                 </Text>
@@ -121,7 +121,7 @@ export default function HistoryScreen() {
           ListHeaderComponent={
             <>
               <BrowseHeader
-                accent="#818cf8"
+                accent={palette.accent}
                 kicker="Browse"
                 subtitle="Every play on every zone, just for your profile."
                 title="History"
@@ -218,7 +218,7 @@ export default function HistoryScreen() {
                 </Text>
               </View>
               {entry.source === "generated" ? (
-                <Radio color="#38bdf8" size={16} />
+                <Radio color={palette.accent} size={16} />
               ) : null}
             </Pressable>
           )}

@@ -86,7 +86,7 @@ export default function LiveRadioScreen() {
           >
             <ChevronLeft color="white" size={26} />
           </Pressable>
-          <PageTitle subtitle="Stations from around the world, through your Parson server">
+          <PageTitle subtitle="Stations from around the world, through your Mujin Music server">
             Live Radio
           </PageTitle>
           <View style={styles.searchBox}>

@@ -49,8 +49,8 @@ pub fn submission(kind: ListenType, listens: &[Listen]) -> Value {
         .iter()
         .map(|listen| {
             let mut info = serde_json::Map::new();
-            info.insert("media_player".into(), json!("Parson"));
-            info.insert("submission_client".into(), json!("Parson"));
+            info.insert("media_player".into(), json!("Mujin Music"));
+            info.insert("submission_client".into(), json!("Mujin Music"));
             info.insert(
                 "submission_client_version".into(),
                 json!(env!("CARGO_PKG_VERSION")),
@@ -254,7 +254,7 @@ mod tests {
         let info = &item["track_metadata"]["additional_info"];
         assert_eq!(info["duration_ms"], 214_000);
         assert_eq!(info["tracknumber"], 3);
-        assert_eq!(info["media_player"], "Parson");
+        assert_eq!(info["media_player"], "Mujin Music");
         assert_eq!(info["isrc"], "GBAYE0601498");
         // Same album artist as track artist is not repeated.
         assert!(info.get("album_artist").is_none());

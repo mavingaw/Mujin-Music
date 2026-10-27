@@ -167,7 +167,7 @@ export function VersionGroupCard({
           <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-zinc-300 hover:bg-white/[0.05]">
             <input
               checked={group.hide_others}
-              className="h-3.5 w-3.5 accent-[#b26bff]"
+              className="h-3.5 w-3.5 accent-mujin-copper"
               disabled={busy}
               onChange={(event) =>
                 void run(
@@ -212,7 +212,7 @@ export function VersionGroupCard({
             className={cn(
               "group relative rounded-lg border p-2.5 transition-colors",
               album.preferred
-                ? "border-[#b26bff]/45 bg-[#b26bff]/[0.06] shadow-[0_0_24px_-12px_#b26bff]"
+                ? "border-mujin-copper/45 bg-mujin-copper/[0.06] shadow-[0_0_24px_-12px_#b26bff]"
                 : "border-white/[0.06] bg-black/20",
               album.hidden && "opacity-60",
             )}
@@ -226,7 +226,7 @@ export function VersionGroupCard({
                 src={album.cover_url}
               />
               {album.preferred && (
-                <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#d6b8ff] backdrop-blur">
+                <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-mujin-copper-hover backdrop-blur">
                   <Star className="h-3 w-3 fill-current" />
                   Preferred
                 </span>
@@ -373,7 +373,7 @@ function GroupAlbumsDialog({
           <div className="flex flex-wrap gap-1.5">
             {[...selected.values()].map((item) => (
               <button
-                className="rounded-full bg-[#b26bff]/15 px-2.5 py-1 text-xs text-[#d6b8ff]"
+                className="rounded-full bg-mujin-copper/15 px-2.5 py-1 text-xs text-mujin-copper-hover"
                 key={item.id}
                 onClick={() => toggle(item)}
                 type="button"
@@ -418,7 +418,7 @@ function GroupAlbumsDialog({
                   )}
                 </span>
                 {selected.has(item.id) && (
-                  <Check className="h-4 w-4 text-[#b26bff]" />
+                  <Check className="h-4 w-4 text-mujin-copper" />
                 )}
               </button>
             </li>

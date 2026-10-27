@@ -98,7 +98,7 @@ export default function ListenLaterScreen() {
               <ActivityIndicator color="white" style={{ marginTop: 40 }} />
             ) : (
               <View style={styles.empty}>
-                <Clock color="#38bdf8" size={36} />
+                <Clock color={palette.accent} size={36} />
                 <Text style={[styles.emptyTitle, { marginTop: 14 }]}>
                   Nothing saved for later
                 </Text>
@@ -111,7 +111,7 @@ export default function ListenLaterScreen() {
           ListHeaderComponent={
             <>
               <BrowseHeader
-                accent="#38bdf8"
+                accent={palette.accent}
                 kicker="Browse"
                 subtitle={subtitle}
                 title="Listen Later"
@@ -138,7 +138,7 @@ export default function ListenLaterScreen() {
                   accessibilityLabel="Remove once played"
                   disabled={setting.isPending || page.isPending}
                   onValueChange={(value) => setting.mutate(value)}
-                  trackColor={{ true: "#38bdf8" }}
+                  trackColor={{ true: palette.accent }}
                   value={Boolean(page.data?.removeWhenPlayed)}
                 />
               </View>

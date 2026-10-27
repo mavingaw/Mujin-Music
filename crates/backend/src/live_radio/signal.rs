@@ -105,12 +105,12 @@ pub fn describe(
     let mut explanation = match source.lossless {
         Some(true) => "This station broadcasts lossless audio: every bit it sends reaches the next stage unchanged.".to_string(),
         Some(false) => "Internet radio is almost always lossy (MP3, AAC, Opus or Vorbis). Detail was discarded before the stream left the station, and no player can restore it.".to_string(),
-        None => "Parson could not identify this stream's codec yet, so it cannot call it lossless.".to_string(),
+        None => "Mujin Music could not identify this stream's codec yet, so it cannot call it lossless.".to_string(),
     };
     if verified {
-        explanation.push_str(" Parson read this format from the audio frames themselves, not from the station's listing.");
+        explanation.push_str(" Mujin Music read this format from the audio frames themselves, not from the station's listing.");
     } else if format.is_none() {
-        explanation.push_str(" This is the directory's listing; Parson confirms it from the audio once the station plays.");
+        explanation.push_str(" This is the directory's listing; Mujin Music confirms it from the audio once the station plays.");
     }
     if let (Some(claimed), Some(actual)) = (claimed_codec.as_deref(), codec.as_deref())
         && verified
@@ -149,12 +149,12 @@ pub fn describe(
     }];
     let (relay_detail, relay_explanation) = match transport {
         Some(Transport::Hls) => (
-            "HLS segments, joined live by Parson",
-            "Parson fetches the station's HLS playlist on the server, picks its best rendition (lossless first, then the highest bitrate) and joins the segments into one stream. Your device never contacts the station.",
+            "HLS segments, joined live by Mujin Music",
+            "Mujin Music fetches the station's HLS playlist on the server, picks its best rendition (lossless first, then the highest bitrate) and joins the segments into one stream. Your device never contacts the station.",
         ),
         _ => (
-            "Relayed by Parson",
-            "Parson fetches the stream on the server, removes the in-band ICY title data and passes the audio through bit for bit. Your device never contacts the station, and every zone type can play it.",
+            "Relayed by Mujin Music",
+            "Mujin Music fetches the stream on the server, removes the in-band ICY title data and passes the audio through bit for bit. Your device never contacts the station, and every zone type can play it.",
         ),
     };
     stages.push(SignalStage {
@@ -227,7 +227,7 @@ pub fn describe(
                             .unwrap_or_default()
                     ),
                     quality: Some(SignalQuality::HighQuality),
-                    explanation: "Parson decodes the stream once and sends the samples losslessly, so no second lossy generation is added.".into(),
+                    explanation: "Mujin Music decodes the stream once and sends the samples losslessly, so no second lossy generation is added.".into(),
                 });
             } else {
                 stages.push(SignalStage {
@@ -240,7 +240,7 @@ pub fn describe(
                         output_label(output)
                     ),
                     quality: Some(SignalQuality::LowQuality),
-                    explanation: "This output cannot take the station's format or a lossless one, so Parson encodes it again. A second lossy generation loses a little more detail.".into(),
+                    explanation: "This output cannot take the station's format or a lossless one, so Mujin Music encodes it again. A second lossy generation loses a little more detail.".into(),
                 });
             }
             (

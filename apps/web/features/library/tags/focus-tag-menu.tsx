@@ -90,7 +90,7 @@ export default function FocusTagMenu({ query }: { query: FocusQuery }) {
         <DropdownMenuContent align="start" className="w-64">
           {focused && (
             <DropdownMenuItem onSelect={() => setSmartOpen(true)}>
-              <Sparkles className="text-violet-300" />
+              <Sparkles className="text-mujin-copper" />
               Save focus as smart tag…
             </DropdownMenuItem>
           )}

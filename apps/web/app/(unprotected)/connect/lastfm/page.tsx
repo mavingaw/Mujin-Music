@@ -5,7 +5,7 @@ import LastfmCallback from "@/features/scrobbling/lastfm-callback";
 
 export const metadata: Metadata = {
   title: "Connect Last.fm",
-  description: "Finishes connecting a Parson profile to Last.fm.",
+  description: "Finishes connecting a Mujin Music profile to Last.fm.",
 };
 
 export default function LastfmCallbackRoute() {

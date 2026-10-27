@@ -125,7 +125,9 @@ export function AddStationDialog({
       if (!name && result.stream_name) setName(result.stream_name);
       if (!tags && result.genre) setTags(result.genre.toLowerCase());
     } catch (failure) {
-      setError(liveRadioError(failure, "Parson could not open that stream."));
+      setError(
+        liveRadioError(failure, "Mujin Music could not open that stream."),
+      );
     } finally {
       setChecking(false);
     }
@@ -169,8 +171,8 @@ export function AddStationDialog({
           </DialogTitle>
           <DialogDescription className="text-sm leading-6 text-zinc-400">
             Paste a stream URL: MP3, AAC, Ogg, Opus or FLAC streams, PLS, M3U
-            and ASX playlists, or HLS (.m3u8). Parson checks it and shows what
-            it really sends.
+            and ASX playlists, or HLS (.m3u8). Mujin Music checks it and shows
+            what it really sends.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -220,8 +222,8 @@ export function AddStationDialog({
               <span>
                 This stream is on my local network
                 <span className="block text-xs text-zinc-500">
-                  Lets Parson reach private addresses (a NAS or Icecast at home)
-                  for this station only.
+                  Lets Mujin Music reach private addresses (a NAS or Icecast at
+                  home) for this station only.
                 </span>
               </span>
             </label>

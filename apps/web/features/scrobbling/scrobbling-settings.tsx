@@ -227,7 +227,7 @@ function ServiceCard({
               <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-black/40 px-3 py-2.5">
                 <p className="flex items-center gap-2 text-xs text-zinc-300">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Approve Parson in the Last.fm window…
+                  Approve Mujin Music in the Last.fm window…
                 </p>
                 <Button onClick={onCancelConnect} size="sm" variant="ghost">
                   Cancel
@@ -337,7 +337,7 @@ function ServiceCard({
               </p>
               {importing && (
                 <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/8">
-                  <div className="h-full w-1/3 animate-[profile-import_1.4s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-sky-400 to-violet-400" />
+                  <div className="h-full w-1/3 animate-[profile-import_1.4s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-mujin-copper to-mujin-copper" />
                 </div>
               )}
             </div>
@@ -654,7 +654,7 @@ export default function ScrobblingSettings() {
           stay their own.
         </p>
         {status.data?.sandbox && (
-          <p className="mt-3 inline-flex items-center gap-2 rounded-full bg-violet-400/10 px-3 py-1 text-xs text-violet-200">
+          <p className="mt-3 inline-flex items-center gap-2 rounded-full bg-mujin-copper/10 px-3 py-1 text-xs text-mujin-copper-hover">
             <FlaskConical className="h-3.5 w-3.5" />
             Sandbox: services answer with recorded replies.
           </p>
@@ -691,11 +691,11 @@ export default function ScrobblingSettings() {
             ))}
           </div>
           <p className="mt-4 text-xs leading-5 text-zinc-500">
-            Parson follows Last.fm&apos;s rules: a track longer than 30 seconds
-            scrobbles once you have heard half of it or four minutes, stamped
-            with when you started listening. While a service or this server is
-            offline, listens wait in a queue and are sent later with their
-            original times.
+            Mujin Music follows Last.fm&apos;s rules: a track longer than 30
+            seconds scrobbles once you have heard half of it or four minutes,
+            stamped with when you started listening. While a service or this
+            server is offline, listens wait in a queue and are sent later with
+            their original times.
           </p>
 
           <h3 className="mt-8 text-sm font-semibold text-white">
