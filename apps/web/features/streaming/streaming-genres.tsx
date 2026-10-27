@@ -90,7 +90,7 @@ function GenreAlbums({
             <button
               aria-pressed={section === item.id}
               className={cn(
-                "inline-flex h-8 items-center rounded-full border px-3 text-[13px] font-medium",
+                "inline-flex h-8 items-center rounded-full border px-3 text-[0.8125rem] font-medium",
                 section === item.id
                   ? "border-white bg-white text-black"
                   : "border-white/12 text-zinc-300 hover:text-white",
@@ -105,7 +105,7 @@ function GenreAlbums({
         </div>
       )}
       {provider === "tidal" && (
-        <p className="max-w-2xl text-[13px] leading-5 text-zinc-500">
+        <p className="max-w-2xl text-[0.8125rem] leading-5 text-zinc-500">
           TIDAL lists albums by genre only on its genre pages, so Mujin Music
           files an album you add from here under {genre.name} in your library.
         </p>

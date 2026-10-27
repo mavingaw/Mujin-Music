@@ -6,7 +6,7 @@ export function ExplicitBadge() {
       role="img"
       aria-label="Explicit"
       title="Explicit"
-      className="mr-1.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-xs bg-zinc-400/20 text-[9px] font-semibold leading-none text-zinc-400 align-middle"
+      className="mr-1.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-xs bg-zinc-400/20 text-[0.5625rem] font-semibold leading-none text-zinc-400 align-middle"
     >
       E
     </span>

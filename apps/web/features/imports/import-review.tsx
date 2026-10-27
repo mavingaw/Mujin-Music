@@ -68,7 +68,7 @@ function ConfidencePill({ value }: { value: number }) {
   }[band];
   return (
     <span
-      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${tone}`}
+      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums ${tone}`}
       title={`${band} confidence`}
     >
       {percent(value)}
@@ -102,7 +102,9 @@ function StatusLabel({ item }: { item: ImportItem }) {
     skipped: ["Skipped", "text-zinc-500"],
   };
   const [label, tone] = labels[item.status];
-  return <span className={`text-[11px] font-medium ${tone}`}>{label}</span>;
+  return (
+    <span className={`text-[0.6875rem] font-medium ${tone}`}>{label}</span>
+  );
 }
 
 function ItemRow({
@@ -178,7 +180,7 @@ function ItemRow({
                   .filter(Boolean)
                   .join(" · ")}
               </p>
-              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-zinc-600">
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[0.6875rem] text-zinc-600">
                 <StatusLabel item={item} />
                 {item.reasons.slice(0, 4).map((reason) => (
                   <span key={reason}>{MATCH_REASON_LABELS[reason]}</span>
@@ -512,7 +514,7 @@ export default function ImportReview({
         )}
       </ul>
 
-      <footer className="z-10 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-[#0b0b0b]/95 p-3 shadow-2xl shadow-black/60 backdrop-blur md:sticky md:bottom-28">
+      <footer className="z-10 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-mujin-raised/95 p-3 shadow-2xl shadow-black/60 backdrop-blur md:sticky md:bottom-28">
         <Input
           aria-label="Playlist name"
           className="min-w-48 flex-1"

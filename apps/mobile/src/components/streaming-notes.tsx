@@ -90,9 +90,9 @@ export function StartRadioButton({
       style={styles.radio}
     >
       {radio.isPending ? (
-        <ActivityIndicator color="white" size="small" />
+        <ActivityIndicator color={palette.text} size="small" />
       ) : (
-        <Radio color="white" size={17} />
+        <Radio color={palette.text} size={17} />
       )}
       <Text style={styles.radioText}>Radio</Text>
     </Pressable>
@@ -144,7 +144,7 @@ export function AwardTags({ awards }: { awards: string[] | undefined }) {
     <View style={styles.awards}>
       {awards.map((award) => (
         <View key={award} style={styles.award}>
-          <Award color="#fde68a" size={13} />
+          <Award color={palette.brass} size={13} />
           <Text style={styles.awardText}>{award}</Text>
         </View>
       ))}
@@ -223,12 +223,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  radioText: { color: "white", fontWeight: "700", fontSize: 14 },
+  radioText: { color: palette.text, fontWeight: "700", fontSize: 14 },
   section: { marginTop: 18 },
   body: { paddingHorizontal: 20, gap: 10 },
   paragraph: { color: palette.secondary, fontSize: 14, lineHeight: 21 },
   footerRow: { flexDirection: "row", alignItems: "center", gap: 14 },
-  more: { color: "white", fontWeight: "700", fontSize: 13 },
+  more: { color: palette.text, fontWeight: "700", fontSize: 13 },
   source: { color: palette.muted, fontSize: 12 },
   awards: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
   award: {
@@ -237,13 +237,13 @@ const styles = StyleSheet.create({
     gap: 5,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(253, 230, 138, 0.3)",
+    borderColor: "rgba(240, 220, 194, 0.3)",
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  awardText: { color: "#fde68a", fontSize: 12, fontWeight: "700" },
+  awardText: { color: palette.brass, fontSize: 12, fontWeight: "700" },
   credit: { gap: 2 },
-  creditTrack: { color: "white", fontWeight: "700", fontSize: 14 },
+  creditTrack: { color: palette.text, fontWeight: "700", fontSize: 14 },
   creditLine: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
   similar: { paddingHorizontal: 20, gap: 14 },
   similarItem: { width: 88, alignItems: "center", gap: 6 },

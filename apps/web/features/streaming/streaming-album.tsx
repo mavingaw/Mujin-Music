@@ -116,12 +116,12 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
                 <FormatBadge label={data.format.label} tone={tone} />
               )}
               {data.explicit && (
-                <span className="rounded-[5px] bg-white/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-zinc-300">
+                <span className="rounded-[5px] bg-white/10 px-1.5 py-0.5 text-[0.6562rem] font-semibold text-zinc-300">
                   E
                 </span>
               )}
             </div>
-            <h1 className="mb-4 text-balance text-4xl font-black leading-[0.98] text-white sm:text-5xl">
+            <h1 className="mb-4 text-balance text-4xl mj-display leading-[0.98] text-mujin-text sm:text-5xl">
               {data.title}
               {data.version && (
                 <span className="block text-2xl font-bold text-zinc-400">
@@ -161,15 +161,15 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
         <div className="mb-7 flex flex-wrap items-center gap-4">
           <button
             aria-label={`${isAlbumPlaying ? "Pause" : "Play"} ${data.title}`}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100 disabled:opacity-70"
+            className="flex h-12 w-12 items-center justify-center rounded-full mj-primary motion-safe:hover:scale-105 hover:bg-zinc-100 disabled:opacity-70"
             disabled={preferred.starting}
             onClick={() => void preferred.play()}
             type="button"
           >
             {isAlbumPlaying ? (
-              <Pause className="h-6 w-6 fill-black text-black" />
+              <Pause className="h-6 w-6 fill-current" />
             ) : (
-              <Play className="ml-1 h-6 w-6 fill-black text-black" />
+              <Play className="ml-1 h-6 w-6 fill-current" />
             )}
           </button>
           <PreferredPlayCaption

@@ -34,6 +34,7 @@ export type DesktopServerState = {
   localRunning?: boolean;
 };
 export type DesktopServerEvent = { type: "restarted" };
+export type DesktopWindowMaterial = "mica" | "acrylic" | "vibrancy";
 
 declare global {
   interface Window {
@@ -50,6 +51,13 @@ declare global {
       watchPowerResume(callback: () => void): () => void;
       watchUpdates(callback: (state: DesktopUpdateState) => void): () => void;
       watchServer?(callback: (event: DesktopServerEvent) => void): () => void;
+      /** Native window materials (Windows 11 Mica/Acrylic, macOS vibrancy). */
+      windowMaterial?: {
+        supported(): Promise<DesktopWindowMaterial[]>;
+        set(
+          material: DesktopWindowMaterial | null,
+        ): Promise<DesktopWindowMaterial | null>;
+      };
     };
   }
 }
@@ -204,4 +212,35 @@ export async function updateDesktopService(change: {
     (await electronInvoke<DesktopServiceState>("server_service_set", change)) ??
     null
   );
+}
+
+/** The window materials this desktop app can show; none in a browser. */
+export async function desktopWindowMaterials(): Promise<
+  DesktopWindowMaterial[]
+> {
+  if (typeof window === "undefined") return [];
+  try {
+    return (
+      (await window.__PARSON_ELECTRON__?.windowMaterial?.supported()) ?? []
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Asks the desktop window to show a native material behind the page (or
+ * none). Returns what the window applied; null in a browser.
+ */
+export async function setDesktopWindowMaterial(
+  material: DesktopWindowMaterial | null,
+): Promise<DesktopWindowMaterial | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    return (
+      (await window.__PARSON_ELECTRON__?.windowMaterial?.set(material)) ?? null
+    );
+  } catch {
+    return null;
+  }
 }

@@ -121,13 +121,24 @@ export function useZonePlayback() {
     [player, remote, target],
   );
 
+  /** "Add next": one song, or several in order (an album, an artist). */
   const addNext = useCallback(
-    (song: LibrarySong) => {
+    (songs: LibrarySong | LibrarySong[]) => {
+      const list = Array.isArray(songs) ? songs : [songs];
+      if (!list.length) return;
       if (target.kind === "zone") {
-        void remote(queueOnZoneCommand([song.id], true), target.canQueue);
+        void remote(
+          queueOnZoneCommand(
+            list.map((song) => song.id),
+            true,
+          ),
+          target.canQueue,
+        );
         return;
       }
-      player.addNext(song);
+      // Each insert lands right after the playing song, so insert in
+      // reverse to keep the list's order.
+      for (const song of [...list].reverse()) player.addNext(song);
     },
     [player, remote, target],
   );

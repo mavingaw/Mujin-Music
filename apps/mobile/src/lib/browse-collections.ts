@@ -10,16 +10,16 @@ import {
 /** Tag colours as hex for React Native (the web uses Tailwind tokens). */
 export const TAG_HEX: Record<TagColor, string> = {
   slate: "#cbd5e1",
-  red: "#f87171",
+  red: "#f2473f",
   orange: "#fb923c",
-  amber: "#fcd34d",
+  amber: "#e6c599",
   lime: "#bef264",
-  green: "#34d399",
+  green: "#a3c98b",
   teal: "#5eead4",
-  sky: "#38bdf8",
+  sky: "#8fc3e0",
   blue: "#60a5fa",
   violet: "#a78bfa",
-  fuchsia: "#e879f9",
+  fuchsia: "#e6a27a",
   pink: "#f472b6",
 };
 

@@ -10,7 +10,7 @@ export default function ParsonBrandMark({ className }: { className?: string }) {
   return (
     <svg
       aria-hidden="true"
-      className={cn("text-[#f2eee6]", className)}
+      className={cn("text-mujin-text", className)}
       focusable="false"
       viewBox="0 0 512 512"
     >

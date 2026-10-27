@@ -93,7 +93,10 @@ export function ZoneQueue({
               }
               style={[styles.toggle, zone.shuffle && styles.toggleOn]}
             >
-              <Shuffle color={zone.shuffle ? "black" : "white"} size={16} />
+              <Shuffle
+                color={zone.shuffle ? palette.background : palette.text}
+                size={16}
+              />
             </Pressable>
           ) : null}
           {zone.capabilities.repeat ? (
@@ -112,7 +115,9 @@ export function ZoneQueue({
               style={[styles.toggle, zone.repeat !== "off" && styles.toggleOn]}
             >
               <RepeatIcon
-                color={zone.repeat !== "off" ? "black" : "white"}
+                color={
+                  zone.repeat !== "off" ? palette.background : palette.text
+                }
                 size={16}
               />
             </Pressable>
@@ -128,7 +133,7 @@ export function ZoneQueue({
               onPress={() => edit({ command: "clear_upcoming" })}
               style={[styles.clear, upcoming === 0 && styles.disabled]}
             >
-              <ListX color="white" size={16} />
+              <ListX color={palette.text} size={16} />
               <Text style={styles.clearText}>Clear</Text>
             </Pressable>
           ) : null}
@@ -179,7 +184,7 @@ export function ZoneQueue({
                       index <= current + 1 && styles.disabled,
                     ]}
                   >
-                    <ChevronUp color="white" size={16} />
+                    <ChevronUp color={palette.text} size={16} />
                   </Pressable>
                   <Pressable
                     accessibilityLabel={`Move ${title} down`}
@@ -200,7 +205,7 @@ export function ZoneQueue({
                       index >= ids.length - 1 && styles.disabled,
                     ]}
                   >
-                    <ChevronDown color="white" size={16} />
+                    <ChevronDown color={palette.text} size={16} />
                   </Pressable>
                   <Pressable
                     accessibilityLabel={`Remove ${title} from the queue`}
@@ -215,7 +220,7 @@ export function ZoneQueue({
                     }
                     style={styles.small}
                   >
-                    <X color="white" size={16} />
+                    <X color={palette.text} size={16} />
                   </Pressable>
                 </View>
               ) : null}
@@ -239,7 +244,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  heading: { color: "white", fontSize: 14, fontWeight: "700" },
+  heading: { color: palette.text, fontSize: 14, fontWeight: "700" },
   actions: { alignItems: "center", flexDirection: "row", gap: 8 },
   toggle: {
     alignItems: "center",
@@ -250,7 +255,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 32,
   },
-  toggleOn: { backgroundColor: "white", borderColor: "white" },
+  toggleOn: { backgroundColor: palette.text, borderColor: palette.text },
   clear: {
     alignItems: "center",
     borderColor: palette.borderStrong,
@@ -261,7 +266,7 @@ const styles = StyleSheet.create({
     height: 32,
     paddingHorizontal: 10,
   },
-  clearText: { color: "white", fontSize: 12, fontWeight: "600" },
+  clearText: { color: palette.text, fontSize: 12, fontWeight: "600" },
   list: { marginTop: 8, maxHeight: 260 },
   row: {
     alignItems: "center",
@@ -270,7 +275,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   rowText: { flex: 1, minWidth: 0 },
-  title: { color: "white", fontSize: 14, fontWeight: "500" },
+  title: { color: palette.text, fontSize: 14, fontWeight: "500" },
   playing: { color: palette.success },
   artist: { color: palette.secondary, fontSize: 12, marginTop: 1 },
   rowActions: { flexDirection: "row", gap: 6 },

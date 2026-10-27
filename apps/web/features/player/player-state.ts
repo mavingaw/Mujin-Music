@@ -60,3 +60,23 @@ export function queueIndexForPersistedPosition(
   );
   return next >= 0 ? next : positions.length - 1;
 }
+
+/**
+ * The length to show for the playing track. A file the server converts
+ * while it plays (ALAC to FLAC, DSD to PCM) arrives as a stream with no
+ * length, so the media element reports Infinity or NaN, or only the part
+ * received so far. The library already knows the track's length: use it
+ * then, so the total time and seek bar are right on the first play.
+ */
+export function effectiveDuration(
+  mediaDuration: number | undefined,
+  knownDuration: number | undefined,
+): number {
+  const media = Number(mediaDuration);
+  const known = Number(knownDuration);
+  const hasKnown = Number.isFinite(known) && known > 0;
+  if (!Number.isFinite(media) || media <= 0) return hasKnown ? known : 0;
+  // A partly received stream reports what has arrived so far.
+  if (hasKnown && media < known * 0.5) return known;
+  return media;
+}

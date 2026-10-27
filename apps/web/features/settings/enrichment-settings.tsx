@@ -97,7 +97,7 @@ function EditorialSources({
                 )}
               </span>
               {source.id === main && (
-                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-300">
+                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-zinc-300">
                   Main
                 </span>
               )}
@@ -134,8 +134,8 @@ function EditorialSources({
 }
 
 /**
- * Online metadata is off by default: Parson only contacts MusicBrainz and
- * Wikimedia after an administrator turns it on here.
+ * Online metadata: Mujin Music contacts MusicBrainz and Wikimedia only while
+ * it is on. First-run setup turns it on unless the person unticks it there.
  */
 export default function EnrichmentSettings() {
   const queryClient = useQueryClient();
@@ -181,9 +181,12 @@ export default function EnrichmentSettings() {
             Adds credits and composers&apos; full catalogues from MusicBrainz;
             biographies, album background, critical reception and review scores
             from Wikipedia, in every language you turn on below; notable works,
-            influences and followers from Wikidata; and front covers from the
-            Cover Art Archive for albums without artwork, with their sources and
-            licenses shown. Off by default.
+            influences and followers from Wikidata; front covers from the Cover
+            Art Archive for albums without artwork, with their sources and
+            licenses shown; and lyrics from LRCLIB for tracks whose files carry
+            none. Lyrics in your files (embedded LRC, SYLT/USLT, or an .lrc
+            beside the track) always show. First-run setup turns it on unless
+            you untick it there; only artist and album names leave this server.
           </p>
         </div>
         <Button
@@ -200,9 +203,12 @@ export default function EnrichmentSettings() {
       <div className="mt-5 space-y-4 rounded-lg border border-white/10 p-4 text-sm">
         <p className="leading-6 text-zinc-400">
           When on, the server sends album titles, artist names and MusicBrainz
-          ids to{" "}
-          {(data?.sources ?? ["musicbrainz.org", "wikipedia.org"]).join(", ")}.
-          MusicBrainz is asked at most once a second, and each service has its
+          ids (and, for lyrics, the open track&apos;s title, artist, album and
+          length) to{" "}
+          {(
+            data?.sources ?? ["musicbrainz.org", "wikipedia.org", "lrclib.net"]
+          ).join(", ")}
+          . MusicBrainz is asked at most once a second, and each service has its
           own queue, so a busy one never holds up the others. Nothing about your
           listening is sent.
         </p>

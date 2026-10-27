@@ -309,7 +309,7 @@ export function DrawerAction({
       style={({ pressed }) => [styles.action, pressed && { opacity: 0.55 }]}
       onPress={onPress}
     >
-      {Icon ? <Icon color="white" size={21} /> : null}
+      {Icon ? <Icon color={palette.text} size={21} /> : null}
       <Text numberOfLines={2} style={styles.label}>
         {label}
       </Text>
@@ -328,10 +328,10 @@ const styles = StyleSheet.create({
   backdrop: {
     position: "absolute",
     inset: 0,
-    backgroundColor: "black",
+    backgroundColor: palette.background,
   },
   drawer: {
-    backgroundColor: "#18181b",
+    backgroundColor: palette.surface,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingTop: 10,
@@ -341,7 +341,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#66666d",
+    backgroundColor: palette.muted,
     alignSelf: "center",
     marginBottom: 10,
   },
@@ -362,7 +362,7 @@ const styles = StyleSheet.create({
   },
   label: {
     flex: 1,
-    color: "white",
+    color: palette.text,
     fontSize: 16,
     fontWeight: "600",
     lineHeight: 21,

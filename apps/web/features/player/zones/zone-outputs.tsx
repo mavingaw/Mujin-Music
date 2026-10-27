@@ -13,7 +13,7 @@ import {
 import { useZones } from "./zones-provider";
 
 const TONE: Record<"ok" | "warn" | "off", string> = {
-  ok: "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]",
+  ok: "bg-emerald-400 shadow-[0_0_8px_rgba(163,201,139,0.6)]",
   warn: "bg-amber-400",
   off: "bg-zinc-600",
 };
@@ -68,10 +68,10 @@ export function ZoneOutputsPanel() {
       className="space-y-2 rounded-xl border border-white/8 bg-white/[0.03] p-3"
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+        <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-zinc-400">
           Bridges and network speakers
         </p>
-        <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+        <div className="flex items-center gap-1.5 text-[0.6875rem] text-zinc-500">
           {outputs?.airplay?.enabled && (
             <span className="flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5">
               <Radio aria-hidden className="h-3 w-3" />
@@ -108,7 +108,7 @@ export function ZoneOutputsPanel() {
                     {summary.title}
                   </p>
                   <p
-                    className="truncate text-[11px] text-zinc-500"
+                    className="truncate text-[0.6875rem] text-zinc-500"
                     title={summary.detail}
                   >
                     {summary.detail}
@@ -132,7 +132,7 @@ export function ZoneOutputsPanel() {
             );
           })}
           {!bridges.bridges.length && (
-            <li className="px-2 text-[11px] leading-4 text-zinc-500">
+            <li className="px-2 text-[0.6875rem] leading-4 text-zinc-500">
               Run{" "}
               <code className="rounded bg-white/10 px-1 text-zinc-300">
                 parson-bridge
@@ -172,7 +172,7 @@ export function ZoneOutputsPanel() {
           </form>
         ) : (
           <button
-            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] text-zinc-400 hover:bg-white/10 hover:text-white"
+            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[0.6875rem] text-zinc-400 hover:bg-white/10 hover:text-white"
             onClick={() => setAdding(true)}
             type="button"
           >
@@ -181,13 +181,13 @@ export function ZoneOutputsPanel() {
           </button>
         ))}
       {counts.airplayUnsupported.length > 0 && (
-        <p className="px-2 text-[11px] leading-4 text-zinc-500">
+        <p className="px-2 text-[0.6875rem] leading-4 text-zinc-500">
           {counts.airplayUnsupported.join(", ")}{" "}
           {counts.airplayUnsupported.length === 1 ? "speaks" : "speak"} only
           AirPlay 2 with HomeKit pairing, which Mujin Music does not do yet.
         </p>
       )}
-      <p className="px-2 text-[11px] leading-4 text-zinc-600">
+      <p className="px-2 text-[0.6875rem] leading-4 text-zinc-600">
         Bridges run on Linux (ALSA), Windows (WASAPI exclusive) and macOS
         (CoreAudio hog mode). Bridges, AirPlay and server-side Chromecast are
         tested against simulated DACs and protocol-level fakes of each audio

@@ -157,7 +157,7 @@ export function AlbumizerPanel() {
         <>
           {made.length > 0 && (
             <section>
-              <h2 className="mb-3 text-[15px] font-semibold text-white">
+              <h2 className="mb-3 text-[0.9375rem] font-semibold text-white">
                 Albums you made
               </h2>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -225,7 +225,7 @@ export function AlbumizerPanel() {
           )}
 
           <section>
-            <h2 className="mb-1 text-[15px] font-semibold text-white">
+            <h2 className="mb-1 text-[0.9375rem] font-semibold text-white">
               Loose tracks by folder
             </h2>
             <p className="mb-3 text-sm text-zinc-500">
@@ -252,7 +252,7 @@ export function AlbumizerPanel() {
                           {suggestion.title}
                         </p>
                         <p
-                          className="truncate font-mono text-[11px] text-zinc-600"
+                          className="truncate font-mono text-[0.6875rem] text-zinc-600"
                           title={suggestion.folder}
                         >
                           {suggestion.folder}

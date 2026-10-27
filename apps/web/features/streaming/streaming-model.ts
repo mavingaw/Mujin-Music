@@ -19,6 +19,9 @@ export type LibraryAlbumEntry = {
   year: string;
   source: StreamingProviderId | null;
   formatLabel: string | null;
+  /** The badge marks high-resolution / lossless local albums. */
+  hiRes?: boolean;
+  lossless?: boolean;
 };
 
 /** Roon's "Storage location" focus: everything, local files, or one service's library. */
@@ -49,7 +52,9 @@ export function localAlbumEntry(album: LibraryCatalogAlbum): LibraryAlbumEntry {
     cover: album.coverPath,
     year: album.releaseYear,
     source: null,
-    formatLabel: null,
+    formatLabel: album.formatLabel ?? null,
+    hiRes: Boolean(album.hiRes),
+    lossless: Boolean(album.lossless),
   };
 }
 

@@ -12,6 +12,7 @@ import {
   refreshEnrichment,
   isStreamingId,
   localAlbumFormat,
+  releaseTypeLabel,
   type AlbumVersionSubject,
   type LibraryAlbum,
 } from "@parson/music-sdk";
@@ -32,16 +33,11 @@ import { useMemo, useState } from "react";
 import {
   Download,
   Globe2,
-  ListEnd,
   ListPlus,
-  ListStart,
   Loader2,
   MoreHorizontal,
   Pencil,
   SlidersHorizontal,
-  Pause,
-  Play,
-  Radio,
   Plus,
   RefreshCw,
   ScanSearch,
@@ -51,11 +47,9 @@ import { IdentifyAlbumDialog } from "@/features/library/works/identify-album-dia
 import { GenreChips } from "@/features/library/genres/genre-chips";
 import { AlbumGenresDialog } from "@/features/library/genres/album-genres-dialog";
 import { downloadAlbum } from "@/lib/downloads/download-album";
-import {
-  StartRadioButton,
-  useStartRadio,
-} from "@/features/player/radio/radio-controls";
+import { StartRadioButton } from "@/features/player/radio/radio-controls";
 import { AlbumFormat } from "@/features/player/signal-path-popover";
+import { PlayNowSplit } from "@/features/player/play-now-split";
 import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
 import { useSession } from "@/features/account/session-provider";
 import AlbumEditor, {
@@ -63,7 +57,13 @@ import AlbumEditor, {
 } from "@/features/library/album-editor";
 import { CreditsEditor } from "@/features/library/credits/credits-editor";
 import { BanToggleButton } from "@/features/library/radio-bans";
-import { useAlbum } from "@/features/library/use-library-entity";
+import { useAlbum, useArtist } from "@/features/library/use-library-entity";
+import AlbumCard from "@/features/library/album-card";
+import { ShelfRow } from "@/features/library/home/home-sections";
+import { generatedCover } from "@/features/library/artwork/generated-cover";
+import { rgbString } from "@/features/player/artwork-palette";
+import { useArtworkPalette } from "@/features/player/use-artwork-palette";
+import { useOptionalAppearance } from "@/features/appearance/theme-provider";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import {
   DropdownMenu,
@@ -197,16 +197,19 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     textRef: titleRef,
     wrapped: titleWrapped,
     wrapperRef: titleWrapRef,
-  } = useFitText(album?.name);
+  } = useFitText(album?.name, 30, 76);
 
   const playback = useZonePlayback();
   const { isPlaying, currentSongId, currentAlbumId } = playback;
-  const startRadio = useStartRadio();
 
   const albumCoverURL = useMemo(
     () => getLibraryImageUrl(album?.cover_url, getBaseURL),
     [album?.cover_url],
   );
+  const heroPalette = useArtworkPalette(albumCoverURL);
+  // OLED Black and High Contrast keep the cover's colour out of the page.
+  const backdrop = useOptionalAppearance()?.theme.backdrop ?? "artwork";
+  const artGlow = backdrop === "artwork" || backdrop === "glass";
   const artistIconURL = useMemo(
     () => getLibraryImageUrl(artist?.icon_url, getBaseURL),
     [artist?.icon_url],
@@ -238,30 +241,6 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
     },
     onError: () => toast("Could not add this album."),
   });
-
-  const addAlbumToQueue = () => {
-    if (!album || !artist) {
-      return;
-    }
-    void playback.addToQueue(
-      album.songs.map((song) => ({
-        song,
-        album,
-        artist,
-      })),
-      album.name,
-    );
-  };
-
-  const playAlbumNext = () => {
-    if (!album || !artist) {
-      return;
-    }
-    void playback.playNext(
-      album.songs.map((song) => ({ song, album, artist })),
-      album.name,
-    );
-  };
 
   const saveAlbum = () => {
     if (!album) {
@@ -332,75 +311,96 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const isAlbumPlaying = preferred.playing;
   const titleParts = titleWrapped ? splitQualifiedTitle(album.name) : null;
 
+  const year = releaseYear(album, aboutQuery.data);
+  // Only a named release type (an edit, MusicBrainz or the tags): never a
+  // guess from the track count or running time.
+  const typeLabel = releaseTypeLabel(aboutQuery.data);
+  const heroCover =
+    albumCoverURL ?? generatedCover(album.name, artist?.name ?? "");
+
   return (
-    <div className="tidal-route relative text-zinc-50">
-      <div className="relative mx-auto max-w-225 px-5 pb-24 pt-8 sm:px-7">
-        <div className="mb-8 flex w-full flex-col items-start gap-6 sm:flex-row sm:items-end">
-          {albumCoverURL && (
-            <div className="relative h-44 w-44 shrink-0 overflow-hidden rounded-md border border-white/5 sm:h-52 sm:w-52">
-              <Image
-                src={albumCoverURL}
-                alt={album.name}
-                fill
-                className="object-cover"
-                sizes="208px"
-                priority
-              />
-            </div>
-          )}
+    <div className="relative isolate text-mujin-text">
+      <AlbumHeroBackdrop cover={heroCover} />
+      <div className="relative mx-auto max-w-[1240px] px-5 pb-24 pt-8 sm:px-8 md:pt-12 lg:px-12">
+        <div className="mb-9 grid w-full gap-7 md:grid-cols-[minmax(220px,340px)_minmax(0,1fr)] md:items-end lg:grid-cols-[minmax(260px,380px)_minmax(0,1fr)] lg:gap-12">
+          <div
+            className="relative aspect-square w-full max-w-[300px] shrink-0 overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1 md:max-w-none"
+            style={{
+              boxShadow: artGlow
+                ? `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 40px 90px -36px ${rgbString(heroPalette.glow, 0.6)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`
+                : "0 0 0 1px var(--color-mujin-border), 0 24px 50px -26px rgb(0 0 0 / 0.9)",
+            }}
+          >
+            <Image
+              src={heroCover}
+              alt={album.name}
+              fill
+              className="object-cover"
+              sizes="(min-width: 1024px) 380px, (min-width: 768px) 340px, 300px"
+              priority
+            />
+          </div>
 
           <div
             ref={titleWrapRef}
             className="flex w-full min-w-0 flex-1 flex-col"
           >
+            <p className="mj-eyebrow mb-3">
+              {[typeLabel, year].filter(Boolean).join(" · ")}
+            </p>
             <h1
               ref={titleRef}
-              className={`mb-5 font-black leading-[0.95] text-white ${titleWrapped ? "text-balance whitespace-normal" : "whitespace-nowrap"}`}
-              style={{ fontSize: titleFontSize, letterSpacing: 0 }}
+              className={`mj-display mb-4 text-mujin-text ${titleWrapped ? "text-balance whitespace-normal" : "whitespace-nowrap"}`}
+              style={{ fontSize: titleFontSize }}
             >
               {titleParts ? (
                 <>
                   <span className="block">{titleParts[0]}</span>
-                  <span className="block">{titleParts[1]}</span>
+                  <span className="block text-mujin-text-secondary">
+                    {titleParts[1]}
+                  </span>
                 </>
               ) : (
                 album.name
               )}
             </h1>
-            <div className="flex items-center gap-2 text-sm font-medium text-zinc-300 flex-wrap">
+            <div className="flex flex-wrap items-center gap-2.5">
               {artistIconURL && (
-                <div className="relative w-6 h-6 rounded-full overflow-hidden">
+                <div className="relative h-7 w-7 overflow-hidden rounded-full">
                   <Image
                     src={artistIconURL}
                     alt={artist.name}
                     fill
                     className="object-cover"
-                    sizes="24px"
+                    sizes="28px"
                   />
                 </div>
               )}
               <Link
                 href={`/artist?id=${artist.id}`}
-                className="text-white hover:underline cursor-pointer font-bold"
+                className="mj-title cursor-pointer text-[1.25rem] text-mujin-text hover:underline md:text-[1.375rem]"
               >
                 {artist.name}
               </Link>
-              {releaseYear(album, aboutQuery.data) && (
-                <>
-                  <span className="text-zinc-500">•</span>
-                  <span title="Original release">
-                    {releaseYear(album, aboutQuery.data)}
-                  </span>
-                </>
-              )}
-              <span className="text-zinc-500">•</span>
+            </div>
+            <div className="mj-tnum mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem] text-mujin-text-secondary">
+              {year && <span title="Original release">{year}</span>}
+              {year && <span className="text-mujin-text-disabled">•</span>}
               <span>
-                {album.songs.length} songs, {formatTotalDuration(totalDuration)}
+                {album.songs.length}{" "}
+                {album.songs.length === 1 ? "track" : "tracks"},{" "}
+                {formatTotalDuration(totalDuration)}
               </span>
               <AlbumFormat audios={album.songs.map((song) => song.audio)} />
+              {album.label && (
+                <>
+                  <span className="text-mujin-text-disabled">•</span>
+                  <span>{album.label}</span>
+                </>
+              )}
             </div>
             <GenreChips
-              className="mt-3"
+              className="mt-4"
               genres={aboutQuery.data?.genres}
               onEdit={
                 session?.role === "admin" && aboutQuery.data
@@ -411,20 +411,13 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
           </div>
         </div>
 
-        <div className="mb-7 flex items-center gap-5">
-          <button
-            aria-label={`${isAlbumPlaying ? "Pause" : "Play"} ${album.name}`}
-            onClick={playAlbum}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100 disabled:opacity-70"
-            disabled={preferred.starting}
-            type="button"
-          >
-            {isAlbumPlaying ? (
-              <Pause className="w-6 h-6 fill-black text-black" />
-            ) : (
-              <Play className="ml-1 w-6 h-6 fill-black text-black" />
-            )}
-          </button>
+        <div className="mb-9 flex flex-wrap items-center gap-3">
+          <PlayNowSplit
+            busy={preferred.starting}
+            onPlayNow={playAlbum}
+            playing={isAlbumPlaying}
+            target={{ kind: "album", id: album.id, name: album.name }}
+          />
           <StartRadioButton
             label={`Start radio from ${album.name}`}
             seed={{ kind: "album", id: album.id }}
@@ -450,33 +443,13 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
             <DropdownMenuTrigger asChild>
               <button
                 aria-label="Album actions"
-                className="text-zinc-400 transition-colors hover:text-white"
+                className="grid h-10 w-10 place-items-center rounded-full border border-white/12 text-mujin-text-secondary transition-colors hover:border-white/25 hover:text-mujin-text"
                 type="button"
               >
-                <MoreHorizontal className="h-8 w-8" />
+                <MoreHorizontal className="h-5 w-5" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onSelect={playAlbum}>
-                <Play className="h-4 w-4 fill-current" />
-                Play
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() =>
-                  void startRadio({ kind: "album", id: album.id })
-                }
-              >
-                <Radio className="h-4 w-4" />
-                Start radio
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={playAlbumNext}>
-                <ListStart className="h-4 w-4" />
-                Play next
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={addAlbumToQueue}>
-                <ListEnd className="h-4 w-4" />
-                Add to queue
-              </DropdownMenuItem>
               {session?.role === "user" && (
                 <DropdownMenuItem onSelect={saveAlbum}>
                   <Download className="h-4 w-4" />
@@ -621,7 +594,7 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
 
         <div
           aria-label="Album sections"
-          className="mb-5 flex gap-6 border-b border-white/10"
+          className="mb-5 flex gap-8 border-b border-white/[0.08]"
           role="tablist"
         >
           {(
@@ -633,10 +606,10 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
             <button
               aria-controls={`album-${key}`}
               aria-selected={tab === key}
-              className={`-mb-px border-b-2 pb-3 text-sm font-semibold uppercase tracking-[0.08em] transition-colors ${
+              className={`-mb-px border-b-2 pb-3 text-[0.75rem] font-semibold uppercase tracking-[0.14em] transition-colors ${
                 tab === key
-                  ? "border-white text-white"
-                  : "border-transparent text-zinc-500 hover:text-zinc-200"
+                  ? "border-mujin-copper text-mujin-text"
+                  : "border-transparent text-mujin-text-tertiary hover:text-mujin-text"
               }`}
               id={`album-tab-${key}`}
               key={key}
@@ -728,7 +701,65 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
 
         {subject && <AlbumVersions subject={subject} />}
         <AlbumVersionsStrip albumId={album.id} />
+        <MoreByArtist albumId={album.id} artist={artist} />
       </div>
     </div>
+  );
+}
+
+/** The cover, blurred and faded into the canvas behind the album header. */
+function AlbumHeroBackdrop({ cover }: { cover: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[620px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
+    >
+      <div
+        className="mj-art-backdrop opacity-50!"
+        style={{ backgroundImage: `url("${cover}")` }}
+      />
+      <div className="absolute inset-0 bg-linear-to-b from-mujin-base/30 via-mujin-base/70 to-mujin-base" />
+    </div>
+  );
+}
+
+/** Roon's "More by" strip: the artist's other albums in the library. */
+function MoreByArtist({
+  albumId,
+  artist,
+}: {
+  albumId: string;
+  artist: Artist;
+}) {
+  const artistQuery = useArtist(artist.id);
+  const albums = (artistQuery.data?.albums ?? []).filter(
+    (other) => other.id !== albumId && (other.songs?.length ?? 1) > 0,
+  );
+  if (!albums.length) return null;
+  return (
+    <section className="mt-16">
+      <ShelfRow
+        action={{
+          href: `/artist?id=${encodeURIComponent(artist.id)}`,
+          label: "Artist",
+        }}
+        eyebrow={artist.name}
+        title={`More by ${artist.name}`}
+      >
+        {albums.slice(0, 12).map((other) => (
+          <div className="min-w-0 snap-start" key={other.id}>
+            <AlbumCard
+              album_cover={other.cover_url}
+              album_id={other.id}
+              album_name={other.name}
+              artist_id={artist.id}
+              artist_name={artist.name}
+              first_release_date={other.first_release_date}
+              showYear
+            />
+          </div>
+        ))}
+      </ShelfRow>
+    </section>
   );
 }

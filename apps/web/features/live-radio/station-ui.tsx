@@ -47,7 +47,7 @@ export function LiveBadge({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-red-300 ring-1 ring-inset ring-red-400/30",
+        "inline-flex items-center gap-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-[0.12em] text-red-300 ring-1 ring-inset ring-red-400/30",
         className,
       )}
     >
@@ -70,7 +70,7 @@ export function QualityBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-[5px] border px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide tabular-nums",
+        "inline-flex items-center rounded-[5px] border px-1.5 py-[1px] text-[0.625rem] font-semibold uppercase tracking-wide tabular-nums",
         QUALITY_BADGE_CLASSES[quality.tier],
         className,
       )}
@@ -112,7 +112,7 @@ export function StationArtwork({
   return (
     <div
       className={cn(
-        "relative aspect-square overflow-hidden bg-zinc-900 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]",
+        "relative aspect-square overflow-hidden bg-zinc-900 shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.07)]",
         rounded,
         className,
       )}
@@ -120,7 +120,7 @@ export function StationArtwork({
         logo
           ? undefined
           : {
-              backgroundImage: `radial-gradient(circle at 25% 20%, rgba(255,255,255,0.18), transparent 55%), linear-gradient(140deg, ${monogram.from}, ${monogram.to})`,
+              backgroundImage: `radial-gradient(circle at 25% 20%, rgb(var(--mj-ink)/0.18), transparent 55%), linear-gradient(140deg, ${monogram.from}, ${monogram.to})`,
             }
       }
     >
@@ -206,7 +206,7 @@ function PlayOverlay({ station }: { station: LiveStation }) {
   return (
     <>
       {current && (
-        <span className="absolute left-2 top-2 inline-flex items-center gap-1.5 rounded-full bg-black/70 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white backdrop-blur">
+        <span className="absolute left-2 top-2 inline-flex items-center gap-1.5 rounded-full bg-black/70 px-2 py-1 text-[0.625rem] font-bold uppercase tracking-wider text-white backdrop-blur">
           <OnAirBars paused={!playing} />
           {playing ? "On air" : "Paused"}
         </span>
@@ -214,7 +214,7 @@ function PlayOverlay({ station }: { station: LiveStation }) {
       <button
         aria-label={playing ? `Pause ${station.name}` : `Play ${station.name}`}
         className={cn(
-          "absolute bottom-2.5 right-2.5 grid h-11 w-11 place-items-center rounded-full bg-white text-black shadow-xl shadow-black/50 transition-all duration-200 hover:scale-105 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60",
+          "absolute bottom-2.5 right-2.5 grid h-11 w-11 place-items-center rounded-full mj-primary shadow-xl shadow-black/50 motion-safe:hover:scale-105 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60",
           current
             ? "translate-y-0 opacity-100"
             : "translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100",
@@ -277,12 +277,12 @@ export function StationCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <QualityBadge quality={station.quality} />
             {station.hls && (
-              <span className="rounded-[5px] border border-white/10 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+              <span className="rounded-[5px] border border-white/10 px-1.5 py-[1px] text-[0.625rem] font-semibold uppercase tracking-wide text-zinc-400">
                 HLS
               </span>
             )}
             {station.online === false && (
-              <span className="text-[10px] font-medium text-amber-300/80">
+              <span className="text-[0.625rem] font-medium text-amber-300/80">
                 Offline lately
               </span>
             )}
@@ -403,12 +403,12 @@ export function CategoryTile({
   return (
     <Link
       className={cn(
-        "group relative isolate flex overflow-hidden rounded-xl p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)] transition-transform duration-300 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+        "group relative isolate flex overflow-hidden rounded-xl p-4 shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.08)] transition-transform duration-300 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
         large ? "h-36 items-end md:h-44" : "h-24 items-end md:h-28",
       )}
       href={href}
       style={{
-        backgroundImage: `radial-gradient(120% 90% at 100% 0%, rgba(255,255,255,0.22), transparent 55%), radial-gradient(80% 80% at 0% 100%, rgba(0,0,0,0.55), transparent 70%), linear-gradient(135deg, ${from}, ${to})`,
+        backgroundImage: `radial-gradient(120% 90% at 100% 0%, rgb(var(--mj-ink)/0.22), transparent 55%), radial-gradient(80% 80% at 0% 100%, rgba(0,0,0,0.55), transparent 70%), linear-gradient(135deg, ${from}, ${to})`,
       }}
     >
       <span className="pointer-events-none absolute -right-3 -top-3 text-white/15 transition-transform duration-500 group-hover:rotate-6 group-hover:scale-110">

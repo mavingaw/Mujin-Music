@@ -8,6 +8,9 @@ use crate::library::state::{LibraryCache, LibraryLifecycle, library_unavailable_
 use crate::persistence::connection::DbPool;
 
 use super::album::ResponseAlbum;
+use super::home_discovery::{
+    BestYears, DailyPicks, HomeAlbum, HomeArtist, HomeGenre, LibraryProfile, ListeningContext,
+};
 use super::song::{ResponseSong, SongInfo, fetch_random_songs, fetch_song_info_from_cache};
 use super::user::fetch_recommended_song_ids;
 
@@ -27,6 +30,58 @@ struct HomeResponse {
     shuffle: Vec<ResponseSong>,
     albums: Vec<ResponseAlbum>,
     stats: LibraryStats,
+    /// Lossless / high-resolution share, composers, genres and hours.
+    profile: LibraryProfile,
+    recently_added: Vec<HomeAlbum>,
+    daily_picks: DailyPicks,
+    new_for_you: Vec<HomeAlbum>,
+    similar_artists: Vec<HomeArtist>,
+    best_years: Option<BestYears>,
+    genres: Vec<HomeGenre>,
+    /// What this listener has actually played, from their listening
+    /// history (the library's own length is `profile.total_duration_seconds`).
+    listening: ListeningTotals,
+}
+
+/// The listener's plays and time listened, all time.
+#[derive(Serialize, Debug, Default, PartialEq, diesel::QueryableByName)]
+struct ListeningTotals {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    plays: i64,
+    #[diesel(sql_type = diesel::sql_types::Double)]
+    listened_seconds: f64,
+}
+
+fn listening_totals(
+    connection: &mut diesel::SqliteConnection,
+    user_id: i32,
+) -> diesel::QueryResult<ListeningTotals> {
+    use diesel::RunQueryDsl;
+    diesel::sql_query(
+        "SELECT COUNT(*) AS plays,
+                CAST(COALESCE(SUM(COALESCE(duration_seconds, 0)), 0) AS REAL) AS listened_seconds
+         FROM listen_history_item WHERE user_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(user_id)
+    .get_result(connection)
+}
+
+/// Album ids, newest first, by when the catalog first saw them.
+fn recently_added_album_ids(pool: &DbPool, limit: i64) -> Vec<String> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        id: String,
+    }
+    use diesel::RunQueryDsl;
+    let Ok(mut connection) = pool.get() else {
+        return Vec::new();
+    };
+    diesel::sql_query("SELECT id FROM album_entity ORDER BY created_at DESC, rowid DESC LIMIT ?")
+        .bind::<diesel::sql_types::BigInt, _>(limit)
+        .load::<Row>(&mut connection)
+        .map(|rows| rows.into_iter().map(|row| row.id).collect())
+        .unwrap_or_default()
 }
 
 fn hydrate(song_ids: impl IntoIterator<Item = String>, cache: &LibraryCache) -> Vec<ResponseSong> {
@@ -171,8 +226,9 @@ async fn home(
     };
 
     let history =
-        crate::recommendation::recent_playback_ids(user_id as i32, &pool, SECTION_SIZE as i64)
+        crate::recommendation::recent_playback_ids(user_id as i32, &pool, SECTION_SIZE as i64 * 4)
             .unwrap_or_default();
+    let context = ListeningContext::from_history(&history, &cache);
     let continue_listening = hydrate(history, &cache);
 
     let recommendation_ids =
@@ -201,6 +257,42 @@ async fn home(
         albums = discovery_albums(&cache);
     }
 
+    let user_key = user_id.to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let added_ids = {
+        let pool = pool.get_ref().clone();
+        web::block(move || recently_added_album_ids(&pool, 64))
+            .await
+            .unwrap_or_default()
+    };
+    let recently_added = super::home_discovery::recently_added(&cache, &added_ids);
+    let listening = {
+        let pool = pool.get_ref().clone();
+        web::block(move || {
+            let mut connection = pool.get().map_err(|error| error.to_string())?;
+            listening_totals(&mut connection, user_id as i32).map_err(|error| error.to_string())
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+    };
+    let mut similar_artists =
+        super::home_discovery::similar_artists(&cache, &context, &user_key, &today);
+    let mut best_years = super::home_discovery::best_years(&cache, &context, &user_key, &today);
+    let mut genres = super::home_discovery::genre_tiles(&cache);
+    let with_photos = super::editorial::credited_images(
+        pool.get_ref().clone(),
+        super::home_discovery::photo_candidates(&similar_artists, best_years.as_ref(), &genres),
+    )
+    .await;
+    super::home_discovery::attach_photos(
+        &with_photos,
+        &mut similar_artists,
+        best_years.as_mut(),
+        &mut genres,
+    );
+
     HttpResponse::Ok().json(HomeResponse {
         continue_listening,
         recommended,
@@ -211,7 +303,40 @@ async fn home(
             album_count: cache.album_count(),
             artist_count: cache.artists.len(),
         },
+        profile: super::home_discovery::library_profile(&cache),
+        recently_added,
+        daily_picks: super::home_discovery::daily_picks(&cache, &context, &user_key, &today),
+        new_for_you: super::home_discovery::new_for_you(&cache, &context),
+        similar_artists,
+        best_years,
+        genres,
+        listening,
     })
+}
+
+/// Artists in the library sharing genres with this one (artist page).
+#[get("/{id}/similar")]
+pub async fn get_similar_artists(
+    id: web::Path<String>,
+    lifecycle: web::Data<LibraryLifecycle>,
+    pool: web::Data<DbPool>,
+) -> HttpResponse {
+    let cache = match lifecycle.cache().await {
+        Ok(cache) => cache,
+        Err(readiness) => return library_unavailable_response(readiness),
+    };
+    let mut similar = super::home_discovery::similar_to(
+        &cache,
+        &id.into_inner(),
+        super::home_discovery::ROW_SIZE,
+    );
+    let with_photos = super::editorial::credited_images(
+        pool.get_ref().clone(),
+        super::home_discovery::photo_candidates(&similar, None, &[]),
+    )
+    .await;
+    super::home_discovery::attach_photos(&with_photos, &mut similar, None, &mut []);
+    HttpResponse::Ok().json(similar)
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -220,6 +345,43 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn listening_time_counts_what_was_played_not_the_library_length() {
+        use diesel::Connection;
+        use diesel::connection::SimpleConnection;
+        use diesel_migrations::MigrationHarness;
+        let mut connection = diesel::SqliteConnection::establish(":memory:").unwrap();
+        connection
+            .run_pending_migrations(crate::persistence::connection::MIGRATIONS)
+            .unwrap();
+        connection
+            .batch_execute(
+                "INSERT INTO user(id, username, password) VALUES (1, 'one', 'x'), (2, 'two', 'x');",
+            )
+            .unwrap();
+        // Nothing played yet: zero, whatever the library holds.
+        assert_eq!(
+            super::listening_totals(&mut connection, 1).unwrap(),
+            super::ListeningTotals::default()
+        );
+        connection
+            .batch_execute(
+                "INSERT INTO listen_history_item (user_id, song_id, listened_at, duration_seconds)
+                 VALUES (1, 's1', '2026-10-01 10:00:00', 300),
+                        (1, 's2', '2026-10-01 10:05:00', 240.5),
+                        (1, 's3', '2026-10-01 10:10:00', NULL),
+                        (2, 's9', '2026-10-01 10:00:00', 999);",
+            )
+            .unwrap();
+        assert_eq!(
+            super::listening_totals(&mut connection, 1).unwrap(),
+            super::ListeningTotals {
+                plays: 3,
+                listened_seconds: 540.5,
+            }
+        );
+    }
+
     use std::collections::HashMap;
     use std::sync::Arc;
 

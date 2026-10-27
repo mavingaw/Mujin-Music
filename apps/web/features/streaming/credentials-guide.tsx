@@ -47,7 +47,7 @@ export function CredentialsGuide() {
           <li>
             Sign in at{" "}
             <a
-              className="text-sky-300 hover:text-sky-200"
+              className="text-mujin-copper hover:text-mujin-copper-hover"
               href="https://developer.tidal.com/dashboard"
               rel="noreferrer"
               target="_blank"
@@ -92,7 +92,7 @@ export function CredentialsGuide() {
             Qobuz has no self-service keys. Write to Qobuz&apos;s API team,
             using the contact in its{" "}
             <a
-              className="text-sky-300 hover:text-sky-200"
+              className="text-mujin-copper hover:text-mujin-copper-hover"
               href="https://github.com/Qobuz/api-documentation"
               rel="noreferrer"
               target="_blank"
@@ -123,7 +123,7 @@ export function CredentialsGuide() {
           quality through this proxy. It fails unless the whole track arrives in
           the announced format. Run it once on your computer:
         </p>
-        <pre className="mt-2 overflow-x-auto rounded-lg bg-white/6 px-3 py-2 text-[12px] leading-5 text-zinc-300">
+        <pre className="mt-2 overflow-x-auto rounded-lg bg-white/6 px-3 py-2 text-[0.75rem] leading-5 text-zinc-300">
           cargo test -p parson-music live_accounts -- --ignored --nocapture
         </pre>
         <p className="mt-2">
@@ -145,7 +145,7 @@ function GuideSection({
   children: ReactNode;
 }) {
   return (
-    <details className="group rounded-xl border border-white/8 px-4 py-3 text-[13px] leading-5 text-zinc-400">
+    <details className="group rounded-xl border border-white/8 px-4 py-3 text-[0.8125rem] leading-5 text-zinc-400">
       <summary className="flex cursor-pointer list-none items-center gap-2 font-medium text-zinc-200">
         <ChevronRight
           aria-hidden="true"

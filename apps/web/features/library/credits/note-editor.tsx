@@ -24,7 +24,7 @@ export function NoteEditor({
   if (!editing && note) {
     return (
       <div className="space-y-3">
-        <p className="whitespace-pre-wrap text-[15px] leading-7 text-zinc-300">
+        <p className="whitespace-pre-wrap text-[0.9375rem] leading-7 text-zinc-300">
           {note.body}
         </p>
         <div className="flex items-center gap-3 text-xs text-zinc-500">

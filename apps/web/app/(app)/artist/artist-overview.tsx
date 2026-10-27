@@ -17,6 +17,7 @@ import { NotableWorkCard } from "./artist-compositions";
 import { NoteEditor } from "@/features/library/credits/note-editor";
 import { lifeSpanFacts } from "@/features/library/credits/credit-roles";
 import { roleFilterKey, roleSummaryLabel } from "./artist-credits";
+import { mainArtistDetail } from "@/features/library/artist-roles";
 
 /** Biography, facts, credit roles and the listener's note. */
 export function ArtistOverview({
@@ -25,10 +26,15 @@ export function ArtistOverview({
   onShowCredits,
   works,
   onShowCompositions,
+  ownWork,
+  onShowDiscography,
 }: {
   about: ArtistAbout;
   isAdmin: boolean;
   onShowCredits: (filter: string | null) => void;
+  /** Their own albums and tracks in the library, as main artist. */
+  ownWork?: { albums: number; tracks: number };
+  onShowDiscography?: () => void;
   /** A composer's works, for "Notable compositions". */
   works?: ComposerWorks;
   onShowCompositions?: () => void;
@@ -65,7 +71,7 @@ export function ArtistOverview({
                 about.enrichment.task?.status === "pending" ? (
                   enrichmentWaitingLabel(about.enrichment.task, "artist")
                 ) : (
-                  "No biography was found for this artist."
+                  `Wikipedia has no article about ${about.name} yet, so there is no biography to show.`
                 )
               ) : isAdmin ? (
                 <>
@@ -110,12 +116,24 @@ export function ArtistOverview({
           </section>
         )}
 
-        {about.roles.length > 0 && (
+        {(about.roles.length > 0 || Boolean(ownWork?.albums)) && (
           <section aria-label="Credits summary">
             <h3 className="mb-4 text-xl font-semibold text-white">
               Credited as
             </h3>
             <div className="flex flex-wrap gap-2">
+              {ownWork && ownWork.albums > 0 && (
+                <button
+                  className="rounded-full bg-white/6 px-3.5 py-1.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-white/10 hover:text-white"
+                  onClick={onShowDiscography}
+                  type="button"
+                >
+                  Main artist
+                  <span className="ml-2 text-xs text-zinc-500">
+                    {mainArtistDetail(ownWork)}
+                  </span>
+                </button>
+              )}
               {about.roles.map((summary) => {
                 const { label, detail } = roleSummaryLabel(summary);
                 return (

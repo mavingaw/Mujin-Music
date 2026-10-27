@@ -81,3 +81,16 @@ enc 44100 stereo -c:a aac -b:a 128k aac-adts-44k-stereo.aac
 # WAV with RIFF INFO tags and AIFF with an ID3 chunk.
 tagged 44100 stereo -c:a pcm_s16le wav-tagged-44k-16bit-stereo.wav
 tagged 44100 stereo -c:a pcm_s16be -write_id3v2 1 aiff-tagged-44k-16bit-stereo.aiff
+
+# The lyrics test track: FLAC 48 kHz / 24-bit stereo whose Vorbis LYRICS
+# comment holds an LRC file (tags, an offset, a repeated stamp, a break).
+enc 48000 stereo -c:a flac -sample_fmt s32 -bits_per_raw_sample 24 \
+  -metadata "LYRICS=[ti:Fixture]
+[ar:Fixture Artist]
+[offset:0]
+[00:00.00][00:09.50]Every line arrives on time
+[00:02.25]The current one is lit
+[00:04.50]The next ones wait in the dark
+[00:06.75]
+[00:07.00]<00:07.00>Word <00:07.40>stamps <00:07.80>are <00:08.10>dropped" \
+  flac-48k-24bit-embedded-lrc.flac

@@ -174,11 +174,11 @@ export default function LikedSongsDetails() {
         Playlists
       </Link>
       <header className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-end">
-        <div className="grid h-40 w-40 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-rose-500 to-fuchsia-800 text-white shadow-2xl shadow-black sm:h-48 sm:w-48">
+        <div className="grid h-40 w-40 shrink-0 place-items-center rounded-xl bg-[radial-gradient(120%_120%_at_20%_10%,#e6a27a_0%,#a85d30_45%,#2a1810_100%)] text-mujin-text shadow-2xl shadow-black sm:h-48 sm:w-48">
           <Heart className="h-16 w-16 fill-current sm:h-20 sm:w-20" />
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="break-words text-4xl font-black text-white sm:text-5xl">
+          <h1 className="break-words text-4xl mj-display text-mujin-text sm:text-5xl">
             Liked Songs
           </h1>
           <p className="mt-3 text-sm text-zinc-500">

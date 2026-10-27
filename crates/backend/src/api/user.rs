@@ -1537,6 +1537,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(remove_favorite_song)
             .service(add_playback_event)
             .service(set_bitrate)
+            .configure(crate::api::appearance::configure)
             .service(get_now_playing)
             .service(set_now_playing)
             .service(get_user_info)

@@ -95,7 +95,10 @@ export default function ListenLaterScreen() {
           keyExtractor={(row) => row.key}
           ListEmptyComponent={
             page.isPending ? (
-              <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+              <ActivityIndicator
+                color={palette.text}
+                style={{ marginTop: 40 }}
+              />
             ) : (
               <View style={styles.empty}>
                 <Clock color={palette.accent} size={36} />

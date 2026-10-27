@@ -38,7 +38,7 @@ import {
 } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { volumeLevelingOptions } from "@/lib/signal-path";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
@@ -536,7 +536,7 @@ function StageRow({
     >
       <View style={styles.rail}>
         <View style={styles.iconRing}>
-          <Icon color="#d4d4d8" size={16} />
+          <Icon color={palette.secondary} size={16} />
         </View>
         {!last ? <View style={styles.railLine} /> : null}
       </View>
@@ -570,24 +570,24 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.borderStrong,
-    backgroundColor: "rgba(255,255,255,0.05)",
+    backgroundColor: tint(0.05),
   },
   badgeQuality: { fontSize: 13, fontWeight: "700" },
   badgeFormat: { flexShrink: 1, color: palette.secondary, fontSize: 13 },
   hiRes: {
     borderWidth: 1,
-    borderColor: "#c9a2ff",
+    borderColor: palette.accentSoft,
     borderRadius: 4,
     paddingHorizontal: 3,
   },
   hiResText: {
-    color: "#c9a2ff",
+    color: palette.accentSoft,
     fontSize: 9,
     fontWeight: "800",
     letterSpacing: 0.5,
   },
   content: { paddingHorizontal: 20, paddingBottom: 4 },
-  heading: { color: "white", fontSize: 19, fontWeight: "800" },
+  heading: { color: palette.text, fontSize: 19, fontWeight: "800" },
   subtitle: { color: palette.secondary, fontSize: 13, marginTop: 3 },
   bitPerfect: {
     flexDirection: "row",
@@ -604,7 +604,7 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
+    borderColor: tint(0.16),
     backgroundColor: palette.elevatedStrong,
     alignItems: "center",
     justifyContent: "center",
@@ -612,11 +612,11 @@ const styles = StyleSheet.create({
   railLine: {
     flex: 1,
     width: StyleSheet.hairlineWidth * 2,
-    backgroundColor: "rgba(255,255,255,0.14)",
+    backgroundColor: tint(0.14),
   },
   stageText: { flex: 1, paddingTop: 2, paddingBottom: 12 },
   stageTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  stageTitle: { color: "white", fontSize: 15, fontWeight: "700" },
+  stageTitle: { color: palette.text, fontSize: 15, fontWeight: "700" },
   stageDetail: { fontSize: 14, marginTop: 2 },
   stageExplanation: {
     color: palette.secondary,
@@ -640,11 +640,11 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: palette.border,
   },
-  levelingLabel: { color: "white", fontSize: 14, fontWeight: "600" },
+  levelingLabel: { color: palette.text, fontSize: 14, fontWeight: "600" },
   segments: {
     flexDirection: "row",
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: tint(0.08),
     padding: 2,
   },
   segment: {
@@ -653,9 +653,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     justifyContent: "center",
   },
-  segmentActive: { backgroundColor: "white" },
+  segmentActive: { backgroundColor: palette.text },
   segmentText: { color: palette.secondary, fontSize: 12, fontWeight: "600" },
-  segmentTextActive: { color: "black" },
+  segmentTextActive: { color: palette.background },
   dsp: {
     gap: 6,
     marginTop: 8,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  effectiveDuration,
   boundedMediaPosition,
   boundedVolume,
   isCurrentTrackGeneration,
@@ -59,5 +60,23 @@ describe("async playback generations", () => {
     expect(isCurrentTrackGeneration(3, 4, "song-a", "song-a")).toBeFalse();
     expect(isCurrentTrackGeneration(4, 4, "song-a", "song-b")).toBeFalse();
     expect(isCurrentTrackGeneration(4, 4)).toBeTrue();
+  });
+});
+
+describe("effectiveDuration", () => {
+  test("a converted stream with no length shows the library's length", () => {
+    // ALAC 24/192 converted to FLAC while it plays: Infinity, then NaN.
+    expect(effectiveDuration(Infinity, 35.2)).toBe(35.2);
+    expect(effectiveDuration(Number.NaN, 35.2)).toBe(35.2);
+    expect(effectiveDuration(0, 35.2)).toBe(35.2);
+    // Only the first seconds have arrived.
+    expect(effectiveDuration(4.1, 35.2)).toBe(35.2);
+  });
+
+  test("a real media length wins", () => {
+    expect(effectiveDuration(35.0, 35.2)).toBe(35.0);
+    expect(effectiveDuration(240, undefined)).toBe(240);
+    expect(effectiveDuration(Infinity, undefined)).toBe(0);
+    expect(effectiveDuration(Number.NaN, 0)).toBe(0);
   });
 });

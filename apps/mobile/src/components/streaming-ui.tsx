@@ -48,7 +48,7 @@ export function SourceTag({
           style={[
             styles.markText,
             large && styles.markTextLarge,
-            provider === "tidal" && { color: "black" },
+            provider === "tidal" && { color: palette.background },
           ]}
         >
           {provider === "tidal" ? "T" : "Q"}
@@ -148,10 +148,10 @@ export function LibraryToggle({
       style={wide ? styles.libraryWide : styles.libraryCompact}
     >
       {toggle.isPending ? (
-        <ActivityIndicator color="white" size="small" />
+        <ActivityIndicator color={palette.text} size="small" />
       ) : (
         <Icon
-          color={showIn ? palette.success : "white"}
+          color={showIn ? palette.success : palette.text}
           size={wide ? 17 : 18}
         />
       )}
@@ -291,24 +291,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   markLarge: { width: 22, height: 22, borderRadius: 6 },
-  tidalMark: { backgroundColor: "white" },
+  tidalMark: { backgroundColor: palette.text },
   qobuzMark: { backgroundColor: "#3e8ef7" },
-  markText: { color: "white", fontSize: 9, fontWeight: "900" },
+  markText: { color: palette.text, fontSize: 9, fontWeight: "900" },
   markTextLarge: { fontSize: 13 },
   sourceName: { color: palette.secondary, fontSize: 12, fontWeight: "700" },
-  sourceNameLarge: { color: "white", fontSize: 15 },
+  sourceNameLarge: { color: palette.text, fontSize: 15 },
   format: {
-    color: "#bae6fd",
+    color: "#c9e0ec",
     fontSize: 11,
     fontWeight: "800",
     borderWidth: 1,
-    borderColor: "rgba(125,211,252,0.3)",
+    borderColor: "rgba(169,209,230,0.3)",
     borderRadius: 5,
     paddingHorizontal: 5,
     paddingVertical: 1,
     overflow: "hidden",
   },
-  formatHiRes: { color: "#fde68a", borderColor: "rgba(252,211,77,0.35)" },
+  formatHiRes: { color: palette.brass, borderColor: "rgba(230,197,153,0.35)" },
   libraryCompact: {
     width: 40,
     height: 40,
@@ -325,7 +325,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  libraryWideText: { color: "white", fontWeight: "700", fontSize: 14 },
+  libraryWideText: { color: palette.text, fontWeight: "700", fontSize: 14 },
   row: {
     minHeight: 64,
     flexDirection: "row",
@@ -346,7 +346,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontVariant: ["tabular-nums"],
   },
-  title: { color: "white", fontWeight: "700", fontSize: 15 },
+  title: { color: palette.text, fontWeight: "700", fontSize: 15 },
   subtitleRow: {
     flexDirection: "row",
     alignItems: "center",

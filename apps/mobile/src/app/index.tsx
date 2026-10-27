@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -29,6 +30,8 @@ export default function EntryScreen() {
   const [password, setPassword] = useState("");
   const [libraryPath, setLibraryPath] = useState("");
   const [showCustomFolder, setShowCustomFolder] = useState(false);
+  // First-run online metadata: on unless the person turns it off here.
+  const [onlineMetadata, setOnlineMetadata] = useState(true);
   const [passwordLoginOrigin, setPasswordLoginOrigin] = useState<string | null>(
     null,
   );
@@ -139,7 +142,7 @@ export default function EntryScreen() {
           {detail ? <Text style={styles.detail}>{detail}</Text> : null}
           {busy && (
             <ActivityIndicator
-              color="white"
+              color={palette.text}
               size="small"
               style={styles.spinner}
             />
@@ -232,6 +235,30 @@ export default function EntryScreen() {
                     <Text style={styles.folderLabel}>Music folder</Text>
                     <Text style={styles.folderPath}>{libraryTarget}</Text>
                   </View>
+                  <View style={[styles.folderCard, styles.metadataCard]}>
+                    <View style={styles.metadataRow}>
+                      <Text style={[styles.folderLabel, { flex: 1 }]}>
+                        Artist photos, biographies and reviews
+                      </Text>
+                      <Switch
+                        accessibilityLabel="Look up artist photos, biographies and reviews online"
+                        ios_backgroundColor={palette.border}
+                        onValueChange={setOnlineMetadata}
+                        thumbColor={palette.text}
+                        trackColor={{
+                          false: palette.border,
+                          true: palette.accent,
+                        }}
+                        value={onlineMetadata}
+                      />
+                    </View>
+                    <Text style={styles.folderPath}>
+                      Looks your artists and albums up on MusicBrainz, then
+                      reads biographies and reviews from Wikipedia and photos
+                      from Wikimedia Commons. Only artist and album names leave
+                      the server.
+                    </Text>
+                  </View>
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || !libraryTarget}
@@ -239,7 +266,11 @@ export default function EntryScreen() {
                       styles.primary,
                       (busy || !libraryTarget) && styles.disabledPrimary,
                     ]}
-                    onPress={() => void session.setupLibrary(libraryTarget)}
+                    onPress={() =>
+                      void session.setupLibrary(libraryTarget, {
+                        onlineMetadata,
+                      })
+                    }
                   >
                     <Text style={styles.primaryText}>Use this folder</Text>
                   </Pressable>
@@ -330,14 +361,14 @@ export default function EntryScreen() {
                     enter this code, and approve this phone.
                   </Text>
                   <ActivityIndicator
-                    color="white"
+                    color={palette.text}
                     size="small"
                     style={styles.pairingSpinner}
                   />
                 </View>
               ) : (
                 <View style={styles.pairingLoading}>
-                  <ActivityIndicator color="white" size="small" />
+                  <ActivityIndicator color={palette.text} size="small" />
                   <Text style={styles.discoveryStatus}>
                     Creating a secure pairing code…
                   </Text>
@@ -501,7 +532,7 @@ export default function EntryScreen() {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: "black",
+    backgroundColor: palette.background,
   },
   scroll: { width: "100%" },
   scrollContent: {
@@ -518,7 +549,7 @@ const styles = StyleSheet.create({
   },
   logo: { width: 72, height: 72, borderRadius: 18, marginBottom: 26 },
   heading: {
-    color: "white",
+    color: palette.text,
     fontSize: 28,
     fontWeight: "800",
     letterSpacing: -0.6,
@@ -540,20 +571,25 @@ const styles = StyleSheet.create({
     backgroundColor: palette.elevatedStrong,
     borderWidth: 1,
     borderColor: palette.border,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 16,
     fontSize: 16,
   },
   primary: {
     height: 52,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 26,
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryText: { color: "black", fontSize: 16, fontWeight: "800" },
+  primaryText: { color: palette.background, fontSize: 16, fontWeight: "800" },
   disabledPrimary: { opacity: 0.62 },
-  link: { color: "white", textAlign: "center", fontWeight: "700", padding: 12 },
+  link: {
+    color: palette.text,
+    textAlign: "center",
+    fontWeight: "700",
+    padding: 12,
+  },
   secondaryLink: {
     color: palette.secondary,
     textAlign: "center",
@@ -576,7 +612,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
   },
   pairingCode: {
-    color: "white",
+    color: palette.text,
     fontSize: 38,
     fontWeight: "900",
     letterSpacing: 4,
@@ -620,7 +656,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
   },
   libraryCardPressed: { opacity: 0.78 },
-  libraryName: { color: "white", fontSize: 16, fontWeight: "800" },
+  libraryName: { color: palette.text, fontSize: 16, fontWeight: "800" },
   libraryAddress: { color: palette.muted, fontSize: 13, marginTop: 4 },
   folderCard: {
     borderRadius: 12,
@@ -630,19 +666,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
   },
-  folderLabel: { color: "white", fontSize: 14, fontWeight: "700" },
+  folderLabel: { color: palette.text, fontSize: 14, fontWeight: "700" },
+  metadataCard: { marginTop: 12 },
+  metadataRow: { alignItems: "center", flexDirection: "row", gap: 12 },
   folderPath: { color: palette.muted, fontSize: 14, marginTop: 4 },
-  error: { color: "#fb7185", textAlign: "center", marginTop: 16 },
+  error: { color: palette.danger, textAlign: "center", marginTop: 16 },
   failureCard: {
     width: "100%",
     marginTop: 22,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#713f12",
+    borderColor: "#55432b",
     backgroundColor: "#1c1408",
     padding: 18,
   },
-  failureTitle: { color: "white", fontSize: 19, fontWeight: "800" },
+  failureTitle: { color: palette.text, fontSize: 19, fontWeight: "800" },
   failureBody: {
     color: palette.secondary,
     fontSize: 14,

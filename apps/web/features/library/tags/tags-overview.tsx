@@ -100,7 +100,7 @@ function TagTile({ covers, tag }: { covers: string[]; tag: UserTag }) {
             className={cn("absolute inset-x-0 top-0 h-1 opacity-90", tone.dot)}
           />
           {smart && (
-            <span className="absolute right-2.5 top-3 flex items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-mujin-copper-hover backdrop-blur">
+            <span className="absolute right-2.5 top-3 flex items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[0.6875rem] font-semibold text-mujin-copper-hover backdrop-blur">
               <Sparkles className="h-3 w-3" /> Smart
             </span>
           )}
@@ -160,7 +160,9 @@ export default function TagsOverview() {
             <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               <Hash className="h-3.5 w-3.5" /> Browse
             </p>
-            <h1 className="text-4xl font-black text-white sm:text-5xl">Tags</h1>
+            <h1 className="text-4xl mj-display text-mujin-text sm:text-5xl">
+              Tags
+            </h1>
             <p className="mt-3 text-sm text-zinc-400">
               {tags.isPending
                 ? "Loading…"

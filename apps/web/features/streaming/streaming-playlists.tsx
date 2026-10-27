@@ -83,7 +83,7 @@ function PlaylistTile({
       <div className="relative aspect-square overflow-hidden rounded-md border border-white/5 bg-[#111]">
         <Cover src={cover} title={title} />
         {badge && (
-          <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[10.5px] font-semibold text-white backdrop-blur-md">
+          <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[0.6562rem] font-semibold text-white backdrop-blur-md">
             <Copy aria-hidden="true" className="h-3 w-3" />
             {badge}
           </span>
@@ -144,7 +144,7 @@ export function StreamingPlaylistsSection({
 
   return (
     <div className="space-y-10">
-      <p className="flex items-start gap-2 text-[13px] leading-5 text-zinc-500">
+      <p className="flex items-start gap-2 text-[0.8125rem] leading-5 text-zinc-500">
         <Lock aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         {name} playlists are read-only here; edit them in {name}. Save a copy to
         keep one in Mujin Music and edit it there: rename it, reorder, remove or
@@ -383,7 +383,7 @@ function PlaylistView({
         <div className="min-w-0 flex-1">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <SourceBadge provider={playlist.provider} />
-            <span className="inline-flex items-center gap-1 rounded-[5px] border border-white/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-zinc-400">
+            <span className="inline-flex items-center gap-1 rounded-[5px] border border-white/10 px-1.5 py-0.5 text-[0.6562rem] font-semibold text-zinc-400">
               {copy ? (
                 <>
                   <Copy aria-hidden="true" className="h-3 w-3" />{" "}
@@ -400,7 +400,7 @@ function PlaylistView({
               )}
             </span>
           </div>
-          <h1 className="mb-3 text-balance text-4xl font-black leading-[0.98] text-white sm:text-5xl">
+          <h1 className="mb-3 text-balance text-4xl mj-display leading-[0.98] text-mujin-text sm:text-5xl">
             {playlist.title}
           </h1>
           {playlist.description && (
@@ -423,7 +423,7 @@ function PlaylistView({
       <div className="mb-7 flex flex-wrap items-center gap-3">
         <button
           aria-label={`${playing ? "Pause" : "Play"} ${playlist.title}`}
-          className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100"
+          className="flex h-12 w-12 items-center justify-center rounded-full mj-primary motion-safe:hover:scale-105 hover:bg-zinc-100"
           onClick={() =>
             playing
               ? playback.playTracks(
@@ -440,9 +440,9 @@ function PlaylistView({
           type="button"
         >
           {playing ? (
-            <Pause className="h-6 w-6 fill-black text-black" />
+            <Pause className="h-6 w-6 fill-current" />
           ) : (
-            <Play className="ml-1 h-6 w-6 fill-black text-black" />
+            <Play className="ml-1 h-6 w-6 fill-current" />
           )}
         </button>
         {live && (

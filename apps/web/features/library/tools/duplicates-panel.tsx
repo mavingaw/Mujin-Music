@@ -263,7 +263,7 @@ export function DuplicatesPanel({ jobs }: { jobs: ToolJob[] }) {
                         {copy.kept ? ` into ${copy.kept.album}` : ""}
                       </span>
                     </p>
-                    <p className="truncate font-mono text-[11px] text-zinc-600">
+                    <p className="truncate font-mono text-[0.6875rem] text-zinc-600">
                       {copy.path}
                     </p>
                   </div>
@@ -333,7 +333,7 @@ function GroupSection({
   return (
     <section>
       <div className="mb-3">
-        <h2 className="text-[15px] font-semibold text-white">
+        <h2 className="text-[0.9375rem] font-semibold text-white">
           {title}
           <span className="ml-2 text-sm font-normal tabular-nums text-zinc-500">
             {formatCount(groups.length)}
@@ -413,12 +413,12 @@ function GroupCard({
           {first.title}
           <span className="font-normal text-zinc-500"> · {first.artist}</span>
         </h3>
-        <span className="rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-zinc-400">
+        <span className="rounded-full bg-white/[0.05] px-2 py-0.5 text-[0.6875rem] text-zinc-400">
           {duplicateKindLabel(group.kind)}
         </span>
         <span
           className={cn(
-            "flex items-center gap-1 text-[11px]",
+            "flex items-center gap-1 text-[0.6875rem]",
             group.confidence === "high" ? "text-quality-high" : "text-zinc-500",
           )}
         >
@@ -459,14 +459,14 @@ function GroupCard({
                 <p className="flex items-center gap-2 truncate text-sm text-zinc-100">
                   <span className="truncate">{song.album}</span>
                   {song.id === group.best && (
-                    <span className="flex shrink-0 items-center gap-1 text-[11px] text-mujin-copper-hover">
+                    <span className="flex shrink-0 items-center gap-1 text-[0.6875rem] text-mujin-copper-hover">
                       <Crown className="h-3 w-3" />
                       Best
                     </span>
                   )}
                 </p>
                 <p
-                  className="truncate font-mono text-[11px] text-zinc-600"
+                  className="truncate font-mono text-[0.6875rem] text-zinc-600"
                   title={song.path}
                 >
                   {song.path}
@@ -552,7 +552,7 @@ function CopiesSection({
   return (
     <section>
       <div className="mb-3">
-        <h2 className="text-[15px] font-semibold text-white">
+        <h2 className="text-[0.9375rem] font-semibold text-white">
           One track, several files
           <span className="ml-2 text-sm font-normal tabular-nums text-zinc-500">
             {formatCount(copies.length)}
@@ -607,15 +607,15 @@ function CopiesSection({
                     type="button"
                   >
                     <QualityBadge quality={file.quality} />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-zinc-500">
                       {file.path}
                     </span>
-                    <span className="shrink-0 text-[11px] tabular-nums text-zinc-600">
+                    <span className="shrink-0 text-[0.6875rem] tabular-nums text-zinc-600">
                       {formatBytes(file.size_bytes)}
                     </span>
                     <span
                       className={cn(
-                        "w-14 shrink-0 text-right text-[11px]",
+                        "w-14 shrink-0 text-right text-[0.6875rem]",
                         file.playing
                           ? "text-mujin-copper-hover"
                           : "text-zinc-600",

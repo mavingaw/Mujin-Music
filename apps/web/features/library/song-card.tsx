@@ -7,7 +7,8 @@ import { isExplicitSongTitle } from "./song-presentation";
 import { ArtistCreditLinks } from "./artist-credit-links";
 import type { TrackArtistCreditPart } from "./track-artist-credit";
 import getBaseURL from "@/lib/api/server-url";
-import { defaultCover } from "@/lib/images/default-cover";
+import { generatedCover } from "@/features/library/artwork/generated-cover";
+import PlayIcon from "@/components/icons/play";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -36,9 +37,10 @@ export default function SongCard({
   typeLabel,
 }: SongCardProps) {
   const playback = useZonePlayback();
+  const fallback = generatedCover(album_name || song_name, artist_name);
   const imageSrc = album_cover
     ? `${getBaseURL()}/media/images/${encodeURIComponent(album_cover)}`
-    : defaultCover;
+    : fallback;
   const artist = { id: artist_id, name: artist_name };
   const album = { id: album_id, name: album_name, cover_url: album_cover };
 
@@ -59,30 +61,38 @@ export default function SongCard({
         album_name={album_name}
         album_cover={album_cover}
       >
-        <div className="group min-w-0">
-          <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-[#111]">
+        <div className="mj-card group min-w-0">
+          <div className="mj-artwork relative aspect-square w-full overflow-hidden bg-mujin-surface-1">
             <Image
               src={imageSrc}
               alt={song_name}
               fill
               sizes="(min-width: 1024px) 260px, 42vw"
-              className="cursor-pointer object-cover"
+              className="cursor-pointer object-cover transition-transform duration-500 ease-out motion-safe:group-hover:scale-[1.035]"
               onError={(event) => {
-                event.currentTarget.src = defaultCover;
+                event.currentTarget.src = fallback;
               }}
               onClick={handlePlay}
             />
+            <button
+              aria-label={`Play ${song_name}`}
+              className="mj-card-play mj-primary absolute bottom-2 right-2 grid h-10 w-10 place-items-center rounded-full shadow-[0_8px_24px_-6px_rgba(0,0,0,0.8)]"
+              onClick={handlePlay}
+              type="button"
+            >
+              <PlayIcon className="ml-0.5 h-4 w-4" fill="currentColor" />
+            </button>
           </div>
 
-          <div className="mt-3 min-w-0">
+          <div className="mt-2.5 min-w-0">
             <Link
               href={`/album?id=${album_id}`}
-              className="block truncate text-sm font-semibold leading-5 text-zinc-100 hover:underline"
+              className="block truncate text-[0.8438rem] font-medium leading-5 text-mujin-text hover:underline"
             >
               <SongTitle title={song_name} />
             </Link>
-            <p className="truncate text-sm leading-5 text-zinc-500">
-              {typeLabel && <span>{typeLabel} · </span>}
+            <p className="truncate text-[0.7812rem] leading-5 text-mujin-text-secondary">
+              {typeLabel && <span>{typeLabel}&nbsp;·&nbsp;</span>}
               {isExplicitSongTitle(song_name) && <ExplicitBadge />}
               <ArtistCreditLinks
                 credits={

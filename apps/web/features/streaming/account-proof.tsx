@@ -52,7 +52,7 @@ export function AccountProofChip({
   return (
     <div className="min-w-0">
       <span
-        className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold tracking-wide ring-1 ring-inset ${tone.chip}`}
+        className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[0.7188rem] font-semibold tracking-wide ring-1 ring-inset ${tone.chip}`}
         data-proof={proof.tone}
         title={proof.detail}
       >

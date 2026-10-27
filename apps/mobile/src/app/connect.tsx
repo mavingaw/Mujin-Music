@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 import { useSession } from "@/providers/session-provider";
+import { palette } from "@/constants/colors";
 
 /**
  * Handles `parson://connect?server=…&name=…&id=…`, the link in the QR code a
@@ -41,7 +42,7 @@ export default function ConnectLinkScreen() {
   }, [params, router, session]);
   return (
     <View style={styles.page}>
-      <ActivityIndicator color="white" />
+      <ActivityIndicator color={palette.text} />
     </View>
   );
 }
@@ -51,6 +52,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "black",
+    backgroundColor: palette.background,
   },
 });
