@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   name: { color: "white", fontWeight: "700", fontSize: 15 },
-  description: { color: "#d4d4d8", fontSize: 13, marginTop: 2 },
+  description: { color: "#c7c2b9", fontSize: 13, marginTop: 2 },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 2 },
   recording: {
     flexDirection: "row",

@@ -185,7 +185,7 @@ export default function HomeAssistantSettings() {
 
   return (
     <div className="space-y-8">
-      <section className="overflow-hidden rounded-xl border border-white/10 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(56,189,248,0.14),transparent_55%),radial-gradient(120%_140%_at_100%_100%,rgba(16,185,129,0.10),transparent_50%)] p-5 sm:p-6">
+      <section className="overflow-hidden rounded-xl border border-white/10 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(217,139,95,0.12),transparent_55%),radial-gradient(120%_140%_at_100%_100%,rgba(163,201,139,0.08),transparent_50%)] p-5 sm:p-6">
         <div className="flex items-start gap-4">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-400/15 text-sky-300 ring-1 ring-sky-300/20">
             <House className="h-5 w-5" />

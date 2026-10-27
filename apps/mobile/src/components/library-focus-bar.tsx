@@ -73,8 +73,8 @@ export function LibraryFocusBar({
           ]}
         >
           <Heart
-            color={liked === "include" ? "#fda4af" : "white"}
-            fill={liked === "include" ? "#fda4af" : "transparent"}
+            color={liked === "include" ? "#f9b3af" : "white"}
+            fill={liked === "include" ? "#f9b3af" : "transparent"}
             size={16}
           />
         </Pressable>
@@ -160,8 +160,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   heartOn: {
-    borderColor: "rgba(253,164,175,.6)",
-    backgroundColor: "rgba(244,63,94,.18)",
+    borderColor: "rgba(249,179,175,.6)",
+    backgroundColor: "rgba(242,71,63,.18)",
   },
   heartOff: { opacity: 0.5 },
   chip: {
@@ -178,11 +178,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chipExcluded: {
-    borderColor: "rgba(251,113,133,.45)",
-    backgroundColor: "rgba(244,63,94,.1)",
+    borderColor: "rgba(246,128,122,.45)",
+    backgroundColor: "rgba(242,71,63,.1)",
   },
   chipText: { color: "white", fontSize: 13, fontWeight: "600" },
-  chipExcludedText: { color: "#fecdd3", textDecorationLine: "line-through" },
+  chipExcludedText: { color: "#fbdcda", textDecorationLine: "line-through" },
   count: {
     color: palette.secondary,
     fontSize: 12,

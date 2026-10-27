@@ -10,7 +10,10 @@ import {
   usePlayerShortcuts,
 } from "./player-bar-hooks";
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
-import { PlayerFooter } from "./player-footer";
+import { IdleFooter, PlayerFooter } from "./player-footer";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
+import { generatedCover } from "@/features/library/artwork/generated-cover";
+import { nowPlayingFacts } from "./now-playing-facts";
 import PlayerQueue, { type QueueEditing } from "./player-queue";
 import { timelinePlaybackRate } from "./player-controls-state";
 import { useMediaSession } from "./use-media-session";
@@ -473,6 +476,24 @@ export default function PlayerBar() {
   useCloseLyricsOnNavigation(closeLyrics);
 
   const playerQueue = remote ? remoteQueue : queue;
+  const nextQueueItem = casting
+    ? undefined
+    : playerQueue[(remote ? remote.queue.current_position : currentIndex) + 1];
+  const upNext = nextQueueItem
+    ? {
+        title: displaySongTitle(nextQueueItem.song.name || "Untitled"),
+        artist: nextQueueItem.artist.name || nextQueueItem.song.artist,
+        cover:
+          getLibraryImageUrl(nextQueueItem.album.cover_url, getBaseURL) ??
+          generatedCover(
+            nextQueueItem.album.name || nextQueueItem.song.name,
+            nextQueueItem.artist.name,
+          ),
+      }
+    : null;
+  const nowPlayingDetails = live
+    ? undefined
+    : nowPlayingFacts(effectiveSong, album);
   const selectQueueItem = remote
     ? (index: number) => sendRemote({ command: "jump", queue_position: index })
     : playQueueItem;
@@ -536,11 +557,16 @@ export default function PlayerBar() {
   if (!song.id && !castItem && !remote) {
     // Nothing plays here: keep the zone picker reachable so a remote zone
     // can be chosen and controlled.
-    return zones.zones.length > 1 ? (
-      <div className="fixed bottom-22 right-3 z-50 rounded-full border border-white/10 bg-[#080808] p-1 shadow-2xl md:bottom-5 md:right-5">
-        <ZonePickerButton />
-      </div>
-    ) : null;
+    return (
+      <>
+        <IdleFooter zonePicker={<ZonePickerButton />} />
+        {zones.zones.length > 1 ? (
+          <div className="fixed bottom-[calc(var(--shell-footer)+10px)] right-3 z-50 rounded-full border border-white/10 bg-mujin-surface-1 p-1 shadow-2xl md:hidden">
+            <ZonePickerButton />
+          </div>
+        ) : null}
+      </>
+    );
   }
 
   return (
@@ -614,6 +640,8 @@ export default function PlayerBar() {
           volume={effectiveVolume}
           zonePicker={<ZonePickerButton compact />}
           livePlaying={live ? livePlaying : null}
+          details={nowPlayingDetails}
+          upNext={upNext}
         />
       )}
 
@@ -647,7 +675,7 @@ export default function PlayerBar() {
 
       {error?.startsWith("This audio format") ? (
         <div
-          className="fixed bottom-42 left-1/2 z-80 w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-300/20 bg-zinc-950 p-4 shadow-2xl md:bottom-32 md:left-[calc(50%+40px)]"
+          className="fixed bottom-42 left-1/2 z-80 w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-300/20 bg-mujin-surface-2 p-4 shadow-2xl md:bottom-28 md:left-[calc(50%+var(--shell-sidebar)/2)]"
           role="alert"
         >
           <p className="font-semibold text-white">

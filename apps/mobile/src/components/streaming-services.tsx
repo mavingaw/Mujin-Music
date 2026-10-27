@@ -131,8 +131,8 @@ export function StreamingServicesSettings() {
 
 const proofColors: Record<AccountProofTone, string> = {
   verified: palette.success,
-  partial: "#fde68a",
-  failed: "#fda4af",
+  partial: "#f0dcc2",
+  failed: "#f9b3af",
   unproven: palette.muted,
 };
 
@@ -525,14 +525,14 @@ const styles = StyleSheet.create({
   proof: { gap: 2, paddingHorizontal: 16, paddingBottom: 12 },
   proofLabel: { fontSize: 13, fontWeight: "600", letterSpacing: 0.2 },
   sandbox: {
-    color: "#fde68a",
-    backgroundColor: "rgba(252,211,77,0.08)",
+    color: "#f0dcc2",
+    backgroundColor: "rgba(230,197,153,0.08)",
     borderRadius: 10,
     padding: 12,
     lineHeight: 19,
     overflow: "hidden",
   },
-  warning: { color: "#fde68a" },
+  warning: { color: "#f0dcc2" },
   card: {
     borderRadius: 14,
     backgroundColor: palette.elevatedStrong,
@@ -548,7 +548,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: { flex: 1, minWidth: 0, gap: 4 },
   status: { color: palette.secondary, fontSize: 13, lineHeight: 18 },
-  link: { color: "#7dd3fc", fontWeight: "700" },
+  link: { color: "#a9d1e6", fontWeight: "700" },
   panel: { padding: 16, paddingTop: 4, gap: 10 },
   input: {
     height: 48,

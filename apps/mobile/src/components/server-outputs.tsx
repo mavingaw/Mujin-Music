@@ -357,9 +357,9 @@ const styles = StyleSheet.create({
   deviceText: { flex: 1, minWidth: 0 },
   deviceName: { color: "white", fontSize: 13, fontWeight: "600" },
   detail: { color: palette.secondary, fontSize: 12 },
-  network: { color: "#c4b5fd", fontSize: 12 },
-  tested: { color: "rgba(252,211,77,0.85)", fontSize: 11, lineHeight: 15 },
-  unsupported: { color: "#f87171", fontSize: 11 },
+  network: { color: "#f0c3a6", fontSize: 12 },
+  tested: { color: "rgba(230,197,153,0.85)", fontSize: 11, lineHeight: 15 },
+  unsupported: { color: "#f2473f", fontSize: 11 },
   button: {
     minHeight: 32,
     justifyContent: "center",

@@ -152,7 +152,7 @@ export default function FocusBar({
             <>
               <button
                 aria-label="Play focused music"
-                className="grid h-9 w-9 place-items-center rounded-full bg-white text-black hover:bg-zinc-200"
+                className="mj-primary grid h-9 w-9 place-items-center rounded-full"
                 onClick={() => onPlay(false)}
                 title="Play"
                 type="button"

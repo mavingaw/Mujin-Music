@@ -477,7 +477,7 @@ function AttentionTile({
 }) {
   const accent =
     tone === "warn"
-      ? "#f5c542"
+      ? "#daab6c"
       : tone === "ok"
         ? "var(--color-quality-high)"
         : "var(--color-mujin-text-secondary)";

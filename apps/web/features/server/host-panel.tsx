@@ -109,7 +109,7 @@ function ReachabilityNote({ info }: { info: HostInfo }) {
         className={cn(
           "mt-1.5 h-2 w-2 shrink-0 rounded-full",
           copy.tone === "good"
-            ? "bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.7)]"
+            ? "bg-emerald-400 shadow-[0_0_10px_rgba(163,201,139,0.6)]"
             : "bg-amber-400",
         )}
       />

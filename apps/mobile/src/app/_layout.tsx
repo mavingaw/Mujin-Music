@@ -10,6 +10,7 @@ import {
   useRouter,
   useSegments,
 } from "expo-router";
+import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
@@ -110,9 +111,16 @@ export default function RootLayout() {
         defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
       }),
   );
+  // Brand display face; the app shows with system type if it can't load.
+  const [fontsLoaded, fontError] = useFonts({
+    "Jost-Light": require("../../assets/fonts/jost/Jost-Light.ttf"),
+    "Jost-Regular": require("../../assets/fonts/jost/Jost-Regular.ttf"),
+    "Jost-Medium": require("../../assets/fonts/jost/Jost-Medium.ttf"),
+  });
+  const fontsSettled = fontsLoaded || Boolean(fontError);
   useEffect(() => {
-    void SplashScreen.hideAsync();
-  }, []);
+    if (fontsSettled) void SplashScreen.hideAsync();
+  }, [fontsSettled]);
   return (
     <GestureHandlerRootView
       style={{ flex: 1, backgroundColor: palette.background }}

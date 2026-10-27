@@ -5,7 +5,7 @@ import {
   influenceLine,
   influencesEmptyLabel,
   performanceLine,
-  personHue,
+  personTone,
   personInitials,
   relatedSections,
 } from "@parson/music-sdk";
@@ -48,7 +48,7 @@ function Portrait({
 }) {
   const src = editorialImageSrc(imageUrl);
   const [failed, setFailed] = useState(false);
-  const hue = personHue(name);
+  const [lit] = personTone(name);
   return (
     <>
       {src && !failed ? (
@@ -65,7 +65,7 @@ function Portrait({
           aria-hidden
           className="absolute inset-0 flex items-center justify-center font-serif text-5xl text-white/70"
           style={{
-            background: `linear-gradient(160deg, hsl(${hue} 30% 40%), ${tone.deep})`,
+            background: `linear-gradient(160deg, ${lit}, ${tone.deep})`,
           }}
         >
           {personInitials(name)}

@@ -6,6 +6,7 @@ import {
   type LiveStation,
 } from "@parson/music-sdk";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { personTone } from "@parson/music-sdk";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import {
@@ -41,7 +42,7 @@ const TIER_COLORS: Record<
   },
   standard: {
     border: "rgba(255,255,255,0.14)",
-    text: "#d4d4d8",
+    text: "#c7c2b9",
     background: "rgba(255,255,255,0.05)",
   },
   low: {
@@ -51,7 +52,7 @@ const TIER_COLORS: Record<
   },
   unknown: {
     border: "rgba(255,255,255,0.08)",
-    text: "#71717a",
+    text: "#8e8a84",
     background: "transparent",
   },
 };
@@ -86,11 +87,9 @@ export function LiveTag() {
   );
 }
 
-function hue(name: string) {
-  let value = 0;
-  for (const character of name)
-    value = (value * 31 + (character.codePointAt(0) ?? 0)) % 360;
-  return value;
+/** A muted brand tone (copper, steel, sage, brass, clay, graphite). */
+function stationTone(name: string) {
+  return personTone(name)[0];
 }
 
 /** A station logo, contained, on a soft tile; a monogram when missing. */
@@ -123,9 +122,7 @@ export function StationLogo({
           width: size,
           height: size,
           borderRadius: rounded,
-          backgroundColor: uri
-            ? "#18181b"
-            : `hsl(${hue(station.name)}, 55%, 32%)`,
+          backgroundColor: uri ? "#17171a" : stationTone(station.name),
         },
       ]}
     >
@@ -193,8 +190,8 @@ export function SaveButton({ station }: { station: LiveStation }) {
       style={styles.iconButton}
     >
       <Heart
-        color={station.saved ? "#fb7185" : palette.secondary}
-        fill={station.saved ? "#fb7185" : "transparent"}
+        color={station.saved ? "#f6807a" : palette.secondary}
+        fill={station.saved ? "#f6807a" : "transparent"}
         size={20}
       />
     </Pressable>
@@ -313,16 +310,16 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.4 },
   live: {
     alignItems: "center",
-    backgroundColor: "rgba(239,68,68,0.16)",
+    backgroundColor: "rgba(242,71,63,0.16)",
     borderRadius: 999,
     flexDirection: "row",
     gap: 4,
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  liveDot: { backgroundColor: "#f87171", borderRadius: 3, height: 6, width: 6 },
+  liveDot: { backgroundColor: "#f2473f", borderRadius: 3, height: 6, width: 6 },
   liveText: {
-    color: "#fca5a5",
+    color: "#f9b3af",
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.2,
@@ -361,7 +358,7 @@ const styles = StyleSheet.create({
   },
   tileSubtitle: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   tileTags: { flexDirection: "row", marginTop: 6 },
-  current: { color: "#6ee7b7" },
+  current: { color: "#bcd8a9" },
   rail: { gap: 14, paddingHorizontal: 20 },
   row: {
     alignItems: "center",

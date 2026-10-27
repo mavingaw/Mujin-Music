@@ -31,6 +31,7 @@ import {
   useState,
 } from "react";
 import { queueDropIndex } from "./player-queue-reorder";
+import { queueSummary } from "./queue-summary";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
 import { isExplicitSongTitle } from "@/features/library/song-presentation";
 import { trackArtistCredit } from "@/features/library/track-artist-credit";
@@ -78,8 +79,8 @@ export function QueueToolbar({
   const toggleClass = (active: boolean) =>
     `flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
       active
-        ? "bg-white/12 text-white"
-        : "text-zinc-500 hover:bg-white/10 hover:text-white"
+        ? "bg-mujin-copper/[0.16] text-mujin-copper"
+        : "text-mujin-text-tertiary hover:bg-white/[0.07] hover:text-mujin-text"
     }`;
   return (
     <div className="flex items-center gap-1">
@@ -186,11 +187,18 @@ export default function PlayerQueue({
   return (
     <aside
       aria-label="Queue"
-      className="fixed bottom-42 left-3 right-3 z-60 flex max-h-[min(380px,calc(100dvh-188px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/95 text-white shadow-2xl backdrop-blur-2xl sm:left-auto sm:right-5 sm:w-90 md:bottom-31 md:max-h-[min(380px,calc(100dvh-144px))] lg:right-[max(1.25rem,calc((100vw-80px-min(960px,100vw-112px))/2))]"
+      className="fixed bottom-[calc(var(--shell-footer)+80px)] left-2 right-2 z-60 flex max-h-[min(460px,calc(100dvh-220px))] flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-mujin-raised/97 text-mujin-text shadow-2xl backdrop-blur-2xl md:inset-x-auto md:bottom-(--shell-footer) md:right-0 md:top-(--shell-header) md:max-h-none md:w-[380px] md:rounded-none md:border-y-0 md:border-r-0 md:border-l md:border-white/[0.06] md:shadow-[-30px_0_60px_-30px_rgba(0,0,0,0.9)] motion-safe:animate-in motion-safe:fade-in motion-safe:md:slide-in-from-right-4"
       ref={queueRef}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-white/10 py-2 pl-4 pr-2">
-        <h2 className="min-w-0 truncate font-semibold">{title}</h2>
+      <header className="flex items-center justify-between gap-2 border-b border-white/[0.06] py-3 pl-5 pr-3">
+        <div className="min-w-0">
+          <h2 className="mj-title min-w-0 truncate text-[22px] leading-tight">
+            {title}
+          </h2>
+          <p className="mj-tnum text-[11.5px] text-mujin-text-tertiary">
+            {queueSummary(queue, editing?.currentIndex)}
+          </p>
+        </div>
         <div className="flex shrink-0 items-center gap-1">
           {editing && <QueueToolbar editing={editing} length={queue.length} />}
           <button
@@ -215,11 +223,11 @@ export default function PlayerQueue({
         <div className="flex flex-1 flex-col overflow-y-auto p-2">
           <div className="grid flex-1 place-items-center px-6 py-6 text-center">
             <div>
-              <ListMusic className="mx-auto h-7 w-7 text-zinc-700" />
-              <p className="mt-3 text-sm font-medium text-zinc-300">
-                Nothing queued
+              <ListMusic className="mx-auto h-7 w-7 text-mujin-text-disabled" />
+              <p className="mj-title mt-3 text-lg text-mujin-text">
+                Go find something to play
               </p>
-              <p className="mt-1 text-xs leading-5 text-zinc-600">
+              <p className="mt-1 text-xs leading-5 text-mujin-text-tertiary">
                 Play a song or album, or start a station.
               </p>
             </div>

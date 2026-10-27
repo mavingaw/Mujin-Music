@@ -669,14 +669,14 @@ const styles = StyleSheet.create({
   },
   chipInclude: { backgroundColor: "white", borderColor: "white" },
   chipExclude: {
-    borderColor: "rgba(251,113,133,.5)",
-    backgroundColor: "rgba(244,63,94,.12)",
+    borderColor: "rgba(246,128,122,.5)",
+    backgroundColor: "rgba(242,71,63,.12)",
   },
   chipText: { color: "white", fontSize: 14, fontWeight: "600", flexShrink: 1 },
   chipIncludeText: { color: "black" },
-  chipExcludeText: { color: "#fecdd3", textDecorationLine: "line-through" },
+  chipExcludeText: { color: "#fbdcda", textDecorationLine: "line-through" },
   chipCount: { color: palette.muted, fontSize: 12, fontWeight: "700" },
-  chipIncludeCount: { color: "#52525b" },
+  chipIncludeCount: { color: "#5c5955" },
   iconChip: {
     width: 36,
     height: 36,

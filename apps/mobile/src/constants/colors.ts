@@ -15,7 +15,9 @@ export const palette = {
   qualityHigh: "#A3C98B",
   qualityLow: "#7E7A74",
   danger: "#F2473F",
-  success: "#22c55e",
+  success: "#A3C98B",
+  tertiary: "#8E8A84",
+  surface: "#17171A",
 } as const;
 
 export const layout = {
@@ -23,4 +25,23 @@ export const layout = {
   tabBar: 76,
   miniPlayer: 68,
   radius: 16,
+} as const;
+
+/**
+ * Brand type. Jost (SIL OFL 1.1, bundled under assets/fonts/jost) for
+ * display and section titles; body text stays on the platform face.
+ */
+export const fonts = {
+  display: "Jost-Light",
+  title: "Jost-Regular",
+  titleMedium: "Jost-Medium",
+} as const;
+
+/** Small caps label above a title ("DAILY PICKS"). */
+export const eyebrow = {
+  color: "#8E8A84",
+  fontSize: 11,
+  fontWeight: "600",
+  letterSpacing: 1.6,
+  textTransform: "uppercase",
 } as const;

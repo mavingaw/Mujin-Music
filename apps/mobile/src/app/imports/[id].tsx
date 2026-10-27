@@ -61,11 +61,11 @@ function ItemRow({
   const song = item.song_id ? job.songs[item.song_id] : undefined;
   const tone =
     item.status === "matched" || item.status === "confirmed"
-      ? "#6ee7b7"
+      ? "#bcd8a9"
       : item.status === "review"
-        ? "#fcd34d"
+        ? "#e6c599"
         : item.status === "unmatched"
-          ? "#fda4af"
+          ? "#f9b3af"
           : palette.muted;
   return (
     <Pressable

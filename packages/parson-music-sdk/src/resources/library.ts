@@ -10,6 +10,10 @@ export interface LibraryCatalogAlbum {
   releaseYear: string;
   songCount: number;
   firstSongId?: string | null;
+  /** Quality badge text ("24/96", "16/44.1", "MP3"); newer servers only. */
+  formatLabel?: string | null;
+  hiRes?: boolean;
+  lossless?: boolean;
 }
 
 export interface LibraryCatalogSong {

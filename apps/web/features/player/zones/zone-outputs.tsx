@@ -13,7 +13,7 @@ import {
 import { useZones } from "./zones-provider";
 
 const TONE: Record<"ok" | "warn" | "off", string> = {
-  ok: "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]",
+  ok: "bg-emerald-400 shadow-[0_0_8px_rgba(163,201,139,0.6)]",
   warn: "bg-amber-400",
   off: "bg-zinc-600",
 };

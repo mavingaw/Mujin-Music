@@ -48,7 +48,7 @@ import {
   usePreferredAlbumPlay,
 } from "@/components/preferred-album-play";
 import { StreamingAlbumScreen } from "@/components/streaming-album-screen";
-import { palette } from "@/constants/colors";
+import { fonts, palette } from "@/constants/colors";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { formatCollectionDuration } from "@/lib/format";
 import {
@@ -221,9 +221,13 @@ function LibraryAlbumScreen({ id }: { id: string }) {
                 onPress={() => void preferred.play()}
               >
                 {albumPlaying ? (
-                  <PauseGlyph color="black" size={25} />
+                  <PauseGlyph color={palette.accentText} size={25} />
                 ) : (
-                  <Play color="black" fill="black" size={28} />
+                  <Play
+                    color={palette.accentText}
+                    fill={palette.accentText}
+                    size={28}
+                  />
                 )}
               </Pressable>
               <Pressable
@@ -348,11 +352,10 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   title: {
-    color: "white",
-    fontSize: 30,
-    lineHeight: 34,
-    fontWeight: "900",
-    letterSpacing: -0.8,
+    color: palette.text,
+    fontFamily: fonts.display,
+    fontSize: 34,
+    lineHeight: 40,
     marginTop: 14,
   },
   artistRow: {
@@ -378,7 +381,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.08)",
   },
   pillActive: { backgroundColor: "white" },
-  pillText: { color: "#d4d4d8", fontSize: 12, fontWeight: "700" },
+  pillText: { color: "#c7c2b9", fontSize: 12, fontWeight: "700" },
   pillTextActive: { color: "black" },
   actions: {
     width: "100%",
@@ -391,7 +394,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: "white",
+    backgroundColor: palette.accent,
     alignItems: "center",
     justifyContent: "center",
   },

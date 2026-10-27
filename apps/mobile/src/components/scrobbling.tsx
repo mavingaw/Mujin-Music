@@ -31,9 +31,9 @@ import { useSession } from "@/providers/session-provider";
 const key = ["scrobbling"] as const;
 const accent = palette.accent;
 const tones = {
-  ok: "#6ee7b7",
-  warn: "#fcd34d",
-  error: "#fda4af",
+  ok: "#bcd8a9",
+  warn: "#e6c599",
+  error: "#f9b3af",
   idle: palette.secondary,
 } as const;
 
@@ -72,7 +72,7 @@ function Row({
         accessibilityLabel={label}
         onValueChange={onChange}
         thumbColor="white"
-        trackColor={{ false: "#3f3f46", true: accent }}
+        trackColor={{ false: "#34343a", true: accent }}
         value={value}
       />
     </View>
@@ -244,7 +244,7 @@ function ServiceCard({ service }: { service: ScrobbleServiceStatus }) {
               }
               style={styles.secondary}
             >
-              <Text style={[styles.secondaryText, { color: "#fda4af" }]}>
+              <Text style={[styles.secondaryText, { color: "#f9b3af" }]}>
                 Disconnect
               </Text>
             </Pressable>
@@ -309,7 +309,7 @@ const styles = StyleSheet.create({
   name: { color: "white", fontSize: 15, fontWeight: "800" },
   status: { fontSize: 13, marginTop: 3 },
   note: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
-  error: { color: "#fda4af", fontSize: 13 },
+  error: { color: "#f9b3af", fontSize: 13 },
   counts: { color: palette.secondary, fontSize: 13 },
   toggle: {
     minHeight: 44,

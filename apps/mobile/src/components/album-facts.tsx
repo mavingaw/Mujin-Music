@@ -10,9 +10,9 @@ import { StyleSheet, Text, View } from "react-native";
 import { palette } from "@/constants/colors";
 
 const SOURCE_COLORS: Record<NonNullable<ResolvedFact["source"]>, string> = {
-  edited: "#7dd3fc",
+  edited: "#a9d1e6",
   tags: palette.secondary,
-  online: "#c4b5fd",
+  online: "#f0c3a6",
 };
 
 function display(fact: ResolvedFact) {

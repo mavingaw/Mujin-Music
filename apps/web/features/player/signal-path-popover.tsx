@@ -206,7 +206,7 @@ export function SignalPathLight({
 
 function HiResBadge() {
   return (
-    <span className="shrink-0 rounded-[5px] border border-current px-1 text-[9px] font-bold leading-3.5 tracking-wide text-[#c9a2ff]">
+    <span className="shrink-0 rounded-[4px] border border-current px-1 font-mono text-[9px] font-medium leading-3.5 tracking-wide text-mujin-copper">
       HI-RES
     </span>
   );

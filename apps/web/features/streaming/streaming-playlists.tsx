@@ -400,7 +400,7 @@ function PlaylistView({
               )}
             </span>
           </div>
-          <h1 className="mb-3 text-balance text-4xl font-black leading-[0.98] text-white sm:text-5xl">
+          <h1 className="mb-3 text-balance text-4xl mj-display leading-[0.98] text-mujin-text sm:text-5xl">
             {playlist.title}
           </h1>
           {playlist.description && (
@@ -423,7 +423,7 @@ function PlaylistView({
       <div className="mb-7 flex flex-wrap items-center gap-3">
         <button
           aria-label={`${playing ? "Pause" : "Play"} ${playlist.title}`}
-          className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 hover:bg-zinc-100"
+          className="flex h-12 w-12 items-center justify-center rounded-full mj-primary motion-safe:hover:scale-105 hover:bg-zinc-100"
           onClick={() =>
             playing
               ? playback.playTracks(
@@ -440,9 +440,9 @@ function PlaylistView({
           type="button"
         >
           {playing ? (
-            <Pause className="h-6 w-6 fill-black text-black" />
+            <Pause className="h-6 w-6 fill-current" />
           ) : (
-            <Play className="ml-1 h-6 w-6 fill-black text-black" />
+            <Play className="ml-1 h-6 w-6 fill-current" />
           )}
         </button>
         {live && (

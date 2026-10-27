@@ -385,7 +385,7 @@ const styles = StyleSheet.create({
   },
   saveText: { color: "black", fontWeight: "800" },
   disabled: { opacity: 0.45 },
-  editError: { color: "#ff9b9b", textAlign: "center" },
+  editError: { color: "#f6807a", textAlign: "center" },
   empty: {
     margin: 20,
     padding: 28,

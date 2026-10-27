@@ -14,6 +14,7 @@ pub mod genre_pages;
 pub mod genres;
 pub mod history;
 pub mod home;
+pub mod home_discovery;
 pub mod image;
 pub mod imports;
 pub mod key_service;

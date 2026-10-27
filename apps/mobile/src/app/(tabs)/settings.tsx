@@ -811,7 +811,7 @@ function LibrarySettings({
             hitSlop={12}
             onPress={() => onRemove(root)}
           >
-            <Trash2 color="#fb7185" size={20} />
+            <Trash2 color="#f6807a" size={20} />
           </Pressable>
         </View>
       ))}
@@ -953,7 +953,7 @@ function UserSettings({
                   hitSlop={12}
                   onPress={() => onDelete(user)}
                 >
-                  <Trash2 color="#fb7185" size={20} />
+                  <Trash2 color="#f6807a" size={20} />
                 </Pressable>
               ) : null}
             </View>
