@@ -175,7 +175,9 @@ export default function StreamingBrowse() {
   return (
     <section className="mx-auto w-full max-w-266 space-y-7 px-5 py-8 pb-36 sm:px-7">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="text-3xl font-semibold text-white">Streaming</h1>
+        <h1 className="mj-display text-[2.5rem] text-mujin-text md:text-[3rem]">
+          Streaming
+        </h1>
         {connected.length > 1 && (
           <div className="flex gap-2" role="tablist" aria-label="Services">
             {connected.map((provider) => (

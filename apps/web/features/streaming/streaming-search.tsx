@@ -48,7 +48,7 @@ export function SearchScopeToggle({
         <button
           aria-checked={scope === value}
           className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors",
+            "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[0.8125rem] font-medium transition-colors",
             scope === value
               ? "bg-white text-black"
               : "text-zinc-400 hover:text-white",
@@ -218,7 +218,7 @@ function ServiceHeading({ service }: { service: StreamingServiceSearch }) {
     <h2 className="flex items-center gap-3 border-b border-white/8 pb-2 text-lg font-semibold text-white">
       From{" "}
       <SourceBadge
-        className="text-[15px] text-white"
+        className="text-[0.9375rem] text-white"
         provider={service.provider}
       />
     </h2>
@@ -269,7 +269,7 @@ function LibraryItemRow({ item }: { item: StreamingLibraryItem }) {
         )}
       </div>
       <div className="pointer-events-none min-w-0 flex-1">
-        <p className="truncate text-[15px] font-medium text-zinc-100">
+        <p className="truncate text-[0.9375rem] font-medium text-zinc-100">
           {item.title}
         </p>
         <p className="mt-0.5 flex items-center gap-2 truncate text-sm text-zinc-500">

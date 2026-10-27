@@ -59,5 +59,10 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     backgroundColor: palette.elevated,
   },
-  label: { flexShrink: 1, color: "white", fontSize: 13, fontWeight: "700" },
+  label: {
+    flexShrink: 1,
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: "700",
+  },
 });

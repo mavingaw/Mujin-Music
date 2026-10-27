@@ -100,7 +100,7 @@ test("avatar helpers", () => {
   expect(profileInitials("ada lovelace")).toBe("AL");
   expect(profileInitials("  ")).toBe("?");
   expect(profileInitials("Émile-Zola")).toBe("ÉZ");
-  expect(profileGradient("rose")[0]).toBe("#fda4af");
+  expect(profileGradient("rose")[0]).toBe("#d49a8f");
   expect(profileGradient("unknown")).toEqual(profileGradient("slate"));
   expect(validProfilePin("2468")).toBeTrue();
   expect(validProfilePin("246")).toBeFalse();

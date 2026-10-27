@@ -23,7 +23,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { PageTitle, Screen, SectionTitle } from "@/components/music-ui";
-import { layout, palette } from "@/constants/colors";
+import { alpha, layout, palette } from "@/constants/colors";
 import {
   importStatusLine,
   isJobRunning,
@@ -63,7 +63,7 @@ function ServiceRow({ service }: { service: ImportService }) {
             style={[styles.chip, grant.available && styles.chipOn]}
           >
             {grant.available ? (
-              <Check color="#a7f3d0" size={11} />
+              <Check color={palette.success} size={11} />
             ) : (
               <X color={palette.muted} size={11} />
             )}
@@ -131,7 +131,7 @@ export default function ImportsScreen() {
             onPress={() => router.back()}
             style={styles.back}
           >
-            <ArrowLeft color="white" size={22} />
+            <ArrowLeft color={palette.text} size={22} />
           </Pressable>
           <PageTitle subtitle="Matched to music you own. Nothing is streamed from other services.">
             Import playlists
@@ -163,7 +163,7 @@ export default function ImportsScreen() {
               style={[styles.primary, (!parsed || busy) && styles.disabled]}
             >
               {busy ? (
-                <ActivityIndicator color="black" />
+                <ActivityIndicator color={palette.background} />
               ) : (
                 <Text style={styles.primaryText}>Import</Text>
               )}
@@ -217,7 +217,7 @@ export default function ImportsScreen() {
           <SectionTitle>What each service allows</SectionTitle>
           <View style={styles.section}>
             {services.isPending ? (
-              <ActivityIndicator color="white" />
+              <ActivityIndicator color={palette.text} />
             ) : (
               services.data?.map((service) => (
                 <ServiceRow key={service.id} service={service} />
@@ -244,23 +244,23 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     borderWidth: 1,
     borderRadius: 12,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
   },
   hint: { color: palette.secondary, fontSize: 12 },
   primary: {
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
     height: 46,
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
   error: { color: palette.danger, fontSize: 13 },
-  errorText: { color: "#fda4af" },
+  errorText: { color: palette.danger },
   jobRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -269,7 +269,7 @@ const styles = StyleSheet.create({
     borderBottomColor: palette.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  jobName: { color: "white", fontSize: 15, fontWeight: "600" },
+  jobName: { color: palette.text, fontSize: 15, fontWeight: "600" },
   jobStatus: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   dot: { height: 8, width: 8, borderRadius: 4 },
   serviceRow: {
@@ -281,14 +281,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   serviceHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  serviceName: { color: "white", fontWeight: "700", fontSize: 15 },
+  serviceName: { color: palette.text, fontWeight: "700", fontSize: 15 },
   serviceState: {
     color: palette.muted,
     fontSize: 12,
     marginLeft: "auto",
     flexShrink: 1,
   },
-  connected: { color: "#6ee7b7" },
+  connected: { color: palette.success },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   chip: {
     flexDirection: "row",
@@ -301,10 +301,10 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   chipOn: {
-    borderColor: "rgba(52,211,153,0.3)",
-    backgroundColor: "rgba(52,211,153,0.08)",
+    borderColor: alpha(palette.success, 0.3),
+    backgroundColor: alpha(palette.success, 0.08),
   },
   chipText: { fontSize: 11, fontWeight: "600" },
-  chipTextOn: { color: "#a7f3d0" },
+  chipTextOn: { color: palette.success },
   chipTextOff: { color: palette.muted, textDecorationLine: "line-through" },
 });

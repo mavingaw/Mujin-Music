@@ -6,12 +6,14 @@ import {
   chooseTextSource,
   pageTextSources,
   resolvedFact,
+  enrichmentNoMatch,
   enrichmentWaitingLabel,
   releaseMatchFact,
   releaseMatchSignals,
   releaseMatchSummary,
   releaseYearDiffers,
   UNVERIFIED_MATCH_TEXT,
+  unverifiedMatchText,
   unverifiedMatch,
   workHref,
 } from "@parson/music-sdk";
@@ -171,10 +173,13 @@ export function UnverifiedMatchBanner({
   check,
   isAdmin,
   onIdentify,
+  text = UNVERIFIED_MATCH_TEXT,
 }: {
   check: ReleaseMatchCheck;
   isAdmin: boolean;
   onIdentify?: () => void;
+  /** What the check means for this album's page. */
+  text?: string;
 }) {
   const summary = releaseMatchSummary(check);
   return (
@@ -188,7 +193,7 @@ export function UnverifiedMatchBanner({
           <ShieldAlert className="h-[18px] w-[18px]" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+          <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-amber-200">
             Unverified match
           </p>
           <p className="mt-1 text-sm leading-6 text-zinc-200">
@@ -206,9 +211,7 @@ export function UnverifiedMatchBanner({
             )}
             {summary && <span className="text-zinc-400"> · {summary}</span>}
           </p>
-          <p className="mt-1 text-sm leading-6 text-zinc-400">
-            {UNVERIFIED_MATCH_TEXT}
-          </p>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{text}</p>
           <ul aria-label="Match evidence" className="mt-3 grid gap-1.5">
             {releaseMatchSignals(check).map((signal) => {
               const style =
@@ -216,7 +219,7 @@ export function UnverifiedMatchBanner({
               const Icon = style.icon;
               return (
                 <li
-                  className="flex items-start gap-2 text-[13px] leading-5 text-zinc-300"
+                  className="flex items-start gap-2 text-[0.8125rem] leading-5 text-zinc-300"
                   key={signal.key}
                 >
                   <Icon
@@ -286,6 +289,8 @@ export function AlbumAboutSection({
     { key: "note", label: about?.note ? "Your note" : "Add a note" },
   ];
   const [selected, setSelected] = useState<string | null>(null);
+  // Without a note the editor stays folded, so the tracks start higher.
+  const [noteOpen, setNoteOpen] = useState(false);
   const active =
     panels.find((panel) => panel.key === selected)?.key ??
     panels[0]?.key ??
@@ -294,6 +299,7 @@ export function AlbumAboutSection({
   const facts = albumFacts(album, about);
   const hasEditorial = Boolean(textPanels.length || about?.note);
   const unverified = unverifiedMatch(about);
+  const noMatch = enrichmentNoMatch(about?.enrichment.task);
 
   return (
     <section
@@ -306,6 +312,7 @@ export function AlbumAboutSection({
             check={unverified}
             isAdmin={isAdmin}
             onIdentify={onIdentify}
+            text={unverifiedMatchText(about)}
           />
         </div>
       )}
@@ -394,14 +401,11 @@ export function AlbumAboutSection({
                 about?.enrichment.enabled &&
                 !about.identification &&
                 !unverified &&
-                about.enrichment.task?.status === "skipped" && (
+                noMatch && (
                   <p className="rounded-md border border-white/8 bg-white/3 px-3 py-2.5 text-sm leading-6 text-zinc-400">
                     Mujin Music found no confident MusicBrainz match for this
                     album
-                    {about.enrichment.task.last_error
-                      ? ` (${about.enrichment.task.last_error})`
-                      : ""}
-                    .{" "}
+                    {noMatch.reason ? ` (${noMatch.reason})` : ""}.{" "}
                     <button
                       className="font-semibold text-white underline-offset-2 hover:underline"
                       onClick={onIdentify}
@@ -411,7 +415,24 @@ export function AlbumAboutSection({
                     </button>
                   </p>
                 )}
-              <NoteEditor entityType="album" id={album.id} note={about?.note} />
+              {about?.note || noteOpen ? (
+                <NoteEditor
+                  entityType="album"
+                  id={album.id}
+                  note={about?.note}
+                />
+              ) : (
+                <button
+                  className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium text-mujin-text-secondary transition-colors hover:text-mujin-text"
+                  onClick={() => setNoteOpen(true)}
+                  type="button"
+                >
+                  <span aria-hidden="true" className="text-mujin-copper">
+                    +
+                  </span>
+                  Write a private note
+                </button>
+              )}
             </div>
           )}
         </div>

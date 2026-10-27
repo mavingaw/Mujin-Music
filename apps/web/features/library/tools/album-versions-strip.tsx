@@ -71,7 +71,7 @@ export function AlbumVersionsStrip({ albumId }: { albumId: string }) {
                   src={version.cover_url}
                 />
                 {version.preferred && (
-                  <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-mujin-copper-hover backdrop-blur">
+                  <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-mujin-copper-hover backdrop-blur">
                     <Star className="h-3 w-3 fill-current" />
                     Preferred
                   </span>
@@ -110,11 +110,13 @@ export function AlbumVersionsStrip({ albumId }: { albumId: string }) {
                 </Link>
               )}
               {current && (
-                <p className="mt-1 text-[11px] text-zinc-400">This version</p>
+                <p className="mt-1 text-[0.6875rem] text-zinc-400">
+                  This version
+                </p>
               )}
               {!version.preferred && (
                 <button
-                  className="mt-1 text-[11px] text-zinc-500 underline-offset-4 hover:text-white hover:underline"
+                  className="mt-1 text-[0.6875rem] text-zinc-500 underline-offset-4 hover:text-white hover:underline"
                   onClick={() => void prefer(version.album_id)}
                   type="button"
                 >

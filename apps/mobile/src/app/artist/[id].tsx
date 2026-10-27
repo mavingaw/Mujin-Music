@@ -51,7 +51,7 @@ import { FocusBar } from "@/components/focus";
 import { RelatedPeople } from "@/components/related-people";
 import { apiUrl } from "@/lib/runtime";
 import { joinMeta } from "@/lib/credit-links";
-import { palette } from "@/constants/colors";
+import { fonts, palette, tint } from "@/constants/colors";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
   immediateBorderlessPressFeedback,
@@ -209,7 +209,7 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
   )
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   if (!artist.data && !contributor)
@@ -226,8 +226,17 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
     );
   const data = (artist.data ?? contributor) as Artist;
   const facts = lifeSpanFacts(about.data?.facts);
-  const portrait =
-    data.icon_url || (about.data?.image ? apiUrl(about.data.image.url) : null);
+  // The Commons photo first: the library's own artist picture is usually
+  // one of their covers, which reads as a cover, not a portrait.
+  const coverIsIcon = Boolean(
+    data.icon_url &&
+    (data.albums ?? []).some((album) => album.cover_url === data.icon_url),
+  );
+  const portrait = about.data?.image
+    ? apiUrl(about.data.image.url)
+    : data.icon_url && !coverIsIcon
+      ? data.icon_url
+      : null;
   const creditedAlbums = credits.data?.albums ?? [];
   return (
     <Screen>
@@ -240,7 +249,7 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
@@ -280,7 +289,7 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
               </Text>
             ) : null}
             <GenreChips centered genres={about.data?.genres} />
-            {!data.icon_url && about.data?.image ? (
+            {about.data?.image ? (
               <Text style={styles.photoCredit}>
                 Photo: {about.data.image.author}, {about.data.image.license},
                 via Wikimedia Commons
@@ -307,7 +316,7 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
                     playback.playShuffled(allowed.length ? allowed : songs);
                   }}
                 >
-                  <Shuffle color="white" size={22} />
+                  <Shuffle color={palette.text} size={22} />
                 </Pressable>
                 <Pressable
                   {...immediatePressFeedback}
@@ -316,7 +325,11 @@ function LibraryArtistScreen({ id, tab }: { id: string; tab?: string }) {
                   style={styles.play}
                   onPress={() => songs[0] && playback.playSong(songs[0], songs)}
                 >
-                  <Play color="black" fill="black" size={27} />
+                  <Play
+                    color={palette.accentText}
+                    fill={palette.accentText}
+                    size={27}
+                  />
                 </Pressable>
               </View>
             ) : null}
@@ -578,10 +591,10 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
   },
   title: {
-    color: "white",
-    fontSize: 34,
-    fontWeight: "900",
-    letterSpacing: -1,
+    color: palette.text,
+    fontFamily: fonts.display,
+    fontSize: 40,
+    lineHeight: 46,
     textAlign: "center",
   },
   description: {
@@ -610,7 +623,7 @@ const styles = StyleSheet.create({
     borderRadius: 29,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.accent,
   },
   grid: {
     flexDirection: "row",
@@ -620,7 +633,7 @@ const styles = StyleSheet.create({
   },
   card: { width: 156 },
   albumName: {
-    color: "white",
+    color: palette.text,
     flexShrink: 1,
     fontWeight: "700",
     marginTop: 8,
@@ -655,7 +668,7 @@ const styles = StyleSheet.create({
   },
   rail: { paddingHorizontal: 20, gap: 16 },
   subsection: {
-    color: "white",
+    color: palette.text,
     fontSize: 16,
     fontWeight: "800",
     paddingHorizontal: 20,
@@ -673,9 +686,12 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
     borderRadius: 4,
     overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.07)",
+    backgroundColor: tint(0.07),
   },
-  badgeHires: { color: "#fcd34d", backgroundColor: "rgba(252,211,77,0.14)" },
+  badgeHires: {
+    color: palette.brass,
+    backgroundColor: "rgba(230,197,153,0.14)",
+  },
   creditRole: { color: palette.muted, fontSize: 12, marginTop: 2 },
   errorState: { flex: 1, alignItems: "center", justifyContent: "center" },
   error: { color: palette.secondary },

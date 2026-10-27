@@ -47,7 +47,7 @@ export default function CompositionScreen() {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <View style={styles.hero}>
@@ -70,7 +70,7 @@ export default function CompositionScreen() {
           ) : null}
         </View>
         {data.isPending ? (
-          <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={palette.text} style={{ marginTop: 40 }} />
         ) : !composition ? (
           <Pressable
             accessibilityRole="button"
@@ -107,14 +107,14 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
   },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 28,
     fontWeight: "900",
     letterSpacing: -0.6,
     marginTop: 4,
   },
   composers: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 6 },
-  composer: { color: "white", fontWeight: "600", fontSize: 15 },
+  composer: { color: palette.text, fontWeight: "600", fontSize: 15 },
   muted: { color: palette.secondary, textAlign: "center" },
   center: {
     flex: 1,

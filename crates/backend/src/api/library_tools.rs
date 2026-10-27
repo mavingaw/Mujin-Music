@@ -2146,7 +2146,7 @@ async fn reidentify(
 }
 
 /// `size:mtime_ns` of a file, to notice when it changed.
-fn file_version(path: &Path) -> Option<String> {
+pub(crate) fn file_version(path: &Path) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
     let modified = metadata
         .modified()

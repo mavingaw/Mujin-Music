@@ -70,7 +70,7 @@ export function TextSourceSwitcher({
       className="flex flex-wrap items-center gap-1.5"
       role="radiogroup"
     >
-      <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+      <span className="mr-1 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
         Source
       </span>
       {offered.map((source) => {
@@ -144,7 +144,7 @@ export function ReviewScores({ scores }: { scores: ReviewScoresValue }) {
       aria-label="Professional ratings"
       className="mt-7 rounded-xl border border-white/8 bg-white/[0.025] p-4"
     >
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">
+      <h3 className="mb-3 text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-zinc-400">
         Professional ratings
       </h3>
       <ul className="grid gap-x-8 gap-y-2 sm:grid-cols-2">

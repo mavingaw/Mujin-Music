@@ -115,7 +115,7 @@ export default function ComposerDetails() {
           <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.14em] text-zinc-500">
             <Feather className="h-3.5 w-3.5" /> Composer
           </p>
-          <h1 className="mt-1 truncate text-3xl font-semibold text-white sm:text-4xl">
+          <h1 className="mt-1 truncate mj-display text-[2.5rem] text-mujin-text md:text-[3rem]">
             {person.data.name}
           </h1>
           {composer && composerFacts(composer) && (
@@ -283,7 +283,7 @@ function Discography({
                 first_release_date={album.releaseYear}
               />
               {badge && (
-                <span className="pointer-events-none absolute left-2 top-2 z-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200 backdrop-blur">
+                <span className="pointer-events-none absolute left-2 top-2 z-2 rounded bg-black/75 px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-amber-200 backdrop-blur">
                   {badge}
                 </span>
               )}

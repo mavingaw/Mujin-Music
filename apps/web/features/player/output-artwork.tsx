@@ -28,8 +28,8 @@ const KIND_ICONS: Record<NetworkEndpointKind, LucideIcon> = {
 
 /** Protocol tint, so a glance tells UPnP, OpenHome and AirPlay apart. */
 const PROTOCOL_TINT: Record<NetworkProtocol, string> = {
-  upnp_av: "from-sky-500/25 to-sky-500/5 text-sky-200",
-  open_home: "from-violet-500/30 to-violet-500/5 text-violet-200",
+  upnp_av: "from-mujin-copper/25 to-mujin-copper/5 text-mujin-copper-hover",
+  open_home: "from-white/15 to-white/5 text-mujin-text-secondary",
   air_play: "from-zinc-200/20 to-zinc-200/5 text-zinc-100",
 };
 
@@ -103,11 +103,11 @@ export function ProtocolBadge({
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-semibold uppercase tracking-wide",
+        "inline-flex h-5 items-center rounded-full border px-2 text-[0.625rem] font-semibold uppercase tracking-wide",
         protocol === "open_home" &&
-          "border-violet-400/35 bg-violet-500/10 text-violet-200",
+          "border-white/15 bg-white/[0.05] text-mujin-text-secondary",
         protocol === "upnp_av" &&
-          "border-sky-400/35 bg-sky-500/10 text-sky-200",
+          "border-mujin-copper/35 bg-mujin-copper/10 text-mujin-copper-hover",
         protocol === "air_play" &&
           "border-zinc-300/30 bg-zinc-200/8 text-zinc-200",
       )}

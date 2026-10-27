@@ -112,7 +112,7 @@ export default function LibraryToolsScreen() {
             onPress={() => router.back()}
             style={styles.back}
           >
-            <ArrowLeft color="white" size={22} />
+            <ArrowLeft color={palette.text} size={22} />
           </Pressable>
           <PageTitle subtitle="Mujin Music only reads your music files; every change can be undone.">
             Library tools
@@ -122,7 +122,7 @@ export default function LibraryToolsScreen() {
               Library tools are for the admin of this server.
             </Text>
           ) : !stats ? (
-            <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+            <ActivityIndicator color={palette.text} style={{ marginTop: 40 }} />
           ) : (
             <>
               {running.map((job) => (
@@ -155,7 +155,7 @@ export default function LibraryToolsScreen() {
                           tier.tracks / Math.max(1, tiersTotal),
                           0.01,
                         ),
-                        backgroundColor: tierColor(tier.key),
+                        backgroundColor: tierColor(tier.key, palette),
                       }}
                     />
                   ))}
@@ -165,7 +165,7 @@ export default function LibraryToolsScreen() {
                     <View
                       style={[
                         styles.dot,
-                        { backgroundColor: tierColor(tier.key) },
+                        { backgroundColor: tierColor(tier.key, palette) },
                       ]}
                     />
                     <Text style={styles.legendLabel}>
@@ -210,7 +210,7 @@ export default function LibraryToolsScreen() {
 
               <View style={styles.actions}>
                 <Action
-                  icon={<FolderSearch color="black" size={18} />}
+                  icon={<FolderSearch color={palette.background} size={18} />}
                   label="Check folders"
                   onPress={() =>
                     void start(
@@ -221,7 +221,7 @@ export default function LibraryToolsScreen() {
                   primary
                 />
                 <Action
-                  icon={<AudioWaveform color="white" size={18} />}
+                  icon={<AudioWaveform color={palette.text} size={18} />}
                   label="Analyze new tracks"
                   onPress={() =>
                     void start(
@@ -232,7 +232,7 @@ export default function LibraryToolsScreen() {
                 />
                 {(overview.data?.duplicates_suggested ?? 0) > 0 && (
                   <Action
-                    icon={<Sparkles color="white" size={18} />}
+                    icon={<Sparkles color={palette.text} size={18} />}
                     label={`Keep best copies (${overview.data?.duplicates_suggested})`}
                     onPress={() =>
                       void start(
@@ -340,7 +340,7 @@ function Attention({ label, value }: { label: string; value: number }) {
       <View
         style={[
           styles.dot,
-          { backgroundColor: value > 0 ? "#f5c542" : palette.success },
+          { backgroundColor: value > 0 ? palette.brass : palette.success },
         ]}
       />
       <Text style={styles.legendLabel}>{label}</Text>
@@ -368,7 +368,9 @@ function Action({
       style={[styles.action, primary && styles.actionPrimary]}
     >
       {icon}
-      <Text style={[styles.actionText, primary && { color: "black" }]}>
+      <Text
+        style={[styles.actionText, primary && { color: palette.background }]}
+      >
         {label}
       </Text>
     </Pressable>
@@ -458,8 +460,8 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     backgroundColor: palette.elevatedStrong,
   },
-  actionPrimary: { backgroundColor: "white" },
-  actionText: { color: "white", fontWeight: "600", fontSize: 15 },
+  actionPrimary: { backgroundColor: palette.text },
+  actionText: { color: palette.text, fontWeight: "600", fontSize: 15 },
   error: {
     color: palette.danger,
     marginHorizontal: layout.horizontal,

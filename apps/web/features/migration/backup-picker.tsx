@@ -81,7 +81,7 @@ export default function BackupPicker({
         <Input
           aria-label="Folder to look in"
           autoComplete="off"
-          className="font-mono text-[13px]"
+          className="font-mono text-[0.8125rem]"
           onChange={(event) => setPath(event.target.value)}
           placeholder="Folder on the server, e.g. /mnt/nas/parson-backups"
           spellCheck={false}

@@ -6,6 +6,7 @@ use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, put, web};
 use futures::StreamExt;
 use serde::Deserialize;
 
+use crate::api::appearance;
 use crate::api::auth::authenticated_user_id;
 use crate::api::cast::{self, CastZoneSnapshot};
 use crate::library::state::{LibraryCache, LibraryLifecycle};
@@ -389,6 +390,7 @@ async fn zone_events(
     let (response, mut session, mut messages) = actix_ws::handle(&request, payload)?;
     let mut events = service.subscribe();
     let mut cast_events = cast::subscribe_cast_changes();
+    let mut appearance_events = appearance::subscribe_appearance_changes();
     actix_web::rt::spawn(async move {
         if session.text(r#"{"type":"ready"}"#).await.is_err() {
             return;
@@ -429,6 +431,18 @@ async fn zone_events(
                     Ok(_) => None,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         Some(r#"{"type":"zones_changed"}"#.to_string())
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                // Settings → Appearance saved on another device or tab.
+                event = appearance_events.recv() => match event {
+                    Ok(change) if change.user_id == user_id => {
+                        Some(appearance::appearance_event_message(change))
+                    }
+                    Ok(_) => None,
+                    // Missed some: let the client re-read its appearance.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        Some(r#"{"type":"appearance_changed"}"#.to_string())
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },

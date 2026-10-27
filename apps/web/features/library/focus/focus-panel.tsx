@@ -544,7 +544,7 @@ function FacetAccordion({
               type="button"
             >
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+                <span className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400">
                   {tools.pinned && <Pin className="h-3 w-3" />}
                   {facetTitle(facet)}
                 </span>
@@ -881,7 +881,7 @@ function FacetColumn({
           <ColumnMenu facet={facet} tools={tools}>
             <button
               aria-label={`${facetTitle(facet)} column options`}
-              className="flex min-w-0 items-center gap-0.5 rounded text-[11px] font-semibold uppercase tracking-[0.06em] text-zinc-500 hover:text-zinc-200"
+              className="flex min-w-0 items-center gap-0.5 rounded text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-zinc-500 hover:text-zinc-200"
               title={`${facetTitle(facet)}: order, pin or hide`}
               type="button"
             >
@@ -1264,7 +1264,7 @@ function YearRange({
           );
         })}
       </div>
-      <div className="-mt-3 flex justify-between text-[11px] tabular-nums text-zinc-600">
+      <div className="-mt-3 flex justify-between text-[0.6875rem] tabular-nums text-zinc-600">
         <span>{first}</span>
         <span>{last}</span>
       </div>

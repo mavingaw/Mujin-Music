@@ -72,7 +72,7 @@ export default function ComposerScreen() {
   if (person.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   if (!person.data)
@@ -113,7 +113,7 @@ export default function ComposerScreen() {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <View style={styles.hero}>
@@ -155,7 +155,7 @@ export default function ComposerScreen() {
           setQuery={setFocus}
         />
         {loading ? (
-          <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={palette.text} style={{ marginTop: 40 }} />
         ) : empty ? (
           <Pressable
             accessibilityRole="button"
@@ -226,7 +226,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
   },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 32,
     fontWeight: "900",
     letterSpacing: -1,
@@ -234,7 +234,12 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   muted: { color: palette.secondary, textAlign: "center" },
-  facts: { color: "white", fontSize: 14, fontWeight: "600", marginBottom: 2 },
+  facts: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
   summary: { color: palette.secondary },
   center: {
     flex: 1,
@@ -254,9 +259,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: palette.elevated,
   },
-  tabActive: { backgroundColor: "white" },
-  tabText: { color: "white", fontWeight: "700" },
-  tabTextActive: { color: "black" },
+  tabActive: { backgroundColor: palette.text },
+  tabText: { color: palette.text, fontWeight: "700" },
+  tabTextActive: { color: palette.background },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -266,7 +271,7 @@ const styles = StyleSheet.create({
   },
   card: { width: 156 },
   albumName: {
-    color: "white",
+    color: palette.text,
     fontWeight: "700",
     marginTop: 8,
     lineHeight: 18,

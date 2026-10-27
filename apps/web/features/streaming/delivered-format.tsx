@@ -91,11 +91,11 @@ export function DeliveredFormat({
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align} className="w-72 p-3" side="top">
-        <DropdownMenuLabel className="flex items-center gap-2 px-0 pt-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        <DropdownMenuLabel className="flex items-center gap-2 px-0 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
           <AudioLines aria-hidden="true" className="h-3.5 w-3.5" />
           Signal path
         </DropdownMenuLabel>
-        <ul className="mt-1 space-y-1.5 text-[13px] leading-5 text-zinc-200">
+        <ul className="mt-1 space-y-1.5 text-[0.8125rem] leading-5 text-zinc-200">
           {summary.lines.map((line) => (
             <li className="flex items-start gap-2" key={line}>
               <CheckCircle2
@@ -109,7 +109,7 @@ export function DeliveredFormat({
         {summary.warning && (
           <>
             <DropdownMenuSeparator className="my-2.5" />
-            <p className="flex items-start gap-2 text-[13px] leading-5 text-amber-200">
+            <p className="flex items-start gap-2 text-[0.8125rem] leading-5 text-amber-200">
               <AlertTriangle
                 aria-hidden="true"
                 className="mt-0.5 h-3.5 w-3.5 shrink-0"
@@ -119,7 +119,7 @@ export function DeliveredFormat({
           </>
         )}
         <DropdownMenuSeparator className="my-2.5" />
-        <p className="text-[11.5px] leading-4 text-zinc-500">
+        <p className="text-[0.7188rem] leading-4 text-zinc-500">
           Read from the stream itself as Mujin Music relays it, not from the
           service&apos;s catalog.
         </p>

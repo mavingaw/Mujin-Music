@@ -66,7 +66,7 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
   if (album.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   const data = album.data;
@@ -99,7 +99,7 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
@@ -145,9 +145,13 @@ export function StreamingAlbumScreen({ id }: { id: string }) {
                 style={styles.circle}
               >
                 {playing ? (
-                  <PauseGlyph color="black" size={25} />
+                  <PauseGlyph color={palette.background} size={25} />
                 ) : (
-                  <Play color="black" fill="black" size={28} />
+                  <Play
+                    color={palette.background}
+                    fill={palette.background}
+                    size={28}
+                  />
                 )}
               </Pressable>
               <LibraryToggle
@@ -191,14 +195,19 @@ const styles = StyleSheet.create({
   cover: { alignSelf: "center", marginVertical: 12 },
   tags: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 14 },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 30,
     lineHeight: 34,
     fontWeight: "900",
     letterSpacing: -0.8,
     marginTop: 10,
   },
-  artist: { color: "white", fontWeight: "800", fontSize: 15, marginTop: 9 },
+  artist: {
+    color: palette.text,
+    fontWeight: "800",
+    fontSize: 15,
+    marginTop: 9,
+  },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 5 },
   actions: {
     width: "100%",
@@ -211,7 +220,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },

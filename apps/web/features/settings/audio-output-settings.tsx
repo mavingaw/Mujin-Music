@@ -194,7 +194,7 @@ function DeviceCard({
           </p>
           {hardwareSummary(device) ? (
             <p
-              className="mt-0.5 text-[11px] text-zinc-500"
+              className="mt-0.5 text-[0.6875rem] text-zinc-500"
               data-hardware-summary
             >
               {hardwareSummary(device)}
@@ -223,7 +223,7 @@ function DeviceCard({
               {networkStreamNote(device)}
             </p>
             {network.accepts.length ? (
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[0.6875rem] text-zinc-500">
                 The player lists:{" "}
                 <span className="text-zinc-300">
                   {network.accepts.join(", ")}
@@ -231,7 +231,7 @@ function DeviceCard({
               </p>
             ) : null}
             <p
-              className="flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] leading-4 text-amber-200/90"
+              className="flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[0.6875rem] leading-4 text-amber-200/90"
               data-network-verification
             >
               <FlaskConical className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -387,7 +387,7 @@ function DeviceCard({
           </h4>
           {network ? (
             <p
-              className="mb-2 text-[11px] leading-4 text-zinc-400"
+              className="mb-2 text-[0.6875rem] leading-4 text-zinc-400"
               data-network-limits
             >
               {networkLimitsNote(device)}
@@ -432,17 +432,17 @@ function DeviceCard({
               ) : null}
               {descriptorLines(device).length ? (
                 <div className="mt-3" data-usb-descriptors>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                  <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-zinc-500">
                     USB descriptors (from the kernel)
                   </p>
-                  <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-zinc-400">
+                  <ul className="mt-1 space-y-0.5 font-mono text-[0.6875rem] text-zinc-400">
                     {descriptorLines(device).map((line, index) => (
                       <li key={index}>{line}</li>
                     ))}
                   </ul>
                 </div>
               ) : null}
-              <p className="mt-2 text-[11px] leading-4 text-zinc-500">
+              <p className="mt-2 text-[0.6875rem] leading-4 text-zinc-500">
                 Tracks in a format marked in red, or above your limits, are
                 converted on the server to the closest supported format, and the
                 signal path shows that conversion. Containers:{" "}
@@ -513,7 +513,9 @@ function AddNetworkPlayer() {
       }}
     >
       <label className="grid gap-1" htmlFor={protocolId}>
-        <span className="text-[11px] font-medium text-zinc-400">Protocol</span>
+        <span className="text-[0.6875rem] font-medium text-zinc-400">
+          Protocol
+        </span>
         <select
           className={selectClass}
           id={protocolId}
@@ -530,7 +532,9 @@ function AddNetworkPlayer() {
         </select>
       </label>
       <label className="grid gap-1" htmlFor={addressId}>
-        <span className="text-[11px] font-medium text-zinc-400">Address</span>
+        <span className="text-[0.6875rem] font-medium text-zinc-400">
+          Address
+        </span>
         <input
           className={cn(selectClass, "min-w-0")}
           id={addressId}
@@ -540,7 +544,7 @@ function AddNetworkPlayer() {
         />
       </label>
       <label className="grid gap-1" htmlFor={nameId}>
-        <span className="text-[11px] font-medium text-zinc-400">
+        <span className="text-[0.6875rem] font-medium text-zinc-400">
           Name (AirPlay)
         </span>
         <input
@@ -746,13 +750,13 @@ export default function AudioOutputSettings({ isAdmin }: { isAdmin: boolean }) {
         </>
       )}
       {simulated ? (
-        <p className="text-[11px] leading-4 text-zinc-500">
+        <p className="text-[0.6875rem] leading-4 text-zinc-500">
           The simulated device is enabled (PARSON_NATIVE_OUTPUT_SIMULATE): it
           consumes audio in real time without a sound card, for testing.
         </p>
       ) : null}
       {!isAdmin ? (
-        <p className="text-[11px] text-zinc-500">
+        <p className="text-[0.6875rem] text-zinc-500">
           Only administrators can change device settings or add players.
         </p>
       ) : null}

@@ -162,7 +162,12 @@ export function PreferredPlayCaption({
 
 const styles = StyleSheet.create({
   caption: { alignItems: "center", gap: 3, marginTop: 10 },
-  plays: { color: "white", fontSize: 13, fontWeight: "700" },
+  plays: { color: palette.text, fontSize: 13, fontWeight: "700" },
   fine: { color: palette.muted, fontSize: 12, textAlign: "center" },
-  link: { color: "#7dd3fc", fontSize: 13, fontWeight: "700", marginTop: 2 },
+  link: {
+    color: palette.enhanced,
+    fontSize: 13,
+    fontWeight: "700",
+    marginTop: 2,
+  },
 });

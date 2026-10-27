@@ -4,6 +4,7 @@ import {
   flattenGenreTree,
   genreAboutWaitingLabel,
   genreChipTitle,
+  genreDisplayName,
   genreHref,
   genreOriginCaption,
   genrePathLabel,
@@ -96,4 +97,15 @@ test("genre pages say what the description is waiting for", () => {
     }),
   ).toBe("Fetching the description from Wikipedia.");
   expect(genreAboutWaitingLabel({ enabled: false, task: null })).toBeNull();
+});
+
+test("MusicBrainz's lower-case genres read as titles; capitals stay", () => {
+  expect(genreDisplayName("industrial rock")).toBe("Industrial Rock");
+  expect(genreDisplayName("electro-industrial")).toBe("Electro-Industrial");
+  expect(genreDisplayName("drum and bass")).toBe("Drum and Bass");
+  expect(genreDisplayName("the blues")).toBe("The Blues");
+  expect(genreDisplayName("IDM")).toBe("IDM");
+  expect(genreDisplayName("Hip Hop")).toBe("Hip Hop");
+  expect(genreDisplayName("J-Pop")).toBe("J-Pop");
+  expect(genreDisplayName("électronique")).toBe("Électronique");
 });

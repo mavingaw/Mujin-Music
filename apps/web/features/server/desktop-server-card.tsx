@@ -161,7 +161,7 @@ export default function DesktopServerCard() {
               aria-hidden="true"
               className={
                 summary.running
-                  ? "mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_0_3px_rgba(52,211,153,0.15)]"
+                  ? "mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_0_3px_rgba(163,201,139,0.15)]"
                   : "mt-1.5 h-2 w-2 shrink-0 rounded-full bg-zinc-600"
               }
             />

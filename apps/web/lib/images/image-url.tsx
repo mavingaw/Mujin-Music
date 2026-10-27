@@ -27,7 +27,7 @@ export function AlbumArtFallback({
 }) {
   return (
     <div
-      className="h-full w-full rounded-[inherit] bg-[radial-gradient(circle_at_22%_16%,rgba(255,255,255,0.045),transparent_70%),linear-gradient(135deg,#181818,#0c0c0c)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
+      className="h-full w-full rounded-[inherit] bg-[radial-gradient(circle_at_22%_16%,rgb(var(--mj-ink)/0.045),transparent_70%),linear-gradient(135deg,#181818,#0c0c0c)] shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.06)]"
       aria-label={label}
     />
   );

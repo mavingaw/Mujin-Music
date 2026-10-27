@@ -76,7 +76,7 @@ export function LiveRadioHeader({
     <header className="relative mb-8">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -inset-x-40 -top-24 -z-10 h-72 bg-[radial-gradient(60%_80%_at_20%_0%,rgba(244,63,94,0.18),transparent_70%),radial-gradient(50%_70%_at_80%_10%,rgba(124,58,237,0.16),transparent_70%)]"
+        className="pointer-events-none absolute -inset-x-40 -top-24 -z-10 h-72 bg-[radial-gradient(60%_80%_at_20%_0%,rgb(var(--mj-accent-rgb)/0.16),transparent_70%),radial-gradient(50%_70%_at_80%_10%,rgba(143,195,224,0.07),transparent_70%)]"
       />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <LiveRadioTabs active={active} />
@@ -91,7 +91,7 @@ export function LiveRadioHeader({
       <p className="mt-8 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-300/80">
         <Radio className="h-3.5 w-3.5" /> {eyebrow ?? "On air worldwide"}
       </p>
-      <h1 className="mt-2 text-4xl font-black tracking-tight text-white sm:text-6xl">
+      <h1 className="mt-2 text-4xl mj-display text-mujin-text sm:text-6xl">
         {title}
       </h1>
       {children}

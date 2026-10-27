@@ -676,11 +676,14 @@ pub fn classify_release_details(evidence: &ReleaseEvidence<'_>) -> ReleaseClassi
             // Several mixes of one lead recording are still a single release.
             add(&mut scores, "Single", 120);
             reasons.push("all short-release variants share one lead recording".to_string());
-        } else if evidence
-            .track_titles
-            .iter()
-            .any(|title| base_track_title(title) == album)
+        } else if base_title_count <= 2
+            && evidence
+                .track_titles
+                .iter()
+                .any(|title| base_track_title(title) == album)
         {
+            // A title track alone does not make a single: an EP or album of
+            // four distinct recordings often shares its name with one.
             add(&mut scores, "Single", 120);
             reasons.push("a compact release is named for its lead recording".to_string());
         }
@@ -1432,6 +1435,55 @@ mod tests {
             track_durations: durations,
             genres: &[],
         })
+    }
+
+    #[test]
+    fn a_title_track_does_not_turn_four_or_five_distinct_tracks_into_a_single() {
+        for tracks in [
+            &[
+                "Afterlight",
+                "Salt and Brass",
+                "Small Hours Waltz",
+                "Late Ferry",
+            ][..],
+            &[
+                "Blue Ledger",
+                "Afterlight",
+                "Salt and Brass",
+                "Small Hours Waltz",
+                "Late Ferry",
+            ][..],
+        ] {
+            let titles = tracks
+                .iter()
+                .map(|title| title.to_string())
+                .collect::<Vec<_>>();
+            let kind = classify_release(&ReleaseEvidence {
+                album_name: "Afterlight",
+                album_artist: "Example Artist",
+                paths: &[],
+                track_titles: &titles,
+                track_durations: &vec![40.0; tracks.len()],
+                genres: &[],
+            });
+            assert_ne!(kind, "Single", "{tracks:?}");
+        }
+        // One song with its instrumental is still a single.
+        let titles = [
+            "Afterlight".to_string(),
+            "Afterlight (Instrumental)".to_string(),
+        ];
+        assert_eq!(
+            classify_release(&ReleaseEvidence {
+                album_name: "Afterlight",
+                album_artist: "Example Artist",
+                paths: &[],
+                track_titles: &titles,
+                track_durations: &[200.0, 200.0],
+                genres: &[],
+            }),
+            "Single"
+        );
     }
 
     #[test]

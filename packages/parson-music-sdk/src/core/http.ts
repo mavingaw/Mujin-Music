@@ -31,6 +31,12 @@ export interface ApiRequestConfig extends Omit<RequestInit, "body"> {
   params?: object;
   responseType?: "json" | "text" | "blob";
   skipAuth?: boolean;
+  /**
+   * A request that never carries or refreshes the session (a display's
+   * key-only calls): no Authorization header, no cookies, and a 401 never
+   * starts a token refresh or a sign-in redirect.
+   */
+  anonymous?: boolean;
   timeout?: number;
   _retryCount?: number;
 }
@@ -366,7 +372,8 @@ const request = async <T = any>(
   try {
     const url = resolveURL(path, config);
     const { body, headers } = buildBodyAndHeaders(config);
-    if (!config.skipAuth) await addAuthHeader(url, headers);
+    if (!config.skipAuth && !config.anonymous)
+      await addAuthHeader(url, headers);
     timeout = setTimeout(() => {
       const reason =
         typeof DOMException === "undefined"
@@ -384,6 +391,7 @@ const request = async <T = any>(
       params: _params,
       responseType: _responseType,
       skipAuth: _skipAuth,
+      anonymous,
       timeout: _timeout,
       _retryCount,
       ...requestInit
@@ -392,7 +400,8 @@ const request = async <T = any>(
       ...requestInit,
       body,
       headers,
-      credentials: config.credentials ?? getDefaultCredentials(),
+      credentials:
+        config.credentials ?? (anonymous ? "omit" : getDefaultCredentials()),
       signal: composed.signal,
     });
     const data = await parseResponse<T>(
@@ -410,6 +419,7 @@ const request = async <T = any>(
     }
 
     if (
+      !anonymous &&
       shouldAttemptAuthRefresh(url, response.status, config._retryCount ?? 0)
     ) {
       const refresh = await refreshOnce();

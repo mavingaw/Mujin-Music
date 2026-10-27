@@ -19,10 +19,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
-const GOLD = "#fcd34d";
+const GOLD = palette.brass;
 
 function GroupList({
   group,
@@ -52,7 +52,7 @@ function GroupList({
           >
             <View style={[styles.box, chip.selected && styles.boxSelected]}>
               {chip.selected ? (
-                <Check color="black" size={12} strokeWidth={3} />
+                <Check color={palette.background} size={12} strokeWidth={3} />
               ) : null}
             </View>
             <Text numberOfLines={1} style={styles.valueLabel}>
@@ -112,8 +112,16 @@ export function FocusBar({
             !filterable && { opacity: 0.5 },
           ]}
         >
-          <ListFilter color={active ? "black" : "white"} size={15} />
-          <Text style={[styles.focusText, active ? { color: "black" } : null]}>
+          <ListFilter
+            color={active ? palette.background : palette.text}
+            size={15}
+          />
+          <Text
+            style={[
+              styles.focusText,
+              active ? { color: palette.background } : null,
+            ]}
+          >
             Focus{active ? ` · ${active}` : ""}
           </Text>
         </Pressable>
@@ -128,7 +136,10 @@ export function FocusBar({
             style={[styles.hires, hires.selected && styles.hiresOn]}
           >
             <Text
-              style={[styles.hiresText, hires.selected && { color: "black" }]}
+              style={[
+                styles.hiresText,
+                hires.selected && { color: palette.background },
+              ]}
             >
               HI-RES ONLY · {hires.count}
             </Text>
@@ -220,15 +231,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
   },
-  focusActive: { backgroundColor: "white", borderColor: "white" },
-  focusText: { color: "white", fontWeight: "700", fontSize: 13 },
+  focusActive: { backgroundColor: palette.text, borderColor: palette.text },
+  focusText: { color: palette.text, fontWeight: "700", fontSize: 13 },
   hires: {
     height: 34,
     borderRadius: 17,
     paddingHorizontal: 12,
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(252,211,77,0.4)",
+    borderColor: "rgba(230,197,153,0.4)",
   },
   hiresOn: { backgroundColor: GOLD, borderColor: GOLD },
   hiresText: {
@@ -246,9 +257,9 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     paddingLeft: 12,
     paddingRight: 10,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: tint(0.12),
   },
-  selectedText: { color: "white", fontSize: 13, fontWeight: "600" },
+  selectedText: { color: palette.text, fontSize: 13, fontWeight: "600" },
   result: {
     color: palette.secondary,
     fontSize: 12,
@@ -277,16 +288,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: palette.border,
   },
-  sheetTitle: { color: "white", fontSize: 18, fontWeight: "800" },
+  sheetTitle: { color: palette.text, fontSize: 18, fontWeight: "800" },
   sheetResult: { color: palette.secondary, fontSize: 13, flex: 1 },
   clear: { color: palette.secondary, fontWeight: "700" },
   done: {
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  doneText: { color: "black", fontWeight: "800" },
+  doneText: { color: palette.background, fontWeight: "800" },
   group: { paddingHorizontal: 20, paddingTop: 18 },
   groupLabel: {
     color: palette.muted,
@@ -304,7 +315,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 10,
   },
-  valueSelected: { backgroundColor: "rgba(255,255,255,0.10)" },
+  valueSelected: { backgroundColor: tint(0.1) },
   box: {
     width: 18,
     height: 18,
@@ -314,8 +325,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  boxSelected: { backgroundColor: "white", borderColor: "white" },
-  valueLabel: { color: "white", fontSize: 15, flex: 1 },
+  boxSelected: { backgroundColor: palette.text, borderColor: palette.text },
+  valueLabel: { color: palette.text, fontSize: 15, flex: 1 },
   count: { color: palette.secondary, fontSize: 13 },
   note: {
     color: palette.muted,

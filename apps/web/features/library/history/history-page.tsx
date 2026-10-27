@@ -319,7 +319,7 @@ export default function HistoryPage() {
             <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               <HistoryIcon className="h-3.5 w-3.5" /> Browse
             </p>
-            <h1 className="text-4xl font-black text-white sm:text-5xl">
+            <h1 className="text-4xl mj-display text-mujin-text sm:text-5xl">
               History
             </h1>
             <p className="mt-3 text-sm text-zinc-400">
@@ -680,7 +680,7 @@ function TimelineRow({
           </span>
           <QualityBadge quality={entry.quality} />
           {!entry.available && (
-            <span className="shrink-0 text-[11px] text-zinc-600">
+            <span className="shrink-0 text-[0.6875rem] text-zinc-600">
               not in library
             </span>
           )}
@@ -716,7 +716,7 @@ function TimelineRow({
       <div className="hidden shrink-0 items-center gap-1.5 md:flex">
         {entry.zoneName && (
           <button
-            className="flex max-w-40 items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-300 hover:border-white/25 hover:text-white"
+            className="flex max-w-40 items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[0.6875rem] text-zinc-300 hover:border-white/25 hover:text-white"
             onClick={() => entry.zoneId && onZone(entry.zoneId)}
             title={
               entry.device
@@ -730,7 +730,7 @@ function TimelineRow({
           </button>
         )}
         {entry.source === "generated" && (
-          <span className="flex items-center gap-1 rounded-full border border-mujin-copper/20 px-2 py-0.5 text-[11px] text-mujin-copper-hover">
+          <span className="flex items-center gap-1 rounded-full border border-mujin-copper/20 px-2 py-0.5 text-[0.6875rem] text-mujin-copper-hover">
             <Radio className="h-3 w-3" /> Radio
           </span>
         )}

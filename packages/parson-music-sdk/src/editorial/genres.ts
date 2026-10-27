@@ -5,6 +5,26 @@ import type {
   GenreTreeNode,
 } from "../domain/types";
 
+/**
+ * A genre name as chips and tiles show it. MusicBrainz writes the genres it
+ * lists in lower case ("industrial rock", "electro-industrial"); those read
+ * as titles beside the canonical ones ("Industrial"). Names with capitals
+ * of their own ("IDM", "Hip Hop", "J-Pop") are kept as they are.
+ */
+const GENRE_SMALL_WORDS = new Set(["and", "of", "the", "n", "in", "de", "et"]);
+
+export function genreDisplayName(name: string): string {
+  if (name !== name.toLowerCase()) return name;
+  return name.replace(
+    /(^|[\s\-/&(])(\p{L}+)/gu,
+    (_, before: string, word: string, offset: number) =>
+      before +
+      (offset > 0 && GENRE_SMALL_WORDS.has(word)
+        ? word
+        : word.charAt(0).toUpperCase() + word.slice(1)),
+  );
+}
+
 /** Route of a genre page in the web app. */
 export function genreHref(slug: string) {
   return `/genre?slug=${encodeURIComponent(slug)}`;

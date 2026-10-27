@@ -5,7 +5,7 @@ import {
   influenceLine,
   influencesEmptyLabel,
   performanceLine,
-  personHue,
+  personTone,
   personInitials,
   relatedSections,
 } from "@parson/music-sdk";
@@ -23,12 +23,16 @@ import {
   editorialImageSrc,
 } from "@/features/library/credits/person-avatar";
 
-/** A color for each section's banner, after Roon's editorial panels. */
+/**
+ * Each section's banner tone, after Roon's editorial panels but within the
+ * Mujin Music palette: copper, burnt copper, warm graphite and bronze, each
+ * deepening to the canvas.
+ */
 const TONES = {
-  performers: { base: "#3b3fe0", deep: "#1b1d7a" },
-  music: { base: "#e2483d", deep: "#7a1a14" },
-  collaborators: { base: "#3f4652", deep: "#16191f" },
-  influences: { base: "#0f8a74", deep: "#063d33" },
+  performers: { base: "#b8703f", deep: "#24150c" },
+  music: { base: "#8c4f2c", deep: "#1f120b" },
+  collaborators: { base: "#3a3531", deep: "#141211" },
+  influences: { base: "#7a6040", deep: "#1c160e" },
 } as const;
 
 type Tone = (typeof TONES)[keyof typeof TONES];
@@ -48,7 +52,7 @@ function Portrait({
 }) {
   const src = editorialImageSrc(imageUrl);
   const [failed, setFailed] = useState(false);
-  const hue = personHue(name);
+  const [lit] = personTone(name);
   return (
     <>
       {src && !failed ? (
@@ -63,9 +67,9 @@ function Portrait({
       ) : (
         <span
           aria-hidden
-          className="absolute inset-0 flex items-center justify-center font-serif text-5xl text-white/70"
+          className="mj-display absolute inset-0 flex items-center justify-center text-5xl text-mujin-text/70"
           style={{
-            background: `linear-gradient(160deg, hsl(${hue} 30% 40%), ${tone.deep})`,
+            background: `linear-gradient(160deg, ${lit}, ${tone.deep})`,
           }}
         >
           {personInitials(name)}
@@ -94,7 +98,7 @@ function BannerPerson({
   const body = (
     <>
       <Portrait imageUrl={person.image_url} name={person.name} tone={tone} />
-      <span className="absolute inset-x-2.5 bottom-3 font-serif text-[15px] leading-tight text-white drop-shadow [overflow-wrap:anywhere] [hyphens:auto] sm:inset-x-3 sm:text-2xl">
+      <span className="mj-title absolute inset-x-2.5 bottom-3 text-[0.9375rem] leading-tight text-mujin-text drop-shadow [overflow-wrap:anywhere] [hyphens:auto] sm:inset-x-3 sm:text-[1.375rem]">
         {person.name}
       </span>
     </>
@@ -142,17 +146,19 @@ function RelatedBanner({
   const empty = Math.max(0, 3 - shown.length);
   return (
     <div
-      className="grid overflow-hidden rounded-2xl shadow-2xl shadow-black/40 md:grid-cols-[minmax(0,1fr)_minmax(0,1.55fr)]"
-      style={{ background: tone.base }}
+      className="grid overflow-hidden rounded-2xl border border-white/[0.06] shadow-2xl shadow-black/40 md:grid-cols-[minmax(0,1fr)_minmax(0,1.55fr)]"
+      style={{
+        background: `linear-gradient(135deg, ${tone.base} 0%, ${tone.deep} 92%)`,
+      }}
     >
       <div className="flex min-h-44 flex-col justify-end gap-3 p-6 sm:p-8">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/85">
-          {kicker}
-        </p>
-        <h3 className="font-serif text-4xl leading-[0.95] text-white sm:text-5xl">
+        <p className="mj-eyebrow text-mujin-text/85!">{kicker}</p>
+        <h3 className="mj-display text-4xl leading-[0.95] text-mujin-text sm:text-5xl">
           {title}
         </h3>
-        <p className="max-w-sm text-sm leading-6 text-white/75">{summary}</p>
+        <p className="max-w-sm text-sm leading-6 text-mujin-text/75">
+          {summary}
+        </p>
       </div>
       <div className="grid grid-cols-3">
         {shown.map((person) => (
@@ -239,7 +245,7 @@ function InfluenceRow({ person }: { person: InfluencePerson }) {
     <>
       <PersonAvatar imageUrl={person.image_url} name={person.name} size={44} />
       <span className="min-w-0">
-        <span className="block truncate text-[15px] font-medium text-zinc-100 group-hover:text-white">
+        <span className="block truncate text-[0.9375rem] font-medium text-zinc-100 group-hover:text-white">
           {person.name}
         </span>
         {line && (

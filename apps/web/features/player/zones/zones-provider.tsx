@@ -30,6 +30,7 @@ import {
   type ZoneSettingsPatch,
   type ZoneSocketMessage,
 } from "@parson/music-sdk";
+import { publishAppearanceChange } from "@/features/appearance/appearance-events";
 import type { LibrarySong } from "@parson/music-sdk/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -410,6 +411,8 @@ export function ZonesProvider({ children }: { children: ReactNode }) {
         }
         if (message.type === "zones_changed") {
           void queryClient.invalidateQueries({ queryKey: zonesQueryKey });
+        } else if (message.type === "appearance_changed") {
+          publishAppearanceChange(message.revision);
         } else if (
           message.type === "zone_command" &&
           message.zone_id === localZoneRef.current

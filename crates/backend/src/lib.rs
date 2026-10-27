@@ -7,6 +7,8 @@ pub mod app;
 pub mod assets;
 #[cfg(feature = "server")]
 pub mod discovery;
+#[cfg(feature = "server")]
+pub mod displays;
 pub mod domain;
 #[cfg(feature = "server")]
 pub mod enrichment;

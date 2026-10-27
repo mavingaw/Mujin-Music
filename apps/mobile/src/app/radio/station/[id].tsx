@@ -29,7 +29,7 @@ import {
   useToggleSaved,
 } from "@/components/live-radio-ui";
 import { Screen, SectionTitle } from "@/components/music-ui";
-import { layout, palette } from "@/constants/colors";
+import { alpha, layout, palette } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 
 /** A station: play, save, what it is playing and how it sounds. */
@@ -58,7 +58,7 @@ export default function StationScreen() {
       <Screen>
         <SafeAreaView style={{ flex: 1 }}>
           {query.isPending ? (
-            <ActivityIndicator color="white" style={{ marginTop: 80 }} />
+            <ActivityIndicator color={palette.text} style={{ marginTop: 80 }} />
           ) : (
             <Text style={styles.empty}>This station could not be found.</Text>
           )}
@@ -87,7 +87,7 @@ export default function StationScreen() {
             onPress={() => router.back()}
             style={styles.back}
           >
-            <ChevronLeft color="white" size={26} />
+            <ChevronLeft color={palette.text} size={26} />
           </Pressable>
           <View style={styles.header}>
             <StationLogo rounded={20} size={196} station={station} />
@@ -106,9 +106,17 @@ export default function StationScreen() {
                 style={styles.playButton}
               >
                 {isPlaying ? (
-                  <Pause color="black" fill="black" size={20} />
+                  <Pause
+                    color={palette.background}
+                    fill={palette.background}
+                    size={20}
+                  />
                 ) : (
-                  <Play color="black" fill="black" size={20} />
+                  <Play
+                    color={palette.background}
+                    fill={palette.background}
+                    size={20}
+                  />
                 )}
                 <Text style={styles.playText}>
                   {isPlaying ? "Pause" : current ? "Resume" : "Play now"}
@@ -127,8 +135,8 @@ export default function StationScreen() {
                 style={styles.saveButton}
               >
                 <Heart
-                  color={station.saved ? "#fb7185" : "white"}
-                  fill={station.saved ? "#fb7185" : "transparent"}
+                  color={station.saved ? palette.danger : palette.text}
+                  fill={station.saved ? palette.danger : "transparent"}
                   size={20}
                 />
               </Pressable>
@@ -194,7 +202,7 @@ const styles = StyleSheet.create({
   },
   badges: { flexDirection: "row", gap: 8, marginTop: 16 },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 30,
     fontWeight: "900",
     letterSpacing: -0.5,
@@ -210,14 +218,14 @@ const styles = StyleSheet.create({
   },
   playButton: {
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 999,
     flexDirection: "row",
     gap: 8,
     height: 48,
     paddingHorizontal: 26,
   },
-  playText: { color: "black", fontSize: 15, fontWeight: "800" },
+  playText: { color: palette.background, fontSize: 15, fontWeight: "800" },
   saveButton: {
     alignItems: "center",
     borderColor: palette.borderStrong,
@@ -228,20 +236,20 @@ const styles = StyleSheet.create({
     width: 48,
   },
   onAir: {
-    backgroundColor: "rgba(244,63,94,0.12)",
+    backgroundColor: alpha(palette.danger, 0.12),
     borderRadius: 14,
     marginHorizontal: layout.horizontal,
     padding: 14,
   },
-  onAirTitle: { color: "white", fontSize: 17, fontWeight: "700" },
-  onAirArtist: { color: "#d4d4d8", fontSize: 14, marginTop: 2 },
+  onAirTitle: { color: palette.text, fontSize: 17, fontWeight: "700" },
+  onAirArtist: { color: palette.secondary, fontSize: 14, marginTop: 2 },
   history: {
     color: palette.secondary,
     fontSize: 13,
     marginHorizontal: layout.horizontal,
     marginTop: 8,
   },
-  body: { color: "#e4e4e7", fontSize: 14, marginHorizontal: layout.horizontal },
+  body: { color: "#e9e5dd", fontSize: 14, marginHorizontal: layout.horizontal },
   note: {
     color: palette.muted,
     fontSize: 12,

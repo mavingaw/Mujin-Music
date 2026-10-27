@@ -15,6 +15,7 @@ import {
   formatTone,
   formatToneFromLabel,
   genreTileStyle,
+  localAlbumEntry,
   mergeLibraryAlbums,
   parseAlbumSourceFilter,
   providerStatusLine,
@@ -356,4 +357,33 @@ test("only the edited-copy 409 asks before replacing edits", () => {
     }),
   ).toBe(false);
   expect(isEditedCopyConflict(new Error("offline"))).toBe(false);
+});
+
+test("local albums carry the server's quality badge", () => {
+  const entry = localAlbumEntry({
+    id: "goldberg",
+    name: "The Open Goldberg Variations",
+    artistId: "kimiko",
+    artistName: "Kimiko Ishizaka",
+    coverPath: "cover.jpg",
+    releaseYear: "2012",
+    songCount: 5,
+    formatLabel: "24/96",
+    hiRes: true,
+    lossless: true,
+  });
+  expect(entry.formatLabel).toBe("24/96");
+  expect(entry.hiRes).toBe(true);
+  expect(entry.lossless).toBe(true);
+  const older = localAlbumEntry({
+    id: "x",
+    name: "X",
+    artistId: "a",
+    artistName: "A",
+    coverPath: "",
+    releaseYear: "",
+    songCount: 1,
+  });
+  expect(older.formatLabel).toBeNull();
+  expect(older.hiRes).toBe(false);
 });

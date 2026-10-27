@@ -219,7 +219,7 @@ function WorkRow({
             </span>
           </span>
           {work.form && (
-            <span className="hidden shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-400 md:inline">
+            <span className="hidden shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[0.6875rem] text-zinc-400 md:inline">
               {work.form}
             </span>
           )}
@@ -324,7 +324,7 @@ export function RecordingRow({
         </span>
         <button
           aria-label={`Play ${recording.albumName ?? "recording"}`}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-black hover:bg-zinc-200"
+          className="mj-primary grid h-8 w-8 shrink-0 place-items-center rounded-full"
           onClick={onPlay}
           type="button"
         >

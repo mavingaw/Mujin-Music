@@ -253,6 +253,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(crate::api::works::get_artist_works)
             .service(crate::api::discography::get_discography)
             .service(crate::api::related::get_related)
+            .service(crate::api::home::get_similar_artists)
             .service(get_artist_info),
     );
 }
