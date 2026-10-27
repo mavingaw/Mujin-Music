@@ -188,7 +188,7 @@ describe("history zone", () => {
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
     expect(localZoneForHistory("device-1234", chromeMac, true)).toEqual({
       zone_id: "client:device-1234",
-      zone_name: "Parson on macOS",
+      zone_name: "Mujin Music on macOS",
       device: "Desktop app",
     });
     const web = localZoneForHistory("bad id!", chromeMac, false);
