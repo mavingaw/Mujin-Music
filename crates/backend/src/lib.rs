@@ -17,6 +17,8 @@ pub mod imports;
 pub mod library;
 pub mod listen_later;
 #[cfg(feature = "server")]
+pub mod live_radio;
+#[cfg(feature = "server")]
 pub mod outputs;
 pub mod persistence;
 mod playlist_rules;

@@ -6,6 +6,7 @@ import {
   defaultRadioSettings,
   getRadioPicks,
   getRadioSettings,
+  isLiveRadioId,
   isStreamingId,
   nextRepeatMode,
   normalizeDspSettings,
@@ -108,7 +109,9 @@ export type PendingRadioSkip = { song: LibrarySong; cover: string };
 const cover = (path?: string) =>
   !path
     ? defaultCover
-    : /^(https:\/\/|data:image\/)/i.test(path)
+    : /^(https:\/\/|data:image\/)/i.test(path) ||
+        // Live station logos are absolute URLs on this server.
+        path.startsWith(`${getBaseURL()}/api/`)
       ? path
       : `${getBaseURL()}/media/images/${encodeURIComponent(path)}`;
 
@@ -280,7 +283,8 @@ export function usePlayerController() {
         queueRef.current.length &&
         radioEnabledRef.current &&
         // Server queues and radio cover the local library only.
-        !isStreamingId(normalized.id)
+        !isStreamingId(normalized.id) &&
+        !isLiveRadioId(normalized.id)
       ) {
         manualQueuePending.current = true;
         const explicitSongIds = queueRef.current
@@ -543,8 +547,49 @@ export function usePlayerController() {
       setSongCallback,
     ],
   );
+  /**
+   * A live stream that drops (network, station restart) reconnects with a
+   * growing pause, up to six times in a row; a minute of good playback
+   * resets the count.
+   */
+  const liveRetries = useRef({ count: 0, since: 0 });
+  const reconnectLive = useCallback(() => {
+    const songId = activeSong.current.id;
+    if (!isLiveRadioId(songId)) return false;
+    const now = Date.now();
+    if (now - liveRetries.current.since > 60_000) {
+      liveRetries.current = { count: 0, since: now };
+    }
+    if (liveRetries.current.count >= 6) {
+      setError(
+        "The station stopped sending audio. Try again later or pick another station.",
+      );
+      setIsPlaying(false);
+      return true;
+    }
+    const attempt = ++liveRetries.current.count;
+    const generation = playbackGeneration.current;
+    setError(`Reconnecting to ${activeSong.current.name}…`);
+    setTimeout(
+      () => {
+        if (
+          generation !== playbackGeneration.current ||
+          activeSong.current.id !== songId
+        ) {
+          return;
+        }
+        setAudioSource(
+          streamUrl(songId, 0, false, browserPlaybackCapabilities()),
+        );
+        playAudioSource();
+      },
+      Math.min(1_000 * 2 ** (attempt - 1), 15_000),
+    );
+    return true;
+  }, [playAudioSource, setAudioSource, setError, setIsPlaying]);
   const handleMediaError = useCallback(
     (code: number | undefined) => {
+      if (reconnectLive()) return true;
       const activeSongId = activeSong.current.id;
       if (
         activeSongId &&
@@ -571,7 +616,14 @@ export function usePlayerController() {
       }
       return false;
     },
-    [playAudioSource, playItem, session?.bitrate, setAudioSource, setError],
+    [
+      playAudioSource,
+      playItem,
+      reconnectLive,
+      session?.bitrate,
+      setAudioSource,
+      setError,
+    ],
   );
   const playNextSong = useCallback(() => {
     const element = audio.current;
@@ -626,6 +678,8 @@ export function usePlayerController() {
     }
   }, [finishCrossfade, playAudioSource, setIsPlaying]);
   const handleTimeChange = useCallback((value: number | string) => {
+    // A live stream has no timeline to seek in.
+    if (isLiveRadioId(activeSong.current.id)) return;
     const element = audio.current;
     const bounded = setMediaPosition(element, value, element?.duration);
     if (bounded === null) {
@@ -644,6 +698,7 @@ export function usePlayerController() {
       !endingSongId ||
       // Server queues and radio cover the local library only.
       isStreamingId(endingSongId) ||
+      isLiveRadioId(endingSongId) ||
       !shouldContinueWithRadio({
         enabled: radioEnabledRef.current,
         repeating: repeatRef.current !== "off",
@@ -707,6 +762,8 @@ export function usePlayerController() {
     setRepeatMode(nextRepeatMode(repeatRef.current));
   }, [setRepeatMode]);
   const handleEnded = useCallback(() => {
+    // A live stream only ends when the connection drops.
+    if (reconnectLive()) return;
     if (repeatRef.current === "one" && audio.current) {
       audio.current.currentTime = 0;
       playAudioSource();
@@ -835,6 +892,7 @@ export function usePlayerController() {
       looping ||
       !song.id ||
       isStreamingId(song.id) ||
+      isLiveRadioId(song.id) ||
       manualQueuePending.current ||
       !queue.length
     ) {

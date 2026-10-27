@@ -87,7 +87,16 @@ import { SignalPathBadge, SignalPathContent } from "@/components/signal-path";
 import { ServerOutputs } from "@/components/server-outputs";
 import { dspAvailable } from "@/lib/signal-path";
 import { useSignalPath } from "@/hooks/use-signal-path";
-import { isStreamingId, type SignalPath } from "@parson/music-sdk";
+import {
+  getLiveNowPlaying,
+  isLiveRadioId,
+  isStreamingId,
+  LIVE_TITLE_POLL_MS,
+  liveStationIdFromSongId,
+  liveTitleText,
+  type SignalPath,
+} from "@parson/music-sdk";
+import { LiveTag, StationLogo } from "@/components/live-radio-ui";
 import { ZoneButton } from "@/components/zone-sheet";
 import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
 import {
@@ -193,14 +202,28 @@ function NowPlayingPanel({
   const presetLabel = playerAudioPresets.find(
     (preset) => preset.id === player.audioPreset,
   )?.label;
+  const live = isLiveRadioId(song.id);
   return (
     <View style={styles.player}>
-      <Artwork
-        path={song.album_object?.cover_url}
-        size={330}
-        rounded={14}
-        style={styles.art}
-      />
+      {live ? (
+        <View style={styles.art}>
+          <StationLogo
+            rounded={14}
+            size={330}
+            station={{
+              name: song.name,
+              logo_url: song.album_object?.cover_url || null,
+            }}
+          />
+        </View>
+      ) : (
+        <Artwork
+          path={song.album_object?.cover_url}
+          size={330}
+          rounded={14}
+          style={styles.art}
+        />
+      )}
       <View style={styles.songInfo}>
         <View style={{ flex: 1 }}>
           {player.radio.currentIsPick ? (
@@ -215,10 +238,12 @@ function NowPlayingPanel({
             accessibilityRole={song.album_object?.id ? "button" : undefined}
             numberOfLines={1}
             style={styles.title}
-            onPress={() =>
-              song.album_object?.id &&
-              router.replace(`/album/${song.album_object.id}`)
-            }
+            onPress={() => {
+              const station = liveStationIdFromSongId(song.id);
+              if (station) router.replace(`/radio/station/${station}`);
+              else if (song.album_object?.id)
+                router.replace(`/album/${song.album_object.id}`);
+            }}
           >
             {song.name}
           </Text>
@@ -232,48 +257,65 @@ function NowPlayingPanel({
               router.replace(`/artist/${song.artist_object.id}`)
             }
           >
-            {song.artist}
+            {live ? (
+              <LiveTitle fallback={song.artist} songId={song.id} />
+            ) : (
+              song.artist
+            )}
           </Text>
-          {isStreamingId(song.id) ? (
+          {live ? (
+            <View style={styles.liveRow}>
+              <LiveTag />
+              <SignalPathBadge onPress={onSignalPath} path={signalPath} />
+            </View>
+          ) : isStreamingId(song.id) ? (
             <StreamDeliveryLine songId={song.id} />
           ) : (
             <SignalPathBadge onPress={onSignalPath} path={signalPath} />
           )}
         </View>
-        <Pressable
-          {...immediateBorderlessPressFeedback}
-          accessibilityLabel={
-            !online
-              ? "Liked songs unavailable offline"
-              : banned
-                ? "Banned from Radio and Shuffle. Unban"
-                : favorite
-                  ? "Remove from liked songs and ban from Radio"
-                  : "Add to liked songs"
-          }
-          accessibilityRole="button"
-          disabled={!online}
-          hitSlop={12}
-          style={!online ? styles.disabledControl : undefined}
-          onPress={onToggleFavorite}
-        >
-          {banned ? (
-            <Ban color={palette.danger} size={25} />
-          ) : (
-            <Heart
-              color={favorite ? palette.danger : "white"}
-              fill={favorite ? palette.danger : "transparent"}
-              size={25}
-            />
-          )}
-        </Pressable>
+        {live ? null : (
+          <Pressable
+            {...immediateBorderlessPressFeedback}
+            accessibilityLabel={
+              !online
+                ? "Liked songs unavailable offline"
+                : banned
+                  ? "Banned from Radio and Shuffle. Unban"
+                  : favorite
+                    ? "Remove from liked songs and ban from Radio"
+                    : "Add to liked songs"
+            }
+            accessibilityRole="button"
+            disabled={!online}
+            hitSlop={12}
+            style={!online ? styles.disabledControl : undefined}
+            onPress={onToggleFavorite}
+          >
+            {banned ? (
+              <Ban color={palette.danger} size={25} />
+            ) : (
+              <Heart
+                color={favorite ? palette.danger : "white"}
+                fill={favorite ? palette.danger : "transparent"}
+                size={25}
+              />
+            )}
+          </Pressable>
+        )}
       </View>
-      {online ? (
+      {online && !live ? (
         <View style={styles.feedbackRow}>
           <RadioThumbs index={player.currentIndex} name={song.name} />
         </View>
       ) : null}
-      <PlaybackTimeline onSeek={player.seek} />
+      {live ? (
+        <View style={styles.liveBar}>
+          <View style={styles.liveLine} />
+        </View>
+      ) : (
+        <PlaybackTimeline onSeek={player.seek} />
+      )}
       {online ? <RadioNotices /> : null}
       {notice ? (
         <Text accessibilityRole="alert" style={styles.playbackError}>
@@ -1012,7 +1054,28 @@ function PlayerServerOutputs() {
   );
 }
 
+/** A live station's current title (from its stream), polled. */
+function LiveTitle({ songId, fallback }: { songId: string; fallback: string }) {
+  const station = liveStationIdFromSongId(songId);
+  const playing = useQuery({
+    queryKey: ["live-radio", "now-playing", station],
+    queryFn: async () =>
+      (await getLiveNowPlaying([station!]))[station!] ?? null,
+    enabled: Boolean(station),
+    refetchInterval: LIVE_TITLE_POLL_MS,
+  }).data;
+  return <>{liveTitleText(playing?.title) || fallback}</>;
+}
+
 const styles = StyleSheet.create({
+  liveRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 6 },
+  liveBar: { height: 44, justifyContent: "center", paddingHorizontal: 4 },
+  liveLine: {
+    backgroundColor: "#f43f5e",
+    borderRadius: 2,
+    height: 3,
+    opacity: 0.85,
+  },
   page: { flex: 1, backgroundColor: "black" },
   down: { padding: 20 },
   header: {
