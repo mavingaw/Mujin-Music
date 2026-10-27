@@ -13,3 +13,4 @@
 *.wav binary
 *.aiff binary
 *.mp4 binary
+*.cmd text eol=crlf

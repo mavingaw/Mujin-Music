@@ -132,7 +132,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Mujin Music",
-      "artifactName": "Mujin-Music-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Mujin-Music-Setup-${version}-${arch}.${ext}",
+      "include": "build/installer.nsh"
     },
     "portable": {
       "artifactName": "Mujin-Music-${version}-${arch}-portable.${ext}"

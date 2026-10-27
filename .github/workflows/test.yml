@@ -288,6 +288,56 @@ jobs:
               throw "Windows package is missing $relativePath."
             }
           }
+      # build/installer.nsh adds inbound Windows Firewall rules for the app
+      # and its background server on private networks, and the uninstaller
+      # removes them. The runner is elevated, so the silent install adds them
+      # without a UAC prompt, as an install for all users would.
+      - name: Check the installer's Windows Firewall rules
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target\release\bundle\electron\Mujin-Music-Setup-*.exe |
+            Select-Object -First 1
+          $install = Join-Path $env:RUNNER_TEMP "MujinMusicFirewall"
+          $expected = [ordered]@{
+            "Mujin Music" = Join-Path $install "Mujin Music.exe"
+            "Mujin Music Server" = Join-Path $env:LOCALAPPDATA "Programs\Mujin Music Server\ParsonMusicServer.exe"
+          }
+          function Get-MujinRule([string]$Name, [string]$Program) {
+            @(Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue |
+              Where-Object {
+                $filter = $_ | Get-NetFirewallApplicationFilter
+                [Environment]::ExpandEnvironmentVariables($filter.Program) -eq $Program
+              })
+          }
+          function Wait-Until([scriptblock]$Condition, [string]$Failure) {
+            $deadline = (Get-Date).AddMinutes(2)
+            while (-not (& $Condition)) {
+              if ((Get-Date) -gt $deadline) { throw $Failure }
+              Start-Sleep -Seconds 2
+            }
+          }
+          $process = Start-Process $installer.FullName -ArgumentList @("/S", "/D=$install") `
+            -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent installation failed." }
+          foreach ($name in $expected.Keys) {
+            $program = $expected[$name]
+            Wait-Until { (Get-MujinRule $name $program).Count -eq 1 } `
+              "The installer did not add exactly one '$name' rule for $program."
+            $rule = (Get-MujinRule $name $program)[0]
+            if ($rule.Direction -ne "Inbound" -or $rule.Action -ne "Allow" -or
+                $rule.Profile -ne "Private" -or $rule.Enabled -ne "True") {
+              $rule | Format-List | Out-Host
+              throw "The '$name' rule is not an enabled inbound allow rule for private networks only."
+            }
+          }
+          $uninstaller = Join-Path $install "Uninstall Mujin Music.exe"
+          $process = Start-Process $uninstaller -ArgumentList "/S" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent uninstall failed." }
+          foreach ($name in $expected.Keys) {
+            $program = $expected[$name]
+            Wait-Until { (Get-MujinRule $name $program).Count -eq 0 } `
+              "The uninstaller left the '$name' rule for $program."
+          }
       - name: Upload Windows installer and portable executable
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -306,6 +356,53 @@ jobs:
         run: |
           ./crates/windows-server/package.ps1 -SkipWebBuild
           ./crates/windows-server/verify-update-assets.ps1
+      # Runs the double-click scripts the zip ships, as a user would (with
+      # stdin redirected, so they do not wait for Enter), and checks the rule
+      # they add and remove. The runner is elevated, so there is no UAC prompt.
+      - name: Check the server package's contents and Windows Firewall scripts
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem artifacts\windows-server\Mujin-Music-Server-*-win-x64.zip |
+            Select-Object -First 1
+          if ($null -eq $zip) { throw "The server-only zip was not created." }
+          $unpacked = Join-Path $env:RUNNER_TEMP "MujinMusicServerZip"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $unpacked -Force
+          foreach ($name in @(
+            "ParsonMusicServer.exe",
+            "README.md",
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
+            "firewall.ps1",
+            "Allow through Windows Firewall.cmd",
+            "Remove from Windows Firewall.cmd"
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path $unpacked $name) -PathType Leaf)) {
+              throw "The server-only zip is missing $name."
+            }
+          }
+          $program = Join-Path $unpacked "ParsonMusicServer.exe"
+          function Get-ServerRule {
+            @(Get-NetFirewallRule -DisplayName "Mujin Music Server" -ErrorAction SilentlyContinue |
+              Where-Object {
+                $filter = $_ | Get-NetFirewallApplicationFilter
+                [Environment]::ExpandEnvironmentVariables($filter.Program) -eq $program
+              })
+          }
+          foreach ($attempt in 1..2) {
+            $null | & (Join-Path $unpacked "Allow through Windows Firewall.cmd")
+            if ($LASTEXITCODE -ne 0) { throw "Allow through Windows Firewall.cmd failed." }
+          }
+          $rules = Get-ServerRule
+          if ($rules.Count -ne 1) { throw "Expected one server rule after allowing twice, found $($rules.Count)." }
+          if ($rules[0].Direction -ne "Inbound" -or $rules[0].Action -ne "Allow" -or
+              $rules[0].Profile -ne "Private" -or $rules[0].Enabled -ne "True") {
+            $rules[0] | Format-List | Out-Host
+            throw "The server rule is not an enabled inbound allow rule for private networks only."
+          }
+          $null | & (Join-Path $unpacked "Remove from Windows Firewall.cmd")
+          if ($LASTEXITCODE -ne 0) { throw "Remove from Windows Firewall.cmd failed." }
+          if ((Get-ServerRule).Count -ne 0) { throw "The server rule remains after removing it." }
       - name: Upload standalone Windows server package
         if: matrix.arch == 'x64'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

@@ -45,7 +45,7 @@ it.
 
 | System  | How the server runs                                                                                                                                                                                                                                                                   |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows | The Mujin Music server tray host (`ParsonMusicServer.exe`, shipped with Mujin Music Desktop) is copied to `%LOCALAPPDATA%\Programs\Parson Server` and starts at sign-in from `HKCU\…\Run` (its **Start with Windows** item).                                                          |
+| Windows | The Mujin Music server tray host (`ParsonMusicServer.exe`, shipped with Mujin Music Desktop) is copied to `%LOCALAPPDATA%\Programs\Mujin Music Server` and starts at sign-in from `HKCU\…\Run` (its **Start with Windows** item).                                                     |
 | macOS   | A LaunchAgent, `~/Library/LaunchAgents/com.parsonlabs.parson.server.plist`, runs Mujin Music in `--server-host` mode. A menu-bar item shows that it is running and offers **Launch at startup** and **Quit Mujin Music Server**. launchd restarts it after a crash, never after Quit. |
 | Linux   | A systemd user service, `~/.config/systemd/user/parson-server.service` (`systemctl --user status parson-server`). Without a systemd user session, an XDG autostart entry runs Mujin Music in `--server-host` mode instead.                                                            |
 
@@ -232,6 +232,43 @@ volumes:
 Remotes need to reach TCP 1993 on the server. If discovery is blocked (some
 guest networks, VLANs, Docker bridge networking), connect by address.
 
+Speakers need it too: Sonos, UPnP/DLNA renderers and Chromecasts fetch the
+music from the server over HTTP on the same port, and Sonos and UPnP
+speakers send their events back to it. The server finds them with SSDP
+(UDP 1900 multicast; the answers come back to the server) and mDNS. A
+firewall that blocks the server shows up as speakers that are found but
+stay silent, or phones that see the server and then cannot connect.
+
+### Windows Firewall
+
+The Mujin Music Desktop installer adds two inbound **allow** rules, for
+**private** networks only, and the uninstaller removes them:
+
+| Rule                 | Program                                                            | Why                                             |
+| -------------------- | ------------------------------------------------------------------ | ----------------------------------------------- |
+| `Mujin Music`        | `<install folder>\Mujin Music.exe`                                 | finds servers on the network (mDNS)             |
+| `Mujin Music Server` | `%LOCALAPPDATA%\Programs\Mujin Music Server\ParsonMusicServer.exe` | phones, browsers, speakers and bridges reach it |
+
+Changing firewall rules needs administrator rights. An install for all
+users adds them directly; an install for the current user asks once through
+UAC (decline it, and Windows asks again the first time the server starts).
+A silent install without administrator rights, such as an automatic update,
+never prompts: updates keep the rules that are already there. The
+uninstaller keeps the server's rule while the background server is still
+installed, since it keeps serving after the desktop app is gone.
+
+The server-only package (`Mujin-Music-Server-<version>-win-x64.zip`) has no
+installer. Double-click **Allow through Windows Firewall.cmd** next to
+`ParsonMusicServer.exe` (it asks through UAC), and **Remove from Windows
+Firewall.cmd** before deleting the folder. Both run `firewall.ps1`, which
+takes `-Action Allow|Remove` and `-Program <path>`.
+
+Windows marks a new network as **Public** unless you choose otherwise. The
+rules above, like Windows' own prompt, cover private networks only, so set
+your home network to **Private** (Settings → Network & internet → Wi-Fi or
+Ethernet → the network → Network profile type). Check the rules with
+`netsh advfirewall firewall show rule name="Mujin Music Server" verbose`.
+
 ## Headless server on Linux or a NAS (Docker)
 
 The container image is `ghcr.io/parsonlabs/parson:latest`. It is built for
@@ -297,8 +334,9 @@ the desktop interface. Every release includes it, and each pull request
 builds it as a CI artifact. Its tray menu can open Mujin Music, start, stop and
 restart the server, start it with Windows, and **Connect a phone or another
 computer…**, which opens Settings → Connections. Data is stored in
-`%LOCALAPPDATA%\Parson`. On first start, allow Mujin Music through Windows
-Firewall on private networks, so that remotes can reach it.
+`%LOCALAPPDATA%\Parson`. Before first start, double-click **Allow through
+Windows Firewall.cmd** in the same folder, so that phones and speakers can
+reach it on private networks (see [Windows Firewall](#windows-firewall)).
 
 ## Server settings
 
