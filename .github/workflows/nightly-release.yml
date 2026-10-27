@@ -33,7 +33,7 @@ jobs:
       - name: Download release packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: parson-*
+          pattern: mujin-music-*
           path: artifacts
           merge-multiple: true
       - name: Verify release package set
@@ -51,7 +51,7 @@ jobs:
           test "$(find artifacts -maxdepth 1 -type f -name '*-setup.exe' | wc -l)" -eq 2
           test "$(find artifacts -maxdepth 1 -type f -name '*-portable.exe' | wc -l)" -eq 2
           test "$(find artifacts -maxdepth 1 -type f -name '*.dmg' | wc -l)" -eq 2
-          test "$(find artifacts -maxdepth 1 -type f -name 'Parson_*.zip' | wc -l)" -eq 2
+          test "$(find artifacts -maxdepth 1 -type f -name 'Mujin-Music-*.zip' | wc -l)" -eq 2
           test "$(find artifacts -maxdepth 1 -type f ! -name '*.blockmap' | wc -l)" -eq 12
       - name: Publish rolling nightly release
         env:
@@ -65,6 +65,6 @@ jobs:
           mapfile -d '' packages < <(find artifacts -maxdepth 1 -type f -print0 | sort -z)
           gh release create nightly "${packages[@]}" \
             --target "$GITHUB_SHA" \
-            --title "Parson Nightly" \
+            --title "Mujin Music Nightly" \
             --notes "Automated nightly desktop packages for Linux, macOS, and Windows." \
             --prerelease

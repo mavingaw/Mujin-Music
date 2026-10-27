@@ -59,6 +59,11 @@ const {
   fileVaultStorage,
 } = require("./session-vault.cjs");
 
+// The app was called Parson before it became Mujin Music. Its settings,
+// saved servers and sign-ins stay where they have always been, whatever the
+// product name says. (`--server-host` moves itself to "Parson Server".)
+app.setPath("userData", path.join(app.getPath("appData"), "Parson"));
+
 // `Parson --server-host` is the background process that keeps the server
 // running (macOS LaunchAgent, Linux without systemd). It has no window.
 const SERVER_HOST = process.argv.includes("--server-host");
@@ -189,7 +194,7 @@ async function localService() {
         env: { ...process.env, ...env },
       });
       child.on("error", (error) =>
-        console.error("Could not start the Parson server", error),
+        console.error("Could not start the Mujin Music server", error),
       );
       child.unref();
     },
@@ -258,20 +263,20 @@ async function offerLinuxInstallation() {
         ? `Version ${state.installedVersion} is installed.`
         : state.installed
           ? "An existing installation was found."
-          : "Install Parson for your user account.";
+          : "Install Mujin Music for your user account.";
   const choice = process.argv.includes("--install")
     ? 0
     : dialog.showMessageBoxSync({
         type: "info",
-        title: `${action} Parson`,
+        title: `${action} Mujin Music`,
         message:
           alreadyCurrent || installedIsNewer
             ? versionDetail
-            : `${action} Parson ${version}?`,
+            : `${action} Mujin Music ${version}?`,
         detail:
           alreadyCurrent || installedIsNewer
             ? "You can open the installed copy or run this file once."
-            : `${versionDetail}\n\nNo administrator password is required. Parson will add itself to your applications and restart.`,
+            : `${versionDetail}\n\nNo administrator password is required. Mujin Music will add itself to your applications and restart.`,
         buttons: [action, "Run once"],
         defaultId: 0,
         cancelId: 1,
@@ -304,8 +309,8 @@ async function offerLinuxInstallation() {
       title: `${action} failed`,
       message:
         alreadyCurrent || installedIsNewer
-          ? "Parson could not open the installed copy."
-          : `Parson could not ${action.toLowerCase()} itself.`,
+          ? "Mujin Music could not open the installed copy."
+          : `Mujin Music could not ${action.toLowerCase()} itself.`,
       detail: error instanceof Error ? error.message : String(error),
       buttons: ["Continue"],
     });
@@ -403,7 +408,7 @@ async function ensureLocalServer() {
   const service = await localService();
   if (!service.available) {
     throw new Error(
-      "This copy of Parson cannot run the server in the background on this computer.",
+      "This copy of Mujin Music cannot run the server in the background on this computer.",
     );
   }
   const current = await probeBackend();
@@ -421,7 +426,7 @@ async function ensureLocalServer() {
   }
   if (current.kind === "other") {
     throw new Error(
-      `Port ${LOCAL_PORT} is used by another program, so the Parson server cannot start. Close that program or connect to a Parson server on your network instead.`,
+      `Port ${LOCAL_PORT} is used by another program, so the Mujin Music server cannot start. Close that program or connect to a Mujin Music server on your network instead.`,
     );
   }
   upgradeChecked = true;
@@ -438,7 +443,7 @@ async function ensureLocalServer() {
       foreignSince ||= Date.now();
       if (Date.now() - foreignSince > 5_000) {
         const error = new Error(
-          `Another Parson server (“${status.manifest.name}”) already runs on port ${LOCAL_PORT} of this computer. Connect to it from “Connect to a server on my network”, or stop it first.`,
+          `Another Mujin Music server (“${status.manifest.name}”) already runs on port ${LOCAL_PORT} of this computer. Connect to it from “Connect to a server on my network”, or stop it first.`,
         );
         error.foreign = status.manifest;
         throw error;
@@ -453,7 +458,7 @@ async function ensureLocalServer() {
       ? " Check `systemctl --user status parson-server` and `journalctl --user -u parson-server`."
       : "";
   throw new Error(
-    `The Parson server did not start within ${LOCAL_START_TIMEOUT_MS / 1000} seconds.${where}`,
+    `The Mujin Music server did not start within ${LOCAL_START_TIMEOUT_MS / 1000} seconds.${where}`,
   );
 }
 
@@ -549,7 +554,7 @@ async function startLocal({ persist = true } = {}) {
     const detail = error instanceof Error ? error.message : String(error);
     if (error?.foreign) {
       chooserWarning = {
-        title: "Another Parson server already runs on this computer. ",
+        title: "Another Mujin Music server already runs on this computer. ",
         body: detail,
       };
       serverMode = null;
@@ -590,7 +595,7 @@ async function loadRemoteApp() {
   try {
     await mainWindow.loadURL(resumeTarget(currentRemote.origin));
   } catch (error) {
-    console.error("Could not load the Parson app", error);
+    console.error("Could not load the Mujin Music app", error);
   }
 }
 
@@ -636,7 +641,7 @@ function watchRemote({ down = false } = {}) {
     },
     onReplaced: (manifest) => {
       chooserWarning = {
-        title: "This address now belongs to a different Parson server. ",
+        title: "This address now belongs to a different Mujin Music server. ",
         body: `${server.origin} answers as “${manifest.name || "another library"}”, not “${server.name}”. Choose it below if you trust it.`,
       };
       void showChooser();
@@ -707,7 +712,7 @@ async function connectRemote(
     manifest.instanceId !== target.instanceId
   ) {
     chooserWarning = {
-      title: "This address now belongs to a different Parson server. ",
+      title: "This address now belongs to a different Mujin Music server. ",
       body: `${new URL(origin).host} now answers as “${manifest.name}”. Connect to it from the list if you trust it.`,
     };
     await showChooser();
@@ -883,7 +888,7 @@ async function handleServersAction(action, args = {}) {
       if (!localServerAvailable()) {
         return {
           ok: false,
-          message: "This copy of Parson does not include the server.",
+          message: "This copy of Mujin Music does not include the server.",
         };
       }
       const ok = await startLocal();
@@ -986,7 +991,9 @@ function installDesktopBridge() {
 
   ipcMain.handle("parson:servers", async (event, action, args = {}) => {
     if (!isAllowedNavigation(event.senderFrame.url, "", ALLOWED_LOCAL_PAGES)) {
-      throw new Error("Server selection is only available to Parson Desktop.");
+      throw new Error(
+        "Server selection is only available to Mujin Music Desktop.",
+      );
     }
     return handleServersAction(action, args ?? {});
   });
@@ -994,13 +1001,13 @@ function installDesktopBridge() {
   ipcMain.handle("parson:invoke", async (event, command, args = {}) => {
     if (!appOrigin || new URL(event.senderFrame.url).origin !== appOrigin) {
       throw new Error(
-        "Desktop commands are only available to the Parson app this window shows.",
+        "Desktop commands are only available to the Mujin Music app this window shows.",
       );
     }
     if (!commandAllowed(command, serverMode)) {
       throw new Error(
         serverMode === "remote"
-          ? `${command} is only available when Parson runs the server on this computer.`
+          ? `${command} is only available when Mujin Music runs the server on this computer.`
           : `Unknown desktop command: ${command}`,
       );
     }
@@ -1123,7 +1130,7 @@ async function createWindow() {
     backgroundColor: "#000000",
     autoHideMenuBar: true,
     frame: process.platform === "darwin",
-    title: "Parson",
+    title: "Mujin Music",
     icon: app.isPackaged
       ? path.join(process.resourcesPath, "parson.png")
       : path.join(__dirname, "../../web/public/icons/icon-512.png"),
@@ -1200,7 +1207,7 @@ if (primary) {
   app
     .whenReady()
     .then(async () => {
-      app.setName("Parson");
+      app.setName("Mujin Music");
       hadLocalInstall = fs.existsSync(
         path.join(app.getPath("userData"), "desktop-instance.key"),
       );
@@ -1276,8 +1283,8 @@ if (primary) {
     })
     .catch((error) => {
       const detail = error instanceof Error ? error.message : String(error);
-      console.error("Parson desktop initialization failed", error);
-      dialog.showErrorBox("Parson could not start", detail);
+      console.error("Mujin Music desktop initialization failed", error);
+      dialog.showErrorBox("Mujin Music could not start", detail);
       app.quit();
     });
 }
@@ -1286,8 +1293,8 @@ app.on("activate", () => {
   if (!SERVER_HOST && BrowserWindow.getAllWindows().length === 0) {
     void createWindow().catch((error) => {
       const detail = error instanceof Error ? error.message : String(error);
-      console.error("Parson window restoration failed", error);
-      dialog.showErrorBox("Parson could not restore its window", detail);
+      console.error("Mujin Music window restoration failed", error);
+      dialog.showErrorBox("Mujin Music could not restore its window", detail);
     });
   }
 });

@@ -116,7 +116,14 @@ test("server.env keeps user lines, replaces the key and respects audio choices",
   assert.match(next, /^PARSON_LIBRARY_NAME=Living room$/m);
   assert.equal(next.match(/PARSON_DESKTOP_INSTANCE_TOKEN/g).length, 1);
   assert.match(next, new RegExp(`TOKEN=${"b".repeat(64)}`));
-  assert.equal(next.match(/^# Written by Parson Desktop/gm).length, 1);
+  assert.equal(next.match(/^# Written by Mujin Music Desktop/gm).length, 1);
+  // A file written before the rename gets the new header, not a second one.
+  const legacy = hostFileContents(
+    "# Written by Parson Desktop for the background server.\nPARSON_LOCAL_AUDIO=on\n",
+    { token: "c".repeat(64) },
+  );
+  assert.equal(legacy.match(/^# Written by/gm).length, 1);
+  assert.match(legacy, /^# Written by Mujin Music Desktop/m);
 });
 
 test("the systemd unit mirrors the packaged unit for a user session", () => {
@@ -137,7 +144,7 @@ test("the systemd unit mirrors the packaged unit for a user session", () => {
     "utf8",
   );
   for (const line of [
-    "Description=Parson music server",
+    "Description=Mujin Music server",
     "After=network-online.target sound.target",
     "RestartSec=3",
   ]) {
@@ -400,7 +407,7 @@ test("Windows: copies the tray host, registers it at sign-in and starts it", asy
   const installed = path.join(
     local,
     "Programs",
-    "Parson Server",
+    "Mujin Music Server",
     "ParsonMusicServer.exe",
   );
   assert.equal(service.paths.tray, installed);

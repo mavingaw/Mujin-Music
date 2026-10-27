@@ -31,7 +31,7 @@ if (-not $SkipWebBuild) {
 }
 
 & cargo build --locked --release -p parson-music-windows-server
-if ($LASTEXITCODE -ne 0) { throw "Building Parson for Windows failed." }
+if ($LASTEXITCODE -ne 0) { throw "Building Mujin Music for Windows failed." }
 
 $builtExecutable = Join-Path $workspace "target\release\ParsonMusicServer.exe"
 
@@ -51,7 +51,7 @@ Copy-Item -LiteralPath (Join-Path $workspace "crates\windows-server\README.md") 
 Copy-Item -LiteralPath (Join-Path $workspace "LICENSE") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $workspace "THIRD_PARTY_NOTICES.md") -Destination $staging
 
-$archive = Join-Path $output "ParsonMusicServer-$Version-win-x64.zip"
+$archive = Join-Path $output "Mujin-Music-Server-$Version-win-x64.zip"
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $archive -CompressionLevel Optimal
 
 $executable = Join-Path $output "ParsonMusicServer.exe"
@@ -60,7 +60,7 @@ $hash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerIn
 $size = (Get-Item -LiteralPath $executable).Length
 $manifest = [ordered]@{
     version = $Version
-    url = "https://github.com/ParsonLabs/Parson/releases/download/v$Version/ParsonMusicServer.exe"
+    url = "https://github.com/mavingaw/parson-jin/releases/download/v$Version/ParsonMusicServer.exe"
     sha256 = $hash
     size = $size
 } | ConvertTo-Json

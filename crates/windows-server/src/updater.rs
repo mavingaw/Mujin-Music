@@ -14,8 +14,8 @@ use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/ParsonLabs/Parson/releases/latest/download/windows-server-update.json";
-const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/ParsonLabs/Parson/releases/download/";
+    "https://github.com/mavingaw/parson-jin/releases/latest/download/windows-server-update.json";
+const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/mavingaw/parson-jin/releases/download/";
 const MAX_UPDATE_BYTES: u64 = 128 * 1024 * 1024;
 const SYNCHRONIZE_PROCESS: u32 = 0x0010_0000;
 
@@ -288,7 +288,7 @@ fn wait_for_process(process_id: u32) -> Result<(), String> {
     if result == WAIT_OBJECT_0 {
         Ok(())
     } else {
-        Err("the running Parson for Windows did not stop in time".to_string())
+        Err("the running Mujin Music for Windows did not stop in time".to_string())
     }
 }
 
@@ -387,7 +387,7 @@ mod tests {
         UpdateManifest {
             version: "99.0.0".to_string(),
             url:
-                "https://github.com/ParsonLabs/Parson/releases/download/v99.0.0/ParsonMusicServer.exe"
+                "https://github.com/mavingaw/parson-jin/releases/download/v99.0.0/ParsonMusicServer.exe"
                     .to_string(),
             sha256: "ab".repeat(32),
             size: 42,

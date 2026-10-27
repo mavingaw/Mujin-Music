@@ -27,7 +27,7 @@ foreach ($path in @($executable, $manifestPath, $checksumPath)) {
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $expectedHash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
 $expectedSize = (Get-Item -LiteralPath $executable).Length
-$expectedUrl = "https://github.com/ParsonLabs/Parson/releases/download/v$Version/ParsonMusicServer.exe"
+$expectedUrl = "https://github.com/mavingaw/parson-jin/releases/download/v$Version/ParsonMusicServer.exe"
 $sidecarHash = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split '\s+')[0]
 
 if ($manifest.version -ne $Version) { throw "Update manifest version does not match $Version." }

@@ -4,7 +4,7 @@
 #          sudo cp parson-music.service /etc/systemd/system/
 #          sudo systemctl enable --now parson-music
 [Unit]
-Description=Parson music server
+Description=Mujin Music server
 After=network-online.target sound.target
 Wants=network-online.target
 

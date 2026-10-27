@@ -4,6 +4,8 @@ const path = require("node:path");
 
 const APPLICATION_ID = "com.parsonlabs.parson";
 const DESKTOP_FILE = `${APPLICATION_ID}.desktop`;
+// Install paths and the desktop-file id stay as they were, so an update
+// replaces the existing installation and launcher in place.
 const APPIMAGE_FILE = "Parson.AppImage";
 
 function homeDirectory(environment = process.env) {
@@ -104,14 +106,14 @@ function desktopEntry(applicationPath, version) {
   return [
     "[Desktop Entry]",
     "Type=Application",
-    "Name=Parson",
+    "Name=Mujin Music",
     "Comment=Play and manage your music library",
     `Exec=${quoteDesktopArgument(applicationPath)} %U`,
     `Icon=${APPLICATION_ID}`,
     "Terminal=false",
     "Categories=AudioVideo;Audio;Player;",
     "MimeType=x-scheme-handler/parson;",
-    "StartupWMClass=Parson",
+    "StartupWMClass=Mujin Music",
     `X-AppImage-Version=${version}`,
     "X-Parson-Desktop=true",
     "",
@@ -166,7 +168,7 @@ async function updateExistingDesktopShortcut(paths, entry) {
   }
   if (
     !current.includes("X-Parson-Desktop=true") &&
-    !/^Name=Parson$/m.test(current)
+    !/^Name=(Parson|Mujin Music)$/m.test(current)
   ) {
     return false;
   }
