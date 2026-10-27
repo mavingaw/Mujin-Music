@@ -171,10 +171,11 @@ version is tagged.
   PCs without a screen.
 - **macOS and Linux**: desktop packages are published beside the Windows
   installer.
-- **Android**: the APK is built by the
-  [Android workflow](../.github/workflows/android.yml) and attached to each
-  run as `mujin-music-android-arm64-v8a`. A 32-bit (`armeabi-v7a`) build can
-  be started by hand from the Actions tab.
+- **Android**: each release has two APKs,
+  `Mujin-Music-<version>-android-arm64-v8a.apk` for most phones and tablets
+  and `Mujin-Music-<version>-android-armeabi-v7a.apk` for 32-bit devices.
+  The [Android workflow](../.github/workflows/android.yml) also builds the
+  arm64-v8a APK for every change.
 - **Docker**: the server image is `ghcr.io/mavingaw/mujin-music`, published
   for x86_64 and arm64 with each release.
 - **Server only**: Docker, systemd on Linux, or the Windows server. See the
