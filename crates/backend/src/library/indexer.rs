@@ -376,6 +376,15 @@ struct ParsedFile {
     fast_path_error: Option<String>,
 }
 
+impl ParsedFile {
+    /// Whether the readers found audio to play. A file they could not measure
+    /// (corrupt, empty or without audio frames) stays out of the catalog and
+    /// is listed under Skipped files with its reason instead.
+    fn has_playable_audio(&self) -> bool {
+        crate::library::tools::skipped::has_playable_length(self.duration_seconds)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OwnedReleaseEvidence {
     album_name: String,
@@ -8378,7 +8387,8 @@ fn reconcile_normalized_tables(
 
     let track_count = parsed_files.len();
     let mut interner = StringInterner::with_capacity(track_count.saturating_mul(12));
-    let seeds = prepare_track_seeds(parsed_files, &mut interner);
+    let mut seeds = prepare_track_seeds(parsed_files, &mut interner);
+    seeds.retain(|seed| seed.parsed.has_playable_audio());
     let mut changed_artist_identities = HashSet::new();
     let artist_aliases = if phase == LibraryIndexPhase::Enriched {
         let retained = load_artist_alias_decisions(conn)?;
@@ -10395,7 +10405,12 @@ pub fn build_instant_library_preview(
     let (threads, _) = parse_thread_count(Path::new(path_to_library));
     let parsed = parse_file_batch(&references, &HashMap::new(), threads)?;
     // Bound first content to one album and eight songs per sampled artist.
-    let mut parsed = select_instant_preview_records(parsed);
+    let mut parsed = select_instant_preview_records(
+        parsed
+            .into_iter()
+            .filter(ParsedFile::has_playable_audio)
+            .collect(),
+    );
     for record in &mut parsed {
         if record.cover_url.is_empty() {
             record.cover_url = preview_local_cover(
@@ -15016,6 +15031,166 @@ mod technical_and_credit_tests {
         assert_eq!(loudness.track_peak, Some(0.5));
         assert_eq!(loudness.album_gain_db, None);
         assert_eq!(json["loudness"]["track_gain_db"], -6.5);
+    }
+    #[derive(QueryableByName)]
+    struct PathRow {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        path: String,
+    }
+
+    fn song_paths(connection: &mut SqliteConnection) -> Vec<String> {
+        let mut paths = diesel::sql_query(
+            "SELECT file.path FROM song
+             JOIN track_file source ON source.track_id = song.id
+             JOIN file_entry file ON file.id = source.file_id",
+        )
+        .load::<PathRow>(connection)
+        .expect("song files")
+        .into_iter()
+        .map(|row| row.path)
+        .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    /// Scans `files` (on disk) the way a library scan does and rebuilds the
+    /// catalog from them, returning the parsed records.
+    fn scan_into_catalog(
+        connection: &mut SqliteConnection,
+        root: &Path,
+        names: &[&str],
+    ) -> Vec<ParsedFile> {
+        let files = names
+            .iter()
+            .map(|name| {
+                let path = root.join(name);
+                let size = std::fs::metadata(&path).expect("fixture on disk").len();
+                DiscoveredFile {
+                    native_directory: root.to_path_buf(),
+                    path: path.to_string_lossy().as_ref().into(),
+                    directory: root.to_string_lossy().as_ref().into(),
+                    file_name: (*name).into(),
+                    format: AudioFormat::from_extension(
+                        name.rsplit('.').next().unwrap_or_default(),
+                    ),
+                    native_path: path,
+                    size_bytes: size as i64,
+                    modified_at_ns: 0,
+                    stable_identity: None,
+                    tag_fingerprint: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let references = files.iter().collect::<Vec<_>>();
+        let parsed = parse_file_batch(&references, &HashMap::new(), 1).expect("scan batch");
+        let file_ids = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (file.path.to_string(), index as i32 + 1))
+            .collect::<HashMap<_, _>>();
+        for file in &files {
+            diesel::sql_query(
+                "INSERT OR IGNORE INTO file_entry
+                     (id, root_id, path, directory, file_name, extension, size_bytes, modified_at_ns)
+                 VALUES (?, 1, ?, ?, ?, ?, ?, 0)",
+            )
+            .bind::<diesel::sql_types::Integer, _>(file_ids[file.path.as_ref()])
+            .bind::<diesel::sql_types::Text, _>(file.path.as_ref())
+            .bind::<diesel::sql_types::Text, _>(file.directory.as_ref())
+            .bind::<diesel::sql_types::Text, _>(file.file_name.as_ref())
+            .bind::<diesel::sql_types::Text, _>(file.format.as_str())
+            .bind::<diesel::sql_types::BigInt, _>(file.size_bytes)
+            .execute(connection)
+            .expect("file entry");
+        }
+        let changed_paths = parsed
+            .iter()
+            .map(|parsed| parsed.path.as_ref())
+            .collect::<HashSet<_>>();
+        reconcile_normalized_tables(
+            connection,
+            ReconcileInputs {
+                root_id: 1,
+                parsed_files: &parsed,
+                file_ids: &file_ids,
+                discovered_files: &HashMap::new(),
+                artwork_hashes: &HashMap::new(),
+                phase: LibraryIndexPhase::Enriched,
+                mode: IndexMode::Repair,
+                changed_paths: &changed_paths,
+            },
+        )
+        .expect("rebuild catalog");
+        parsed
+    }
+
+    #[test]
+    fn files_that_cannot_be_read_are_skipped_not_imported_as_songs() {
+        use crate::library::tools::skipped::{ImportedFile, SkipReason, audit_root};
+
+        let root = std::env::temp_dir().join(format!("parson-unreadable-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("fixture folder");
+        let healthy = include_bytes!("../../testdata/audio/flac-96k-24bit-stereo.flac");
+        std::fs::write(root.join("01 Healthy.flac"), healthy).expect("healthy flac");
+        std::fs::write(root.join("02 Second.flac"), healthy).expect("second flac");
+        std::fs::write(root.join("03 Empty.mp3"), b"").expect("empty mp3");
+        let mut connection = catalog_schema();
+        connection
+            .batch_execute(&format!(
+                "INSERT INTO library_root (id, path) VALUES (1, '{}');",
+                root.to_string_lossy().replace('\'', "''")
+            ))
+            .expect("library root");
+        let path_of = |name: &str| root.join(name).to_string_lossy().into_owned();
+
+        scan_into_catalog(
+            &mut connection,
+            &root,
+            &["01 Healthy.flac", "02 Second.flac", "03 Empty.mp3"],
+        );
+        assert_eq!(
+            song_paths(&mut connection),
+            [path_of("01 Healthy.flac"), path_of("02 Second.flac")]
+        );
+
+        // The second file gets damaged: the next scan drops its song.
+        let mut broken = b"fLaC".to_vec();
+        broken.extend_from_slice(&[0xff; 64]);
+        std::fs::write(root.join("02 Second.flac"), &broken).expect("broken flac");
+        let parsed = scan_into_catalog(
+            &mut connection,
+            &root,
+            &["01 Healthy.flac", "02 Second.flac", "03 Empty.mp3"],
+        );
+        assert_eq!(song_paths(&mut connection), [path_of("01 Healthy.flac")]);
+
+        // ...and Skipped files lists exactly the two unreadable files.
+        let imported = parsed
+            .iter()
+            .map(|parsed| {
+                (
+                    parsed.path.replace('\\', "/"),
+                    ImportedFile {
+                        error: parsed.error.clone(),
+                        duration_seconds: parsed.duration_seconds,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let mut skipped = audit_root(&root, &imported, &|| false, &mut |_| {})
+            .into_iter()
+            .map(|record| (record.path, record.reason))
+            .collect::<Vec<_>>();
+        skipped.sort_by(|left, right| left.0.cmp(&right.0));
+        let audit_path = |name: &str| path_of(name).replace('\\', "/");
+        assert_eq!(
+            skipped,
+            [
+                (audit_path("02 Second.flac"), SkipReason::Corrupt),
+                (audit_path("03 Empty.mp3"), SkipReason::EmptyFile),
+            ]
+        );
+        std::fs::remove_dir_all(root).expect("remove fixture folder");
     }
 }
 

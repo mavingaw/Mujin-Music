@@ -481,6 +481,12 @@ pub fn audit_root(
     records
 }
 
+/// Whether a file the readers measured has audio to play. The scanner keeps
+/// files without it out of the catalog, and this audit lists them.
+pub fn has_playable_length(duration_seconds: f64) -> bool {
+    duration_seconds.is_finite() && duration_seconds > 0.0
+}
+
 fn audit_audio_file(
     path: &Path,
     key: &str,
@@ -506,24 +512,21 @@ fn audit_audio_file(
         ));
     }
     match imported.get(key) {
-        Some(file) => {
-            let has_audio = file.duration_seconds.is_finite() && file.duration_seconds > 0.0;
-            match (&file.error, has_audio) {
-                (Some(error), false) => Some(record(
-                    SkipReason::Corrupt,
-                    format!("The audio reader stopped: {error}."),
-                )),
-                (Some(error), true) => Some(record(
-                    SkipReason::TagsUnreadable,
-                    format!("The tag reader stopped: {error}."),
-                )),
-                (None, false) => Some(record(
-                    SkipReason::NoAudio,
-                    "The stream headers report no playable length.".into(),
-                )),
-                (None, true) => None,
-            }
-        }
+        Some(file) => match (&file.error, has_playable_length(file.duration_seconds)) {
+            (Some(error), false) => Some(record(
+                SkipReason::Corrupt,
+                format!("The audio reader stopped: {error}."),
+            )),
+            (Some(error), true) => Some(record(
+                SkipReason::TagsUnreadable,
+                format!("The tag reader stopped: {error}."),
+            )),
+            (None, false) => Some(record(
+                SkipReason::NoAudio,
+                "The stream headers report no playable length.".into(),
+            )),
+            (None, true) => None,
+        },
         None => match std::fs::File::open(path) {
             Ok(_) => Some(record(
                 SkipReason::NotYetImported,
