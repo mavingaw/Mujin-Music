@@ -12,6 +12,7 @@ import {
   releaseMatchSummary,
   releaseYearDiffers,
   UNVERIFIED_MATCH_TEXT,
+  unverifiedMatchText,
   unverifiedMatch,
   workHref,
 } from "@parson/music-sdk";
@@ -171,10 +172,13 @@ export function UnverifiedMatchBanner({
   check,
   isAdmin,
   onIdentify,
+  text = UNVERIFIED_MATCH_TEXT,
 }: {
   check: ReleaseMatchCheck;
   isAdmin: boolean;
   onIdentify?: () => void;
+  /** What the check means for this album's page. */
+  text?: string;
 }) {
   const summary = releaseMatchSummary(check);
   return (
@@ -206,9 +210,7 @@ export function UnverifiedMatchBanner({
             )}
             {summary && <span className="text-zinc-400"> · {summary}</span>}
           </p>
-          <p className="mt-1 text-sm leading-6 text-zinc-400">
-            {UNVERIFIED_MATCH_TEXT}
-          </p>
+          <p className="mt-1 text-sm leading-6 text-zinc-400">{text}</p>
           <ul aria-label="Match evidence" className="mt-3 grid gap-1.5">
             {releaseMatchSignals(check).map((signal) => {
               const style =
@@ -308,6 +310,7 @@ export function AlbumAboutSection({
             check={unverified}
             isAdmin={isAdmin}
             onIdentify={onIdentify}
+            text={unverifiedMatchText(about)}
           />
         </div>
       )}

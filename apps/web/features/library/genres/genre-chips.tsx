@@ -4,6 +4,7 @@ import {
   genreChipTitle,
   genreHref,
   genreOriginCaption,
+  genreDisplayName,
 } from "@parson/music-sdk";
 import type { GenreRef } from "@parson/music-sdk/types";
 import { Pencil } from "lucide-react";
@@ -41,7 +42,7 @@ export function GenreChips({
               href={genreHref(genre.slug)}
               title={genreChipTitle(genre)}
             >
-              {genre.name}
+              {genreDisplayName(genre.name)}
             </Link>
           </li>
         ))}

@@ -684,6 +684,10 @@ export interface GenreCount extends GenreLink {
 
 export interface GenreTreeNode extends GenreCount {
   children: GenreTreeNode[];
+  /** Top-level genres: covers of up to four of its albums. */
+  covers?: string[];
+  /** Top-level genres: API paths of up to three of its artists' photos. */
+  photos?: string[];
 }
 
 /** The library's genres as a tree, with album counts. */

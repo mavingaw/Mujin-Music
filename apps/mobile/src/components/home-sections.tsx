@@ -14,8 +14,9 @@ import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Artwork } from "@/components/artwork";
+import { PersonAvatar } from "@/components/person-avatar";
 import { eyebrow, fonts, layout, palette } from "@/constants/colors";
-import { imageRequestHeaders, imageUrl } from "@/lib/runtime";
+import { apiUrl, imageRequestHeaders, imageUrl } from "@/lib/runtime";
 
 /** "Hi, Mavinga" with the library's stat cards (two per row). */
 export function HomeGreeting({
@@ -201,7 +202,22 @@ export function ArtistCircles({ artists }: { artists: HomeArtist[] }) {
           onPress={() => router.push(`/artist/${artist.id}`)}
           style={styles.artist}
         >
-          <Artwork path={artist.image_url} rounded={56} size={112} />
+          {/* Their photo when online metadata found one; otherwise their
+              initials, never a cover posing as a portrait. */}
+          <View style={styles.artistPicture}>
+            <PersonAvatar
+              imageUrl={artist.photo_url}
+              name={artist.name}
+              size={112}
+            />
+            {artist.photo_url ? (
+              <LinearGradient
+                colors={["rgba(217,139,95,0.0)", "rgba(217,139,95,0.28)"]}
+                pointerEvents="none"
+                style={[StyleSheet.absoluteFill, { borderRadius: 56 }]}
+              />
+            ) : null}
+          </View>
           <Text numberOfLines={1} style={styles.artistName}>
             {artist.name}
           </Text>
@@ -252,6 +268,7 @@ export function GenreTiles({ genres }: { genres: HomeGenre[] }) {
       showsHorizontalScrollIndicator={false}
     >
       {genres.map((genre) => {
+        const photos = (genre.photos ?? []).slice(0, 3).map(apiUrl);
         const cover = genre.covers[0] ? imageUrl(genre.covers[0]) : null;
         return (
           <Pressable
@@ -263,7 +280,20 @@ export function GenreTiles({ genres }: { genres: HomeGenre[] }) {
             }
             style={styles.genre}
           >
-            {cover ? (
+            {photos.length ? (
+              // Its artists' photos side by side, washed in copper.
+              <View style={[StyleSheet.absoluteFill, styles.genrePhotos]}>
+                {photos.map((photo) => (
+                  <Image
+                    contentFit="cover"
+                    contentPosition="top"
+                    key={photo}
+                    source={{ uri: photo, headers: imageRequestHeaders(photo) }}
+                    style={styles.genrePhoto}
+                  />
+                ))}
+              </View>
+            ) : cover ? (
               <Image
                 contentFit="cover"
                 source={{ uri: cover, headers: imageRequestHeaders(cover) }}
@@ -271,7 +301,7 @@ export function GenreTiles({ genres }: { genres: HomeGenre[] }) {
               />
             ) : null}
             <LinearGradient
-              colors={["rgba(184,112,63,0.35)", "rgba(10,10,11,0.92)"]}
+              colors={["rgba(184,112,63,0.42)", "rgba(10,10,11,0.92)"]}
               style={StyleSheet.absoluteFill}
             />
             <Text numberOfLines={1} style={styles.genreName}>
@@ -313,9 +343,11 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     borderRightWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
+    // Two per row; an odd last card takes the whole row.
+    flexBasis: "50%",
+    flexGrow: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    width: "50%",
   },
   statLabel: { fontSize: 9.5 },
   statValueRow: {
@@ -414,6 +446,9 @@ const styles = StyleSheet.create({
     fontSize: 10,
   },
   artist: { alignItems: "center", width: 112 },
+  artistPicture: { height: 112, width: 112 },
+  genrePhotos: { flexDirection: "row", opacity: 0.6 },
+  genrePhoto: { flex: 1, height: "100%" },
   artistName: {
     color: palette.text,
     fontSize: 13.5,

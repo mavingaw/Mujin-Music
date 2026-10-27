@@ -848,3 +848,64 @@ html[data-window-controls] .app-titlebar-search {
 :is(h1, h2).font-extrabold {
   font-weight: 400;
 }
+
+/*
+ * Duotone: an artist photo of any colour mapped onto the brand palette,
+ * from the warm near-black of the canvas in the shadows to copper in the
+ * highlights. The photo is greyscaled, multiplied by copper (highlights
+ * become copper), then lightened by the shadow tone (blacks lift to it).
+ */
+/* No position here: callers place it (absolute or relative), and the
+   pseudo-elements below fill whichever box that is. */
+.mj-duotone {
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--color-mujin-base);
+}
+
+.mj-duotone img {
+  filter: grayscale(1) contrast(1.12) brightness(1.06);
+}
+
+.mj-duotone::before,
+.mj-duotone::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  transition: opacity 400ms ease;
+}
+
+.mj-duotone::before {
+  background: var(--color-mujin-copper);
+  mix-blend-mode: multiply;
+}
+
+.mj-duotone::after {
+  background: #1d130d;
+  mix-blend-mode: lighten;
+}
+
+/* A softer tone that gives way to the real photo on hover or focus. */
+.mj-duotone-soft img {
+  filter: grayscale(0.55) contrast(1.05);
+  transition: filter 400ms ease;
+}
+
+.mj-duotone-soft::before {
+  opacity: 0.55;
+}
+
+.mj-duotone-soft::after {
+  opacity: 0.7;
+}
+
+:is(.group:hover, .group:focus-visible) .mj-duotone-soft img {
+  filter: none;
+}
+
+:is(.group:hover, .group:focus-visible) .mj-duotone-soft::before,
+:is(.group:hover, .group:focus-visible) .mj-duotone-soft::after {
+  opacity: 0;
+}

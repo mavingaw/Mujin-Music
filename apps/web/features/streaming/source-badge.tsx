@@ -84,7 +84,7 @@ export function LocalSourceBadge({ className }: { className?: string }) {
 
 const toneClasses: Record<FormatTone, string> = {
   "hi-res": "border-amber-300/30 bg-amber-300/10 text-amber-200",
-  lossless: "border-sky-300/25 bg-sky-300/8 text-sky-200",
+  lossless: "border-mujin-copper/25 bg-mujin-copper/8 text-mujin-copper-hover",
   lossy: "border-white/10 bg-white/5 text-zinc-400",
 };
 

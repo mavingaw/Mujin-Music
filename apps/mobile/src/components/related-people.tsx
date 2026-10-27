@@ -18,14 +18,16 @@ import {
 } from "react-native";
 
 import { PersonAvatar } from "@/components/person-avatar";
+import { fonts } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
-/** Each section's color, as on the web person page. */
+/** Each section's tone, as on the web person page: the brand's copper,
+ * burnt copper, warm graphite and bronze. */
 const TONES = {
-  performers: "#3b3fe0",
-  music: "#e2483d",
-  collaborators: "#3f4652",
-  influences: "#0f8a74",
+  performers: "#b8703f",
+  music: "#8c4f2c",
+  collaborators: "#3a3531",
+  influences: "#7a6040",
 } as const;
 
 function Banner({
@@ -240,7 +242,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "white",
-    fontFamily: "serif",
+    fontFamily: fonts.display,
     fontSize: 30,
     lineHeight: 32,
   },

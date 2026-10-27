@@ -24,6 +24,8 @@ import { usePlayStation } from "@/features/live-radio/use-live-radio";
 import { stationHref } from "@/features/live-radio/live-radio-model";
 import PlayIcon from "@/components/icons/play";
 import { cn } from "@/lib/cn";
+import { ArtistRoundel, GenreArt } from "@/features/library/artist-imagery";
+import { editorialImageSrc } from "@/features/library/credits/person-avatar";
 
 export function coverUrl(cover: string, title: string, subtitle = "") {
   return (
@@ -165,22 +167,17 @@ export function HomeAlbumCard({ album }: { album: HomeAlbum }) {
 
 /** Round portraits, Roon-style, with the reason they are here. */
 export function ArtistCircle({ artist }: { artist: HomeArtist }) {
-  const image = coverUrl(artist.image_url, artist.name);
   return (
     <div className="mj-card group relative min-w-0 snap-start text-center">
       <Link
         className="block"
         href={`/artist?id=${encodeURIComponent(artist.id)}`}
       >
-        <span className="relative mx-auto block aspect-square w-full overflow-hidden rounded-full bg-mujin-surface-1 shadow-[0_0_0_1px_rgba(242,238,230,0.07),0_18px_40px_-20px_rgba(0,0,0,0.9)]">
-          <Image
-            alt=""
-            className="object-cover grayscale-[0.25] transition-[transform,filter] duration-500 ease-out group-hover:grayscale-0 motion-safe:group-hover:scale-[1.04]"
-            fill
-            sizes="180px"
-            src={image}
-          />
-        </span>
+        <ArtistRoundel
+          coverUrl={artist.image_url}
+          name={artist.name}
+          photoUrl={artist.photo_url}
+        />
         <span className="mt-3 block truncate text-[13.5px] font-medium text-mujin-text group-hover:underline">
           {artist.name}
         </span>
@@ -306,20 +303,42 @@ export function BestYearsBand({ prime }: { prime: HomeBestYears }) {
     prime.from_year === prime.to_year
       ? String(prime.from_year)
       : `${prime.from_year}–${prime.to_year}`;
-  const backdrop = coverUrl(prime.image_url, prime.artist.name);
+  const photo = editorialImageSrc(prime.photo_url);
+  const backdrop = photo ?? coverUrl(prime.image_url, prime.artist.name);
   return (
     <section
       aria-label={`${prime.artist.name} in ${years}`}
       className="relative isolate overflow-hidden rounded-xl border border-white/[0.07]"
     >
+      {photo ? (
+        // Their photo, toned to the palette, on the right of the band.
+        <div
+          aria-hidden="true"
+          className="mj-duotone absolute inset-y-0 right-0 -z-10 w-full opacity-80 md:w-[62%]"
+        >
+          <Image
+            alt=""
+            className="object-cover object-[50%_25%]"
+            fill
+            sizes="60vw"
+            src={photo}
+          />
+        </div>
+      ) : (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 scale-110 bg-cover bg-center opacity-40 blur-2xl saturate-[0.6]"
+          style={{ backgroundImage: `url("${backdrop}")` }}
+        />
+      )}
       <div
         aria-hidden="true"
-        className="absolute inset-0 -z-10 scale-110 bg-cover bg-center opacity-40 blur-2xl saturate-[0.6]"
-        style={{ backgroundImage: `url("${backdrop}")` }}
-      />
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 -z-10 bg-[radial-gradient(120%_120%_at_0%_100%,rgba(217,139,95,0.22),transparent_55%),linear-gradient(90deg,rgba(10,10,11,0.94),rgba(10,10,11,0.6))]"
+        className={cn(
+          "absolute inset-0 -z-10",
+          photo
+            ? "bg-[radial-gradient(120%_120%_at_0%_100%,rgba(217,139,95,0.2),transparent_55%),linear-gradient(90deg,rgba(10,10,11,0.97)_30%,rgba(10,10,11,0.55)_62%,rgba(10,10,11,0.2))]"
+            : "bg-[radial-gradient(120%_120%_at_0%_100%,rgba(217,139,95,0.22),transparent_55%),linear-gradient(90deg,rgba(10,10,11,0.94),rgba(10,10,11,0.6))]",
+        )}
       />
       <div className="grid gap-8 p-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] md:items-center md:p-9">
         <div>
@@ -361,45 +380,17 @@ export function BestYearsBand({ prime }: { prime: HomeBestYears }) {
 
 /** Genre tiles: a duotone cover collage with the name set large. */
 export function GenreTile({ genre }: { genre: HomeGenre }) {
-  const covers = genre.covers.length
-    ? genre.covers
-    : [generatedCover(genre.name)];
   return (
     <Link
       className="group relative block aspect-[4/3] min-w-0 snap-start overflow-hidden rounded-lg border border-white/[0.06] bg-mujin-surface-1"
       href={`/genre?slug=${encodeURIComponent(genre.slug)}`}
     >
+      <GenreArt covers={genre.covers} name={genre.name} photos={genre.photos} />
       <span
         aria-hidden="true"
-        className={cn(
-          "absolute inset-0 grid",
-          covers.length >= 4 ? "grid-cols-2 grid-rows-2" : "grid-cols-1",
-        )}
-      >
-        {(covers.length >= 4 ? covers.slice(0, 4) : covers.slice(0, 1)).map(
-          (cover) => (
-            <span className="relative" key={cover}>
-              <Image
-                alt=""
-                className="object-cover grayscale contrast-[1.15] transition-transform duration-500 ease-out motion-safe:group-hover:scale-[1.04]"
-                fill
-                sizes="240px"
-                src={coverUrl(cover, genre.name)}
-              />
-            </span>
-          ),
-        )}
-      </span>
-      {/* Copper duotone: colour blend over the greyscale collage. */}
-      <span
-        aria-hidden="true"
-        className="absolute inset-0 bg-[#b8703f] opacity-80 mix-blend-color transition-opacity duration-300 group-hover:opacity-60"
+        className="absolute inset-0 z-[2] bg-[linear-gradient(to_top,rgba(10,10,11,0.92)_0%,rgba(10,10,11,0.45)_55%,rgba(10,10,11,0.1)_100%)]"
       />
-      <span
-        aria-hidden="true"
-        className="absolute inset-0 bg-[linear-gradient(to_top,rgba(10,10,11,0.92)_0%,rgba(10,10,11,0.45)_55%,rgba(10,10,11,0.15)_100%)]"
-      />
-      <span className="absolute inset-x-4 bottom-3.5">
+      <span className="absolute inset-x-4 bottom-3.5 z-[3]">
         <span className="mj-title block truncate text-[22px] leading-tight text-mujin-text">
           {genre.name}
         </span>

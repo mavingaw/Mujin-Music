@@ -7,7 +7,8 @@ import { Globe2, Lock, Tag } from "lucide-react";
 const STYLE = {
   edited: {
     icon: Lock,
-    className: "border-sky-300/25 bg-sky-300/10 text-sky-200",
+    className:
+      "border-mujin-copper/25 bg-mujin-copper/10 text-mujin-copper-hover",
     text: "Edited",
   },
   tags: {
@@ -17,7 +18,7 @@ const STYLE = {
   },
   online: {
     icon: Globe2,
-    className: "border-violet-300/20 bg-violet-300/[0.07] text-violet-200",
+    className: "border-white/15 bg-white/[0.05] text-mujin-text-secondary",
     text: "MusicBrainz",
   },
 } as const;

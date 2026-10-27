@@ -151,6 +151,10 @@ pub struct LocalCatalogArtist {
     pub album_count: usize,
     pub appearance_count: usize,
     pub song_count: usize,
+    /// API path of the artist's photo when online metadata found one; the
+    /// HTTP API fills it in (the C bridge leaves it out).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photo_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -368,6 +372,7 @@ pub(crate) fn focus_artist(cache: &LibraryCache, id: &str) -> Option<LocalCatalo
         album_count: artist.albums.len(),
         appearance_count: artist.featured_on_album_ids.len(),
         song_count: artist.albums.iter().map(|album| album.songs.len()).sum(),
+        photo_url: None,
     })
 }
 
@@ -781,6 +786,7 @@ impl LocalApp {
                 album_count: artist.albums.len(),
                 appearance_count: appearance_counts.get(&artist.id).copied().unwrap_or(0),
                 song_count: artist.albums.iter().map(|album| album.songs.len()).sum(),
+                photo_url: None,
             })
             .collect::<Vec<_>>();
         sort_catalog_artists(&mut artists);
@@ -811,6 +817,7 @@ impl LocalApp {
             album_count: artist.albums.len(),
             appearance_count,
             song_count: artist.albums.iter().map(|album| album.songs.len()).sum(),
+            photo_url: None,
         };
         let albums = artist
             .albums
@@ -1285,6 +1292,7 @@ mod tests {
             album_count,
             appearance_count,
             song_count,
+            photo_url: None,
         };
         let mut artists = vec![
             artist("Zeta Guest", 0, 2, 0),

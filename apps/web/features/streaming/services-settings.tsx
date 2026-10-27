@@ -758,7 +758,7 @@ function TidalSignIn({
             {pending.user_code}
           </p>
           <a
-            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-sky-300 hover:text-sky-200"
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-mujin-copper hover:text-mujin-copper-hover"
             href={link}
             rel="noreferrer"
             target="_blank"
@@ -987,7 +987,7 @@ function AccountStep({
             {formatLastSync(provider.last_library_sync)}
           </span>{" "}
           <button
-            className="ml-2 inline-flex items-center gap-1.5 text-sky-300 hover:text-sky-200 disabled:opacity-60"
+            className="ml-2 inline-flex items-center gap-1.5 text-mujin-copper hover:text-mujin-copper-hover disabled:opacity-60"
             disabled={syncing}
             onClick={() => void sync()}
             type="button"

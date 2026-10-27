@@ -62,8 +62,11 @@ pub struct DailyPicks {
 pub struct HomeArtist {
     pub id: String,
     pub name: String,
-    /// The artist's photo when one is stored, else a cover of theirs.
+    /// A cover of theirs (the fallback picture).
     pub image_url: String,
+    /// Their photo from Wikimedia Commons (`/artists/{id}/image`), when
+    /// online metadata found one. Pages prefer it to the cover.
+    pub photo_url: Option<String>,
     pub album_count: usize,
     /// "Similar to Nine Inch Nails", when the row was seeded by a listen.
     pub reason: Option<String>,
@@ -75,6 +78,8 @@ pub struct HomeArtist {
 pub struct BestYears {
     pub artist: ArtistRef,
     pub image_url: String,
+    /// The artist's photo, when online metadata found one.
+    pub photo_url: Option<String>,
     pub from_year: i32,
     pub to_year: i32,
     pub albums: Vec<HomeAlbum>,
@@ -90,6 +95,12 @@ pub struct HomeGenre {
     pub artist_count: usize,
     /// Up to four distinct covers for the tile collage.
     pub covers: Vec<String>,
+    /// Photos of up to three of the genre's artists (most albums first),
+    /// for the duotone tile. Empty until online metadata finds photos.
+    pub photos: Vec<String>,
+    /// The genre's artists, most albums first; used to pick `photos`.
+    #[serde(skip)]
+    pub artist_ids: Vec<String>,
 }
 
 /// What the library is made of, for the stat cards under the greeting.
@@ -458,6 +469,7 @@ fn rank_similar(cache: &LibraryCache, seed: &Artist, limit: usize) -> Vec<HomeAr
             id: artist.id.clone(),
             name: artist.name.clone(),
             image_url: artist_image(artist),
+            photo_url: None,
             album_count: artist
                 .albums
                 .iter()
@@ -545,6 +557,7 @@ pub fn best_years(
             name: artist.name.clone(),
         },
         image_url: artist_image(artist),
+        photo_url: None,
         from_year,
         to_year,
         albums: albums
@@ -558,7 +571,7 @@ pub fn best_years(
 pub fn genre_tiles(cache: &LibraryCache) -> Vec<HomeGenre> {
     struct Tile<'a> {
         albums: usize,
-        artists: HashSet<&'a str>,
+        artists: HashMap<&'a str, usize>,
         covers: Vec<&'a str>,
     }
     let mut tiles: HashMap<&str, Tile> = HashMap::new();
@@ -566,11 +579,11 @@ pub fn genre_tiles(cache: &LibraryCache) -> Vec<HomeGenre> {
         for genre in cache.album_genres.get(&album.id).into_iter().flatten() {
             let tile = tiles.entry(genre.as_str()).or_insert_with(|| Tile {
                 albums: 0,
-                artists: HashSet::new(),
+                artists: HashMap::new(),
                 covers: Vec::new(),
             });
             tile.albums += 1;
-            tile.artists.insert(artist.id.as_str());
+            *tile.artists.entry(artist.id.as_str()).or_default() += 1;
             if has_cover(&album.cover_url)
                 && tile.covers.len() < 4
                 && !tile.covers.contains(&album.cover_url.as_str())
@@ -582,12 +595,18 @@ pub fn genre_tiles(cache: &LibraryCache) -> Vec<HomeGenre> {
     let mut tiles = tiles
         .into_iter()
         .filter(|(name, _)| !name.trim().is_empty())
-        .map(|(name, tile)| HomeGenre {
-            name: name.to_string(),
-            slug: genre_slug(name),
-            album_count: tile.albums,
-            artist_count: tile.artists.len(),
-            covers: tile.covers.into_iter().map(str::to_string).collect(),
+        .map(|(name, tile)| {
+            let mut artists = tile.artists.into_iter().collect::<Vec<_>>();
+            artists.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+            HomeGenre {
+                name: name.to_string(),
+                slug: genre_slug(name),
+                album_count: tile.albums,
+                artist_count: artists.len(),
+                covers: tile.covers.into_iter().map(str::to_string).collect(),
+                photos: Vec::new(),
+                artist_ids: artists.into_iter().map(|(id, _)| id.to_string()).collect(),
+            }
         })
         .collect::<Vec<_>>();
     tiles.sort_by(|left, right| {
@@ -598,6 +617,60 @@ pub fn genre_tiles(cache: &LibraryCache) -> Vec<HomeGenre> {
     });
     tiles.truncate(GENRE_TILE_COUNT);
     tiles
+}
+
+/// How many artist photos a genre tile shows.
+const GENRE_TILE_PHOTOS: usize = 3;
+
+/// Every artist whose photo Home could show, for one stored-photo lookup.
+pub fn photo_candidates(
+    similar: &[HomeArtist],
+    best: Option<&BestYears>,
+    genres: &[HomeGenre],
+) -> Vec<String> {
+    let mut ids = similar
+        .iter()
+        .map(|artist| artist.id.clone())
+        .chain(best.map(|best| best.artist.id.clone()))
+        .chain(
+            genres
+                .iter()
+                .flat_map(|genre| genre.artist_ids.iter().take(12).cloned()),
+        )
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Points Home's artist pictures at the stored photos, where there are
+/// any: the round "Similar artists" images, the "In their prime" artist,
+/// and up to three photos per genre tile.
+pub fn attach_photos(
+    with_photos: &HashSet<String>,
+    similar: &mut [HomeArtist],
+    best: Option<&mut BestYears>,
+    genres: &mut [HomeGenre],
+) {
+    let photo = |id: &str| {
+        with_photos
+            .contains(id)
+            .then(|| crate::api::editorial::artist_image_url(id))
+    };
+    for artist in similar {
+        artist.photo_url = photo(&artist.id);
+    }
+    if let Some(best) = best {
+        best.photo_url = photo(&best.artist.id);
+    }
+    for genre in genres {
+        genre.photos = genre
+            .artist_ids
+            .iter()
+            .filter_map(|id| photo(id))
+            .take(GENRE_TILE_PHOTOS)
+            .collect();
+    }
 }
 
 /// The genre page slug for a raw genre name.
@@ -930,6 +1003,65 @@ mod tests {
         assert_eq!(names[1..3], ["Ambient", "Rock"]);
         assert!(!tiles[0].slug.is_empty());
         assert_eq!(genre_slug("Zorb Wave"), "zorb-wave");
+    }
+
+    #[test]
+    fn stored_artist_photos_replace_covers_on_home() {
+        let cache = fixture();
+        let mut genres = genre_tiles(&cache);
+        let industrial = genres[0].artist_ids.clone();
+        assert!(!industrial.is_empty());
+        let mut similar = vec![
+            HomeArtist {
+                id: industrial[0].clone(),
+                name: "With photo".into(),
+                image_url: "slip.jpg".into(),
+                photo_url: None,
+                album_count: 3,
+                reason: None,
+            },
+            HomeArtist {
+                id: "no-photo".into(),
+                name: "Without".into(),
+                image_url: "cover.jpg".into(),
+                photo_url: None,
+                album_count: 1,
+                reason: None,
+            },
+        ];
+        let mut best = BestYears {
+            artist: ArtistRef {
+                id: industrial[0].clone(),
+                name: "With photo".into(),
+            },
+            image_url: "slip.jpg".into(),
+            photo_url: None,
+            from_year: 2008,
+            to_year: 2008,
+            albums: Vec::new(),
+        };
+        let candidates = photo_candidates(&similar, Some(&best), &genres);
+        assert!(candidates.contains(&"no-photo".to_string()));
+        assert_eq!(
+            candidates.iter().filter(|id| **id == industrial[0]).count(),
+            1,
+            "each artist is looked up once"
+        );
+        let with_photos = HashSet::from([industrial[0].clone()]);
+        attach_photos(&with_photos, &mut similar, Some(&mut best), &mut genres);
+        let photo = format!("/artists/{}/image", industrial[0]);
+        assert_eq!(similar[0].photo_url.as_deref(), Some(photo.as_str()));
+        assert_eq!(
+            similar[0].image_url, "slip.jpg",
+            "the cover stays as fallback"
+        );
+        assert_eq!(similar[1].photo_url, None);
+        assert_eq!(best.photo_url.as_deref(), Some(photo.as_str()));
+        assert_eq!(genres[0].photos, [photo]);
+        // The internal artist list never reaches the client.
+        let json = serde_json::to_value(&genres[0]).unwrap();
+        assert!(json.get("artist_ids").is_none());
+        assert!(json.get("photos").is_some());
     }
 
     #[test]

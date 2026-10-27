@@ -42,7 +42,7 @@ test("the library profile adds composers, hours and the lossless share", () => {
   );
   expect(stats.slice(3)).toEqual([
     { label: "Composers", value: "1" },
-    { label: "Listening time", value: "43", unit: "min" },
+    { label: "Library length", value: "43", unit: "min" },
     { label: "Lossless · 1 hi-res", value: "93", unit: "%", accent: true },
   ]);
   const long = homeStats(
@@ -58,7 +58,7 @@ test("the library profile adds composers, hours and the lossless share", () => {
     }),
   );
   expect(long[4]).toEqual({
-    label: "Listening time",
+    label: "Library length",
     value: "2,028",
     unit: "h",
   });
@@ -68,4 +68,44 @@ test("the library profile adds composers, hours and the lossless share", () => {
     unit: "%",
     accent: false,
   });
+});
+
+test("time listened comes from history, not from the library's length", () => {
+  const profile = {
+    composer_count: 6,
+    genre_count: 4,
+    total_duration_seconds: 1080,
+    lossless_tracks: 18,
+    hi_res_tracks: 9,
+    hi_res_albums: 3,
+  };
+  const before = homeStats(
+    feed({ profile, listening: { plays: 0, listened_seconds: 0 } }),
+  );
+  expect(before.find((stat) => stat.label === "Library length")).toEqual({
+    label: "Library length",
+    value: "18",
+    unit: "min",
+  });
+  // Nothing played yet reads as zero, not as the library's 18 minutes.
+  expect(before.find((stat) => stat.label === "You've listened")).toEqual({
+    label: "You've listened",
+    value: "0",
+    unit: "min",
+  });
+  const after = homeStats(
+    feed({ profile, listening: { plays: 40, listened_seconds: 9_000 } }),
+  );
+  expect(after.find((stat) => stat.label === "You've listened")?.value).toBe(
+    "3",
+  );
+  expect(after.find((stat) => stat.label === "You've listened")?.unit).toBe(
+    "h",
+  );
+  // Older servers send no history: no listening card at all.
+  expect(
+    homeStats(feed({ profile })).some(
+      (stat) => stat.label === "You've listened",
+    ),
+  ).toBe(false);
 });

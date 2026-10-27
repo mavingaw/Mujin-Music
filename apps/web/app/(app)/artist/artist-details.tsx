@@ -55,6 +55,7 @@ import ListenLaterButton from "@/features/library/listen-later/listen-later-butt
 import TagButton from "@/features/library/tags/tag-button";
 import { BannedBadge, BanToggleButton } from "@/features/library/radio-bans";
 import { songCreditsArtist } from "@/features/library/artist-appearance";
+import { artistKicker } from "@/features/library/artist-roles";
 
 type ArtistDetailsProps = {
   devArtist?: Artist;
@@ -256,7 +257,14 @@ function LibraryArtistDetails({
   const editorialImageURL = about?.image
     ? `${getApiBaseURL()}${about.image.url}`
     : null;
-  const heroImageURL = artistIconURL ?? editorialImageURL;
+  // The library's artist picture is usually one of their covers; only a
+  // picture of its own (an artist.jpg) counts as a portrait.
+  const iconIsPortrait = Boolean(
+    artist?.icon_url &&
+    !albums.some((album) => album.cover_url === artist.icon_url),
+  );
+  const heroImageURL =
+    editorialImageURL ?? (iconIsPortrait ? artistIconURL : null);
   const subtitle = [
     about?.facts?.kind,
     about?.facts?.area,
@@ -268,13 +276,12 @@ function LibraryArtistDetails({
   const lifeSpan = lifeSpanFacts(about?.facts)
     .map((fact) => `${fact.label} ${fact.value}`)
     .join(" · ");
-  const kicker = isComposer
-    ? "Composer"
-    : !artist
-      ? "Contributor"
-      : about?.facts?.kind === "Group" || about?.facts?.kind === "Orchestra"
-        ? about.facts.kind
-        : "Artist";
+  const kicker = artistKicker({
+    ownsAlbums: albums.length > 0,
+    isComposer,
+    inLibrary: Boolean(artist),
+    kind: about?.facts?.kind,
+  });
 
   const mosaicCovers = albums
     .map((album) => getLibraryImageUrl(album.cover_url, getBaseURL))
@@ -299,17 +306,7 @@ function LibraryArtistDetails({
         className="relative isolate mb-10 flex min-h-[360px] items-end overflow-hidden border-b border-white/[0.06] md:min-h-[440px]"
       >
         {heroImageURL ? (
-          <div aria-hidden className="absolute inset-0 -z-10">
-            <Image
-              alt=""
-              className="object-cover object-[50%_25%] opacity-70"
-              fill
-              priority
-              sizes="100vw"
-              src={heroImageURL}
-            />
-            <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_0%,rgba(10,10,11,0.75)_40%,rgba(10,10,11,0.15)_100%),linear-gradient(to_right,rgba(10,10,11,0.8),transparent_70%)]" />
-          </div>
+          <ArtistPhotoHero src={heroImageURL} />
         ) : mosaicCovers.length > 0 ? (
           <ArtistMosaic covers={mosaicCovers} />
         ) : (
@@ -385,7 +382,7 @@ function LibraryArtistDetails({
                 />
               </div>
             )}
-            {!artistIconURL && about?.image && (
+            {heroImageURL === editorialImageURL && about?.image && (
               <p className="mt-3 text-xs text-mujin-text-tertiary">
                 Photo:{" "}
                 <a
@@ -448,6 +445,14 @@ function LibraryArtistDetails({
             isAdmin={session?.role === "admin"}
             onShowCompositions={() => navigate("compositions")}
             onShowCredits={(role) => navigate("credits", role)}
+            onShowDiscography={() => navigate("discography")}
+            ownWork={{
+              albums: albums.length,
+              tracks: albums.reduce(
+                (total, album) => total + (album.songs?.length ?? 0),
+                0,
+              ),
+            }}
             works={worksQuery.data}
           />
         )}
@@ -629,6 +634,40 @@ function artistYears(albums: Album[]) {
   const first = Math.min(...years);
   const last = Math.max(...years);
   return first === last ? String(first) : `${first}–${last}`;
+}
+
+/**
+ * The artist's photo: a soft, blurred wash of it across the whole header,
+ * and the photo itself large on the right, fading into the canvas behind
+ * the name, so even a small Commons portrait reads sharp.
+ */
+function ArtistPhotoHero({ src }: { src: string }) {
+  return (
+    <div
+      aria-hidden
+      className="absolute inset-0 -z-10 overflow-hidden"
+      data-artist-hero="photo"
+    >
+      <Image
+        alt=""
+        className="scale-110 object-cover opacity-35 blur-3xl saturate-[0.8]"
+        fill
+        sizes="40vw"
+        src={src}
+      />
+      <div className="absolute inset-y-0 right-0 w-full md:w-[64%]">
+        <Image
+          alt=""
+          className="object-cover object-[50%_22%] [mask-image:linear-gradient(to_right,transparent,black_38%)] max-md:opacity-60 max-md:[mask-image:none]"
+          fill
+          priority
+          sizes="(min-width: 768px) 64vw, 100vw"
+          src={src}
+        />
+      </div>
+      <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_0%,rgba(10,10,11,0.55)_38%,rgba(10,10,11,0)_75%),linear-gradient(to_right,rgba(10,10,11,0.92)_0%,rgba(10,10,11,0.55)_45%,transparent_80%),radial-gradient(60%_80%_at_80%_20%,rgba(217,139,95,0.12),transparent_70%)]" />
+    </div>
+  );
 }
 
 /**

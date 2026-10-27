@@ -208,6 +208,18 @@ pub struct GenreTreeNode {
     /// Albums in this genre or below it.
     pub album_count: usize,
     pub children: Vec<GenreTreeNode>,
+    /// Top-level genres only: covers of up to four of its albums, for the
+    /// tile behind the name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
+    /// Top-level genres only: photos of up to three of its artists (most
+    /// albums first), shown duotone on the tile. Empty until online
+    /// metadata has found photos.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub photos: Vec<String>,
+    /// The genre's artists, most albums first; used to pick `photos`.
+    #[serde(skip)]
+    pub artist_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,6 +284,9 @@ pub fn build_tree(index: &GenreIndex) -> GenreTree {
             name: name.to_string(),
             album_count,
             children: nodes,
+            covers: Vec::new(),
+            photos: Vec::new(),
+            artist_ids: Vec::new(),
         })
     }
     let mut roots = genres::TREE
@@ -311,6 +326,63 @@ pub fn build_tree(index: &GenreIndex) -> GenreTree {
                 parent: node.parent,
             })
             .collect(),
+    }
+}
+
+/// How many covers and photos a top-level genre tile carries.
+const TILE_COVERS: usize = 4;
+const TILE_PHOTOS: usize = 3;
+
+/// Gives each top-level genre its covers and its artists (most albums in
+/// the genre first), so the genre browser can show imagery, not just names.
+pub fn add_tile_art(tree: &mut GenreTree, index: &GenreIndex, cache: &LibraryCache) {
+    for root in &mut tree.genres {
+        let mut artists: Vec<(&str, usize)> = Vec::new();
+        for artist in cache.artists.iter() {
+            for album in &artist.albums {
+                if album.songs.is_empty() || !index.album_in(&album.id, &root.slug) {
+                    continue;
+                }
+                let cover = album.cover_url.trim();
+                if root.covers.len() < TILE_COVERS
+                    && !cover.is_empty()
+                    && !root.covers.iter().any(|known| known == cover)
+                {
+                    root.covers.push(cover.to_string());
+                }
+                match artists.iter_mut().find(|(id, _)| *id == artist.id) {
+                    Some((_, count)) => *count += 1,
+                    None => artists.push((artist.id.as_str(), 1)),
+                }
+            }
+        }
+        artists.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+        root.artist_ids = artists.into_iter().map(|(id, _)| id.to_string()).collect();
+    }
+}
+
+/// The artists whose stored photos the top-level tiles could use.
+pub fn tile_photo_candidates(tree: &GenreTree) -> Vec<String> {
+    let mut ids = tree
+        .genres
+        .iter()
+        .flat_map(|root| root.artist_ids.iter().take(12).cloned())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Points each top-level tile at up to three stored artist photos.
+pub fn add_tile_photos(tree: &mut GenreTree, with_photos: &HashSet<String>) {
+    for root in &mut tree.genres {
+        root.photos = root
+            .artist_ids
+            .iter()
+            .filter(|id| with_photos.contains(*id))
+            .take(TILE_PHOTOS)
+            .map(|id| crate::api::editorial::artist_image_url(id))
+            .collect();
     }
 }
 
@@ -504,7 +576,17 @@ async fn genre_tree(
         Err(readiness) => return library_unavailable_response(readiness),
     };
     match genre_index(pool.get_ref().clone(), &cache).await {
-        Ok(index) => HttpResponse::Ok().json(build_tree(&index)),
+        Ok(index) => {
+            let mut tree = build_tree(&index);
+            add_tile_art(&mut tree, &index, &cache);
+            let with_photos = crate::api::editorial::credited_images(
+                pool.get_ref().clone(),
+                tile_photo_candidates(&tree),
+            )
+            .await;
+            add_tile_photos(&mut tree, &with_photos);
+            HttpResponse::Ok().json(tree)
+        }
         Err(error) => {
             tracing::error!(%error, "could not load genres");
             internal_server_error("Could not load genres.", "genres_failed")
@@ -885,6 +967,32 @@ mod tests {
         assert_eq!(tree.genres[0].slug, "jazz");
         assert_eq!(tree.other.len(), 1);
         assert_eq!(tree.other[0].name, "Krautrock");
+    }
+
+    #[test]
+    fn top_level_genre_tiles_carry_covers_and_their_artists_photos() {
+        let mut cache = cache();
+        let mut artists = (*cache.artists).clone();
+        artists[0].albums[0].cover_url = "kind-of-blue.jpg".into();
+        artists[1].albums[0].cover_url = "blue-train.jpg".into();
+        cache.artists = Arc::new(artists);
+        let index = index(GenreSource::Online);
+        let mut tree = build_tree(&index);
+        add_tile_art(&mut tree, &index, &cache);
+        let jazz = tree.genres.iter().find(|node| node.slug == "jazz").unwrap();
+        assert_eq!(jazz.covers, ["kind-of-blue.jpg", "blue-train.jpg"]);
+        assert_eq!(jazz.artist_ids, ["coltrane", "miles"]);
+        assert!(jazz.children.iter().all(|child| child.covers.is_empty()));
+        let candidates = tile_photo_candidates(&tree);
+        assert!(candidates.contains(&"miles".to_string()));
+        add_tile_photos(&mut tree, &HashSet::from(["miles".to_string()]));
+        let jazz = tree.genres.iter().find(|node| node.slug == "jazz").unwrap();
+        assert_eq!(jazz.photos, ["/artists/miles/image"]);
+        let json = serde_json::to_value(jazz).unwrap();
+        assert!(json.get("artist_ids").is_none());
+        // A child carries no tile art, so its JSON stays as before.
+        let child = serde_json::to_value(&jazz.children[0]).unwrap();
+        assert!(child.get("covers").is_none() && child.get("photos").is_none());
     }
 
     #[test]

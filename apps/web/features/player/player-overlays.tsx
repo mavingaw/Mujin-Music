@@ -228,6 +228,7 @@ export function FullscreenPlayer({
   livePlaying,
   details,
   upNext,
+  artistBio,
 }: {
   activeLine: number;
   activeLineRef: RefObject<HTMLElement | null>;
@@ -291,6 +292,8 @@ export function FullscreenPlayer({
   details?: NowPlayingDetails;
   /** The next track in the queue. */
   upNext?: UpNextItem | null;
+  /** A short "About the artist" card from their biography. */
+  artistBio?: ReactNode;
 }) {
   const live = isLiveRadioId(songId);
   const palette = useArtworkPalette(cover);
@@ -608,9 +611,10 @@ export function FullscreenPlayer({
                         <DeliveredFormat songId={songId} />
                       </div>
                     )}
+                    {!live && artistBio}
                     {upNext && !live && (
                       <button
-                        className="group mt-8 hidden w-full max-w-md items-center gap-3 rounded-lg border border-white/[0.07] bg-black/25 p-2.5 pr-4 text-left backdrop-blur-md transition-colors hover:border-white/15 hover:bg-black/35 md:flex"
+                        className="group mt-6 hidden w-full max-w-md items-center gap-3 rounded-lg border border-white/[0.07] bg-black/25 p-2.5 pr-4 text-left backdrop-blur-md transition-colors hover:border-white/15 hover:bg-black/35 md:flex"
                         onClick={onOpenQueue}
                         type="button"
                       >
