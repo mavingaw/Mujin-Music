@@ -390,7 +390,7 @@ jobs:
             >"$RUNNER_TEMP/parson-macos.log" 2>&1 &
           app_pid="$!"
           trap 'kill "$app_pid" >/dev/null 2>&1 || true' EXIT
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             if curl --fail --silent \
               "http://127.0.0.1:${PARSON_PORT}/health" >/dev/null; then
               exit 0
@@ -403,6 +403,52 @@ jobs:
           done
           cat "$RUNNER_TEMP/parson-macos.log"
           exit 1
+
+  android:
+    name: Android APK provenance and contents
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download exact published Android APKs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.current }}
+        run: |
+          version="${TAG#v}"
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "Mujin-Music-${version}-android-*.apk"
+      - name: Verify provenance, signature, version and ABI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.current }}
+        run: |
+          version="${TAG#v}"
+          IFS=. read -r major minor patch <<<"$version"
+          version_code=$((major * 1000000 + minor * 1000 + patch))
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          for abi in arm64-v8a armeabi-v7a; do
+            apk="Mujin-Music-${version}-android-${abi}.apk"
+            gh attestation verify "$apk" --repo "$GITHUB_REPOSITORY"
+            "$build_tools/apksigner" verify --print-certs "$apk"
+            # Captured first: under pipefail, a reader that stops early
+            # (head, grep -q) can fail the step with SIGPIPE.
+            badging="$("$build_tools/aapt2" dump badging "$apk")"
+            package_line="$(head -n 1 <<<"$badging")"
+            echo "$package_line"
+            for expected in "name='music.mujin.app'" "versionCode='${version_code}'" "versionName='${version}'"; do
+              if [[ "$package_line" != *" $expected"* ]]; then
+                echo "$apk does not have $expected." >&2
+                exit 1
+              fi
+            done
+            listing="$(unzip -l "$apk")"
+            if ! grep -q "lib/${abi}/" <<<"$listing"; then
+              echo "$apk has no native libraries for ${abi}." >&2
+              exit 1
+            fi
+          done
 
   container:
     name: Server container provenance and startup
@@ -434,7 +480,7 @@ jobs:
             --publish 127.0.0.1:1993:1993 \
             "$image"
           trap 'docker rm --force parson-published-server >/dev/null' EXIT
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             if curl --fail --silent http://127.0.0.1:1993/health >/dev/null; then
               exit 0
             fi
