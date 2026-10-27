@@ -31,6 +31,30 @@ test("activity chips", () => {
     "Waiting to retry",
   );
   expect(activityLabel(entry({ status: "ignored" })).tone).toBe("idle");
+});
+
+test("a waiting listen says why it waits", () => {
+  const connection = {
+    accountName: "a",
+    profileUrl: "https://www.last.fm/user/a",
+    enabled: true,
+    sendNowPlaying: true,
+    scrobbleRadio: false,
+    status: "ok" as const,
+    lastError: null,
+    lastScrobbledAt: null,
+    connectedAt: 0,
+  };
+  const waiting = entry({ status: "pending", attempts: 0 });
+  expect(activityLabel(waiting, connection).text).toBe("Sending");
+  expect(
+    activityLabel(waiting, { ...connection, status: "reauth_required" }),
+  ).toEqual({ tone: "error", text: "Reconnect to send" });
+  expect(activityLabel(waiting, { ...connection, enabled: false })).toEqual({
+    tone: "idle",
+    text: "Paused",
+  });
+  expect(activityLabel(waiting, null).text).toBe("Not connected");
   expect(activityLabel(entry({ status: "failed" })).tone).toBe("error");
 });
 

@@ -176,9 +176,9 @@ function ServiceCard({
             : "border-white/6",
       )}
     >
-      <header className="flex items-start gap-3">
+      <header className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <ServiceMark service={service.service} />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-40">
           <h3 className="text-sm font-semibold text-white">{service.name}</h3>
           {connection ? (
             <a
@@ -200,10 +200,9 @@ function ServiceCard({
         </div>
         <span
           className={cn(
-            "max-w-[45%] truncate rounded-full px-2 py-1 text-[11px] font-medium",
+            "ml-auto shrink-0 whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-medium",
             toneStyles[summary.tone],
           )}
-          title={summary.text}
         >
           {summary.text}
         </span>
@@ -214,8 +213,9 @@ function ServiceCard({
           <CloudOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
           <span>
             {connection.lastError}
-            {connection.status === "ok" &&
-              " Listens are kept and sent automatically when it works again."}
+            {connection.status === "ok"
+              ? " Listens are kept and sent automatically when it works again."
+              : ` ${service.name} needs you to connect again. Listens are kept and sent once you do.`}
           </span>
         </p>
       )}
@@ -284,7 +284,11 @@ function ServiceCard({
           <div className="mt-2 divide-y divide-white/6">
             <Toggle
               checked={connection.enabled}
-              description="Send what this profile plays. Turning it off pauses the queue."
+              description={
+                service.service === "lastfm"
+                  ? "Send what this profile plays. Off pauses sending: listens wait here and go out when you turn it back on (Last.fm takes listens up to 14 days old)."
+                  : "Send what this profile plays. Off pauses sending: listens wait here and go out when you turn it back on."
+              }
               label="Scrobble"
               onChange={(enabled) => void setting({ enabled })}
             />
@@ -523,7 +527,10 @@ function Activity({ status }: { status: ScrobblingStatus }) {
   return (
     <ol className="mt-3 divide-y divide-white/6 overflow-hidden rounded-2xl border border-white/6">
       {status.recent.map((entry) => {
-        const label = activityLabel(entry);
+        const service = status.services.find(
+          (candidate) => candidate.service === entry.service,
+        );
+        const label = activityLabel(entry, service ? service.connection : null);
         return (
           <li className="flex items-center gap-3 px-4 py-2.5" key={entry.id}>
             <ServiceMark service={entry.service} size={22} />
