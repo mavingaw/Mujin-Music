@@ -1,6 +1,10 @@
 import {
   cancelToolJob,
+  checkForFakeLossless,
   checkSkippedFiles,
+  getActiveUpgradeRequests,
+  upgradeProgressDetail,
+  upgradeStatusLabel,
   getLibraryToolsOverview,
   getSkippedFiles,
   getToolJobs,
@@ -74,6 +78,13 @@ export default function LibraryToolsScreen() {
     enabled: admin,
     refetchInterval: (query) =>
       query.state.data?.some((job) => job.state === "running") ? 1_000 : false,
+  });
+  const upgrades = useQuery({
+    queryKey: ["upgrades", "active"],
+    queryFn: getActiveUpgradeRequests,
+    enabled: admin,
+    refetchInterval: (query) =>
+      (query.state.data?.length ?? 0) > 0 ? 5_000 : false,
   });
   const running = (jobs.data ?? []).filter((job) => job.state === "running");
   const runningCount = running.length;
@@ -244,6 +255,47 @@ export default function LibraryToolsScreen() {
                 )}
               </View>
               {message ? <Text style={styles.error}>{message}</Text> : null}
+
+              <SectionTitle>Better versions</SectionTitle>
+              <View style={styles.card}>
+                {(upgrades.data ?? []).length === 0 ? (
+                  <Text style={styles.subtle}>
+                    No lossless copies on their way. Ask FETCH for them in
+                    Library tools → Better versions on the web or desktop.
+                  </Text>
+                ) : (
+                  (upgrades.data ?? []).map((request) => (
+                    <View key={request.id} style={styles.fileRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text numberOfLines={1} style={styles.fileName}>
+                          {request.album_title}{" "}
+                          <Text style={styles.subtle}>
+                            {request.artist_name}
+                          </Text>
+                        </Text>
+                        <Text numberOfLines={1} style={styles.upgradeLine}>
+                          {upgradeStatusLabel(request)}
+                          {upgradeProgressDetail(request)
+                            ? ` · ${upgradeProgressDetail(request)}`
+                            : ""}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+              <View style={styles.actions}>
+                <Action
+                  icon={<AudioWaveform color="white" size={18} />}
+                  label="Check for fake lossless"
+                  onPress={() =>
+                    void start(
+                      () => checkForFakeLossless(),
+                      "Could not start the check.",
+                    )
+                  }
+                />
+              </View>
 
               {groups.length > 0 && <SectionTitle>Skipped files</SectionTitle>}
               {groups.map((group) => (
@@ -427,6 +479,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardTitle: { color: palette.text, fontSize: 15, fontWeight: "600" },
+  upgradeLine: { color: palette.accentSoft, fontSize: 12, marginTop: 2 },
   bar: {
     flexDirection: "row",
     height: 10,

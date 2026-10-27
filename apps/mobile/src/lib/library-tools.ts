@@ -11,6 +11,7 @@ export const TIER_COLORS: Record<FileQualityTier, string> = {
   dsd: palette.accentDeep,
   hi_res: palette.accent,
   lossless: palette.accentSoft,
+  ai_enhanced: palette.qualityEnhanced,
   lossy: palette.qualityLow,
   unknown: palette.muted,
 };
@@ -19,6 +20,7 @@ export const TIER_LABELS: Record<FileQualityTier, string> = {
   dsd: "DSD",
   hi_res: "Hi-Res",
   lossless: "CD quality",
+  ai_enhanced: "AI-enhanced",
   lossy: "Lossy",
   unknown: "Unknown",
 };

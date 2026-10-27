@@ -17,6 +17,7 @@ import {
   formatFrequency,
   formatRealtimeFactor,
   formatSampleRate,
+  getRealtimeEnhanceStatus,
   recommendedHeadroomDb,
   SIGNAL_CLIPPING_COLOR,
   signalLightColor,
@@ -30,12 +31,14 @@ import {
   type OutputDspSupport,
   type SignalPath,
 } from "@parson/music-sdk";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Gauge,
   Plus,
   RotateCcw,
   Server,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useId, useMemo } from "react";
@@ -443,6 +446,22 @@ export function DspPanel({
       ? target.name
       : (output?.label ?? "System default output");
   const quality = path?.quality ?? null;
+  const realtime = useQuery({
+    queryKey: ["upgrades", "realtime"],
+    queryFn: getRealtimeEnhanceStatus,
+    enabled: open && target.kind === "server",
+    refetchInterval: open ? 10_000 : false,
+  });
+  const aiUnavailable =
+    target.kind !== "server"
+      ? "Runs on the server's own outputs (DACs, bridges and network players), not in this browser."
+      : realtime.data && !realtime.data.available
+        ? "Connect the AI enhancer in Settings → Better versions. Real time needs a worker that processes a second of audio in under half a second."
+        : null;
+  const bestRate =
+    availability.sampleRates && availability.sampleRates.length > 0
+      ? Math.max(...availability.sampleRates)
+      : null;
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -699,6 +718,35 @@ export function DspPanel({
           </Section>
 
           <Section
+            badge={
+              <span className="rounded-full bg-quality-enhanced/12 px-2 text-[10px] font-semibold text-quality-enhanced">
+                Experimental
+              </span>
+            }
+            description="Streams lossy tracks through your enhancer (Apollo) ahead of the playhead. It generates plausible treble the encoder threw away; it is not the original master, and the signal path says AI-enhanced. If the enhancer falls behind, the original plays instantly. Lossless tracks are never touched."
+            enabled={settings.aiEnhance?.enabled ?? false}
+            masterOn={settings.enabled && !blocked}
+            onToggle={(enabled) => update({ aiEnhance: { enabled } })}
+            title="AI enhance in real time"
+            unavailable={aiUnavailable}
+          >
+            <p
+              className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+              data-ai-enhance-status
+            >
+              <Sparkles className="h-3.5 w-3.5 text-quality-enhanced" />
+              {realtime.data?.available
+                ? `${realtime.data.model ?? "Enhancer"} · ${formatRealtimeFactor(realtime.data.realtime_factor ?? 0)} on the enhancer${
+                    realtime.data.status.enhanced_chunks ||
+                    realtime.data.status.original_chunks
+                      ? ` · ${realtime.data.status.enhanced_chunks} chunks enhanced, ${realtime.data.status.original_chunks} played original`
+                      : ""
+                  }`
+                : "Not connected"}
+            </p>
+          </Section>
+
+          <Section
             description={
               serverRun
                 ? "The rate the server sends to the device. Its converter is a linear-phase 64-bit polyphase sinc that runs after the EQ and crossfeed; the device receives that rate with no further conversion."
@@ -709,8 +757,29 @@ export function DspPanel({
             onToggle={(enabled) =>
               update({ sampleRate: { ...settings.sampleRate, enabled } })
             }
-            title="Sample rate conversion"
+            title="Upsampling (sample rate conversion)"
           >
+            <p className="mb-2 text-[11px] leading-4 text-zinc-500">
+              Resampling, not enhancement: it changes the rate the DAC receives
+              and adds no detail that is not in the file.
+              {serverRun && bestRate ? (
+                <>
+                  {" "}
+                  <button
+                    className="text-zinc-300 underline underline-offset-2 hover:text-white"
+                    onClick={() =>
+                      update({
+                        sampleRate: { enabled: true, mode: bestRate },
+                      })
+                    }
+                    type="button"
+                  >
+                    Upsample to the DAC&apos;s best rate (
+                    {formatSampleRate(bestRate)})
+                  </button>
+                </>
+              ) : null}
+            </p>
             <select
               aria-label="Processing sample rate"
               className={cn(fieldClass, "w-full")}

@@ -8,8 +8,12 @@ import api from "../core/http";
 
 const BASE = "/library/tools";
 
+/**
+ * `ai_enhanced`: a copy the AI enhancer made from a lossy file. Plausible
+ * restored treble, never the original master, so never "lossless".
+ */
 export type FileQualityTier =
-  "dsd" | "hi_res" | "lossless" | "lossy" | "unknown";
+  "dsd" | "hi_res" | "lossless" | "ai_enhanced" | "lossy" | "unknown";
 
 /** One quality scale for every copy: tier, comparable score and a label such as `FLAC 24/96`. */
 export interface FileQuality {
@@ -60,7 +64,7 @@ export interface LibraryStats {
 }
 
 export type ToolJobKind =
-  "rescan" | "reidentify" | "reanalyze" | "skipped_check";
+  "rescan" | "reidentify" | "reanalyze" | "skipped_check" | "lossless_check";
 export type ToolJobState = "running" | "completed" | "failed" | "cancelled";
 
 export interface ToolJob {

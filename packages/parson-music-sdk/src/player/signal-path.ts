@@ -352,10 +352,34 @@ export function worseQuality(
   return QUALITY_RANK[left] <= QUALITY_RANK[right] ? left : right;
 }
 
+/** Stage id of real-time AI enhancement on a server output. */
+export const AI_ENHANCE_STAGE = "native-ai-enhance";
+
+/**
+ * Where the current "generation" of audio starts: real-time AI enhancement
+ * replaces the lossy audio with AI-enhanced audio, so the path is rated from
+ * there on (the source stage still says the file is lossy).
+ */
+function generationStart(stages: SignalStage[]) {
+  for (let index = stages.length - 1; index >= 0; index -= 1) {
+    if (stages[index]?.id === AI_ENHANCE_STAGE) return index;
+  }
+  return 0;
+}
+
+/** Whether a path runs through AI enhancement (real time or an enhanced file). */
+export function isAiEnhancedPath(stages: SignalStage[]) {
+  return stages.some(
+    (stage) =>
+      stage.id === AI_ENHANCE_STAGE ||
+      (stage.kind === "source" && stage.detail.startsWith("AI-enhanced")),
+  );
+}
+
 /** Worst classified stage; an unclassified source caps the path at high quality. */
 export function overallSignalQuality(stages: SignalStage[]): SignalQuality {
   let worst: SignalQuality | null = null;
-  for (const stage of stages) {
+  for (const stage of stages.slice(generationStart(stages))) {
     if (!stage.quality) continue;
     worst = worst ? worseQuality(worst, stage.quality) : stage.quality;
   }
@@ -895,13 +919,18 @@ function clientStages(
  * it is rated low quality too: an exact copy of an MP3 is still an MP3.
  */
 export function carryLossyGeneration(stages: SignalStage[]): SignalStage[] {
-  const first = stages.findIndex((stage) => stage.quality === "low_quality");
-  if (first < 0) return stages;
-  return stages.map((stage, index) =>
-    index > first && stage.quality
-      ? { ...stage, quality: "low_quality" }
-      : stage,
-  );
+  // Real-time AI enhancement starts a new generation of audio.
+  const start = generationStart(stages);
+  const carry = (part: SignalStage[]) => {
+    const first = part.findIndex((stage) => stage.quality === "low_quality");
+    if (first < 0) return part;
+    return part.map((stage, index) =>
+      index > first && stage.quality
+        ? { ...stage, quality: "low_quality" as const }
+        : stage,
+    );
+  };
+  return [...carry(stages.slice(0, start)), ...carry(stages.slice(start))];
 }
 
 function listTitles(stages: SignalStage[]) {
@@ -989,6 +1018,18 @@ export function describeSignalPath(
         ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
         : `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
     case "enhanced":
+      if (isAiEnhancedPath(stages)) {
+        const ai =
+          stages.find((stage) => stage.id === AI_ENHANCE_STAGE) ??
+          stages.find((stage) => stage.kind === "source");
+        const model = /AI-enhanced \(([^)]+)\)/.exec(
+          `${ai?.title ?? ""} ${ai?.detail ?? ""}`,
+        )?.[1];
+        const others = enhanced.filter(
+          (stage) => stage !== ai && stage.kind !== "conversion",
+        );
+        return `AI-enhanced audio: ${model ?? "the enhancer"} generated plausible treble the lossy encode threw away. It is not the original master and not lossless; the original stays one click away.${others.length ? ` Mujin Music also applies processing you asked for: ${listTitles(others)}.` : ""}`;
+      }
       return outputStage?.id === "native-output" &&
         outputStage.quality === "lossless"
         ? `Mujin Music's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`

@@ -29,6 +29,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AlbumFacts } from "@/components/album-facts";
+import { AlbumUpgradeStatus } from "@/components/album-upgrade-status";
 import { Artwork } from "@/components/artwork";
 import { AlbumActions } from "@/components/album-actions";
 import { PauseGlyph } from "@/components/pause-glyph";
@@ -206,6 +207,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
               <Text style={styles.format}>{albumFormat(data.songs)}</Text>
             ) : null}
             <GenreChips genres={about.data?.genres} />
+            <AlbumUpgradeStatus albumId={String(data.id)} />
             {unverifiedMatch(about.data) ? (
               <UnverifiedMatchNotice
                 check={unverifiedMatch(about.data) as ReleaseMatchCheck}

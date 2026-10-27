@@ -12,6 +12,7 @@ export const palette = {
   accentSoft: "#E6A27A",
   accentDeep: "#BF7246",
   accentText: "#160D07",
+  qualityEnhanced: "#8FC3E0",
   qualityHigh: "#A3C98B",
   qualityLow: "#7E7A74",
   danger: "#F2473F",
