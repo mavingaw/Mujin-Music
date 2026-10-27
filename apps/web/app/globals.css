@@ -557,6 +557,17 @@ body {
     color-mix(in srgb, var(--mujin-quality, #d98b5f) 18%, transparent);
 }
 
+/* The labelled "Finding lyrics" state: four bars breathing in turn. */
+@keyframes mj-lyrics-bar {
+  0%,
+  100% {
+    transform: scaleY(0.45);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
 /* Restrained motion everywhere: honour the system setting. */
 @media (prefers-reduced-motion: reduce) {
   *,

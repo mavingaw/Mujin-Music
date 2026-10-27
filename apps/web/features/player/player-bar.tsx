@@ -10,6 +10,17 @@ import {
   usePlayerShortcuts,
 } from "./player-bar-hooks";
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
+import { useLyricsBackdropImage } from "./lyrics-view";
+import {
+  LyricsSheet,
+  VIEW_LYRICS_EVENT,
+  type ViewLyricsRequest,
+} from "./view-lyrics";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
+import { useZonePlayback } from "./zones/use-zone-playback";
 import { IdleFooter, PlayerFooter } from "./player-footer";
 import { getLibraryImageUrl } from "@/lib/images/image-url";
 import { generatedCover } from "@/features/library/artwork/generated-cover";
@@ -327,6 +338,10 @@ export default function PlayerBar() {
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [lyricsSheet, setLyricsSheet] = useState<ViewLyricsRequest | null>(
+    null,
+  );
+  const zonePlayback = useZonePlayback();
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
   const closeFullscreen = useCallback(() => {
     setFullscreenOpen(false);
@@ -448,13 +463,57 @@ export default function PlayerBar() {
     activeLine,
     activeLineRef,
     fallback: fallbackLyrics,
-    failed: lyricsFailed,
+    failure: lyricsFailure,
     instrumental: lyricsInstrumental,
     loading: lyricsLoading,
     retry: retryLyrics,
     scrollRef: lyricsScrollRef,
+    source: lyricsSource,
     timed: timedLyrics,
   } = useLyrics(effectiveSong, effectiveCurrentTime, lyricsOpen && !live);
+  const lyricsBackdrop = useLyricsBackdropImage(
+    effectiveSong.artist_object.id || artist.id || undefined,
+    effectiveSong.artist_object.icon_url || undefined,
+    lyricsOpen && !live,
+  );
+  const lyricsSongId = live ? "" : effectiveSong.id;
+  const lyricsAvailability = useLyricsAvailability(
+    useMemo(() => (lyricsSongId ? [lyricsSongId] : []), [lyricsSongId]),
+  );
+  // "View lyrics" in a track menu: the playing track opens the full-screen
+  // lyrics; any other track opens a sheet with its words.
+  useEffect(() => {
+    const onViewLyrics = (event: Event) => {
+      const request = (event as CustomEvent<ViewLyricsRequest>).detail;
+      if (!request?.songId) return;
+      if (request.songId === lyricsSongId) {
+        setQueueOpen(false);
+        setFullscreenOpen(true);
+        setLyricsOpen(true);
+      } else {
+        setLyricsSheet(request);
+      }
+    };
+    window.addEventListener(VIEW_LYRICS_EVENT, onViewLyrics);
+    return () => window.removeEventListener(VIEW_LYRICS_EVENT, onViewLyrics);
+  }, [lyricsSongId]);
+  const lyricsSheetView = lyricsSheet ? (
+    <LyricsSheet
+      onFollowAlong={(request) => {
+        setLyricsSheet(null);
+        if (!request.item) return;
+        void zonePlayback.playQueue([request.item]).then(() => {
+          setQueueOpen(false);
+          setFullscreenOpen(true);
+          setLyricsOpen(true);
+        });
+      }}
+      onOpenChange={(open) => {
+        if (!open) setLyricsSheet(null);
+      }}
+      request={lyricsSheet}
+    />
+  ) : null;
   useFullscreenDismiss(fullscreenOpen, closeFullscreen);
   useEffect(() => {
     if (!lyricsOpen || fullscreenOpen) {
@@ -560,6 +619,7 @@ export default function PlayerBar() {
     return (
       <>
         <IdleFooter zonePicker={<ZonePickerButton />} />
+        {lyricsSheetView}
         {zones.zones.length > 1 ? (
           <div className="fixed bottom-[calc(var(--shell-footer)+10px)] right-3 z-50 rounded-full border border-white/10 bg-mujin-surface-1 p-1 shadow-2xl md:hidden">
             <ZonePickerButton />
@@ -589,10 +649,12 @@ export default function PlayerBar() {
           queueEditing={queueEditing}
           lyricsOpen={lyricsOpen}
           lyricsFallback={fallbackLyrics}
-          lyricsFailed={lyricsFailed}
+          lyricsFailure={lyricsFailure}
           lyricsInstrumental={lyricsInstrumental}
           lyricsLoading={lyricsLoading}
           lyricsScrollRef={lyricsScrollRef}
+          lyricsSource={lyricsSource}
+          lyricsBackdrop={lyricsBackdrop}
           muted={effectiveMuted}
           onClose={closeFullscreen}
           onNext={next}
@@ -649,15 +711,18 @@ export default function PlayerBar() {
         <LyricsPanel
           activeLine={activeLine}
           activeLineRef={activeLineRef}
+          backdrop={lyricsBackdrop}
           cover={cover}
           fallback={fallbackLyrics}
-          failed={lyricsFailed}
+          failure={lyricsFailure}
           instrumental={lyricsInstrumental}
           loading={lyricsLoading}
           onRetry={retryLyrics}
           scrollRef={lyricsScrollRef}
           onSeek={handleTimeChange}
+          source={lyricsSource}
           timed={timedLyrics}
+          title={displayTitle}
         />
       )}
 
@@ -756,7 +821,16 @@ export default function PlayerBar() {
           ) : null
         }
         livePlaying={live ? livePlaying : null}
+        lyricsMark={
+          lyricsSongId && lyricsAvailability[lyricsSongId] ? (
+            <TimedLyricsMark
+              availability={lyricsAvailability[lyricsSongId]}
+              showLabel
+            />
+          ) : null
+        }
       />
+      {lyricsSheetView}
       {!casting && !fullscreenOpen && !queueOpen && <RadioNotices />}
       {handoffOpen && (
         <SpotifyHandoffDialog

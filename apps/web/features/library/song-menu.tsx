@@ -26,6 +26,9 @@ import {
   type WorkSummary,
 } from "@parson/music-sdk";
 import { useSongWorks } from "@/features/library/works/use-works";
+import { requestViewLyrics } from "@/features/player/view-lyrics";
+import getBaseURL from "@/lib/api/server-url";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
 import { LibraryToolsSubmenu } from "@/features/library/tools/library-tools-menu";
 import { SongAnalysisDialog } from "@/features/library/tools/song-analysis-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -36,6 +39,7 @@ import {
   ListEnd,
   ListPlus,
   Loader2,
+  MicVocal,
   Pause,
   Play,
   Plus,
@@ -147,6 +151,15 @@ export default function SongMenu({
     void playback.playNext([queueItem()], song_name);
   };
 
+  const viewLyrics = () =>
+    requestViewLyrics({
+      songId: song_id,
+      title: song_name,
+      artist: artist_name,
+      cover: getLibraryImageUrl(album_cover, getBaseURL) ?? undefined,
+      item: queueItem(),
+    });
+
   return (
     <>
       <ContextMenu onOpenChange={setOpen}>
@@ -240,10 +253,11 @@ export default function SongMenu({
               onCreateTag={() => setCreateTagOpen(true)}
             />
           )}
-          {(entityLinks.album ||
-            entityLinks.artist ||
-            onViewCredits ||
-            piece) && <ContextMenuSeparator />}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={viewLyrics}>
+            <MicVocal className="h-4 w-4" />
+            View lyrics
+          </ContextMenuItem>
           {onViewCredits && (
             <ContextMenuItem onSelect={onViewCredits}>
               <Info className="h-4 w-4" />

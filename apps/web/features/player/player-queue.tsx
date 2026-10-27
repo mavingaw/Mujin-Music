@@ -12,6 +12,7 @@ import {
 } from "@parson/music-sdk";
 import { RadioQueueSection, RadioThumbs } from "./radio/radio-controls";
 import {
+  GripVertical,
   ListMusic,
   ListX,
   Play,
@@ -27,9 +28,14 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
 import { queueDropIndex } from "./player-queue-reorder";
 import { queueSummary } from "./queue-summary";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
@@ -261,6 +267,21 @@ export function PlayerQueueList({
     index: number;
   } | null>(null);
   const suppressClick = useRef(false);
+  // The row just moved: lit for a moment and announced, so a drag (or an
+  // arrow-key move) visibly lands.
+  const [moved, setMoved] = useState<{
+    index: number;
+    message: string;
+    at: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!moved) return;
+    const timer = window.setTimeout(() => setMoved(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [moved]);
+  const lyrics = useLyricsAvailability(
+    useMemo(() => queue.map((item) => item.song.id ?? ""), [queue]),
+  );
   const { currentIndex } = usePlayer();
   // A remote zone's queue is positioned by the zone, not this player.
   const radioStart = radioSectionStart(
@@ -280,6 +301,11 @@ export function PlayerQueueList({
       return;
     }
     onReorder(from, to);
+    setMoved({
+      index: to,
+      message: `Moved ${queue[from]?.song.name || "the song"} to position ${to + 1} of ${queue.length}.`,
+      at: Date.now(),
+    });
   };
   const drop = (event: DragEvent<HTMLButtonElement>, targetIndex: number) => {
     event.preventDefault();
@@ -311,6 +337,9 @@ export function PlayerQueueList({
       aria-label="Playback queue. Drag rows to reorder, or use the arrow keys."
       className={`overflow-y-auto p-2 ${className}`}
     >
+      <p aria-live="polite" className="sr-only" data-queue-announcement>
+        {moved?.message ?? ""}
+      </p>
       {queue.map((item, index) => {
         const active = editing
           ? index === editing.currentIndex
@@ -327,7 +356,11 @@ export function PlayerQueueList({
               <button
                 aria-current={active ? "true" : undefined}
                 aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}.${rowMovable ? " Drag to reorder, or use the arrow keys." : ""}`}
-                className={`group relative flex h-15.5 w-full items-center gap-3 rounded-xl p-2 text-left transition-colors ${
+                className={`group relative flex h-15.5 w-full items-center gap-2 rounded-xl p-2 pl-1 text-left transition-[background-color,box-shadow] duration-500 ${
+                  moved?.index === index
+                    ? "bg-mujin-copper/[0.12] shadow-[inset_0_0_0_1px_rgba(217,139,95,0.45)]"
+                    : ""
+                } ${
                   rowMovable ? "cursor-grab active:cursor-grabbing" : ""
                 } ${active ? "bg-white/9" : "hover:bg-white/5"} ${
                   draggedIndex === index ? "opacity-60" : ""
@@ -386,12 +419,21 @@ export function PlayerQueueList({
                 {dropTarget?.index === index && draggedIndex !== index && (
                   <span
                     aria-hidden="true"
-                    className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-white ${
+                    className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-mujin-copper ${
                       dropTarget.edge === "before" ? "top-0" : "bottom-0"
                     }`}
                   />
                 )}
-                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
+                <GripVertical
+                  aria-hidden="true"
+                  className={`h-4 w-4 shrink-0 text-mujin-text-tertiary transition-opacity ${
+                    rowMovable
+                      ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-60"
+                      : "invisible"
+                  }`}
+                  data-drag-handle
+                />
+                <div className="relative ml-1 h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
                   <Image
                     alt=""
                     className="object-cover"
@@ -409,6 +451,10 @@ export function PlayerQueueList({
                     className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
                   >
                     <SongTitle title={item.song.name || "Untitled song"} />
+                    <TimedLyricsMark
+                      availability={item.song.id ? lyrics[item.song.id] : null}
+                      className="ml-2"
+                    />
                   </p>
                   <p className="truncate text-xs text-zinc-500">
                     {radioPick && item.reason && (

@@ -13,7 +13,12 @@ import type { FocusSong } from "@parson/music-sdk";
 import { AudioLines, Play } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
+import { PlayNowSplit } from "@/features/player/play-now-split";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
 
 const QUALITY_LABEL: Record<string, string> = {
   hires: "Hi-Res",
@@ -35,7 +40,7 @@ export function QualityBadge({
       className={cn(
         "rounded-[4px] border px-1 py-px text-[10px] font-bold uppercase leading-3 tracking-wide",
         quality === "hires"
-          ? "border-amber-300/40 text-amber-200"
+          ? "border-mujin-copper/45 text-mujin-copper"
           : "border-white/20 text-zinc-300",
         className,
       )}
@@ -61,6 +66,9 @@ export default function CompactTrackList({
   const playback = useZonePlayback();
   const player = usePlayer();
   const queue = catalogSongsToQueue(songs);
+  const lyrics = useLyricsAvailability(
+    useMemo(() => songs.map((song) => song.id), [songs]),
+  );
   return (
     <ol className="divide-y divide-white/[0.04] overflow-hidden rounded-xl border border-white/8 bg-white/[0.015]">
       {songs.map((song, index) => {
@@ -109,6 +117,7 @@ export default function CompactTrackList({
                 >
                   <span className="truncate">{song.name}</span>
                   <QualityBadge quality={song.quality} />
+                  <TimedLyricsMark availability={lyrics[song.id]} />
                 </p>
                 <p className="truncate text-xs text-zinc-500">
                   <Link
@@ -130,6 +139,18 @@ export default function CompactTrackList({
                   )}
                 </p>
               </div>
+              {queue[index] && (
+                <PlayNowSplit
+                  onPlayNow={() => void playback.playQueue(queue, index)}
+                  target={{
+                    kind: "track",
+                    id: song.id,
+                    name: song.name,
+                    item: queue[index]!,
+                  }}
+                  variant="row"
+                />
+              )}
               {trailing?.(song, index)}
               <span className="w-12 shrink-0 text-right text-xs tabular-nums text-zinc-500">
                 {formatDuration(song.durationSeconds)}

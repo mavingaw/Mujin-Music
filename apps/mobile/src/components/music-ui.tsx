@@ -1,5 +1,6 @@
 import {
   getSongWorks,
+  lookupLyricsAvailability,
   trackWorkTarget,
   type LibrarySong,
   type ResponseAlbum,
@@ -14,6 +15,7 @@ import {
   ChevronUp,
   ListEnd,
   ListPlus,
+  MicVocal,
   MoreHorizontal,
   Music2,
   Play,
@@ -115,6 +117,14 @@ export function SongRow({
   const [downloadError, setDownloadError] = useState(false);
   useDownloadsRevision();
   const active = player.current?.id === song.id;
+  // The "timed lyrics" marker; rows of one list share a batched request.
+  const lyrics = useQuery({
+    queryKey: ["lyrics-availability", song.id],
+    queryFn: () => lookupLyricsAvailability(song.id),
+    enabled: session.phase === "ready",
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
   const songWorks = useQuery({
     queryKey: ["song-works", song.id],
     queryFn: () => getSongWorks(song.id),
@@ -163,6 +173,27 @@ export function SongRow({
               {title ?? song.name}
             </Text>
             <BannedMark target={{ kind: "song", id: song.id }} />
+            {lyrics.data ? (
+              <View
+                accessibilityLabel={
+                  lyrics.data.synced ? "Timed lyrics" : "Lyrics"
+                }
+                accessible
+                style={[
+                  styles.lyricsMark,
+                  lyrics.data.synced ? styles.lyricsMarkTimed : null,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.lyricsMarkText,
+                    lyrics.data.synced ? styles.lyricsMarkTextTimed : null,
+                  ]}
+                >
+                  {lyrics.data.synced ? "LRC" : "LYRICS"}
+                </Text>
+              </View>
+            ) : null}
           </View>
           {subtitle ? (
             <Text numberOfLines={1} style={styles.songArtist}>
@@ -188,7 +219,7 @@ export function SongRow({
       >
         <DrawerAction
           icon={Play}
-          label="Play"
+          label="Play now"
           onPress={() => {
             setMenu(false);
             playback.playSong(song, queue);
@@ -196,7 +227,7 @@ export function SongRow({
         />
         <DrawerAction
           icon={ListPlus}
-          label="Play next"
+          label="Add next"
           onPress={() => {
             setMenu(false);
             playback.addNext(song);
@@ -214,6 +245,17 @@ export function SongRow({
           <StartRadioAction
             seed={{ kind: "song", id: song.id }}
             onStarted={() => setMenu(false)}
+          />
+        ) : null}
+        {session.phase !== "offline" ? (
+          <DrawerAction
+            icon={MicVocal}
+            label={active ? "View lyrics" : "Play and view lyrics"}
+            onPress={() => {
+              setMenu(false);
+              if (!active) playback.playSong(song, queue);
+              router.push({ pathname: "/player", params: { panel: "lyrics" } });
+            }}
           />
         ) : null}
         <BanAction
@@ -392,6 +434,25 @@ export function AlbumRail({ albums }: { albums: ResponseAlbum[] }) {
 }
 
 const styles = StyleSheet.create({
+  lyricsMark: {
+    borderWidth: 1,
+    borderColor: "rgba(242,238,230,0.14)",
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    marginLeft: 6,
+  },
+  lyricsMarkTimed: {
+    borderColor: "rgba(217,139,95,0.4)",
+    backgroundColor: "rgba(217,139,95,0.08)",
+  },
+  lyricsMarkText: {
+    color: palette.tertiary,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+  },
+  lyricsMarkTextTimed: { color: palette.accent },
   songTitleRow: { alignItems: "center", flexDirection: "row", gap: 6 },
   shrink: { flexShrink: 1 },
   screen: { flex: 1, backgroundColor: palette.background },

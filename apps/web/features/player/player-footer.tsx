@@ -93,6 +93,7 @@ export function PlayerFooter({
   zoneLabel,
   zoneSignal,
   livePlaying,
+  lyricsMark,
 }: {
   albumCover?: string;
   albumId: string;
@@ -143,6 +144,8 @@ export function PlayerFooter({
   zoneSignal?: ReactNode;
   /** What a live station is playing (titles and format), when one plays. */
   livePlaying?: LiveNowPlaying | null;
+  /** The "timed lyrics" marker for the playing track; opens the lyrics. */
+  lyricsMark?: ReactNode;
 }) {
   const live = isLiveRadioId(songId);
   const footer = (
@@ -164,6 +167,21 @@ export function PlayerFooter({
           feedback={feedback}
           zoneLabel={zoneLabel ?? null}
           zoneSignal={zoneSignal}
+          lyricsMark={
+            lyricsMark && !live ? (
+              <button
+                aria-label={lyricsOpen ? "Hide lyrics" : "Show lyrics"}
+                className="relative z-30 hidden shrink-0 rounded-[4px] transition-opacity hover:opacity-80 sm:inline-flex"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleLyrics();
+                }}
+                type="button"
+              >
+                {lyricsMark}
+              </button>
+            ) : null
+          }
         />
         <section className="relative z-30 flex min-w-0 flex-col items-center gap-1 md:w-full md:max-w-140 md:justify-self-center">
           <div className="flex items-center gap-2">
@@ -396,6 +414,7 @@ function TrackInfo({
   songId,
   zoneLabel,
   zoneSignal,
+  lyricsMark,
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
@@ -406,6 +425,7 @@ function TrackInfo({
   songId: string;
   zoneLabel: string | null;
   zoneSignal?: ReactNode;
+  lyricsMark?: ReactNode;
 }) {
   const liveStation = liveStationIdFromSongId(songId);
   const href = liveStation
@@ -452,6 +472,7 @@ function TrackInfo({
               songId={songId}
             />
           )}
+          {lyricsMark}
         </span>
         {zoneLabel && (
           <span className="flex min-w-0 items-center gap-1.5">

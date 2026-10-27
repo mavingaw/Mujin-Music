@@ -1425,6 +1425,8 @@ async fn overview(pool: DbPool) -> HttpResponse {
                         hosts.push(host);
                     }
                 }
+                // Lyrics for the track being viewed, when its file has none.
+                hosts.push("lrclib.net");
                 hosts
             },
             stages: store::Stage::ALL

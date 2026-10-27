@@ -15,6 +15,7 @@ import { useArtist } from "@/features/library/use-library-entity";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
 import { isExplicitSongTitle } from "@/features/library/song-presentation";
 import Image from "next/image";
+import { PlayNowSplit } from "@/features/player/play-now-split";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
@@ -45,7 +46,6 @@ import { GenreChips } from "@/features/library/genres/genre-chips";
 import { useQuery } from "@tanstack/react-query";
 import { getSimilarArtists } from "@parson/music-sdk";
 import { useZonePlayback } from "@/features/player/zones/use-zone-playback";
-import PlayIcon from "@/components/icons/play";
 import { ArtistCircle, ShelfRow } from "@/features/library/home/home-sections";
 import { usePageTitle } from "@/components/app/title-metadata";
 import EntityPageState from "@/features/library/entity-page-state";
@@ -357,14 +357,14 @@ function LibraryArtistDetails({
             {artist && (
               <div className="mt-6 flex flex-wrap items-center gap-3">
                 {albums.some((album) => album.songs?.length) && (
-                  <button
-                    className="mj-primary inline-flex h-11 items-center gap-2 rounded-full pl-4 pr-5 text-[13.5px] font-semibold shadow-[0_10px_30px_-10px_rgba(217,139,95,0.6)]"
-                    onClick={playArtist}
-                    type="button"
-                  >
-                    <PlayIcon className="h-4 w-4" fill="currentColor" />
-                    Play now
-                  </button>
+                  <PlayNowSplit
+                    onPlayNow={playArtist}
+                    target={{
+                      kind: "artist",
+                      id: artist.id,
+                      name: artist.name,
+                    }}
+                  />
                 )}
                 <StartRadioButton
                   label={`Start ${artist.name} radio`}

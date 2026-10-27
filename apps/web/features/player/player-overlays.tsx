@@ -9,6 +9,8 @@ import {
   liveTitleText,
   parseStreamingId,
   type LiveNowPlaying,
+  type LyricsFailure,
+  type LyricsSourceKind,
 } from "@parson/music-sdk";
 import { LiveTimeline } from "@/features/live-radio/live-player";
 import { LiveBadge, StationArtwork } from "@/features/live-radio/station-ui";
@@ -34,6 +36,7 @@ import {
   type RefObject,
 } from "react";
 import type { TimedLyric } from "./player-bar-hooks";
+import { LyricsBackdrop, LyricsSourceChip, LyricsView } from "./lyrics-view";
 import type { Player } from "./player-api";
 import {
   PlayerQueueList,
@@ -186,10 +189,12 @@ export function FullscreenPlayer({
   queueEditing,
   lyricsOpen,
   lyricsFallback,
-  lyricsFailed,
+  lyricsFailure,
   lyricsInstrumental,
   lyricsLoading,
   lyricsScrollRef,
+  lyricsSource,
+  lyricsBackdrop,
   muted,
   onClose,
   onNext,
@@ -239,10 +244,13 @@ export function FullscreenPlayer({
   queueEditing?: QueueEditing;
   lyricsOpen: boolean;
   lyricsFallback?: string | null;
-  lyricsFailed: boolean;
+  lyricsFailure: LyricsFailure | null;
   lyricsInstrumental: boolean;
   lyricsLoading: boolean;
   lyricsScrollRef: RefObject<HTMLDivElement | null>;
+  lyricsSource: LyricsSourceKind | null;
+  /** The artist photo behind the lyrics; the blurred cover without one. */
+  lyricsBackdrop?: string | null;
   muted: boolean;
   onClose: () => void;
   onNext: () => void;
@@ -367,11 +375,17 @@ export function FullscreenPlayer({
             <DialogPrimitive.Title className="sr-only">
               Now playing
             </DialogPrimitive.Title>
-            <NowPlayingBackdrop
-              cover={cover}
-              dim={lyricsOpen || queueOpen}
-              palette={palette}
-            />
+            {lyricsOpen ? (
+              <div className="fixed inset-0 bg-mujin-deep">
+                <LyricsBackdrop cover={cover} photo={lyricsBackdrop} />
+              </div>
+            ) : (
+              <NowPlayingBackdrop
+                cover={cover}
+                dim={queueOpen}
+                palette={palette}
+              />
+            )}
             <div
               className="relative z-20 flex touch-none select-none items-center justify-between px-4 pb-2 pt-[max(10px,env(safe-area-inset-top))] md:hidden"
               onPointerCancel={endDrag}
@@ -413,19 +427,71 @@ export function FullscreenPlayer({
             </button>
             <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
               {lyricsOpen ? (
-                <div className="mx-auto min-h-0 w-full max-w-190 flex-1 overflow-hidden px-2 md:px-6">
-                  <LyricsContent
-                    activeLine={activeLine}
-                    activeLineRef={activeLineRef}
-                    fallback={lyricsFallback}
-                    failed={lyricsFailed}
-                    instrumental={lyricsInstrumental}
-                    loading={lyricsLoading}
-                    onRetry={onRetryLyrics}
-                    onSeek={onSeek}
-                    scrollRef={lyricsScrollRef}
-                    timed={timedLyrics}
-                  />
+                <div className="mx-auto grid min-h-0 w-full max-w-[1320px] flex-1 md:grid-cols-[minmax(240px,360px)_minmax(0,1fr)] md:gap-[clamp(32px,5vw,88px)] md:px-12">
+                  <aside className="hidden min-w-0 flex-col justify-center md:flex">
+                    <div
+                      className="relative aspect-square w-full max-w-[300px] overflow-hidden rounded-[8px] bg-mujin-surface-1"
+                      style={{
+                        boxShadow: `0 0 0 1px rgb(242 238 230 / 0.08), 0 40px 90px -36px ${rgbString(palette.glow, 0.55)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
+                      }}
+                    >
+                      <Image
+                        alt=""
+                        className="object-cover"
+                        fill
+                        sizes="300px"
+                        src={cover}
+                      />
+                    </div>
+                    <p className="mj-eyebrow mt-7">Lyrics</p>
+                    <h2
+                      className="mj-display mt-2 line-clamp-2 text-[30px] leading-tight text-mujin-text lg:text-[36px]"
+                      title={title}
+                    >
+                      {title}
+                    </h2>
+                    <p className="mt-2 truncate text-[16px] text-mujin-text-secondary">
+                      <ArtistCreditLinks
+                        credits={artistCredits}
+                        onNavigate={onClose}
+                      />
+                    </p>
+                    {!lyricsLoading &&
+                      (timedLyrics.length > 0 || lyricsFallback) && (
+                        <div className="mt-5">
+                          <LyricsSourceChip
+                            source={lyricsSource}
+                            timed={timedLyrics.length > 0}
+                          />
+                        </div>
+                      )}
+                  </aside>
+                  <div className="flex min-h-0 flex-col overflow-hidden">
+                    {!lyricsLoading &&
+                      (timedLyrics.length > 0 || lyricsFallback) && (
+                        <div className="flex justify-center px-6 pb-1 md:hidden">
+                          <LyricsSourceChip
+                            source={lyricsSource}
+                            timed={timedLyrics.length > 0}
+                          />
+                        </div>
+                      )}
+                    <div className="min-h-0 flex-1">
+                      <LyricsView
+                        activeLine={activeLine}
+                        activeLineRef={activeLineRef}
+                        fallback={lyricsFallback}
+                        failure={lyricsFailure}
+                        instrumental={lyricsInstrumental}
+                        loading={lyricsLoading}
+                        onRetry={onRetryLyrics}
+                        onSeek={onSeek}
+                        scrollRef={lyricsScrollRef}
+                        source={lyricsSource}
+                        timed={timedLyrics}
+                      />
+                    </div>
+                  </div>
                 </div>
               ) : queueOpen ? (
                 <div className="mx-auto min-h-0 w-full max-w-160 flex-1 overflow-y-auto px-4 pt-4 md:pt-16">
@@ -693,162 +759,65 @@ export function FullscreenPlayer({
 export const LyricsPanel = memo(function LyricsPanel({
   activeLine,
   activeLineRef,
+  backdrop,
   cover,
   onSeek,
   fallback,
-  failed,
+  failure,
   instrumental,
   loading,
   onRetry,
   scrollRef,
+  source,
   timed,
+  title,
 }: {
   activeLine: number;
   activeLineRef: RefObject<HTMLElement | null>;
+  /** The artist photo; the blurred cover without one. */
+  backdrop?: string | null;
   onSeek: (value: number) => void;
   cover: string;
   fallback?: string | null;
-  failed: boolean;
+  failure: LyricsFailure | null;
   instrumental: boolean;
   loading: boolean;
   onRetry: () => void;
   scrollRef: RefObject<HTMLDivElement | null>;
+  source: LyricsSourceKind | null;
   timed: TimedLyric[];
+  title: string;
 }) {
   return (
     <section
       aria-label="Lyrics"
-      className="app-content-shell z-40 overflow-hidden bg-black"
+      className="app-content-shell z-40 overflow-hidden bg-mujin-deep"
     >
-      <LyricsBackground cover={cover} />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-1 h-24 bg-linear-to-t from-black/45 to-transparent mask-[linear-gradient(to_top,black,transparent)]" />
-      <div className="relative z-2 mx-auto h-full max-w-180">
-        <LyricsContent
-          activeLine={activeLine}
-          activeLineRef={activeLineRef}
-          fallback={fallback}
-          failed={failed}
-          instrumental={instrumental}
-          loading={loading}
-          onRetry={onRetry}
-          onSeek={onSeek}
-          scrollRef={scrollRef}
-          timed={timed}
-        />
+      <LyricsBackdrop cover={cover} photo={backdrop} />
+      <div className="relative z-2 mx-auto flex h-full max-w-200 flex-col">
+        <header className="flex min-w-0 items-center justify-between gap-4 px-6 pb-1 pt-6 sm:px-10">
+          <p className="mj-eyebrow truncate">Lyrics · {title}</p>
+          {!loading && (timed.length > 0 || fallback) && (
+            <LyricsSourceChip source={source} timed={timed.length > 0} />
+          )}
+        </header>
+        <div className="min-h-0 flex-1">
+          <LyricsView
+            activeLine={activeLine}
+            activeLineRef={activeLineRef}
+            fallback={fallback}
+            failure={failure}
+            instrumental={instrumental}
+            loading={loading}
+            onRetry={onRetry}
+            onSeek={onSeek}
+            scrollRef={scrollRef}
+            size="panel"
+            source={source}
+            timed={timed}
+          />
+        </div>
       </div>
     </section>
-  );
-});
-
-function LyricsBackground({ cover }: { cover: string }) {
-  return (
-    <>
-      <div className="absolute -inset-12">
-        <Image
-          alt=""
-          aria-hidden="true"
-          className="object-cover opacity-50 blur-3xl"
-          fill
-          sizes="100vw"
-          src={cover}
-        />
-      </div>
-      <div className="absolute inset-0 bg-black/55" />
-    </>
-  );
-}
-
-const LyricsContent = memo(function LyricsContent({
-  activeLine,
-  activeLineRef,
-  fallback,
-  failed,
-  instrumental,
-  loading,
-  onRetry,
-  onSeek,
-  scrollRef,
-  timed,
-}: {
-  activeLine: number;
-  activeLineRef: RefObject<HTMLElement | null>;
-  fallback?: string | null;
-  failed: boolean;
-  instrumental: boolean;
-  loading: boolean;
-  onRetry: () => void;
-  onSeek: (value: number) => void;
-  scrollRef: RefObject<HTMLDivElement | null>;
-  timed: TimedLyric[];
-}) {
-  return (
-    <div
-      ref={scrollRef}
-      className="h-full overflow-y-auto px-7 py-8 text-center scrollbar-none sm:px-10 [&::-webkit-scrollbar]:hidden"
-    >
-      {loading ? (
-        <div className="grid h-full place-items-center">
-          <div className="h-2 w-2 animate-pulse rounded-full bg-white/70" />
-        </div>
-      ) : failed ? (
-        <div className="grid h-full place-items-center">
-          <div className="max-w-sm">
-            <p className="text-2xl font-semibold text-white">
-              Lyrics are temporarily unavailable
-            </p>
-            <button
-              className="mj-primary mt-5 rounded-full px-5 py-2.5 text-sm font-semibold"
-              onClick={onRetry}
-              type="button"
-            >
-              Try again
-            </button>
-          </div>
-        </div>
-      ) : timed.length ? (
-        <div className="space-y-5 pb-[50vh] pt-1">
-          {timed.map((line, index) =>
-            line.text.trim() ? (
-              <button
-                key={`${line.time}-${index}`}
-                ref={(node) => {
-                  if (index === activeLine) {
-                    activeLineRef.current = node;
-                  }
-                }}
-                className={`mj-title block w-full cursor-pointer text-center text-[26px] leading-snug transition-[color,transform] duration-300 hover:text-mujin-text sm:text-[36px] ${index === activeLine ? "text-mujin-text motion-safe:scale-[1.03]" : index < activeLine ? "text-mujin-text/25" : "text-mujin-text/45"}`}
-                onClick={() => onSeek(line.time)}
-                type="button"
-              >
-                {line.text}
-              </button>
-            ) : (
-              <div
-                aria-hidden="true"
-                className="h-5"
-                key={`${line.time}-${index}`}
-                ref={(node) => {
-                  if (index === activeLine) {
-                    activeLineRef.current = node;
-                  }
-                }}
-              />
-            ),
-          )}
-        </div>
-      ) : fallback ? (
-        <p className="mj-title whitespace-pre-line py-8 text-[26px] leading-[1.6] text-mujin-text sm:text-[34px]">
-          {fallback}
-        </p>
-      ) : (
-        <div className="grid h-full place-items-center">
-          <p className="mj-display text-[34px] leading-[1.4] text-mujin-text/80 sm:text-[48px]">
-            {instrumental
-              ? "Instrumental"
-              : "No lyrics are available for this track."}
-          </p>
-        </div>
-      )}
-    </div>
   );
 });

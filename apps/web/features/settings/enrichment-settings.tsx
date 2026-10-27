@@ -181,9 +181,11 @@ export default function EnrichmentSettings() {
             Adds credits and composers&apos; full catalogues from MusicBrainz;
             biographies, album background, critical reception and review scores
             from Wikipedia, in every language you turn on below; notable works,
-            influences and followers from Wikidata; and front covers from the
-            Cover Art Archive for albums without artwork, with their sources and
-            licenses shown. Off by default.
+            influences and followers from Wikidata; front covers from the Cover
+            Art Archive for albums without artwork, with their sources and
+            licenses shown; and lyrics from LRCLIB for tracks whose files carry
+            none. Lyrics in your files (embedded LRC, SYLT/USLT, or an .lrc
+            beside the track) always show. Off by default.
           </p>
         </div>
         <Button
@@ -200,9 +202,12 @@ export default function EnrichmentSettings() {
       <div className="mt-5 space-y-4 rounded-lg border border-white/10 p-4 text-sm">
         <p className="leading-6 text-zinc-400">
           When on, the server sends album titles, artist names and MusicBrainz
-          ids to{" "}
-          {(data?.sources ?? ["musicbrainz.org", "wikipedia.org"]).join(", ")}.
-          MusicBrainz is asked at most once a second, and each service has its
+          ids (and, for lyrics, the open track&apos;s title, artist, album and
+          length) to{" "}
+          {(
+            data?.sources ?? ["musicbrainz.org", "wikipedia.org", "lrclib.net"]
+          ).join(", ")}
+          . MusicBrainz is asked at most once a second, and each service has its
           own queue, so a busy one never holds up the others. Nothing about your
           listening is sent.
         </p>

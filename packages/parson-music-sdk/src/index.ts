@@ -12,6 +12,7 @@ export * from "./player/audio-presets";
 export * from "./player/formats";
 export * from "./player/radio";
 export * from "./player/live-radio";
+export * from "./player/lyrics";
 export * from "./player/radio-bans";
 export * from "./player/dsp";
 export * from "./player/signal-path";

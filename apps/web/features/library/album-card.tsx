@@ -11,7 +11,7 @@ import { BannedBadge } from "@/features/library/radio-bans";
 import { generatedCover } from "@/features/library/artwork/generated-cover";
 import { QualityBadge } from "@/features/library/artwork/quality-badge";
 import { usePlayAlbum } from "@/features/library/use-play-album";
-import PlayIcon from "@/components/icons/play";
+import { PlayNowSplit } from "@/features/player/play-now-split";
 
 type AlbumCardProps = {
   artist_id: string;
@@ -90,17 +90,12 @@ export default function AlbumCard({
                 lossless={lossless}
               />
             )}
-            <button
-              aria-label={`Play ${album_name}`}
-              className="mj-card-play mj-primary pointer-events-auto absolute bottom-2 right-2 grid h-10 w-10 place-items-center rounded-full shadow-[0_8px_24px_-6px_rgba(0,0,0,0.8)]"
-              onClick={(event) => {
-                event.preventDefault();
-                void playAlbum(album_id);
-              }}
-              type="button"
-            >
-              <PlayIcon className="ml-0.5 h-4 w-4" fill="currentColor" />
-            </button>
+            <PlayNowSplit
+              className="mj-card-play absolute bottom-2 right-2"
+              onPlayNow={() => void playAlbum(album_id)}
+              target={{ kind: "album", id: album_id, name: album_name }}
+              variant="card"
+            />
           </>
         )}
       </div>

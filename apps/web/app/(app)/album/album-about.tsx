@@ -286,6 +286,8 @@ export function AlbumAboutSection({
     { key: "note", label: about?.note ? "Your note" : "Add a note" },
   ];
   const [selected, setSelected] = useState<string | null>(null);
+  // Without a note the editor stays folded, so the tracks start higher.
+  const [noteOpen, setNoteOpen] = useState(false);
   const active =
     panels.find((panel) => panel.key === selected)?.key ??
     panels[0]?.key ??
@@ -411,7 +413,24 @@ export function AlbumAboutSection({
                     </button>
                   </p>
                 )}
-              <NoteEditor entityType="album" id={album.id} note={about?.note} />
+              {about?.note || noteOpen ? (
+                <NoteEditor
+                  entityType="album"
+                  id={album.id}
+                  note={about?.note}
+                />
+              ) : (
+                <button
+                  className="inline-flex items-center gap-1.5 text-[13px] font-medium text-mujin-text-secondary transition-colors hover:text-mujin-text"
+                  onClick={() => setNoteOpen(true)}
+                  type="button"
+                >
+                  <span aria-hidden="true" className="text-mujin-copper">
+                    +
+                  </span>
+                  Write a private note
+                </button>
+              )}
             </div>
           )}
         </div>
