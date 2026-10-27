@@ -226,6 +226,14 @@ impl Resolve for SystemResolver {
 
 pub type Body = BoxStream<'static, Result<Bytes, String>>;
 
+/// A body that answers `None` for good once it has ended, however often it
+/// is polled after that. Streams built with `unfold` panic when polled
+/// again after their end, and a body is often read in parts (a head to
+/// sniff, then the rest), so every body handed out here is fused.
+pub fn fused(body: Body) -> Body {
+    body.fuse().boxed()
+}
+
 /// One HTTP response, headers lower-cased.
 pub struct Fetched {
     pub status: u16,
@@ -306,6 +314,7 @@ impl Fetch for ReqwestFetch {
                     Err(error) => Some((Err(error.without_url().to_string()), None)),
                 }
             })
+            .fuse()
             .boxed();
             Ok(Fetched {
                 status,
@@ -413,6 +422,10 @@ impl GuardedClient {
             if !(200..300).contains(&response.status) {
                 return Err(GuardError::Status(response.status));
             }
+            let response = Fetched {
+                body: fused(response.body),
+                ..response
+            };
             return Ok(Opened {
                 url: current,
                 response,

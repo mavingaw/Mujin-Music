@@ -21,7 +21,7 @@ use reqwest::Url;
 use serde::Serialize;
 
 use super::format::{Container, DETECT_BYTES, Detected, detect};
-use super::guard::{Body, GuardError, GuardedClient, NetPolicy, parse_url};
+use super::guard::{Body, GuardError, GuardedClient, NetPolicy, fused, parse_url};
 use super::hls::{self, HlsError, TitleSink};
 use super::icy::{IcyDemuxer, IcyHeaders};
 use super::playlist::{self, MAX_PLAYLIST_BYTES, Payload};
@@ -94,7 +94,7 @@ impl From<HlsError> for RelayError {
             HlsError::Encrypted => Self::Unsupported(
                 "This HLS stream is encrypted (DRM), so it cannot be played outside the station's own player.",
             ),
-            HlsError::Empty => Self::NoStream,
+            HlsError::Empty | HlsError::NotHls { .. } => Self::NoStream,
         }
     }
 }
@@ -123,29 +123,47 @@ pub struct Source {
 }
 
 /// Reads up to `wanted` bytes (or the first chunk after `timeout`) and
-/// returns them with a body that replays them first.
-pub async fn read_head(mut body: Body, wanted: usize, timeout: Duration) -> (Vec<u8>, Body) {
+/// returns them with a body that replays them first. A body that ended (or
+/// failed) is not polled again: the replay is all that is left of it.
+pub async fn read_head(body: Body, wanted: usize, timeout: Duration) -> (Vec<u8>, Body) {
+    let mut body = fused(body);
     let mut head = Vec::new();
     let deadline = tokio::time::Instant::now() + timeout;
     let mut failure = None;
+    let mut finished = false;
     while head.len() < wanted {
         match tokio::time::timeout_at(deadline, body.next()).await {
             Ok(Some(Ok(chunk))) => head.extend_from_slice(&chunk),
             Ok(Some(Err(error))) => {
                 failure = Some(error);
+                finished = true;
                 break;
             }
-            Ok(None) | Err(_) => break,
+            Ok(None) => {
+                finished = true;
+                break;
+            }
+            Err(_) => break,
         }
     }
-    let replay = Bytes::from(head.clone());
+    (
+        head.clone(),
+        replay_then(head, failure, (!finished).then_some(body)),
+    )
+}
+
+/// `bytes` (and `failure`), then the rest of `body` when it has more.
+fn replay_then(bytes: Vec<u8>, failure: Option<String>, body: Option<Body>) -> Body {
     let prefix = futures::stream::iter(
-        (!replay.is_empty())
-            .then_some(Ok(replay))
+        (!bytes.is_empty())
+            .then(|| Ok(Bytes::from(bytes)))
             .into_iter()
             .chain(failure.map(Err)),
     );
-    (head, prefix.chain(body).boxed())
+    match body {
+        Some(body) => fused(prefix.chain(body).boxed()),
+        None => prefix.boxed(),
+    }
 }
 
 async fn read_text(body: Body) -> String {
@@ -194,6 +212,11 @@ pub async fn open_source(
         if playlist::looks_like_hls(&url) || (station.hls && depth == 0) {
             match hls::open(client, policy, url.clone(), None, titles.clone()).await {
                 Ok(stream) => return Ok(hls_source(stream)),
+                Err(HlsError::NotHls { url, text }) => {
+                    // An `.m3u8` that is a plain list of stream URLs.
+                    last_error = follow_list(&mut candidates, Payload::M3u, &text, &url, depth);
+                    continue;
+                }
                 Err(error) => {
                     last_error = error.into();
                     continue;
@@ -247,24 +270,40 @@ pub async fn open_source(
                 let text = read_text(body).await;
                 match hls::open(client, policy, opened.url, Some(text), titles.clone()).await {
                     Ok(stream) => return Ok(hls_source(stream)),
+                    Err(HlsError::NotHls { url, text }) => {
+                        last_error = follow_list(&mut candidates, Payload::M3u, &text, &url, depth);
+                    }
                     Err(error) => last_error = error.into(),
                 }
             }
             Payload::WebPage => last_error = RelayError::WebPage,
-            kind if depth < MAX_DEPTH => {
+            kind => {
                 let text = read_text(body).await;
-                let entries = playlist::entries(kind, &text, &opened.url);
-                if entries.is_empty() {
-                    last_error = RelayError::NoStream;
-                }
-                for entry in entries.into_iter().rev() {
-                    candidates.push_front((entry.url, depth + 1));
-                }
+                last_error = follow_list(&mut candidates, kind, &text, &opened.url, depth);
             }
-            _ => last_error = RelayError::NoStream,
         }
     }
     Err(last_error)
+}
+
+/// Queues the stream URLs of a playlist file (PLS, M3U, ASX, XSPF) to be
+/// tried next, in the file's order, unless playlists are already nested
+/// [`MAX_DEPTH`] deep. Returns the error to report if none of them plays.
+fn follow_list(
+    candidates: &mut VecDeque<(Url, usize)>,
+    kind: Payload,
+    text: &str,
+    base: &Url,
+    depth: usize,
+) -> RelayError {
+    if depth >= MAX_DEPTH {
+        return RelayError::NoStream;
+    }
+    let entries = playlist::entries(kind, text, base);
+    for entry in entries.into_iter().rev() {
+        candidates.push_front((entry.url, depth + 1));
+    }
+    RelayError::NoStream
 }
 
 fn hls_source(stream: hls::HlsStream) -> Source {
@@ -284,10 +323,11 @@ fn hls_source(stream: hls::HlsStream) -> Source {
 pub async fn identify(source: Source) -> (Source, Option<Detected>) {
     let Source { body, .. } = source;
     let mut collected = Vec::new();
-    let mut body = body;
+    let mut body = fused(body);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     let mut detected = None;
     let mut failure = None;
+    let mut finished = false;
     while collected.len() < DETECT_BYTES {
         match tokio::time::timeout_at(deadline, body.next()).await {
             Ok(Some(Ok(chunk))) => {
@@ -299,18 +339,17 @@ pub async fn identify(source: Source) -> (Source, Option<Detected>) {
             }
             Ok(Some(Err(error))) => {
                 failure = Some(error);
+                finished = true;
                 break;
             }
-            Ok(None) | Err(_) => break,
+            Ok(None) => {
+                finished = true;
+                break;
+            }
+            Err(_) => break,
         }
     }
-    let replay = futures::stream::iter(
-        (!collected.is_empty())
-            .then(|| Ok(Bytes::from(collected)))
-            .into_iter()
-            .chain(failure.map(Err)),
-    );
-    let body = replay.chain(body).boxed();
+    let body = replay_then(collected, failure, (!finished).then_some(body));
     (Source { body, ..source }, detected)
 }
 
@@ -665,6 +704,7 @@ pub fn pipe_through_ffmpeg(mut body: Body, args: Vec<String>) -> Result<Body, Re
             let chunk = output.next().await?;
             Some((chunk.map_err(|error| error.to_string()), (output, running)))
         })
+        .fuse()
         .boxed(),
     )
 }
@@ -972,5 +1012,226 @@ mod tests {
         let finished =
             tokio::time::timeout(Duration::from_secs(20), body.collect::<Vec<_>>()).await;
         assert!(finished.is_ok());
+    }
+
+    /// A small HTTP server on loopback with station files, so the real
+    /// fetcher (reqwest, pinned addresses, manual redirects) is exercised
+    /// end to end, as when a listener adds a station by a playlist URL.
+    async fn station_server(audio: Vec<u8>) -> (actix_web::dev::ServerHandle, String) {
+        use actix_web::{App, HttpResponse, HttpServer, web};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let files = Arc::new(vec![
+            (
+                "/listen.pls",
+                "audio/x-scpls",
+                format!(
+                    "[playlist]\r\nNumberOfEntries=2\r\nFile1={origin}/gone\r\nTitle1=Jazz\r\nFile2={origin}/stream\r\nLength2=-1\r\nVersion=2\r\n"
+                ),
+            ),
+            (
+                "/listen.m3u",
+                "audio/x-mpegurl",
+                format!("#EXTM3U\n#EXTINF:-1,Jazz\n{origin}/stream\n"),
+            ),
+            (
+                "/listen.m3u8",
+                "application/vnd.apple.mpegurl",
+                format!("#EXTM3U\n#EXTINF:-1,Jazz\n{origin}/stream\n"),
+            ),
+            (
+                "/listen.asx",
+                "video/x-ms-asf",
+                format!(
+                    "<ASX version=\"3.0\"><Entry><Title>Jazz</Title><Ref HREF = \"{origin}/stream\"/></Entry></ASX>"
+                ),
+            ),
+            ("/nested.m3u", "audio/x-mpegurl", "listen.pls\n".to_string()),
+            (
+                "/loop.pls",
+                "audio/x-scpls",
+                "[playlist]\nFile1=loop.m3u\n".to_string(),
+            ),
+            ("/loop.m3u", "text/plain", "loop.pls\n".to_string()),
+        ]);
+        let audio = Arc::new(audio);
+        let server = HttpServer::new(move || {
+            let files = files.clone();
+            let audio = audio.clone();
+            App::new().default_service(web::to(move |request: actix_web::HttpRequest| {
+                let files = files.clone();
+                let audio = audio.clone();
+                async move {
+                    let path = request.path();
+                    if path == "/stream" {
+                        return HttpResponse::Ok()
+                            .content_type("audio/mpeg")
+                            .body(audio.as_ref().clone());
+                    }
+                    if path == "/moved" {
+                        return HttpResponse::Found()
+                            .insert_header(("Location", "/listen.pls"))
+                            .finish();
+                    }
+                    match files.iter().find(|(name, _, _)| *name == path) {
+                        Some((_, content_type, body)) => HttpResponse::Ok()
+                            .content_type(*content_type)
+                            .body(body.clone()),
+                        None => HttpResponse::NotFound().finish(),
+                    }
+                }
+            }))
+        })
+        .workers(1)
+        .listen(listener)
+        .expect("listen")
+        .run();
+        let handle = server.handle();
+        actix_web::rt::spawn(server);
+        (handle, origin)
+    }
+
+    #[actix_web::test]
+    async fn playlist_urls_resolve_through_the_real_fetcher_without_panicking() {
+        let audio = mp3_frames(128, 40);
+        let (server, origin) = station_server(audio.clone()).await;
+        let client = GuardedClient::system();
+        for path in [
+            "/listen.pls",
+            "/listen.m3u",
+            "/listen.m3u8",
+            "/listen.asx",
+            "/moved",
+            "/nested.m3u",
+        ] {
+            let mut station = station("d1a54d2e-623e-4970-ab11-35f7b56c5ec3", "jazz");
+            station.stream_url = format!("{origin}{path}");
+            // Loopback is a LAN address: only a LAN station may reach it.
+            station.allow_lan = true;
+            let (sink, _) = sink();
+            let source = open_source(&client, &station, sink)
+                .await
+                .unwrap_or_else(|error| panic!("{path}: {error}"));
+            assert_eq!(source.url.as_str(), format!("{origin}/stream"), "{path}");
+            let (source, detected) = identify(source).await;
+            assert_eq!(
+                detected.and_then(|found| found.codec).as_deref(),
+                Some("mp3"),
+                "{path}"
+            );
+            let mut body = source.body;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = body.next().await {
+                bytes.extend_from_slice(&chunk.expect("chunk"));
+            }
+            assert_eq!(bytes, audio, "{path}: the stream arrives whole");
+            // Polling an ended body again is harmless.
+            assert!(body.next().await.is_none());
+            assert!(body.next().await.is_none());
+        }
+
+        // Playlists that only point at each other end, with an error.
+        let mut looping = station("d1a54d2e-623e-4970-ab11-35f7b56c5ec3", "loop");
+        looping.stream_url = format!("{origin}/loop.pls");
+        looping.allow_lan = true;
+        let (titles, _) = sink();
+        assert!(matches!(
+            open_source(&client, &looping, titles).await,
+            Err(RelayError::NoStream)
+        ));
+
+        // The same playlist on a public station is refused: the guard
+        // still checks every address, loopback included.
+        let mut public = station("d1a54d2e-623e-4970-ab11-35f7b56c5ec3", "jazz");
+        public.stream_url = format!("{origin}/listen.pls");
+        let (titles, _) = sink();
+        let error = open_source(&client, &public, titles)
+            .await
+            .err()
+            .expect("blocked");
+        assert_eq!(error.code(), "stream_address_blocked");
+        server.stop(true).await;
+    }
+
+    #[actix_web::test]
+    async fn playlists_cannot_redirect_or_point_a_public_station_into_the_lan() {
+        let fetch = FakeFetch::default()
+            .with(
+                "https://radio.example/r.pls",
+                FakeReply::redirect("http://lan.example/listen.pls"),
+            )
+            .with(
+                "https://radio.example/p.pls",
+                FakeReply::ok(
+                    "audio/x-scpls",
+                    "[playlist]\nFile1=http://127.0.0.1:8000/admin\nFile2=http://[::1]/x\nFile3=http://lan.example/x\n",
+                ),
+            );
+        let (client, fetch) = client(fetch);
+        for url in ["https://radio.example/r.pls", "https://radio.example/p.pls"] {
+            let mut station = station("d1a54d2e-623e-4970-ab11-35f7b56c5ec3", "jazz");
+            station.stream_url = url.into();
+            let (sink, _) = sink();
+            let error = open_source(&client, &station, sink)
+                .await
+                .err()
+                .expect("blocked");
+            assert_eq!(error.code(), "stream_address_blocked", "{url}");
+        }
+        assert!(
+            fetch
+                .urls()
+                .iter()
+                .all(|url| url.starts_with("https://radio.example/")),
+            "nothing on the LAN was fetched: {:?}",
+            fetch.urls()
+        );
+    }
+
+    #[actix_web::test]
+    async fn malformed_playlists_from_stations_never_panic_the_relay() {
+        let names = ["f.pls", "f.m3u", "f.m3u8", "f.asx", "f.xspf", "f"];
+        let types = [
+            "audio/x-scpls",
+            "audio/x-mpegurl",
+            "application/vnd.apple.mpegurl",
+            "video/x-ms-asf",
+            "text/plain",
+            "application/octet-stream",
+        ];
+        let cases = crate::live_radio::playlist::tests::malformed_playlists(240);
+        let mut fetch = FakeFetch::default();
+        for (index, bytes) in cases.iter().enumerate() {
+            let url = format!(
+                "https://radio.example/{index}/{}",
+                names[index % names.len()]
+            );
+            let split = 1 + index % 37;
+            fetch = fetch.with(
+                &url,
+                FakeReply::ok(types[index % types.len()], Vec::new())
+                    .chunked(bytes.chunks(split).map(<[u8]>::to_vec).collect()),
+            );
+        }
+        let (client, _) = client(fetch);
+        for (index, _) in cases.iter().enumerate() {
+            let mut station = station("d1a54d2e-623e-4970-ab11-35f7b56c5ec3", "fuzz");
+            station.stream_url = format!(
+                "https://radio.example/{index}/{}",
+                names[index % names.len()]
+            );
+            station.hls = index % 11 == 0;
+            let (sink, _) = sink();
+            // Live HLS keeps polling, so each case gets a short look.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+                if let Ok(source) = open_source(&client, &station, sink).await {
+                    let (source, _) = identify(source).await;
+                    let mut body = source.body;
+                    while body.next().await.is_some() {}
+                    assert!(body.next().await.is_none());
+                }
+            })
+            .await;
+        }
     }
 }

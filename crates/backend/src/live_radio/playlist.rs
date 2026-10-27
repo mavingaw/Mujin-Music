@@ -66,7 +66,7 @@ pub fn sniff(content_type: Option<&str>, url: &Url, head: &[u8]) -> Payload {
     if lowered.starts_with("[playlist]") {
         return Payload::Pls;
     }
-    if lowered.starts_with("<asx") {
+    if lowered.starts_with("<asx") || (lowered.starts_with("<?xml") && lowered.contains("<asx")) {
         return Payload::Asx;
     }
     if lowered.starts_with("<?xml") && lowered.contains("<playlist") && lowered.contains("xspf") {
@@ -87,7 +87,9 @@ pub fn sniff(content_type: Option<&str>, url: &Url, head: &[u8]) -> Payload {
     let extension = path_extension(url);
     let textual = content_type.starts_with("text/")
         || content_type.is_empty()
-        || content_type == "application/octet-stream";
+        || content_type == "application/octet-stream"
+        || content_type == "application/xml"
+        || content_type.ends_with("+xml");
     if textual && looks_textual(head) {
         match extension.as_str() {
             "pls" => return Payload::Pls,
@@ -114,15 +116,12 @@ fn looks_textual(head: &[u8]) -> bool {
         && std::str::from_utf8(sample).is_ok()
 }
 
-fn is_hls_text(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim();
-        line.starts_with("#EXT-X-TARGETDURATION")
-            || line.starts_with("#EXT-X-STREAM-INF")
-            || line.starts_with("#EXT-X-MEDIA-SEQUENCE")
-            || line.starts_with("#EXT-X-MEDIA:")
-            || line.starts_with("#EXT-X-VERSION")
-    })
+/// Whether a playlist's text carries HLS tags (an `.m3u8` may also be a
+/// plain list of stream URLs).
+pub fn is_hls_text(text: &str) -> bool {
+    // Every HLS tag starts `#EXT-X-`; plain M3U lists use only `#EXTM3U`
+    // and `#EXTINF`.
+    text.lines().any(|line| line.trim().starts_with("#EXT-X-"))
 }
 
 /// One entry of a playlist file.
@@ -202,23 +201,43 @@ pub fn parse_m3u(text: &str, base: &Url) -> Vec<Entry> {
     entries
 }
 
+/// The value of attribute `name` (lower case) in one tag, e.g. `href` in
+/// `<Ref HREF = "http://...">`. Quotes are optional; `name` must be a whole
+/// attribute name (`xhref` is not `href`).
 fn xml_attribute(tag: &str, name: &str) -> Option<String> {
+    // ASCII lower-casing keeps every byte offset, so offsets found in
+    // `lowered` are char boundaries in `tag` as well.
     let lowered = tag.to_ascii_lowercase();
-    let at = lowered.find(&format!("{name}="))? + name.len() + 1;
-    let rest = &tag[at..];
-    let quote = rest.chars().next()?;
-    if quote == '"' || quote == '\'' {
-        let value = &rest[1..];
-        Some(value[..value.find(quote)?].to_string())
-    } else {
-        Some(
-            rest.split(|character: char| {
-                character.is_whitespace() || character == '>' || character == '/'
-            })
-            .next()?
-            .to_string(),
-        )
+    let mut from = 0;
+    while let Some(found) = lowered.get(from..)?.find(name) {
+        let at = from + found;
+        from = at + name.len();
+        let whole_name = lowered[..at]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        let Some(rest) = tag[from..].trim_start().strip_prefix('=') else {
+            continue;
+        };
+        if !whole_name {
+            continue;
+        }
+        let rest = rest.trim_start();
+        let quote = rest.chars().next()?;
+        return if quote == '"' || quote == '\'' {
+            let value = &rest[1..];
+            Some(value[..value.find(quote)?].to_string())
+        } else {
+            Some(
+                rest.split(|character: char| {
+                    character.is_whitespace() || character == '>' || character == '/'
+                })
+                .next()?
+                .to_string(),
+            )
+        };
     }
+    None
 }
 
 fn unescape_xml(value: &str) -> String {
@@ -486,7 +505,9 @@ pub fn parse_media(text: &str, base: &Url) -> MediaPlaylist {
             continue;
         }
         if let Some(value) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
-            if let Ok(value) = value.trim().parse::<f64>() {
+            if let Ok(value) = value.trim().parse::<f64>()
+                && value.is_finite()
+            {
                 playlist.target_duration = value.clamp(1.0, 60.0);
             }
         } else if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
@@ -502,7 +523,12 @@ pub fn parse_media(text: &str, base: &Url) -> MediaPlaylist {
         } else if let Some(info) = line.strip_prefix("#EXTINF:") {
             let (duration, description) = info.split_once(',').unwrap_or((info, ""));
             pending = Some((
-                duration.trim().parse().unwrap_or(0.0),
+                duration
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|duration| duration.is_finite() && *duration >= 0.0)
+                    .unwrap_or(0.0),
                 extinf_title(description),
             ));
         } else if !line.starts_with('#') {
@@ -515,14 +541,14 @@ pub fn parse_media(text: &str, base: &Url) -> MediaPlaylist {
                     title,
                 });
             }
-            sequence += 1;
+            sequence = sequence.saturating_add(1);
         }
     }
     playlist
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn base() -> Url {
@@ -696,5 +722,192 @@ mod tests {
         assert_eq!(list[2], ("NAME".into(), "x".into()));
         assert_eq!(hls_codec("mp4a.40.2"), Some("aac"));
         assert_eq!(hls_codec("avc1.4d401f"), None);
+    }
+
+    #[test]
+    fn real_world_playlist_shapes_name_their_streams() {
+        let base = base();
+        // PLS with CRLF, spaces, odd case and a BOM.
+        let pls = "\u{feff}[Playlist]\r\nNumberOfEntries=2\r\nFile2 = http://b.example/two\r\nfile1=http://a.example/one\r\nTitle1=One\r\nLength1=-1\r\nVersion=2\r\n";
+        assert_eq!(
+            sniff(Some("audio/x-scpls"), &base, pls.as_bytes()),
+            Payload::Pls
+        );
+        let urls: Vec<_> = entries(Payload::Pls, pls, &base)
+            .into_iter()
+            .map(|entry| entry.url.to_string())
+            .collect();
+        assert_eq!(urls, ["http://a.example/one", "http://b.example/two"]);
+
+        // A plain list named .m3u8 is M3U, not HLS.
+        let list = "#EXTM3U\n#EXTINF:-1,Jazz\nhttp://a.example/live\n";
+        let m3u8 = Url::parse("https://radio.example/listen.m3u8").unwrap();
+        assert_eq!(
+            sniff(Some("audio/x-mpegurl"), &m3u8, list.as_bytes()),
+            Payload::M3u
+        );
+        assert!(!is_hls_text(list));
+        assert_eq!(
+            entries(Payload::M3u, list, &m3u8)[0].title.as_deref(),
+            Some("Jazz")
+        );
+
+        // ASX in an XML prologue, upper-case tags and spaces around `=`.
+        let asx = "<?xml version=\"1.0\"?>\n<ASX version=\"3.0\"><Entry><Ref HREF = \"http://a.example/one\" /><REF xhref=\"http://evil.example/\" href='http://b.example/two'/></Entry></ASX>";
+        let asx_url = Url::parse("https://radio.example/listen.asx").unwrap();
+        assert_eq!(
+            sniff(Some("application/xml"), &asx_url, asx.as_bytes()),
+            Payload::Asx
+        );
+        let urls: Vec<_> = entries(Payload::Asx, asx, &asx_url)
+            .into_iter()
+            .map(|entry| entry.url.to_string())
+            .collect();
+        assert_eq!(urls, ["http://a.example/one", "http://b.example/two"]);
+
+        // Only http(s) entries are kept.
+        let hostile = "[playlist]\nFile1=file:///etc/passwd\nFile2=javascript:alert(1)\nFile3=ftp://a.example/x\n";
+        assert!(entries(Payload::Pls, hostile, &base).is_empty());
+    }
+
+    /// A tiny deterministic generator, so the fuzz cases are the same on
+    /// every run.
+    struct Noise(u64);
+
+    impl Noise {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, limit: usize) -> usize {
+            (self.next() % limit.max(1) as u64) as usize
+        }
+    }
+
+    pub(crate) fn malformed_playlists(count: usize) -> Vec<Vec<u8>> {
+        const SEEDS: &[&str] = &[
+            "[playlist]\nNumberOfEntries=1\nFile1=http://a.example/one\nTitle1=One\n",
+            "[playlist]\nFile18446744073709551616=http://a.example/x\nTitle-1=\nFile=\n=\n",
+            "#EXTM3U\n#EXTINF:-1,Title\nhttp://a.example/live\n../relative.mp3\n",
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=99999999999999999999999,CODECS=\"mp4a.40.2\nlow.m3u8\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"\n",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:NaN\n#EXT-X-MEDIA-SEQUENCE:18446744073709551615\n#EXTINF:inf,title=\"\nseg1.aac\nseg2.aac\n#EXT-X-KEY:METHOD\n#EXT-X-MAP:URI=\n",
+            "<asx version=\"3.0\"><entry><ref href=\"http://a.example/one\"/><ref href=\"\n<ref href=\'\n<ref\n",
+            "<?xml version=\"1.0\"?><playlist xmlns=\"http://xspf.org/ns/0/\"><trackList><track><location>http://a.example/x</location><location>",
+            "StreamTitle='Guns N' Roses - Patience';StreamUrl='';",
+            "\u{feff}\u{0}\u{1}\u{7f}<html><body>not a stream</body></html>",
+        ];
+        const SPICE: &[&str] = &[
+            "\n",
+            "\r\n",
+            "=",
+            "\"",
+            "'",
+            "<",
+            ">",
+            "<ref href=",
+            "#EXTINF:",
+            "#EXT-X-",
+            ",",
+            "File1=",
+            "http://",
+            "https://[::1]:99999/",
+            "é",
+            "\u{1F3B5}",
+            "\u{0}",
+            "%",
+            "\\",
+            "<location>",
+            "</location>",
+        ];
+        let mut noise = Noise(0x9e37_79b9_7f4a_7c15);
+        (0..count)
+            .map(|index| {
+                let mut bytes = SEEDS[index % SEEDS.len()].as_bytes().to_vec();
+                for _ in 0..noise.below(6) {
+                    let at = noise.below(bytes.len() + 1);
+                    match noise.below(5) {
+                        0 => bytes.truncate(at),
+                        1 => {
+                            let spice = SPICE[noise.below(SPICE.len())].as_bytes();
+                            bytes.splice(at..at, spice.iter().copied());
+                        }
+                        2 => bytes.insert(at, noise.next() as u8),
+                        3 if at < bytes.len() => {
+                            bytes.remove(at);
+                        }
+                        _ => {
+                            let end = (at + noise.below(64)).min(bytes.len());
+                            let copy = bytes[at..end].to_vec();
+                            bytes.splice(at..at, copy);
+                        }
+                    }
+                }
+                bytes
+            })
+            .collect()
+    }
+
+    #[test]
+    fn malformed_playlists_never_panic() {
+        let urls = [
+            "https://radio.example/a.pls",
+            "https://radio.example/a.m3u",
+            "https://radio.example/a.m3u8",
+            "https://radio.example/a.asx",
+            "https://radio.example/a.xspf",
+            "https://radio.example/stream",
+        ]
+        .map(|url| Url::parse(url).unwrap());
+        let types = [
+            None,
+            Some("text/plain"),
+            Some("audio/x-scpls"),
+            Some("audio/x-mpegurl"),
+            Some("application/vnd.apple.mpegurl"),
+            Some("video/x-ms-asf"),
+            Some("application/xspf+xml"),
+            Some("application/octet-stream"),
+            Some("audio/mpeg; charset=\u{0}"),
+        ];
+        for (index, bytes) in malformed_playlists(3_000).iter().enumerate() {
+            let text = String::from_utf8_lossy(bytes);
+            let url = &urls[index % urls.len()];
+            let kind = sniff(types[index % types.len()], url, bytes);
+            for kind in [
+                kind,
+                Payload::Pls,
+                Payload::M3u,
+                Payload::Asx,
+                Payload::Xspf,
+            ] {
+                for entry in entries(kind, &text, url) {
+                    assert!(matches!(entry.url.scheme(), "http" | "https"));
+                }
+            }
+            let variants = parse_master(&text, url);
+            let _ = best_variant(&variants).map(Variant::audio_codec);
+            let media = parse_media(&text, url);
+            assert!(media.target_duration.is_finite());
+            assert!(
+                media
+                    .segments
+                    .iter()
+                    .all(|segment| segment.duration.is_finite())
+            );
+            let _ = is_master(&text) || is_hls_text(&text);
+            let _ = attributes(&text);
+            let _ = crate::live_radio::icy::parse_block(bytes);
+            let _ = crate::live_radio::format::detect(bytes);
+            let _ = crate::live_radio::format::skip_id3(bytes);
+            if let Some(mut demuxer) = crate::live_radio::icy::IcyDemuxer::new(1 + index % 97) {
+                let mut audio = Vec::new();
+                for chunk in bytes.chunks(1 + index % 13) {
+                    demuxer.feed(chunk, &mut audio);
+                }
+            }
+        }
     }
 }

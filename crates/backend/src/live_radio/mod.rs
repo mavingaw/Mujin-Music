@@ -590,6 +590,7 @@ impl LiveRadio {
             let chunk = body.next().await?;
             Some((chunk, (body, listener)))
         })
+        .fuse()
         .boxed()
     }
 
