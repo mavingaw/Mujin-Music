@@ -7,7 +7,8 @@ type ButtonVariant =
 type ButtonSize = "default" | "sm" | "lg" | "icon";
 
 const variants: Record<ButtonVariant, string> = {
-  default: "bg-white text-black hover:bg-zinc-200",
+  default:
+    "bg-mujin-copper text-mujin-on-copper hover:bg-mujin-copper-hover active:bg-mujin-copper-pressed",
   destructive: "bg-red-600 text-white hover:bg-red-500",
   outline:
     "border border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 hover:text-white",
@@ -35,7 +36,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <Comp
         className={cn(
-          "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-black transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+          "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-black transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-mujin-copper focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
           variants[variant ?? "default"],
           sizes[size ?? "default"],
           className,

@@ -15,11 +15,11 @@ import {
 
 /**
  * Roon-style quality classes, best first:
- * - `lossless` (purple): the bits reach the output unmodified.
+ * - `lossless` (copper): the bits reach the output unmodified.
  * - `enhanced` (blue): processing you asked for (DSP, speed, leveling).
  * - `high_quality` (green): high-fidelity changes you did not ask for
  *   (compatibility resampling, software volume, an OS mixer).
- * - `low_quality` (yellow): a lossy format is involved somewhere.
+ * - `low_quality` (dimmed grey): a lossy format is involved somewhere.
  */
 export type SignalQuality =
   "lossless" | "enhanced" | "high_quality" | "low_quality";
@@ -297,15 +297,20 @@ export const signalQualityLabels: Record<SignalQuality, string> = {
 };
 
 /** Light colours, matching Roon's purple / blue / green / yellow. */
+/**
+ * The Mujin Music quality light. Lossless is the brand's copper on purpose:
+ * the logo is lit when the signal is untouched. Low quality dims instead of
+ * raising an alarm.
+ */
 export const signalQualityColors: Record<SignalQuality, string> = {
-  lossless: "#b26bff",
-  enhanced: "#38b6ff",
-  high_quality: "#3ddc97",
-  low_quality: "#f5c542",
+  lossless: "#D98B5F",
+  enhanced: "#8FC3E0",
+  high_quality: "#A3C98B",
+  low_quality: "#7E7A74",
 };
 
 /** The light's colour when the DSP chain clips. */
-export const SIGNAL_CLIPPING_COLOR = "#ff4d5e";
+export const SIGNAL_CLIPPING_COLOR = "#F2473F";
 
 /** Colour of a path's light: red while clipping, else its quality. */
 export function signalLightColor(
@@ -332,9 +337,9 @@ export function formatRealtimeFactor(factor: number) {
 
 export const signalQualityDescriptions: Record<SignalQuality, string> = {
   lossless:
-    "The audio reaches the output without being modified, as far as Parson can see.",
+    "The audio reaches the output without being modified, as far as Mujin Music can see.",
   enhanced:
-    "Parson is processing the audio because you asked it to, for example volume leveling or a sound preset.",
+    "Mujin Music is processing the audio because you asked it to, for example volume leveling or a sound preset.",
   high_quality:
     "The audio is changed in ways you did not ask for, but with very little loss: resampling for compatibility, software volume or the system mixer.",
   low_quality: "A lossy format is involved somewhere in the path.",
@@ -538,7 +543,7 @@ export function gainToDecibels(gain: number) {
 
 const PLATFORM_DEVICE: Record<SignalPlatform, string> = {
   web: "This browser",
-  desktop: "Parson desktop",
+  desktop: "Mujin Music desktop",
   ios: "This iPhone",
   android: "This Android device",
 };
@@ -564,7 +569,7 @@ function sourceStageFromAudio(
         ? "A lossless file: decoding it reproduces the original samples exactly."
         : quality === "low_quality"
           ? "A lossy file. Detail was discarded when it was encoded, so the path can be no better than low quality."
-          : "Parson could not identify this file's codec, so it cannot say whether the source is lossless.",
+          : "Mujin Music could not identify this file's codec, so it cannot say whether the source is lossless.",
   };
 }
 
@@ -656,7 +661,7 @@ function clientStages(
       title: deviceName,
       detail: "Google Cast receiver",
       quality: "lossless",
-      explanation: `${codec} is fetched and decoded by the receiver itself. Parson only sends commands; the audio does not pass through this device.`,
+      explanation: `${codec} is fetched and decoded by the receiver itself. Mujin Music only sends commands; the audio does not pass through this device.`,
     });
   } else {
     const engineDetail =
@@ -751,7 +756,7 @@ function clientStages(
         title: "Volume",
         detail: "Muted",
         quality: "high_quality",
-        explanation: "Playback is muted in Parson.",
+        explanation: "Playback is muted in Mujin Music.",
       });
     } else if (client.volume < 0.9995) {
       stages.push({
@@ -761,7 +766,7 @@ function clientStages(
         detail: formatDecibels(gainToDecibels(client.volume)),
         quality: "high_quality",
         explanation:
-          "Parson's volume slider scales the samples digitally, like Roon's DSP volume. At full volume this stage disappears; use your system or amplifier volume for a bit-perfect path.",
+          "Mujin Music's volume slider scales the samples digitally, like Roon's DSP volume. At full volume this stage disappears; use your system or amplifier volume for a bit-perfect path.",
       });
     }
   }
@@ -841,7 +846,7 @@ function clientStages(
       detail: `${deviceName}, receiver volume`,
       quality: "lossless",
       explanation:
-        "The Cast device plays the stream and applies its own volume. Parson cannot see what the device does after that.",
+        "The Cast device plays the stream and applies its own volume. Mujin Music cannot see what the device does after that.",
     });
   } else {
     const output = client.output.kind === "system" ? client.output : null;
@@ -875,7 +880,7 @@ function clientStages(
           : client.platform === "android"
             ? "Android audio mixer"
             : "system mixer in shared mode"
-      }, so the system can resample the audio, apply its volume and mix in other sounds after Parson hands it over. ${
+      }, so the system can resample the audio, apply its volume and mix in other sounds after Mujin Music hands it over. ${
         client.platform === "web" || client.platform === "desktop"
           ? "For a bit-perfect path, play on a server output in exclusive mode (Settings → Audio outputs)."
           : "Phones always play through the system mixer; play on a server output for a bit-perfect path."
@@ -986,8 +991,8 @@ export function describeSignalPath(
     case "enhanced":
       return outputStage?.id === "native-output" &&
         outputStage.quality === "lossless"
-        ? `Parson's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
-        : `Parson is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
+        ? `Mujin Music's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
+        : `Mujin Music is processing the audio because you asked it to: ${listTitles(enhanced)}. Nothing else changes it.`;
     case "high_quality": {
       const unknown = stages.some(
         (stage) => stage.kind === "source" && !stage.quality,
@@ -995,14 +1000,14 @@ export function describeSignalPath(
       const mixer = network?.airplay
         ? `${output} is an AirPlay receiver: AirPlay carries 44.1kHz/16bit and the receiver applies its own volume, so the path is high quality at best, as Roon also rates AirPlay.`
         : network && sharedOutput
-          ? `${output} is reached over ${network.protocol}; what it does after its network input is out of Parson's sight.`
+          ? `${output} is reached over ${network.protocol}; what it does after its network input is out of Mujin Music's sight.`
           : sharedOutput
-            ? `${output} is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.`
+            ? `${output} is reached in shared mode, where the system can resample the audio and mix in other sounds, so Mujin Music cannot promise it arrives unmodified.`
             : "";
       const changed = high.length
         ? `The audio is changed in ways you did not ask for, with very little loss: ${listTitles(high)}.`
         : unknown
-          ? "Parson cannot tell whether the source is lossless, so the path is rated high quality at best."
+          ? "Mujin Music cannot tell whether the source is lossless, so the path is rated high quality at best."
           : mixer
             ? ""
             : "The path is rated high quality.";
@@ -1016,7 +1021,7 @@ export function describeSignalPath(
           ? `the source is a lossy file (${lossy.detail})`
           : `${lossy.title.toLowerCase()} to ${lossy.detail}`
         : "a lossy format";
-      return `A lossy format is involved: ${what}.${asked ? ` Parson also applies ${asked}.` : ""}`;
+      return `A lossy format is involved: ${what}.${asked ? ` Mujin Music also applies ${asked}.` : ""}`;
     }
   }
 }

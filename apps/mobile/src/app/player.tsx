@@ -920,7 +920,7 @@ export default function PlayerScreen() {
   return (
     <GestureDetector gesture={dragDownGesture}>
       <AnimatedLinearGradient
-        colors={["#27272c", "#08080a", "#000"]}
+        colors={["#26262B", "#0A0A0B", "#050506"]}
         style={[styles.page, playerDragStyle]}
       >
         <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>

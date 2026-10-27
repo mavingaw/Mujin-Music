@@ -55,7 +55,7 @@ function originalServer(format = hiRes): ServerSignalPath {
       {
         id: "server",
         kind: "transport",
-        title: "Parson server",
+        title: "Mujin Music server",
         detail: "Original file",
         quality: "lossless",
         explanation: "",
@@ -105,7 +105,7 @@ describe("signal path classification", () => {
     );
     expect(path.stages[3]!.explanation).toContain("server output");
     expect(path.description).toBe(
-      "USB DAC is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.",
+      "USB DAC is reached in shared mode, where the system can resample the audio and mix in other sounds, so Mujin Music cannot promise it arrives unmodified.",
     );
     expect(path.description).not.toContain("without being modified");
     expect(signalPathSummary(path)).toBe("FLAC 96kHz 24bit 2ch");
@@ -127,7 +127,7 @@ describe("signal path classification", () => {
     expect(path.stages[4]!.title).toBe("System default output");
     expect(path.quality).toBe("high_quality");
     expect(path.description).toBe(
-      "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 96kHz to 48kHz. System default output is reached in shared mode, where the system can resample the audio and mix in other sounds, so Parson cannot promise it arrives unmodified.",
+      "The audio is changed in ways you did not ask for, with very little loss: sample rate conversion 96kHz to 48kHz. System default output is reached in shared mode, where the system can resample the audio and mix in other sounds, so Mujin Music cannot promise it arrives unmodified.",
     );
   });
 
@@ -252,7 +252,7 @@ describe("signal path classification", () => {
         {
           id: "native-decode",
           kind: "decode",
-          title: "Parson server",
+          title: "Mujin Music server",
           detail: "FLAC decoded to PCM",
           quality: "lossless",
           explanation: "",
@@ -330,7 +330,7 @@ describe("signal path classification", () => {
         {
           id: "native-decode",
           kind: "decode",
-          title: "Parson server",
+          title: "Mujin Music server",
           detail: "FLAC decoded to PCM",
           quality: "lossless",
           explanation: "",
@@ -373,7 +373,7 @@ describe("signal path classification", () => {
         },
       ],
       processing: {
-        engine: "Parson DSP, 64-bit float",
+        engine: "Mujin Music DSP, 64-bit float",
         stages: ["native-headroom", "native-eq", "native-depth"],
         notes: [],
         status: {
@@ -394,9 +394,9 @@ describe("signal path classification", () => {
     expect(path.clipping).toBeFalse();
     expect(path.processing?.status?.realtime_factor).toBe(41.27);
     expect(path.description).toBe(
-      "Parson's server is processing the audio because you asked it to: Headroom adjustment (−3.0 dB) and Parametric EQ (1 band: 80 Hz low shelf +5.0 dB). The result reaches USB DAC bit-exact, in exclusive mode at 96kHz 32bit 2ch.",
+      "Mujin Music's server is processing the audio because you asked it to: Headroom adjustment (−3.0 dB) and Parametric EQ (1 band: 80 Hz low shelf +5.0 dB). The result reaches USB DAC bit-exact, in exclusive mode at 96kHz 32bit 2ch.",
     );
-    expect(signalLightColor(path)).toBe("#38b6ff");
+    expect(signalLightColor(path)).toBe("#8FC3E0");
     expect(signalLightLabel(path)).toBe("Enhanced");
     expect(formatRealtimeFactor(41.27)).toBe("41.3x");
     expect(formatRealtimeFactor(250.4)).toBe("250x");
@@ -514,7 +514,7 @@ describe("signal path classification", () => {
       ["client-output", "low_quality"],
     ]);
     expect(path.description).toBe(
-      "A lossy format is involved: transcode to MP3 320kbps (LAME). Parson also applies processing you asked for: Volume leveling (−4.0 dB, track ReplayGain).",
+      "A lossy format is involved: transcode to MP3 320kbps (LAME). Mujin Music also applies processing you asked for: Volume leveling (−4.0 dB, track ReplayGain).",
     );
   });
 

@@ -29,6 +29,7 @@ import {
 } from "@parson/music-sdk";
 import { RadioThumbs } from "./radio/radio-controls";
 import { RadioNotices } from "./radio/radio-notices";
+import { useBrandSignalLight } from "./brand-signal-light";
 import { useSignalPath } from "./signal-path";
 import { SignalPathLight } from "./signal-path-popover";
 import { DspPanel, isDspShortcut, type DspPanelTarget } from "./dsp-panel";
@@ -369,6 +370,7 @@ export default function PlayerBar() {
     : casting
       ? { kind: "cast" }
       : { kind: "client", output };
+  useBrandSignalLight(remote ? remotePath : signalPath);
   const signalProps = {
     casting,
     onOpenDsp: dspAvailable ? openDsp : undefined,

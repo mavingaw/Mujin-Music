@@ -33,34 +33,34 @@ import {
   type SignalStageIcon,
 } from "./zone-signal-path-model";
 
-/** Roon's quality-light colours: purple, blue, green, yellow. */
+/** The Mujin Music quality light: copper, blue, green, dimmed grey. */
 export const QUALITY_TONES: Record<
   ZoneStreamQuality,
   { dot: string; text: string; border: string; line: string }
 > = {
   lossless: {
-    dot: "bg-fuchsia-400 shadow-[0_0_10px_2px_rgba(232,121,249,0.55)]",
-    text: "text-fuchsia-300",
-    border: "border-fuchsia-400/30",
-    line: "from-fuchsia-400/70",
+    dot: "bg-quality-lossless shadow-[0_0_10px_2px_rgba(217,139,95,0.55)]",
+    text: "text-quality-lossless",
+    border: "border-quality-lossless/30",
+    line: "from-quality-lossless/70",
   },
   enhanced: {
-    dot: "bg-sky-400 shadow-[0_0_10px_2px_rgba(56,189,248,0.5)]",
-    text: "text-sky-300",
-    border: "border-sky-400/30",
-    line: "from-sky-400/70",
+    dot: "bg-quality-enhanced shadow-[0_0_10px_2px_rgba(143,195,224,0.5)]",
+    text: "text-quality-enhanced",
+    border: "border-quality-enhanced/30",
+    line: "from-quality-enhanced/70",
   },
   high: {
-    dot: "bg-emerald-400 shadow-[0_0_10px_2px_rgba(52,211,153,0.45)]",
-    text: "text-emerald-300",
-    border: "border-emerald-400/30",
-    line: "from-emerald-400/70",
+    dot: "bg-quality-high shadow-[0_0_10px_2px_rgba(163,201,139,0.45)]",
+    text: "text-quality-high",
+    border: "border-quality-high/30",
+    line: "from-quality-high/70",
   },
   low: {
-    dot: "bg-amber-300 shadow-[0_0_10px_2px_rgba(252,211,77,0.45)]",
-    text: "text-amber-300",
-    border: "border-amber-300/30",
-    line: "from-amber-300/70",
+    dot: "bg-quality-low",
+    text: "text-quality-low",
+    border: "border-quality-low/30",
+    line: "from-quality-low/70",
   },
 };
 
@@ -146,7 +146,7 @@ export function SignalPathPanel({ zone }: { zone: Zone }) {
     return (
       <div className="space-y-2">
         <p className="text-[13px] text-zinc-400">
-          Nothing from Parson is playing here right now.
+          Nothing from Mujin Music is playing here right now.
         </p>
         <p className="text-[11px] leading-4 text-zinc-500">{output.note}</p>
       </div>
@@ -166,7 +166,7 @@ export function SignalPathPanel({ zone }: { zone: Zone }) {
           <p className={`text-sm font-semibold ${tone.text}`}>
             {text.label}
             {stream.bit_perfect && (
-              <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-fuchsia-400/30 px-1.5 py-px align-middle text-[10px] font-medium text-fuchsia-200">
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-quality-lossless/30 px-1.5 py-px align-middle text-[10px] font-medium text-quality-lossless">
                 <BadgeCheck className="h-3 w-3" />
                 Bit-perfect
               </span>

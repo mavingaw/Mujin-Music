@@ -1,15 +1,16 @@
+/** Mujin Music palette (brand tokens): deep blacks, ivory text, one copper accent. */
 export const palette = {
-  background: "#000000",
-  elevated: "#0c0c0e",
-  elevatedStrong: "#151518",
-  border: "rgba(255,255,255,0.10)",
-  borderStrong: "rgba(255,255,255,0.18)",
-  text: "#ffffff",
-  secondary: "#a1a1aa",
-  muted: "#5f5f69",
-  accent: "#ffffff",
-  accentText: "#000000",
-  danger: "#ef4444",
+  background: "#0A0A0B",
+  elevated: "#111113",
+  elevatedStrong: "#1E1E22",
+  border: "rgba(242,238,230,0.10)",
+  borderStrong: "rgba(242,238,230,0.18)",
+  text: "#F2EEE6",
+  secondary: "#B8B3AA",
+  muted: "#5C5955",
+  accent: "#D98B5F",
+  accentText: "#160D07",
+  danger: "#F2473F",
   success: "#22c55e",
 } as const;
 

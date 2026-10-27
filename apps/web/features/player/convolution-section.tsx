@@ -90,7 +90,7 @@ function FilterCurve({ filter }: { filter: ConvolutionFilter }) {
       <polyline
         fill="none"
         points={points.join(" ")}
-        stroke="#38b6ff"
+        stroke="#8FC3E0"
         strokeWidth={1.6}
         vectorEffect="non-scaling-stroke"
       />
