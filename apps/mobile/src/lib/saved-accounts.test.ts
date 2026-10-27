@@ -4,6 +4,7 @@ import {
   accountKey,
   parseStoredAccounts,
   renameStoredAccount,
+  replaceSwitchedAccount,
   upsertStoredAccount,
   type StoredAccount,
 } from "./saved-accounts";
@@ -18,6 +19,20 @@ const account = (sub: string, username = sub): StoredAccount => ({
 });
 
 describe("saved mobile accounts", () => {
+  test("a profile switch replaces the revoked profile's entry", () => {
+    const other = { ...account("9"), instanceId: "library-b" };
+    const updated = replaceSwitchedAccount(
+      [account("1"), account("2"), other],
+      { instanceId: "library-a", sub: "1" },
+      account("5", "mia"),
+    );
+    expect(updated.map((item) => `${item.instanceId}:${item.sub}`)).toEqual([
+      "library-a:5",
+      "library-a:2",
+      "library-b:9",
+    ]);
+  });
+
   test("keeps the newest session for each library account", () => {
     const updated = upsertStoredAccount(
       [account("1", "old"), account("2")],

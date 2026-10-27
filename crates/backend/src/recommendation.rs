@@ -468,18 +468,27 @@ fn persist_playback_event(
     })
 }
 
-/// Records one play with a snapshot of what the track was called, so the
-/// history still reads right after files are renamed or removed.
-fn insert_listen_history(
-    connection: &mut SqliteConnection,
-    user_id: i32,
-    event: &PlaybackEventRequest,
-    cache: &LibraryCache,
-) -> QueryResult<usize> {
-    let song = cache.song(&event.song_id);
+/// What a listen was called when it happened (title, artist, album and
+/// duration), so the history still reads right after files are renamed or
+/// removed.
+struct ListenSnapshot<'a> {
+    title: Option<&'a str>,
+    artist_id: Option<&'a str>,
+    artist_name: Option<&'a str>,
+    album_id: Option<&'a str>,
+    album_name: Option<&'a str>,
+    duration: Option<f64>,
+}
+
+fn listen_snapshot<'a>(
+    cache: &'a LibraryCache,
+    song_id: &str,
+    fallback_duration: Option<f64>,
+) -> ListenSnapshot<'a> {
+    let song = cache.song(song_id);
     let (artist_id, album_id) = cache
         .song_map
-        .get(&event.song_id)
+        .get(song_id)
         .map(|(artist, album)| (Some(artist.as_str()), Some(album.as_str())))
         .unwrap_or((None, None));
     let artist_name = artist_id
@@ -492,7 +501,26 @@ fn insert_listen_history(
     let duration = song
         .map(|song| song.duration)
         .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .or(event.duration_seconds);
+        .or(fallback_duration);
+    ListenSnapshot {
+        title: song.map(|song| song.name.as_str()),
+        artist_id,
+        artist_name,
+        album_id,
+        album_name,
+        duration,
+    }
+}
+
+/// Records one play with a snapshot of what the track was called, so the
+/// history still reads right after files are renamed or removed.
+fn insert_listen_history(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    event: &PlaybackEventRequest,
+    cache: &LibraryCache,
+) -> QueryResult<usize> {
+    let snapshot = listen_snapshot(cache, &event.song_id, event.duration_seconds);
     let clean = |value: &Option<String>| {
         value
             .as_deref()
@@ -516,13 +544,125 @@ fn insert_listen_history(
     .bind::<Nullable<Text>, _>(clean(&event.zone_name))
     .bind::<Nullable<Text>, _>(clean(&event.source))
     .bind::<Nullable<Text>, _>(clean(&event.device))
-    .bind::<Nullable<Text>, _>(song.map(|song| song.name.as_str()))
-    .bind::<Nullable<Text>, _>(artist_id)
-    .bind::<Nullable<Text>, _>(artist_name)
-    .bind::<Nullable<Text>, _>(album_id)
-    .bind::<Nullable<Text>, _>(album_name)
-    .bind::<Nullable<Double>, _>(duration)
+    .bind::<Nullable<Text>, _>(snapshot.title)
+    .bind::<Nullable<Text>, _>(snapshot.artist_id)
+    .bind::<Nullable<Text>, _>(snapshot.artist_name)
+    .bind::<Nullable<Text>, _>(snapshot.album_id)
+    .bind::<Nullable<Text>, _>(snapshot.album_name)
+    .bind::<Nullable<Double>, _>(snapshot.duration)
     .execute(connection)
+}
+
+/// Weight of one listen imported from Last.fm or ListenBrainz: a little
+/// less than a play observed in Parson, whose context (skips, queue adds)
+/// is known.
+const IMPORTED_PLAY_WEIGHT: f64 = 2.0;
+/// An imported listen this close to one already in the history (the same
+/// song) is the same listen, e.g. one Parson itself scrobbled.
+const IMPORT_DUPLICATE_WINDOW_SECONDS: i64 = 300;
+
+/// Adds listens imported from a scrobbling service to a profile's listening
+/// history with their original timestamps, and lets them shape the
+/// profile's taste (track, artist, album and genre preferences). `source`
+/// names the service in the history ("lastfm", "listenbrainz"). Returns how
+/// many were new.
+pub(crate) fn import_listens(
+    connection: &mut SqliteConnection,
+    user_id: i32,
+    listens: &[(String, i64)],
+    cache: &LibraryCache,
+    source: &str,
+) -> QueryResult<usize> {
+    connection.immediate_transaction(|connection| {
+        let mut added = 0;
+        for (song_id, listened_at) in listens {
+            let duplicate = diesel::sql_query(
+                "SELECT COUNT(*) AS count FROM listen_history_item
+                 WHERE user_id = ? AND song_id = ?
+                   AND listened_at BETWEEN datetime(?, 'unixepoch') AND datetime(?, 'unixepoch')",
+            )
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .bind::<Text, _>(song_id)
+            .bind::<BigInt, _>(listened_at - IMPORT_DUPLICATE_WINDOW_SECONDS)
+            .bind::<BigInt, _>(listened_at + IMPORT_DUPLICATE_WINDOW_SECONDS)
+            .get_result::<CountRow>(connection)?
+            .count
+                > 0;
+            if duplicate {
+                continue;
+            }
+            let snapshot = listen_snapshot(cache, song_id, None);
+            diesel::sql_query(
+                "INSERT INTO listen_history_item
+                 (user_id, song_id, listened_at, source, title, artist_id, artist_name,
+                  album_id, album_name, duration_seconds)
+                 VALUES (?, ?, datetime(?, 'unixepoch'), ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .bind::<Text, _>(song_id)
+            .bind::<BigInt, _>(*listened_at)
+            .bind::<Text, _>(source)
+            .bind::<Nullable<Text>, _>(snapshot.title)
+            .bind::<Nullable<Text>, _>(snapshot.artist_id)
+            .bind::<Nullable<Text>, _>(snapshot.artist_name)
+            .bind::<Nullable<Text>, _>(snapshot.album_id)
+            .bind::<Nullable<Text>, _>(snapshot.album_name)
+            .bind::<Nullable<Double>, _>(snapshot.duration)
+            .execute(connection)?;
+            diesel::sql_query(
+                "INSERT INTO user_track_preference
+                 (user_id, song_id, qualified_plays, preference_score, last_positive_at, last_played_at)
+                 VALUES (?, ?, 1, ?, datetime(?, 'unixepoch'), datetime(?, 'unixepoch'))
+                 ON CONFLICT(user_id, song_id) DO UPDATE SET
+                   qualified_plays = qualified_plays + 1,
+                   preference_score = preference_score + excluded.preference_score,
+                   last_positive_at = MAX(COALESCE(last_positive_at, excluded.last_positive_at), excluded.last_positive_at),
+                   last_played_at = MAX(COALESCE(last_played_at, excluded.last_played_at), excluded.last_played_at)",
+            )
+            .bind::<diesel::sql_types::Integer, _>(user_id)
+            .bind::<Text, _>(song_id)
+            .bind::<Double, _>(IMPORTED_PLAY_WEIGHT)
+            .bind::<BigInt, _>(*listened_at)
+            .bind::<BigInt, _>(*listened_at)
+            .execute(connection)?;
+            if let Some((artist_id, album_id)) = cache.song_map.get(song_id) {
+                upsert_entity_preference(
+                    connection,
+                    "user_artist_preference",
+                    "artist_id",
+                    user_id,
+                    artist_id,
+                    IMPORTED_PLAY_WEIGHT,
+                    0.0,
+                )?;
+                upsert_entity_preference(
+                    connection,
+                    "user_album_preference",
+                    "album_id",
+                    user_id,
+                    album_id,
+                    IMPORTED_PLAY_WEIGHT,
+                    0.0,
+                )?;
+                for genre in cache.album_genres.get(album_id).into_iter().flatten() {
+                    upsert_entity_preference(
+                        connection,
+                        "user_genre_preference",
+                        "genre",
+                        user_id,
+                        genre,
+                        IMPORTED_PLAY_WEIGHT,
+                        0.0,
+                    )?;
+                }
+            }
+            added += 1;
+        }
+        if added > 0 {
+            prune_listen_history(connection, user_id)?;
+        }
+        Ok(added)
+    })
 }
 
 fn schedule_playback_retention(

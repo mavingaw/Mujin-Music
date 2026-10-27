@@ -11,7 +11,9 @@ import {
   logout as logoutRequest,
   register,
   startDevicePairing,
+  switchProfile as switchProfileRequest,
   type SetupStatus,
+  type SwitchProfileInput,
 } from "@parson/music-sdk";
 import * as Device from "expo-device";
 import {
@@ -62,6 +64,7 @@ import {
   accountKey,
   parseStoredAccounts,
   renameStoredAccount,
+  replaceSwitchedAccount,
   upsertStoredAccount,
   type StoredAccount,
 } from "@/lib/saved-accounts";
@@ -113,6 +116,11 @@ type SessionContextValue = {
   login: (username: string, password: string) => Promise<boolean>;
   startPairing: () => Promise<void>;
   switchAccount: (key: string) => Promise<boolean>;
+  /** Switches this device to another profile on the same server. */
+  switchProfile: (
+    id: number,
+    input?: SwitchProfileInput,
+  ) => Promise<{ ok: boolean; message?: string }>;
   logout: () => Promise<void>;
   changeServer: () => Promise<void>;
   /**
@@ -691,6 +699,72 @@ export function SessionProvider({ children }: PropsWithChildren) {
     [instanceId, origin, queryClient, storeNativeAuthentication],
   );
 
+  const switchProfile = useCallback(
+    async (id: number, input: SwitchProfileInput = {}) => {
+      if (userOperationInFlight.current)
+        return { ok: false, message: "Another change is in progress." };
+      userOperationInFlight.current = true;
+      const previous = claims;
+      try {
+        const native = Platform.OS !== "web";
+        const response = await switchProfileRequest(id, input, { native });
+        if (!response.status || !response.claims) {
+          return {
+            ok: false,
+            message: response.message || "Could not switch profiles.",
+          };
+        }
+        if (native) {
+          if (!response.access_token) {
+            return { ok: false, message: "Could not switch profiles." };
+          }
+          await storeNativeAuthentication(
+            response.access_token,
+            response.refresh_token,
+          );
+          if (instanceId && origin && previous) {
+            activeAccountRef.current = { instanceId, sub: response.claims.sub };
+            replaceStoredAccounts(
+              replaceSwitchedAccount(
+                storedAccountsRef.current,
+                { instanceId, sub: previous.sub },
+                {
+                  accessToken: response.access_token,
+                  instanceId,
+                  origin,
+                  refreshToken: response.refresh_token || null,
+                  sub: response.claims.sub,
+                  username: response.claims.username,
+                },
+              ),
+            );
+          }
+        }
+        setClaims(response.claims);
+        setTimeout(() => queryClient.clear(), 0);
+        return { ok: true };
+      } catch (cause) {
+        return {
+          ok: false,
+          message:
+            cause instanceof Error
+              ? cause.message
+              : "Could not switch profiles.",
+        };
+      } finally {
+        userOperationInFlight.current = false;
+      }
+    },
+    [
+      claims,
+      instanceId,
+      origin,
+      queryClient,
+      replaceStoredAccounts,
+      storeNativeAuthentication,
+    ],
+  );
+
   const startPairing = useCallback(async () => {
     if (Platform.OS === "web") return;
     const expectedSession = generation.current;
@@ -1085,6 +1159,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       retry,
       startPairing,
       switchAccount,
+      switchProfile,
       updateBitrate,
       setupAccount,
       setupLibrary,
@@ -1113,6 +1188,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
       storedAccounts,
       switchAccount,
       switchLibrary,
+      switchProfile,
       updateBitrate,
       setupAccount,
       setupLibrary,

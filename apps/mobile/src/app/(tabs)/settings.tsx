@@ -42,14 +42,25 @@ import { PageTitle, Screen } from "@/components/music-ui";
 import { StreamingServicesSettings } from "@/components/streaming-services";
 import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
 import { libraryRows, type LibraryRow } from "@/lib/known-libraries";
+import { ProfilesSettings } from "@/components/profiles";
+import { ScrobblingSettings } from "@/components/scrobbling";
 import { layout, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
 import { RadioSettingsRows } from "@/components/radio-ui";
 
 type Tab =
-  "account" | "playback" | "services" | "devices" | "library" | "users";
+  | "account"
+  | "profiles"
+  | "scrobbling"
+  | "playback"
+  | "services"
+  | "devices"
+  | "library"
+  | "users";
 const labels: Record<Tab, string> = {
   account: "Account",
+  profiles: "Profiles",
+  scrobbling: "Scrobbling",
   playback: "Playback",
   services: "Services",
   devices: "Devices",
@@ -65,8 +76,24 @@ export default function SettingsScreen() {
     session.phase === "offline"
       ? ["account", "devices"]
       : admin
-        ? ["account", "playback", "services", "devices", "library", "users"]
-        : ["account", "playback", "services", "devices"];
+        ? [
+            "account",
+            "profiles",
+            "scrobbling",
+            "playback",
+            "services",
+            "devices",
+            "library",
+            "users",
+          ]
+        : [
+            "account",
+            "profiles",
+            "scrobbling",
+            "playback",
+            "services",
+            "devices",
+          ];
   const [tab, setTab] = useState<Tab>("account");
   const nearbyLibraries = useLibraryDiscovery(
     tab === "devices" && session.phase !== "offline",
@@ -368,6 +395,10 @@ export default function SettingsScreen() {
                 usernamePassword={usernamePassword}
                 onUsernamePasswordChange={setUsernamePassword}
               />
+            ) : tab === "profiles" ? (
+              <ProfilesSettings />
+            ) : tab === "scrobbling" ? (
+              <ScrobblingSettings />
             ) : tab === "playback" ? (
               <PlaybackSettings
                 busy={busy}

@@ -79,14 +79,34 @@ impl TokenVault {
         purpose: SealPurpose,
         value: &T,
     ) -> Result<Vec<u8>, VaultError> {
+        self.seal_in_context(&Self::associated_data(user_id, provider, purpose), value)
+    }
+
+    pub fn open<T: DeserializeOwned>(
+        &self,
+        user_id: i32,
+        provider: ProviderId,
+        purpose: SealPurpose,
+        sealed: &[u8],
+    ) -> Result<T, VaultError> {
+        self.open_in_context(&Self::associated_data(user_id, provider, purpose), sealed)
+    }
+
+    /// Seals `value` bound to `context` (the associated data). Other
+    /// subsystems (scrobbling) use their own context namespace, so a sealed
+    /// value never opens under another subsystem, user or purpose.
+    pub fn seal_in_context<T: Serialize>(
+        &self,
+        context: &str,
+        value: &T,
+    ) -> Result<Vec<u8>, VaultError> {
         let mut payload = serde_json::to_vec(value).map_err(|_| VaultError::Encode)?;
         let mut nonce = [0_u8; NONCE_LEN];
         rand::fill(&mut nonce);
-        let aad = Self::associated_data(user_id, provider, purpose);
         self.key
             .seal_in_place_append_tag(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(aad.as_bytes()),
+                Aad::from(context.as_bytes()),
                 &mut payload,
             )
             .map_err(|_| VaultError::Seal)?;
@@ -97,11 +117,9 @@ impl TokenVault {
         Ok(sealed)
     }
 
-    pub fn open<T: DeserializeOwned>(
+    pub fn open_in_context<T: DeserializeOwned>(
         &self,
-        user_id: i32,
-        provider: ProviderId,
-        purpose: SealPurpose,
+        context: &str,
         sealed: &[u8],
     ) -> Result<T, VaultError> {
         if sealed.len() <= 1 + NONCE_LEN || sealed[0] != SEAL_VERSION {
@@ -110,12 +128,11 @@ impl TokenVault {
         let mut nonce = [0_u8; NONCE_LEN];
         nonce.copy_from_slice(&sealed[1..1 + NONCE_LEN]);
         let mut payload = sealed[1 + NONCE_LEN..].to_vec();
-        let aad = Self::associated_data(user_id, provider, purpose);
         let plain = self
             .key
             .open_in_place(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(aad.as_bytes()),
+                Aad::from(context.as_bytes()),
                 &mut payload,
             )
             .map_err(|_| VaultError::Open)?;

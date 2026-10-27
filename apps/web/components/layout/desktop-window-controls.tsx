@@ -8,7 +8,12 @@ import {
   windowControlsReserve,
 } from "./titlebar-layout";
 
-export function DesktopWindowControls() {
+export function DesktopWindowControls({
+  inline = false,
+}: {
+  /** Sit in the caller's flex row instead of the header's right edge. */
+  inline?: boolean;
+} = {}) {
   const [controls, setControls] =
     useState<ReturnType<typeof electronWindowControls>>(null);
   const [maximized, setMaximized] = useState(false);
@@ -41,7 +46,9 @@ export function DesktopWindowControls() {
   return (
     <div
       aria-label="Window controls"
-      className="electron-titlebar-no-drag absolute right-0 top-0 flex h-full items-stretch"
+      className={`electron-titlebar-no-drag flex h-full items-stretch ${
+        inline ? "ml-2" : "absolute right-0 top-0"
+      }`}
       role="group"
       style={{ width: WINDOW_CONTROLS_WIDTH_PX }}
     >
