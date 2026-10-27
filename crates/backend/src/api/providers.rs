@@ -1455,6 +1455,7 @@ mod tests {
     use crate::providers::media::FixtureMedia;
     use crate::providers::transport::{FixtureReply, FixtureRoute, FixtureTransport, Method};
     use crate::providers::vault::TokenVault;
+    use crate::test_support::generated_password;
 
     fn pool() -> DbPool {
         let pool = Arc::new(
@@ -1671,7 +1672,7 @@ mod tests {
         )
         .await
         .expect("qobuz credentials");
-        hub.qobuz_sign_in(1, "listener@example.test", "pw")
+        hub.qobuz_sign_in(1, "listener@example.test", &generated_password())
             .await
             .expect("qobuz sign-in");
         (hub, transport)
@@ -2264,7 +2265,7 @@ mod tests {
             &app,
             test::TestRequest::post()
                 .uri("/providers/qobuz/sign-in")
-                .set_json(json!({"username": "wrong", "password": "nope"})),
+                .set_json(json!({"username": "wrong", "password": generated_password()})),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -2369,7 +2370,7 @@ mod tests {
         )
         .await
         .expect("credentials");
-        hub.qobuz_sign_in(1, "sandbox", "sandbox")
+        hub.qobuz_sign_in(1, "sandbox", &generated_password())
             .await
             .expect("sign in");
         let app = app!(hub, 1);
@@ -2665,7 +2666,9 @@ mod tests {
             &listener,
             test::TestRequest::post()
                 .uri("/providers/qobuz/sign-in")
-                .set_json(json!({"username": "listener@example.test", "password": "pw"})),
+                .set_json(
+                    json!({"username": "listener@example.test", "password": generated_password()})
+                ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -2738,7 +2741,9 @@ mod tests {
             &listener,
             test::TestRequest::post()
                 .uri("/providers/qobuz/sign-in")
-                .set_json(json!({"username": "listener@example.test", "password": "pw"})),
+                .set_json(
+                    json!({"username": "listener@example.test", "password": generated_password()})
+                ),
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -3025,7 +3030,7 @@ mod tests {
         )
         .await
         .expect("credentials");
-        hub.qobuz_sign_in(1, "sandbox", "sandbox")
+        hub.qobuz_sign_in(1, "sandbox", &generated_password())
             .await
             .expect("sign in");
         let check = hub
@@ -3111,7 +3116,7 @@ mod tests {
         )
         .await
         .expect("qobuz credentials");
-        hub.qobuz_sign_in(1, "sandbox", "sandbox")
+        hub.qobuz_sign_in(1, "sandbox", &generated_password())
             .await
             .expect("qobuz sign-in");
         hub
@@ -3581,7 +3586,7 @@ mod tests {
             )
             .await
             .expect("qobuz credentials");
-            hub.qobuz_sign_in(1, "listener@example.test", "pw")
+            hub.qobuz_sign_in(1, "listener@example.test", &generated_password())
                 .await
                 .expect("qobuz sign-in");
             hub
@@ -3975,7 +3980,9 @@ mod tests {
             &listener,
             test::TestRequest::post()
                 .uri("/providers/qobuz/sign-in")
-                .set_json(json!({"username": "listener@example.test", "password": "pw"})),
+                .set_json(
+                    json!({"username": "listener@example.test", "password": generated_password()})
+                ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -4165,7 +4172,7 @@ mod tests {
         assert!(key_service.error.is_some());
         assert!(matches!(
             unreachable
-                .qobuz_sign_in(2, "listener@example.test", "pw")
+                .qobuz_sign_in(2, "listener@example.test", &generated_password())
                 .await,
             Err(crate::providers::hub::HubError::CredentialsRequired(
                 ProviderId::Qobuz

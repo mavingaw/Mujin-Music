@@ -302,14 +302,14 @@ Firewall on private networks, so that remotes can reach it.
 
 ## Server settings
 
-| Variable              | Default                                    | Meaning                                                                                                          |
-| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `PARSON_DATA_DIR`     | platform data folder (`/Parson` in Docker) | Database, caches, logs                                                                                           |
-| `PARSON_PORT`         | `1993`                                     | HTTP port                                                                                                        |
-| `PARSON_BIND_ADDRESS` | `0.0.0.0`                                  | `127.0.0.1` makes the server private to this machine                                                             |
-| `PARSON_PUBLIC_URL`   |                                            | The address remotes should use behind a reverse proxy, e.g. `https://music.example.com` (enables secure cookies) |
-| `PARSON_LIBRARY_NAME` | `Mujin Music Library`                      | Name shown to remotes and in discovery                                                                           |
-| `PARSON_LOCAL_AUDIO`  | off                                        | `on` makes this machine's audio devices zones                                                                    |
+| Variable              | Default                                    | Meaning                                                                                                                                              |
+| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PARSON_DATA_DIR`     | platform data folder (`/Parson` in Docker) | Database, caches, logs                                                                                                                               |
+| `PARSON_PORT`         | `1993`                                     | HTTP port                                                                                                                                            |
+| `PARSON_BIND_ADDRESS` | `0.0.0.0`                                  | `127.0.0.1` makes the server private to this machine                                                                                                 |
+| `PARSON_PUBLIC_URL`   |                                            | The address remotes should use behind a reverse proxy, e.g. `https://music.example.com` (enables secure cookies; cast receivers fetch media from it) |
+| `PARSON_LIBRARY_NAME` | `Mujin Music Library`                      | Name shown to remotes and in discovery                                                                                                               |
+| `PARSON_LOCAL_AUDIO`  | off                                        | `on` makes this machine's audio devices zones                                                                                                        |
 
 `PARSON_LIBRARY_NAME` and `PARSON_LOCAL_AUDIO` can also be set in `server.env`
 in the data folder (one `KEY=value` per line). The environment wins.

@@ -1256,6 +1256,7 @@ mod tests {
         BrowseSection, ClientCredentials, Credit, ItemKind, ProviderContext, ProviderError,
         ProviderSession, RadioOrigin, RadioSeed, StreamQuality, StreamSource, StreamingProvider,
     };
+    use crate::test_support::generated_password;
 
     const FIXTURES: &str = include_str!("fixtures/qobuz.json");
     const BROWSE_FIXTURES: &str = include_str!("fixtures/qobuz_browse.json");
@@ -1419,8 +1420,9 @@ mod tests {
     #[actix_web::test]
     async fn login_sends_a_hashed_password_and_keeps_only_the_token() {
         let (client, transport) = client();
+        let password = generated_password();
         let session = client
-            .login(&credentials(), "listener@example.test", "correct horse")
+            .login(&credentials(), "listener@example.test", &password)
             .await
             .expect("login");
         assert_eq!(session.access_token, "recorded-user-auth-token");
@@ -1430,14 +1432,9 @@ mod tests {
         assert_eq!(request.query_value("email"), Some("listener@example.test"));
         assert_eq!(
             request.query_value("password"),
-            Some(hex_digest("correct horse").as_str())
+            Some(hex_digest(&password).as_str())
         );
-        assert!(
-            request
-                .query
-                .iter()
-                .all(|(_, value)| value != "correct horse")
-        );
+        assert!(request.query.iter().all(|(_, value)| *value != password));
         assert_eq!(request.header_value("x-app-id"), Some("100000001"));
     }
 

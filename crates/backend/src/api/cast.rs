@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use actix_web::http::uri::Authority;
 use actix_web::{HttpRequest, HttpResponse, delete, get, patch, post, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -19,6 +20,8 @@ use crate::persistence::connection::DbPool;
 
 const MAX_CAST_QUEUE_ITEMS: usize = 100;
 const MAX_RECEIVER_FIELD_CHARACTERS: usize = 128;
+/// A DNS name (253) plus a port, with room for IPv6 brackets.
+const MAX_ORIGIN_HOST_BYTES: usize = 263;
 const CAST_URL_LIFETIME_SECONDS: i64 = 12 * 60 * 60;
 const CAST_EVENT_BUFFER: usize = 256;
 const URL_COMPONENT: &AsciiSet = &CONTROLS
@@ -234,9 +237,62 @@ fn media_signature_bytes(session_id: &str, song_id: &str, expires: i64) -> [u8; 
     outer.finalize().into()
 }
 
-fn request_origin(request: &HttpRequest) -> String {
+/// The origin a cast receiver fetches media from, or `None` when the request
+/// does not name a usable one.
+fn request_origin(request: &HttpRequest) -> Option<String> {
     let connection = request.connection_info();
-    format!("{}://{}", connection.scheme(), connection.host())
+    media_origin(
+        crate::settings::public_url(),
+        connection.scheme(),
+        connection.host(),
+    )
+}
+
+/// A configured public URL wins: it is the address the owner chose for other
+/// devices (a loopback one would point the receiver at itself, so it is
+/// skipped). Otherwise the request's own scheme and host are used, but only
+/// when they form a plain `http` or `https` origin.
+fn media_origin(public_url: Option<String>, scheme: &str, host: &str) -> Option<String> {
+    if let Some(origin) = public_url.filter(|origin| !is_loopback_origin(origin)) {
+        return Some(origin);
+    }
+    let scheme = match scheme {
+        "http" => "http",
+        "https" => "https",
+        _ => return None,
+    };
+    let authority = plain_authority(host)?;
+    Some(format!("{scheme}://{}", authority.as_str()))
+}
+
+/// A host with an optional valid port, and nothing else (no user info, path,
+/// query or whitespace).
+fn plain_authority(value: &str) -> Option<Authority> {
+    if value.is_empty() || value.len() > MAX_ORIGIN_HOST_BYTES || value.contains('@') {
+        return None;
+    }
+    let authority = value.parse::<Authority>().ok()?;
+    // Only a host and a port that parsed in full; `host:99999` or `host:` is refused.
+    let rebuilt = match authority.port_u16() {
+        Some(port) => format!("{}:{port}", authority.host()),
+        None => authority.host().to_owned(),
+    };
+    (rebuilt == value).then_some(authority)
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let authority = origin
+        .split_once("://")
+        .and_then(|(_, authority)| plain_authority(authority));
+    authority.is_some_and(|authority| {
+        let host = authority.host();
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
 }
 
 pub(crate) fn encoded(value: &str) -> String {
@@ -399,6 +455,9 @@ async fn response_for_session(
     pool: &DbPool,
     lifecycle: &web::Data<LibraryLifecycle>,
 ) -> HttpResponse {
+    let Some(origin) = request_origin(request) else {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "invalid_host"}));
+    };
     let cache = match lifecycle.cache().await {
         Ok(cache) => cache,
         Err(readiness) => return library_unavailable_response(readiness),
@@ -410,12 +469,9 @@ async fn response_for_session(
     })
     .await;
     match queried {
-        Ok(Ok(Some((session, items)))) => HttpResponse::Ok().json(hydrate_response(
-            session,
-            items,
-            &request_origin(request),
-            cache.as_ref(),
-        )),
+        Ok(Ok(Some((session, items)))) => {
+            HttpResponse::Ok().json(hydrate_response(session, items, &origin, cache.as_ref()))
+        }
         Ok(Ok(None)) => {
             HttpResponse::NotFound().json(serde_json::json!({"error": "cast_session_not_found"}))
         }
@@ -1077,8 +1133,57 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cast_events, notify_cast_changed, sign_media_url, valid_command, verify_media_signature,
+        cast_events, media_origin, notify_cast_changed, sign_media_url, valid_command,
+        verify_media_signature,
     };
+
+    #[test]
+    fn receivers_fetch_media_from_the_public_url_or_a_plain_request_origin() {
+        let public = Some("https://music.example".to_string());
+        assert_eq!(
+            media_origin(public, "http", "192.168.1.20:1993").as_deref(),
+            Some("https://music.example")
+        );
+        // A loopback public URL would send the receiver to itself.
+        assert_eq!(
+            media_origin(
+                Some("http://127.0.0.1:1993".to_string()),
+                "http",
+                "192.168.1.20:1993"
+            )
+            .as_deref(),
+            Some("http://192.168.1.20:1993")
+        );
+        assert_eq!(
+            media_origin(
+                Some("http://localhost:1993".to_string()),
+                "https",
+                "nas.lan"
+            )
+            .as_deref(),
+            Some("https://nas.lan")
+        );
+        assert_eq!(
+            media_origin(None, "http", "[fd00::20]:1993").as_deref(),
+            Some("http://[fd00::20]:1993")
+        );
+        for (scheme, host) in [
+            ("ftp", "nas.lan"),
+            ("javascript", "nas.lan"),
+            ("http", ""),
+            ("http", "user@nas.lan"),
+            ("http", "nas.lan/path"),
+            ("http", "nas.lan?query"),
+            ("http", "nas lan"),
+            ("http", "nas.lan\r\nX-Injected: 1"),
+            ("http", "nas.lan:99999"),
+            ("http", "nas.lan:"),
+        ] {
+            assert_eq!(media_origin(None, scheme, host), None, "{scheme} {host:?}");
+        }
+        let long_host = "a".repeat(300);
+        assert_eq!(media_origin(None, "http", &long_host), None);
+    }
 
     #[actix_web::test]
     async fn cast_change_events_are_user_scoped_and_push_driven() {

@@ -115,6 +115,18 @@ fn same_origin(next: &str, api_base: &str) -> bool {
     next.starts_with(&format!("{}/", api_base.trim_end_matches('/')))
 }
 
+/// The API address of one Deezer user. It is built from parts, so the id is
+/// always exactly one path segment under the API host.
+pub fn user_url(api_base: &str, user_id: u64) -> Result<reqwest::Url, ProviderError> {
+    let mut url = reqwest::Url::parse(api_base)
+        .map_err(|error| ProviderError::Upstream(format!("Deezer API address: {error}")))?;
+    url.path_segments_mut()
+        .map_err(|()| ProviderError::Upstream("Deezer API address has no path".into()))?
+        .pop_if_empty()
+        .extend(["user", &user_id.to_string()]);
+    Ok(url)
+}
+
 pub async fn fetch_playlist(
     client: &reqwest::Client,
     api_base: &str,
@@ -222,6 +234,21 @@ mod tests {
             Err(ProviderError::RateLimited)
         ));
         assert!(check(None).is_ok());
+    }
+
+    #[test]
+    fn user_addresses_put_the_id_in_one_path_segment() {
+        assert_eq!(
+            user_url(API_BASE, 2_529).unwrap().as_str(),
+            "https://api.deezer.com/user/2529"
+        );
+        assert_eq!(
+            user_url("http://127.0.0.1:41234/", u64::MAX)
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:41234/user/18446744073709551615"
+        );
+        assert!(user_url("not a url", 1).is_err());
     }
 
     #[test]
