@@ -1,7 +1,6 @@
 import { ArrowRight, FolderOpen, Monitor, Play } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import InteractiveProductDemo from "../components/interactive-product-demo";
 import PlatformDownloadButton from "../components/platform-download-button";
 import StickyDownloadButton from "../components/sticky-download-button";
 
@@ -69,7 +68,38 @@ export default function Home() {
 
       <section className="landing-section landing-proof">
         <div className="landing-wide-container">
-          <InteractiveProductDemo />
+          <figure className="landing-shots">
+            <img
+              alt="Mujin Music Home: library stats, recently added albums with quality badges, and the player bar"
+              className="landing-shot-main"
+              height={810}
+              src="/screenshots/01-home.png"
+              width={1440}
+            />
+            <div className="landing-shot-row">
+              <img
+                alt="Now Playing with the signal-path quality light and Up next"
+                height={810}
+                loading="lazy"
+                src="/screenshots/03-now-playing.png"
+                width={1440}
+              />
+              <img
+                alt="An album page with release details and the format badge"
+                height={810}
+                loading="lazy"
+                src="/screenshots/04-album.png"
+                width={1440}
+              />
+              <img
+                alt="Timed lyrics read from an LRC file beside the track"
+                height={810}
+                loading="lazy"
+                src="/screenshots/02-fullscreen-lyrics.png"
+                width={1440}
+              />
+            </div>
+          </figure>
         </div>
       </section>
 

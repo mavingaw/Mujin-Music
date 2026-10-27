@@ -7,7 +7,7 @@ Mujin Music is a local-first music app for your own collection. Based on
 
 Choose a folder. Start listening.
 
-![Mujin Music library tools](docs/images/library-tools.png)
+![Mujin Music Home: library stats, recently added albums with quality badges and the player bar](docs/images/home.png)
 
 [Download](https://github.com/mavingaw/Mujin-Music/releases) ·
 [Docs](apps/site/content/docs) ·
@@ -15,12 +15,18 @@ Choose a folder. Start listening.
 
 ## Screenshots
 
-|                                                                     |                                                              |
-| ------------------------------------------------------------------- | ------------------------------------------------------------ |
-| ![Album page with format, credits and radio](docs/images/album.png) | ![Live internet radio](docs/images/live-radio.png)           |
-| ![Now playing with the quality light](docs/images/now-playing.png)  | ![Profiles with instant switching](docs/images/profiles.png) |
+|                                                                                 |                                                                           |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| ![Now Playing with the quality light and Up next](docs/images/now-playing.png)  | ![The signal path from file to output](docs/images/signal-path.png)       |
+| ![Album page with release details and format](docs/images/album.png)            | ![Zones: move playback between rooms and devices](docs/images/zones.png)  |
+| ![Focus filters on the album library](docs/images/focus.png)                    | ![Timed lyrics from an LRC file beside the track](docs/images/lyrics.png) |
+| ![Settings → Appearance with the six theme presets](docs/images/appearance.png) | ![Now Playing in each theme preset](docs/images/themes.png)               |
 
-<img src="docs/images/phone-album.png" alt="Album page on a phone" width="320">
+![Home, an album and Now Playing on a phone](docs/images/phone.png)
+
+The six theme presets above are Mujin Dark, Mujin Light, Material You, Frosted
+Glass, OLED Black and High Contrast. The library in these captures is a demo
+library with generated cover art and fictional artists.
 
 ## What Mujin Music adds
 
@@ -37,6 +43,10 @@ and open source:
   Spotify, Apple Music, YouTube Music and Deezer.
 - Profiles, Last.fm and ListenBrainz scrobbling, a Home Assistant
   integration, away-from-home access, backups and library tools.
+- A dark, gallery-style design with timed lyrics, a display mode for TVs and
+  tablets, and six theme presets (Mujin Dark and Light, Material You, Frosted
+  Glass, OLED Black, High Contrast) with full appearance settings that follow
+  your profile to every device.
 
 Read the full write-up, including how it was tested, what is coming next and
 the known limitations, in [docs/mujin-music.md](docs/mujin-music.md).
