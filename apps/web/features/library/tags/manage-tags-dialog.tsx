@@ -269,7 +269,7 @@ export default function ManageTagsDialog({
           )}
           {smart.length > 0 && !needle && (
             <div className="mt-3 border-t border-white/8 px-2.5 pt-3">
-              <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+              <p className="mb-2 flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-zinc-500">
                 <Sparkles className="h-3 w-3" /> Smart tags follow their focus
               </p>
               <div className="flex flex-wrap gap-1.5">

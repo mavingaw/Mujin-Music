@@ -87,11 +87,11 @@ export default function SongCard({
           <div className="mt-2.5 min-w-0">
             <Link
               href={`/album?id=${album_id}`}
-              className="block truncate text-[13.5px] font-medium leading-5 text-mujin-text hover:underline"
+              className="block truncate text-[0.8438rem] font-medium leading-5 text-mujin-text hover:underline"
             >
               <SongTitle title={song_name} />
             </Link>
-            <p className="truncate text-[12.5px] leading-5 text-mujin-text-secondary">
+            <p className="truncate text-[0.7812rem] leading-5 text-mujin-text-secondary">
               {typeLabel && <span>{typeLabel}&nbsp;·&nbsp;</span>}
               {isExplicitSongTitle(song_name) && <ExplicitBadge />}
               <ArtistCreditLinks

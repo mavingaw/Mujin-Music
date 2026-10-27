@@ -9,7 +9,7 @@ function SourceMark({ sources }: { sources: AboutCredit["sources"] }) {
   if (sources.includes("edited")) {
     return (
       <span
-        className="rounded border border-mujin-copper/25 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-mujin-copper-hover"
+        className="rounded border border-mujin-copper/25 px-1 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-mujin-copper-hover"
         title="From the album's edited credits list (frozen against lookups)"
       >
         Edited
@@ -19,7 +19,7 @@ function SourceMark({ sources }: { sources: AboutCredit["sources"] }) {
   if (!sources.includes("musicbrainz")) return null;
   return (
     <span
-      className="rounded border border-white/10 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-zinc-500"
+      className="rounded border border-white/10 px-1 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-zinc-500"
       title={
         sources.includes("tags")
           ? "In your file tags and on MusicBrainz"
@@ -82,7 +82,7 @@ export function CreditsList({
                 : "";
             return (
               <dd
-                className="flex min-w-0 items-center gap-3 py-1.5 text-[15px]"
+                className="flex min-w-0 items-center gap-3 py-1.5 text-[0.9375rem]"
                 key={`${credit.id ?? ""}-${credit.name}`}
               >
                 <PersonAvatar

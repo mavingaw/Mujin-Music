@@ -49,7 +49,7 @@ import {
   usePreferredAlbumPlay,
 } from "@/components/preferred-album-play";
 import { StreamingAlbumScreen } from "@/components/streaming-album-screen";
-import { fonts, palette } from "@/constants/colors";
+import { fonts, palette, tint } from "@/constants/colors";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { formatCollectionDuration } from "@/lib/format";
 import {
@@ -99,7 +99,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
   if (album.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   if (!album.data)
@@ -162,7 +162,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
           <Pressable
             {...immediateBorderlessPressFeedback}
@@ -171,7 +171,7 @@ function LibraryAlbumScreen({ id }: { id: string }) {
             hitSlop={12}
             onPress={() => setActionsOpen(true)}
           >
-            <MoreHorizontal color="white" size={25} />
+            <MoreHorizontal color={palette.text} size={25} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
@@ -348,7 +348,7 @@ const styles = StyleSheet.create({
   cover: {
     alignSelf: "center",
     marginVertical: 12,
-    shadowColor: "#000",
+    shadowColor: palette.background,
     shadowOpacity: 0.7,
     shadowRadius: 18,
     elevation: 12,
@@ -366,7 +366,7 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 9,
   },
-  artist: { color: "white", fontWeight: "800", fontSize: 15 },
+  artist: { color: palette.text, fontWeight: "800", fontSize: 15 },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 5 },
   format: { color: palette.muted, fontSize: 12, marginTop: 3 },
   section: { marginTop: 18, gap: 4 },
@@ -380,11 +380,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: tint(0.08),
   },
-  pillActive: { backgroundColor: "white" },
-  pillText: { color: "#c7c2b9", fontSize: 12, fontWeight: "700" },
-  pillTextActive: { color: "black" },
+  pillActive: { backgroundColor: palette.text },
+  pillText: { color: palette.secondary, fontSize: 12, fontWeight: "700" },
+  pillTextActive: { color: palette.background },
   actions: {
     width: "100%",
     flexDirection: "row",

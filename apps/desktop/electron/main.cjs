@@ -32,6 +32,10 @@ const { classifyStartupFailure } = require("./failure-state.cjs");
 const { createUpdates, updateSupport } = require("./updates.cjs");
 const { browse } = require("./mdns.cjs");
 const {
+  applyWindowMaterial,
+  windowMaterialSupport,
+} = require("./window-material.cjs");
+const {
   commandAllowed,
   forgetServer,
   loadConfig,
@@ -976,6 +980,28 @@ function installDesktopBridge() {
       default:
         throw new Error(`Unknown window control: ${action}`);
     }
+  });
+
+  // Frosted Glass: Mica or Acrylic on Windows 11, vibrancy on macOS.
+  ipcMain.handle("parson:window-material", (event, action, material) => {
+    if (
+      !isAllowedNavigation(
+        event.senderFrame.url,
+        appOrigin,
+        ALLOWED_LOCAL_PAGES,
+      )
+    ) {
+      throw new Error("Window materials are unavailable to untrusted content.");
+    }
+    const support = windowMaterialSupport(process.platform, os.release());
+    if (action === "supported") return support;
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || window.isDestroyed() || action !== "set") return null;
+    return applyWindowMaterial(
+      window,
+      typeof material === "string" ? material : null,
+      support,
+    );
   });
 
   ipcMain.on("parson:server-mode", (event) => {

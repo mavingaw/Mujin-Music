@@ -100,5 +100,7 @@ Deployment guidance is in the
 Mujin Music is based on [Parson](https://github.com/ParsonLabs/Parson) by
 ParsonLabs and keeps its GPL-3.0-only licence and copyright notices. Third-party
 components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-The Mujin Music fonts (Jost, Inter, JetBrains Mono) are under the SIL Open
-Font License 1.1; each ships with its `OFL.txt` in `apps/web/public/fonts`.
+The Mujin Music fonts (Jost, Inter, JetBrains Mono) and the fonts offered in
+Settings → Appearance (Fraunces, Atkinson Hyperlegible Next, IBM Plex Sans,
+Roboto Flex) are under the SIL Open Font License 1.1; each ships with its
+`OFL.txt` in `apps/web/public/fonts`.

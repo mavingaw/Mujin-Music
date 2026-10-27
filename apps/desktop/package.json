@@ -53,7 +53,8 @@
       "electron/startup.html",
       "electron/startup-error.html",
       "package.json",
-      "electron/updates.cjs"
+      "electron/updates.cjs",
+      "electron/window-material.cjs"
     ],
     "extraResources": [
       {

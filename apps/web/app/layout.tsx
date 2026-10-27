@@ -6,7 +6,8 @@ import SessionProvider from "@/features/account/session-provider";
 import AppBootstrap from "@/components/app/splash-screen";
 import NativeDragGuard from "@/components/app/native-drag-guard";
 
-import { Toaster } from "sonner";
+import { THEME_BOOT_SCRIPT } from "@/features/appearance/theme-boot";
+import ThemedToaster from "@/features/appearance/themed-toaster";
 
 export const metadata: Metadata = {
   metadataBase: new URL(
@@ -42,24 +43,16 @@ export const viewport: Viewport = { themeColor: "#0A0A0B" };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Paints the profile's theme before the app starts (see theme-cache). */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body className="min-h-screen bg-black font-sans text-white antialiased">
         <SessionProvider>
           <NativeDragGuard />
           <AppBootstrap>{children}</AppBootstrap>
-          <Toaster
-            closeButton={false}
-            position="bottom-right"
-            theme="dark"
-            toastOptions={{
-              classNames: {
-                toast: "!border-white/10 !bg-black !text-white !shadow-2xl",
-                description: "!text-zinc-400",
-                actionButton: "!bg-white !text-black",
-                cancelButton: "!bg-zinc-900 !text-white",
-              },
-            }}
-          />
+          <ThemedToaster />
         </SessionProvider>
       </body>
     </html>

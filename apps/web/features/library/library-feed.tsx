@@ -19,14 +19,18 @@ import { getLibraryUnavailable } from "@parson/music-sdk";
 import type { LibrarySong, ResponseAlbum } from "@parson/music-sdk/types";
 import { Library } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   getMyLiveStations,
   getRecentLiveStations,
+  DEFAULT_APPEARANCE,
   greetingForHour,
+  visibleHomeRows,
   type HomeEssentials,
+  type HomeRowId,
 } from "@parson/music-sdk";
+import { useOptionalAppearance } from "@/features/appearance/theme-provider";
 import { useProfiles } from "@/features/profiles/use-profiles";
 import { homeStats } from "@/features/library/home/home-stats";
 import {
@@ -45,6 +49,9 @@ export default function LibraryFeed() {
   const feedQuery = useLibraryFeed(Boolean(session));
   const feed = feedQuery.data ?? emptyLibraryFeed;
   const libraryReadiness = getLibraryUnavailable(feedQuery.error);
+  const homeRows = visibleHomeRows(
+    useOptionalAppearance()?.appearance ?? DEFAULT_APPEARANCE,
+  );
 
   const recentSongs = feed.continue_listening;
   const recommendedSongs =
@@ -88,6 +95,89 @@ export default function LibraryFeed() {
     (feed.recently_added?.length ?? 0) > 0;
   const dailyPicks = feed.daily_picks?.picks ?? [];
 
+  // Rows in the profile's order, hidden ones left out (Appearance → Home).
+  const rows: Partial<Record<HomeRowId, () => ReactNode>> = {
+    "daily-picks": () =>
+      dailyPicks.length > 0 ? (
+        <DailyPicksBand date={feed.daily_picks!.date} picks={dailyPicks} />
+      ) : null,
+    "recently-added": () =>
+      (feed.recently_added?.length ?? 0) > 0 ? (
+        <ShelfRow
+          action={{ href: "/library", label: "All albums" }}
+          eyebrow="Your library"
+          title="Recently added"
+        >
+          {feed.recently_added!.map((album) => (
+            <HomeAlbumCard album={album} key={album.id} />
+          ))}
+        </ShelfRow>
+      ) : null,
+    "recently-played": () =>
+      recentSongs.length > 0 ? (
+        <ShelfRow
+          action={{ href: "/history", label: "History" }}
+          eyebrow="Recent activity"
+          title="Recently played"
+        >
+          <RecentRow songs={recentSongs} />
+        </ShelfRow>
+      ) : null,
+    "new-for-you": () =>
+      (feed.new_for_you?.length ?? 0) > 0 ? (
+        <ShelfRow eyebrow="Newest releases you own" title="New for you">
+          {feed.new_for_you!.map((album) => (
+            <HomeAlbumCard album={album} key={album.id} />
+          ))}
+        </ShelfRow>
+      ) : null,
+    "similar-artists": () =>
+      (feed.similar_artists?.length ?? 0) > 0 ? (
+        <ShelfRow
+          action={{ href: "/library?view=artists", label: "All artists" }}
+          eyebrow={
+            feed.similar_artists!.find((artist) => artist.reason)?.reason ??
+            "From your library"
+          }
+          size="sm"
+          title="Similar artists"
+        >
+          {feed.similar_artists!.map((artist) => (
+            <ArtistCircle artist={artist} key={artist.id} />
+          ))}
+        </ShelfRow>
+      ) : null,
+    "best-years": () =>
+      feed.best_years && feed.best_years.albums.length > 0 ? (
+        <BestYearsBand prime={feed.best_years} />
+      ) : null,
+    "recommended-songs": () =>
+      recommendedSongs.length > 0 ? (
+        <ShelfRow eyebrow="Made for you" title="Recommended songs">
+          <SongRow songs={recommendedSongs} />
+        </ShelfRow>
+      ) : null,
+    genres: () =>
+      (feed.genres?.length ?? 0) > 0 ? (
+        <ShelfRow
+          action={{ href: "/genre", label: "All genres" }}
+          eyebrow="Browse"
+          title="Genres"
+        >
+          {feed.genres!.map((genre) => (
+            <GenreTile genre={genre} key={genre.slug} />
+          ))}
+        </ShelfRow>
+      ) : null,
+    "live-radio": () => <LiveRadioShelf />,
+    "albums-you-might-like": () =>
+      recommendedAlbums.length > 0 ? (
+        <ShelfRow eyebrow="From your listening" title="Albums you might like">
+          <AlbumRow albums={recommendedAlbums.slice(0, 12)} />
+        </ShelfRow>
+      ) : null,
+  };
+
   return (
     <div className="relative min-h-full pb-36 md:pb-16">
       <HomeHero feed={feed} />
@@ -101,88 +191,9 @@ export default function LibraryFeed() {
           />
         )}
         <div className="space-y-14">
-          {dailyPicks.length > 0 && (
-            <DailyPicksBand date={feed.daily_picks!.date} picks={dailyPicks} />
-          )}
-
-          {(feed.recently_added?.length ?? 0) > 0 && (
-            <ShelfRow
-              action={{ href: "/library", label: "All albums" }}
-              eyebrow="Your library"
-              title="Recently added"
-            >
-              {feed.recently_added!.map((album) => (
-                <HomeAlbumCard album={album} key={album.id} />
-              ))}
-            </ShelfRow>
-          )}
-
-          {recentSongs.length > 0 && (
-            <ShelfRow
-              action={{ href: "/history", label: "History" }}
-              eyebrow="Recent activity"
-              title="Recently played"
-            >
-              <RecentRow songs={recentSongs} />
-            </ShelfRow>
-          )}
-
-          {(feed.new_for_you?.length ?? 0) > 0 && (
-            <ShelfRow eyebrow="Newest releases you own" title="New for you">
-              {feed.new_for_you!.map((album) => (
-                <HomeAlbumCard album={album} key={album.id} />
-              ))}
-            </ShelfRow>
-          )}
-
-          {(feed.similar_artists?.length ?? 0) > 0 && (
-            <ShelfRow
-              action={{ href: "/library?view=artists", label: "All artists" }}
-              eyebrow={
-                feed.similar_artists!.find((artist) => artist.reason)?.reason ??
-                "From your library"
-              }
-              size="sm"
-              title="Similar artists"
-            >
-              {feed.similar_artists!.map((artist) => (
-                <ArtistCircle artist={artist} key={artist.id} />
-              ))}
-            </ShelfRow>
-          )}
-
-          {feed.best_years && feed.best_years.albums.length > 0 && (
-            <BestYearsBand prime={feed.best_years} />
-          )}
-
-          {recommendedSongs.length > 0 && (
-            <ShelfRow eyebrow="Made for you" title="Recommended songs">
-              <SongRow songs={recommendedSongs} />
-            </ShelfRow>
-          )}
-
-          {(feed.genres?.length ?? 0) > 0 && (
-            <ShelfRow
-              action={{ href: "/genre", label: "All genres" }}
-              eyebrow="Browse"
-              title="Genres"
-            >
-              {feed.genres!.map((genre) => (
-                <GenreTile genre={genre} key={genre.slug} />
-              ))}
-            </ShelfRow>
-          )}
-
-          <LiveRadioShelf />
-
-          {recommendedAlbums.length > 0 && (
-            <ShelfRow
-              eyebrow="From your listening"
-              title="Albums you might like"
-            >
-              <AlbumRow albums={recommendedAlbums.slice(0, 12)} />
-            </ShelfRow>
-          )}
+          {homeRows.map((row) => (
+            <Fragment key={row}>{rows[row]?.()}</Fragment>
+          ))}
         </div>
       </div>
     </div>
@@ -253,7 +264,7 @@ function HomeHero({ feed }: { feed: HomeEssentials }) {
       <div aria-hidden="true" className="mj-hero-fade absolute inset-0 -z-10" />
       <div className="mx-auto w-full max-w-[1480px] px-5 pb-2 pt-10 sm:px-8 md:pt-14 lg:px-12">
         <p className="mj-eyebrow">{greeting}</p>
-        <h1 className="mj-display mt-3 text-[44px] text-mujin-text sm:text-[56px] lg:text-[64px]">
+        <h1 className="mj-display mt-3 text-[2.75rem] text-mujin-text sm:text-[3.5rem] lg:text-[4rem]">
           {name ? `Hi, ${name}` : "Your library"}
         </h1>
         {stats.length > 0 && (
@@ -263,13 +274,22 @@ function HomeHero({ feed }: { feed: HomeEssentials }) {
                 className="bg-mujin-base/80 px-5 py-4 backdrop-blur-md"
                 key={stat.label}
               >
-                <dt className="mj-eyebrow text-[10px]!">{stat.label}</dt>
+                <dt className="mj-eyebrow text-[0.625rem]!">
+                  {/* "Lossless · 4 hi-res" breaks between its parts only,
+                      never inside "hi-res". */}
+                  {stat.label.split(" · ").map((part, index) => (
+                    <Fragment key={part}>
+                      {index > 0 ? " · " : ""}
+                      <span className="whitespace-nowrap">{part}</span>
+                    </Fragment>
+                  ))}
+                </dt>
                 <dd className="mj-tnum mt-1.5 flex items-baseline gap-1.5">
-                  <span className="mj-display text-[34px] text-mujin-text">
+                  <span className="mj-display text-[2.125rem] text-mujin-text">
                     {stat.value}
                   </span>
                   {stat.unit && (
-                    <span className="text-[12px] text-mujin-text-tertiary">
+                    <span className="text-[0.75rem] text-mujin-text-tertiary">
                       {stat.unit}
                     </span>
                   )}

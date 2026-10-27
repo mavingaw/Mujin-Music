@@ -100,7 +100,7 @@ function TagTile({ covers, tag }: { covers: string[]; tag: UserTag }) {
             className={cn("absolute inset-x-0 top-0 h-1 opacity-90", tone.dot)}
           />
           {smart && (
-            <span className="absolute right-2.5 top-3 flex items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] font-semibold text-mujin-copper-hover backdrop-blur">
+            <span className="absolute right-2.5 top-3 flex items-center gap-1 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[0.6875rem] font-semibold text-mujin-copper-hover backdrop-blur">
               <Sparkles className="h-3 w-3" /> Smart
             </span>
           )}

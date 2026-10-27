@@ -261,7 +261,7 @@ function Backdrop({ lyrics, track }: { lyrics: boolean; track: DisplayTrack }) {
         </div>
       )}
       <div
-        className={`absolute inset-0 transition-colors duration-700 ${lyrics ? "bg-black/55" : "bg-black/20"}`}
+        className={`absolute inset-0 transition-colors duration-700 ${lyrics ? "bg-black/55" : "bg-black/20 portrait:bg-black/40"}`}
       />
       <div className="absolute inset-x-0 bottom-0 h-[62%] bg-gradient-to-t from-[rgb(5_5_6/0.92)] via-[rgb(5_5_6/0.55)] to-transparent" />
       <div className="absolute inset-x-0 top-0 h-[22%] bg-gradient-to-b from-[rgb(5_5_6/0.6)] to-transparent" />
@@ -425,7 +425,7 @@ function NowPlaying({
             {track.artist}
           </p>
           {facts && !lyrics && (
-            <p className="mt-[0.8vh] truncate text-[clamp(14px,2vh,24px)] text-mujin-text-tertiary">
+            <p className="mt-[0.8vh] truncate text-[clamp(14px,2vh,24px)] text-mujin-text-tertiary portrait:line-clamp-2 portrait:whitespace-normal">
               {facts}
             </p>
           )}
@@ -460,7 +460,7 @@ function Cover({
 }) {
   return (
     <div
-      className={`relative aspect-square shrink-0 overflow-hidden rounded-[clamp(4px,0.6vh,8px)] bg-mujin-surface-1 transition-[width] duration-700 ${lyrics ? "w-[clamp(64px,min(16vh,18vw),200px)]" : "w-[clamp(96px,min(34vh,28vw),420px)]"}`}
+      className={`relative aspect-square shrink-0 overflow-hidden rounded-[clamp(4px,0.6vh,8px)] bg-mujin-surface-1 transition-[width] duration-700 ${lyrics ? "w-[clamp(64px,min(16vh,18vw),200px)]" : "w-[clamp(96px,min(34vh,28vw),420px)] portrait:w-[clamp(72px,24vw,132px)]"}`}
       style={{
         boxShadow: `0 0 0 1px rgb(242 238 230 / 0.08), 0 40px 100px -40px ${rgbString(palette.glow, 0.6)}, 0 24px 60px -30px rgb(0 0 0 / 0.95)`,
       }}
@@ -497,10 +497,16 @@ export function QualityChip({
           boxShadow: `0 0 0 0.28em color-mix(in srgb, ${LIGHT_COLOR[chip.light]} 20%, transparent)`,
         }}
       />
-      <span className="truncate text-mujin-text">{parts.join(" · ")}</span>
+      <span className="truncate text-mujin-text portrait:hidden">
+        {parts.join(" · ")}
+      </span>
+      {/* A phone held upright shows the short form whole, never "…". */}
+      <span className="hidden whitespace-nowrap text-mujin-text portrait:inline">
+        {chip.compact}
+      </span>
       {chip.path && (
         <span
-          className="shrink-0 font-sans text-[0.92em] font-medium"
+          className="shrink-0 font-sans text-[0.92em] font-medium portrait:hidden"
           style={{ color: LIGHT_COLOR[chip.light] }}
         >
           {chip.path}
@@ -543,15 +549,17 @@ function Biography({
   return (
     <article
       aria-label={`About ${artist}`}
-      className="mj-display-rise max-w-full self-start landscape:max-w-[min(46vw,760px)]"
+      className="mj-display-rise max-w-full self-start landscape:max-w-[min(46vw,760px)] portrait:rounded-2xl portrait:border portrait:border-white/[0.08] portrait:bg-[rgb(5_5_6/0.72)] portrait:p-4 portrait:shadow-[0_24px_60px_-30px_rgb(0_0_0/0.9)] portrait:backdrop-blur-xl"
     >
-      <p className="mj-eyebrow text-[clamp(11px,1.4vh,15px)]!">
+      <p className="mj-eyebrow text-[clamp(11px,1.4vh,15px)]! portrait:text-mujin-text-secondary!">
         About {artist}
       </p>
-      <p className="mt-[1.4vh] line-clamp-5 text-[clamp(15px,2.25vh,27px)] leading-[1.55] text-mujin-text-secondary [text-wrap:pretty]">
+      {/* Over a photo on an upright phone the text sits on its own dark
+          panel in primary ivory, never straight on the picture. */}
+      <p className="mt-[1.4vh] line-clamp-5 text-[clamp(15px,2.25vh,27px)] leading-[1.55] text-mujin-text-secondary [text-wrap:pretty] portrait:line-clamp-4 portrait:text-[15px] portrait:text-mujin-text">
         {biography.text}
       </p>
-      <p className="mt-[1.2vh] text-[clamp(10px,1.2vh,13px)] text-mujin-text-tertiary">
+      <p className="mt-[1.2vh] text-[clamp(10px,1.2vh,13px)] text-mujin-text-tertiary portrait:text-mujin-text-secondary">
         From {biography.source} · {biography.license}
       </p>
     </article>

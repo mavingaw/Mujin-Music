@@ -82,7 +82,7 @@ export function LyricsSourceChip({
   const where = lyricsSourceLabel(source);
   return (
     <span
-      className={`inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+      className={`inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium ${
         timed
           ? "border-mujin-copper/35 bg-mujin-copper/[0.1] text-mujin-copper"
           : "border-white/12 bg-black/20 text-mujin-text-secondary"
@@ -122,10 +122,10 @@ function LyricsLoading() {
             />
           ))}
         </span>
-        <p className="mj-title mt-5 text-[24px] text-mujin-text sm:text-[28px]">
+        <p className="mj-title mt-5 text-[1.5rem] text-mujin-text sm:text-[1.75rem]">
           Finding lyrics…
         </p>
-        <p className="mt-2 max-w-sm text-[13px] leading-5 text-mujin-text-tertiary">
+        <p className="mt-2 max-w-sm text-[0.8125rem] leading-5 text-mujin-text-tertiary">
           Reading the file&apos;s tags and any .lrc beside it, then LRCLIB when
           online lookups are on.
         </p>
@@ -173,15 +173,15 @@ function LyricsEmpty({
             )}
           </svg>
         </span>
-        <p className="mj-display text-[34px] leading-tight text-mujin-text sm:text-[44px]">
+        <p className="mj-display text-[2.125rem] leading-tight text-mujin-text sm:text-[2.75rem]">
           {message.title}
         </p>
-        <p className="mx-auto mt-3 max-w-sm text-[14px] leading-6 text-mujin-text-secondary">
+        <p className="mx-auto mt-3 max-w-sm text-[0.875rem] leading-6 text-mujin-text-secondary">
           {message.detail}
         </p>
         {message.retry && (
           <button
-            className="mj-primary mt-6 rounded-full px-5 py-2.5 text-[13px] font-semibold"
+            className="mj-primary mt-6 rounded-full px-5 py-2.5 text-[0.8125rem] font-semibold"
             onClick={onRetry}
             type="button"
           >
@@ -227,8 +227,8 @@ export const LyricsView = memo(function LyricsView({
 }) {
   const lineSize =
     size === "large"
-      ? "text-[26px] sm:text-[34px] lg:text-[40px]"
-      : "text-[24px] sm:text-[32px]";
+      ? "text-[1.625rem] sm:text-[2.125rem] lg:text-[2.5rem]"
+      : "text-[1.5rem] sm:text-[2rem]";
   const hasTimed = timed.some((line) => line.text.trim());
   return (
     <div
@@ -293,7 +293,7 @@ export const LyricsView = memo(function LyricsView({
                 <button
                   className={`mj-title block w-full origin-left cursor-pointer text-left leading-[1.22] transition-[opacity,color,transform] duration-500 ease-out hover:opacity-100! ${lineSize} ${
                     active
-                      ? "text-mujin-text motion-safe:scale-[1.02] [text-shadow:0_0_32px_rgba(242,238,230,0.18)]"
+                      ? "text-mujin-text motion-safe:scale-[1.02] [text-shadow:0_0_32px_rgb(var(--mj-ink)/0.18)]"
                       : "text-mujin-text"
                   }`}
                   onClick={() => onSeek(line.time)}
@@ -308,7 +308,7 @@ export const LyricsView = memo(function LyricsView({
           })}
         </ol>
       ) : fallback ? (
-        <p className="mj-title whitespace-pre-line py-[18vh] text-[24px] leading-[1.55] text-mujin-text/85 sm:text-[30px]">
+        <p className="mj-title whitespace-pre-line py-[18vh] text-[1.5rem] leading-[1.55] text-mujin-text/85 sm:text-[1.875rem]">
           {fallback}
         </p>
       ) : (

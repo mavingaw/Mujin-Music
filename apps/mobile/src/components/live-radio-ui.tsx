@@ -19,7 +19,7 @@ import {
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { alpha, palette, tint } from "@/constants/colors";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import { stationLogoUrl, stationSong } from "@/lib/live-radio";
 import { immediatePressFeedback } from "@/lib/press-feedback";
@@ -31,19 +31,19 @@ const TIER_COLORS: Record<
   { border: string; text: string; background: string }
 > = {
   lossless: {
-    border: "rgba(217,139,95,0.5)",
+    border: alpha(palette.accent, 0.5),
     text: palette.accentSoft,
-    background: "rgba(217,139,95,0.16)",
+    background: alpha(palette.accent, 0.16),
   },
   high: {
-    border: "rgba(163,201,139,0.4)",
+    border: alpha(palette.success, 0.4),
     text: palette.qualityHigh,
-    background: "rgba(163,201,139,0.12)",
+    background: alpha(palette.success, 0.12),
   },
   standard: {
-    border: "rgba(255,255,255,0.14)",
-    text: "#c7c2b9",
-    background: "rgba(255,255,255,0.05)",
+    border: tint(0.14),
+    text: palette.secondary,
+    background: tint(0.05),
   },
   low: {
     border: "rgba(126,122,116,0.45)",
@@ -51,8 +51,8 @@ const TIER_COLORS: Record<
     background: "rgba(126,122,116,0.1)",
   },
   unknown: {
-    border: "rgba(255,255,255,0.08)",
-    text: "#8e8a84",
+    border: tint(0.08),
+    text: palette.tertiary,
     background: "transparent",
   },
 };
@@ -122,7 +122,7 @@ export function StationLogo({
           width: size,
           height: size,
           borderRadius: rounded,
-          backgroundColor: uri ? "#17171a" : stationTone(station.name),
+          backgroundColor: uri ? palette.surface : stationTone(station.name),
         },
       ]}
     >
@@ -190,8 +190,8 @@ export function SaveButton({ station }: { station: LiveStation }) {
       style={styles.iconButton}
     >
       <Heart
-        color={station.saved ? "#f6807a" : palette.secondary}
-        fill={station.saved ? "#f6807a" : "transparent"}
+        color={station.saved ? palette.danger : palette.secondary}
+        fill={station.saved ? palette.danger : "transparent"}
         size={20}
       />
     </Pressable>
@@ -216,9 +216,13 @@ export function StationTile({ station }: { station: LiveStation }) {
         <StationLogo size={136} station={station} />
         <View style={styles.tilePlay}>
           {current ? (
-            <Radio color="black" size={16} />
+            <Radio color={palette.background} size={16} />
           ) : (
-            <Play color="black" fill="black" size={16} />
+            <Play
+              color={palette.background}
+              fill={palette.background}
+              size={16}
+            />
           )}
         </View>
       </View>
@@ -310,28 +314,33 @@ const styles = StyleSheet.create({
   tagText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.4 },
   live: {
     alignItems: "center",
-    backgroundColor: "rgba(242,71,63,0.16)",
+    backgroundColor: alpha(palette.danger, 0.16),
     borderRadius: 999,
     flexDirection: "row",
     gap: 4,
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  liveDot: { backgroundColor: "#f2473f", borderRadius: 3, height: 6, width: 6 },
+  liveDot: {
+    backgroundColor: palette.danger,
+    borderRadius: 3,
+    height: 6,
+    width: 6,
+  },
   liveText: {
-    color: "#f9b3af",
+    color: palette.danger,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.2,
   },
   logoFrame: {
     alignItems: "center",
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: tint(0.08),
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: "center",
     overflow: "hidden",
   },
-  initials: { color: "rgba(255,255,255,0.92)", fontWeight: "900" },
+  initials: { color: tint(0.92), fontWeight: "900" },
   iconButton: {
     alignItems: "center",
     height: 40,
@@ -341,7 +350,7 @@ const styles = StyleSheet.create({
   tile: { width: 136 },
   tilePlay: {
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 18,
     bottom: 8,
     height: 36,
@@ -358,7 +367,7 @@ const styles = StyleSheet.create({
   },
   tileSubtitle: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   tileTags: { flexDirection: "row", marginTop: 6 },
-  current: { color: "#bcd8a9" },
+  current: { color: palette.success },
   rail: { gap: 14, paddingHorizontal: 20 },
   row: {
     alignItems: "center",

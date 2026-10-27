@@ -74,7 +74,7 @@ export function PlayNowSplit({
       className="w-56"
       onClick={(event) => event.stopPropagation()}
     >
-      <DropdownMenuLabel className="truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-mujin-text-tertiary">
+      <DropdownMenuLabel className="truncate text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-mujin-text-tertiary">
         {name}
       </DropdownMenuLabel>
       {PLAY_ACTIONS.map(({ action, label }) => (
@@ -82,7 +82,7 @@ export function PlayNowSplit({
           {ACTION_ICONS[action]}
           <span className="flex-1">{label}</span>
           {action === "queue" && queueLength ? (
-            <span className="mj-tnum text-[11px] text-mujin-text-tertiary">
+            <span className="mj-tnum text-[0.6875rem] text-mujin-text-tertiary">
               {queueLength} queued
             </span>
           ) : null}
@@ -99,12 +99,12 @@ export function PlayNowSplit({
     return (
       <DropdownMenu onOpenChange={setOpen} open={open}>
         <div
-          className={`inline-flex h-11 items-stretch overflow-hidden rounded-full shadow-[0_10px_30px_-10px_rgba(217,139,95,0.6)] ${className}`}
+          className={`inline-flex h-11 items-stretch overflow-hidden rounded-full shadow-[0_10px_30px_-10px_rgb(var(--mj-accent-rgb)/0.6)] ${className}`}
           data-split="play-now"
         >
           <button
             aria-label={mainLabel}
-            className="mj-primary inline-flex items-center gap-2 pl-4 pr-4 text-[13.5px] font-semibold disabled:opacity-70"
+            className="mj-primary inline-flex items-center gap-2 pl-4 pr-4 text-[0.8438rem] font-semibold disabled:opacity-70"
             disabled={busy}
             onClick={() => choose("play")}
             type="button"

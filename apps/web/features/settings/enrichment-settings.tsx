@@ -97,7 +97,7 @@ function EditorialSources({
                 )}
               </span>
               {source.id === main && (
-                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-300">
+                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-zinc-300">
                   Main
                 </span>
               )}

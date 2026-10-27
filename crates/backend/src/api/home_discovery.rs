@@ -663,13 +663,15 @@ pub fn attach_photos(
     if let Some(best) = best {
         best.photo_url = photo(&best.artist.id);
     }
-    for genre in genres {
-        genre.photos = genre
-            .artist_ids
-            .iter()
-            .filter_map(|id| photo(id))
-            .take(GENRE_TILE_PHOTOS)
-            .collect();
+    // No two genre tiles open on the same artist's photo.
+    let lists = genres
+        .iter()
+        .map(|genre| genre.artist_ids.as_slice())
+        .collect::<Vec<_>>();
+    let photos =
+        crate::api::genre_pages::distinct_tile_photos(&lists, with_photos, GENRE_TILE_PHOTOS);
+    for (genre, photos) in genres.iter_mut().zip(photos) {
+        genre.photos = photos;
     }
 }
 

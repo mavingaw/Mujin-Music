@@ -75,7 +75,14 @@ import { Artwork } from "@/components/artwork";
 import { ActionDrawer, DrawerAction } from "@/components/action-drawer";
 import { useZones } from "@/providers/zones-provider";
 import { SongRow } from "@/components/music-ui";
-import { fonts, palette } from "@/constants/colors";
+import {
+  alpha,
+  fonts,
+  palette,
+  storedAppearance,
+  tint,
+} from "@/constants/colors";
+
 import {
   playerAudioPresets,
   usePlayer,
@@ -111,6 +118,15 @@ import {
   immediateBorderlessPressFeedback,
   immediatePressFeedback,
 } from "@/lib/press-feedback";
+
+/** Settings → Appearance → Now Playing: immersive shows the cover full-bleed. */
+const immersive =
+  storedAppearance.appearance.now_playing_layout === "immersive";
+/** Scrims over the cover: dark in dark themes, paper in light ones. */
+const scrim = (opacity: number) =>
+  palette.mode === "light"
+    ? alpha(palette.background, opacity)
+    : `rgba(5,5,6,${opacity})`;
 
 type Panel = "player" | "queue" | "lyrics";
 const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
@@ -170,9 +186,9 @@ function PlayerHeader({
         onPress={onBack}
       >
         {panel === "player" ? (
-          <ChevronDown color="white" size={29} />
+          <ChevronDown color={palette.text} size={29} />
         ) : (
-          <ChevronLeft color="white" size={29} />
+          <ChevronLeft color={palette.text} size={29} />
         )}
       </Pressable>
       <Text style={styles.panelHeader}>
@@ -186,7 +202,7 @@ function PlayerHeader({
           hitSlop={13}
           onPress={onActions}
         >
-          <MoreHorizontal color="white" size={25} />
+          <MoreHorizontal color={palette.text} size={25} />
         </Pressable>
       ) : (
         <View style={{ width: 25 }} />
@@ -242,6 +258,9 @@ function NowPlayingPanel({
             }}
           />
         </View>
+      ) : immersive ? (
+        // The cover fills the screen behind; keep its space for the title.
+        <View style={styles.immersiveSpacer} />
       ) : (
         <Artwork
           path={song.album_object?.cover_url}
@@ -327,7 +346,7 @@ function NowPlayingPanel({
               <Ban color={palette.danger} size={25} />
             ) : (
               <Heart
-                color={favorite ? palette.danger : "white"}
+                color={favorite ? palette.danger : palette.text}
                 fill={favorite ? palette.danger : "transparent"}
                 size={25}
               />
@@ -364,7 +383,10 @@ function NowPlayingPanel({
           hitSlop={12}
           onPress={player.toggleShuffle}
         >
-          <Shuffle color={player.shuffle ? "white" : palette.muted} size={24} />
+          <Shuffle
+            color={player.shuffle ? palette.text : palette.muted}
+            size={24}
+          />
         </Pressable>
         <Pressable
           {...immediateBorderlessPressFeedback}
@@ -373,7 +395,7 @@ function NowPlayingPanel({
           hitSlop={14}
           onPress={player.previous}
         >
-          <SkipBack color="white" fill="white" size={31} />
+          <SkipBack color={palette.text} fill={palette.text} size={31} />
         </Pressable>
         <Pressable
           {...immediatePressFeedback}
@@ -399,7 +421,7 @@ function NowPlayingPanel({
           hitSlop={14}
           onPress={player.next}
         >
-          <SkipForward color="white" fill="white" size={31} />
+          <SkipForward color={palette.text} fill={palette.text} size={31} />
         </Pressable>
         <Pressable
           {...immediateBorderlessPressFeedback}
@@ -409,10 +431,10 @@ function NowPlayingPanel({
           onPress={player.cycleRepeat}
         >
           {player.repeat === "one" ? (
-            <Repeat1 color="white" size={24} />
+            <Repeat1 color={palette.text} size={24} />
           ) : (
             <Repeat
-              color={player.repeat === "all" ? "white" : palette.muted}
+              color={player.repeat === "all" ? palette.text : palette.muted}
               size={24}
             />
           )}
@@ -532,9 +554,9 @@ function PlaybackTimeline({ onSeek }: { onSeek: (seconds: number) => void }) {
             };
             onSeek(target);
           }}
-          minimumTrackTintColor="white"
-          maximumTrackTintColor="#66666d"
-          thumbTintColor="white"
+          minimumTrackTintColor={palette.text}
+          maximumTrackTintColor={palette.muted}
+          thumbTintColor={palette.text}
           style={styles.slider}
         />
       </View>
@@ -1039,7 +1061,7 @@ export default function PlayerScreen() {
             style={styles.down}
             onPress={router.back}
           >
-            <ChevronDown color="white" />
+            <ChevronDown color={palette.text} />
           </Pressable>
         </SafeAreaView>
       </View>
@@ -1079,13 +1101,13 @@ export default function PlayerScreen() {
   return (
     <GestureDetector gesture={dragDownGesture}>
       <AnimatedLinearGradient
-        colors={["#26262B", "#0A0A0B", "#050506"]}
+        colors={[palette.surfaceStrong, palette.background, palette.deep]}
         style={[styles.page, playerDragStyle]}
       >
         {backdropUri ? (
           <>
             <Image
-              blurRadius={60}
+              blurRadius={immersive ? 0 : 60}
               contentFit="cover"
               pointerEvents="none"
               source={{
@@ -1095,11 +1117,11 @@ export default function PlayerScreen() {
               style={styles.backdrop}
             />
             <LinearGradient
-              colors={[
-                "rgba(5,5,6,0.25)",
-                "rgba(5,5,6,0.7)",
-                "rgba(5,5,6,0.96)",
-              ]}
+              colors={
+                immersive
+                  ? [scrim(0.15), scrim(0.35), scrim(0.97)]
+                  : [scrim(0.25), scrim(0.7), scrim(0.96)]
+              }
               pointerEvents="none"
               style={StyleSheet.absoluteFill}
             />
@@ -1209,15 +1231,16 @@ function LiveTitle({ songId, fallback }: { songId: string; fallback: string }) {
 }
 
 const styles = StyleSheet.create({
+  immersiveSpacer: { flex: 1, minHeight: 240 },
   liveRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 6 },
   liveBar: { height: 44, justifyContent: "center", paddingHorizontal: 4 },
   liveLine: {
-    backgroundColor: "#f2473f",
+    backgroundColor: palette.danger,
     borderRadius: 2,
     height: 3,
     opacity: 0.85,
   },
-  page: { flex: 1, backgroundColor: "black" },
+  page: { flex: 1, backgroundColor: palette.background },
   down: { padding: 20 },
   header: {
     height: 56,
@@ -1226,9 +1249,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  panelHeader: { color: "white", fontSize: 15, fontWeight: "800" },
+  panelHeader: { color: palette.text, fontSize: 15, fontWeight: "800" },
   playbackError: {
-    color: "#f6807a",
+    color: palette.danger,
     fontSize: 13,
     textAlign: "center",
   },
@@ -1318,14 +1341,14 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 46,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,.1)",
+    backgroundColor: tint(0.1),
     alignItems: "center",
     justifyContent: "center",
   },
-  panelText: { color: "white", fontWeight: "800" },
+  panelText: { color: palette.text, fontWeight: "800" },
   panel: { flex: 1, paddingTop: 18 },
   radioLabel: {
-    color: "#a9d1e6",
+    color: palette.enhanced,
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 1.2,
@@ -1357,13 +1380,13 @@ const styles = StyleSheet.create({
   },
   clearQueueText: { color: palette.secondary, fontWeight: "700" },
   panelTitle: {
-    color: "white",
+    color: palette.text,
     fontSize: 30,
     fontWeight: "900",
     paddingHorizontal: 20,
   },
   lyrics: {
-    color: "white",
+    color: palette.text,
     fontSize: 24,
     lineHeight: 35,
     fontWeight: "700",
@@ -1395,15 +1418,15 @@ const styles = StyleSheet.create({
     gap: 6,
     maxWidth: "100%",
     borderWidth: 1,
-    borderColor: "rgba(242,238,230,0.14)",
+    borderColor: tint(0.14),
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 4,
     backgroundColor: "rgba(0,0,0,.25)",
   },
   lyricsSourceTimed: {
-    borderColor: "rgba(217,139,95,0.4)",
-    backgroundColor: "rgba(217,139,95,0.1)",
+    borderColor: alpha(palette.accent, 0.4),
+    backgroundColor: alpha(palette.accent, 0.1),
   },
   lyricsSourceDot: {
     width: 6,
@@ -1449,10 +1472,14 @@ const styles = StyleSheet.create({
   emptyLyrics: {
     padding: 24,
     margin: 20,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: tint(0.08),
     borderRadius: 16,
   },
-  emptyTitle: { color: "white", fontWeight: "900", fontSize: 18 },
+  emptyTitle: { color: palette.text, fontWeight: "900", fontSize: 18 },
   emptyDetail: { color: palette.secondary, lineHeight: 20, marginTop: 8 },
-  drawerError: { color: "#f6807a", paddingHorizontal: 16, paddingVertical: 8 },
+  drawerError: {
+    color: palette.danger,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
 });

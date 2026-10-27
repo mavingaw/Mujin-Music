@@ -43,9 +43,9 @@ export function NowPlayingArtistBio({
       <div className="flex items-center gap-3">
         <PersonAvatar imageUrl={about.image?.url} name={about.name} size={40} />
         <div className="min-w-0">
-          <p className="mj-eyebrow text-[10px]!">About the artist</p>
+          <p className="mj-eyebrow text-[0.625rem]!">About the artist</p>
           <Link
-            className="block truncate text-[14px] font-medium text-mujin-text hover:underline"
+            className="block truncate text-[0.875rem] font-medium text-mujin-text hover:underline"
             href={`/artist?id=${encodeURIComponent(about.artist_id)}`}
             onClick={onNavigate}
           >
@@ -54,12 +54,12 @@ export function NowPlayingArtistBio({
         </div>
       </div>
       <p
-        className="mt-2.5 line-clamp-3 text-[13px] leading-[1.6] text-mujin-text-secondary"
+        className="mt-2.5 line-clamp-3 text-[0.8125rem] leading-[1.6] text-mujin-text-secondary"
         lang={biography.language}
       >
         {bioExcerpt(biography.body)}
       </p>
-      <p className="mt-2 text-[11px] text-mujin-text-tertiary">
+      <p className="mt-2 text-[0.6875rem] text-mujin-text-tertiary">
         From{" "}
         <a
           className="underline-offset-2 hover:text-mujin-text hover:underline"

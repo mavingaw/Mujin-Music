@@ -22,9 +22,11 @@ import { useSearchParams } from "next/navigation";
 import HomeAssistantSettings from "@/features/settings/home-assistant-settings";
 import ProfilesSettings from "@/features/profiles/profiles-settings";
 import ScrobblingSettings from "@/features/scrobbling/scrobbling-settings";
+import AppearanceSettings from "@/features/appearance/appearance-settings";
 
 const settingsTabs = [
   "account",
+  "appearance",
   "profiles",
   "scrobbling",
   "playback",
@@ -43,6 +45,7 @@ type SettingsTab = (typeof settingsTabs)[number];
 
 const labels: Record<SettingsTab, string> = {
   account: "Account",
+  appearance: "Appearance",
   profiles: "Profiles",
   scrobbling: "Scrobbling",
   playback: "Playback",
@@ -74,6 +77,7 @@ function SettingsContent() {
     ? settingsTabs
     : ([
         "account",
+        "appearance",
         "profiles",
         "scrobbling",
         "playback",
@@ -104,7 +108,7 @@ function SettingsContent() {
   return (
     <div className="mx-auto w-full max-w-[1180px] px-5 pb-36 pt-8 sm:px-8 md:pt-12 lg:px-12">
       <p className="mj-eyebrow mb-2">Mujin Music</p>
-      <h1 className="mj-display mb-10 text-[40px] text-mujin-text md:text-[52px]">
+      <h1 className="mj-display mb-10 text-[2.5rem] text-mujin-text md:text-[3.25rem]">
         Settings
       </h1>
       <section className="grid items-start gap-8 md:grid-cols-[200px_minmax(0,1fr)] lg:gap-12">
@@ -115,7 +119,7 @@ function SettingsContent() {
           {availableTabs.map((tab) => (
             <button
               aria-current={activeTab === tab ? "page" : undefined}
-              className={`relative shrink-0 rounded-lg px-3 py-2 text-left text-[13.5px] font-medium transition-colors ${
+              className={`relative shrink-0 rounded-lg px-3 py-2 text-left text-[0.8438rem] font-medium transition-colors ${
                 activeTab === tab
                   ? "bg-mujin-copper/[0.12] text-mujin-text"
                   : "text-mujin-text-tertiary hover:bg-white/[0.04] hover:text-mujin-text"
@@ -142,6 +146,7 @@ function SettingsContent() {
               <RadioSettings />
             </>
           )}
+          {activeTab === "appearance" && <AppearanceSettings />}
           {activeTab === "profiles" && <ProfilesSettings />}
           {activeTab === "scrobbling" && <ScrobblingSettings />}
           {activeTab === "outputs" && <AudioOutputSettings isAdmin={isAdmin} />}

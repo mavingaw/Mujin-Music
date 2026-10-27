@@ -17,7 +17,7 @@ function ControlTooltip({ children }: { children: ReactNode }) {
   return (
     <span
       role="tooltip"
-      className="pointer-events-none absolute bottom-full left-1/2 z-100 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-mujin-surface-2 px-2 py-1 text-[11px] font-medium text-mujin-text opacity-0 shadow-lg group-hover/control:animate-[control-tooltip_1800ms_ease_forwards] group-focus-within/control:animate-[control-tooltip_1800ms_ease_forwards]"
+      className="pointer-events-none absolute bottom-full left-1/2 z-100 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-mujin-surface-2 px-2 py-1 text-[0.6875rem] font-medium text-mujin-text opacity-0 shadow-lg group-hover/control:animate-[control-tooltip_1800ms_ease_forwards] group-focus-within/control:animate-[control-tooltip_1800ms_ease_forwards]"
     >
       {children}
     </span>
@@ -76,7 +76,7 @@ export function PlaybackControls({
       <button
         aria-label={displayedPlaying ? "Pause" : "Play"}
         aria-keyshortcuts="Space"
-        className={`mj-primary flex shrink-0 items-center justify-center rounded-full shadow-[0_6px_20px_-6px_rgba(217,139,95,0.55)] motion-safe:hover:scale-[1.04] ${prominent ? "h-11 w-11" : "h-9 w-9"}`}
+        className={`mj-primary flex shrink-0 items-center justify-center rounded-full shadow-[0_6px_20px_-6px_rgb(var(--mj-accent-rgb)/0.55)] motion-safe:hover:scale-[1.04] ${prominent ? "h-11 w-11" : "h-9 w-9"}`}
         onClick={toggle}
         type="button"
       >
@@ -141,7 +141,7 @@ export function Timeline({
   const position = isPlaying && readPosition ? smoothTime : currentTime;
   return (
     <div className={`${className} items-center gap-2`}>
-      <span className="mj-tnum w-10 text-right font-mono text-[10.5px] text-mujin-text-tertiary">
+      <span className="mj-tnum w-10 text-right font-mono text-[0.6562rem] text-mujin-text-tertiary">
         {formatPlaybackTime(currentTime / safePlaybackRate)}
       </span>
       <Slider
@@ -175,7 +175,7 @@ export function Timeline({
         }
         value={[Math.min(position, duration || position)]}
       />
-      <span className="mj-tnum w-10 font-mono text-[10.5px] text-mujin-text-tertiary">
+      <span className="mj-tnum w-10 font-mono text-[0.6562rem] text-mujin-text-tertiary">
         {formatPlaybackTime(duration / safePlaybackRate)}
       </span>
     </div>
@@ -236,7 +236,7 @@ export function VolumeControl({
       {expanded && (
         <span
           aria-hidden="true"
-          className="mj-tnum hidden w-7 font-mono text-[11px] text-mujin-text-tertiary xl:inline"
+          className="mj-tnum hidden w-7 font-mono text-[0.6875rem] text-mujin-text-tertiary xl:inline"
         >
           {level}
         </span>

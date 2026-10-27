@@ -64,7 +64,7 @@ function CheckRow({ result }: { result: PathCheck }) {
           <span className="text-sm font-medium text-zinc-100">
             {result.label}
           </span>
-          <code className="min-w-0 truncate font-mono text-[12px] text-zinc-500">
+          <code className="min-w-0 truncate font-mono text-[0.75rem] text-zinc-500">
             {result.origin}
           </code>
         </div>
@@ -74,7 +74,7 @@ function CheckRow({ result }: { result: PathCheck }) {
       </div>
       <span
         className={cn(
-          "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums",
+          "shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium tabular-nums",
           outcomeTone(result) === "good"
             ? "bg-emerald-400/10 text-emerald-300"
             : "bg-white/[0.05] text-zinc-400",
@@ -223,7 +223,7 @@ export default function RemoteAccessPanel() {
           <div className="min-w-0 text-sm">
             <p className="font-medium text-zinc-100">
               Tailscale or another VPN{" "}
-              <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] font-medium text-zinc-400">
+              <span className="ml-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[0.6875rem] font-medium text-zinc-400">
                 Recommended
               </span>
             </p>

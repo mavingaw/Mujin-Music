@@ -35,7 +35,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { palette } from "@/constants/colors";
+import { alpha, palette, tint } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 import { useZones } from "@/providers/zones-provider";
 
@@ -91,7 +91,7 @@ export function ZoneButton() {
         style={[styles.zoneButton, remote && styles.zoneButtonActive]}
       >
         <ZoneIconGlyph
-          color={remote ? palette.success : "white"}
+          color={remote ? palette.success : palette.text}
           zone={remote ?? { kind: "mobile" }}
         />
         {remote ? (
@@ -151,7 +151,7 @@ export function ZoneSheet({
             hitSlop={12}
             onPress={close}
           >
-            <X color="white" size={24} />
+            <X color={palette.text} size={24} />
           </Pressable>
         </View>
         <Text style={styles.subtitle}>
@@ -229,7 +229,7 @@ export function ZoneSheet({
                 >
                   <ZoneIconGlyph
                     color={
-                      zone.status === "playing" ? palette.success : "white"
+                      zone.status === "playing" ? palette.success : palette.text
                     }
                     zone={zone}
                   />
@@ -264,7 +264,7 @@ export function ZoneSheet({
                           {
                             color: zone.group.synced
                               ? palette.success
-                              : "#daab6c",
+                              : palette.brass,
                           },
                         ]}
                       >
@@ -290,7 +290,7 @@ export function ZoneSheet({
                       }
                       style={styles.iconButton}
                     >
-                      <ArrowRightLeft color="white" size={18} />
+                      <ArrowRightLeft color={palette.text} size={18} />
                     </Pressable>
                   ) : null}
                   {!grouping && zone.settings ? (
@@ -301,7 +301,7 @@ export function ZoneSheet({
                       onPress={() => setSettingsFor(zone.id)}
                       style={styles.iconButton}
                     >
-                      <Settings2 color="white" size={18} />
+                      <Settings2 color={palette.text} size={18} />
                     </Pressable>
                   ) : null}
                   {!grouping && zone.group ? (
@@ -316,7 +316,7 @@ export function ZoneSheet({
                       }
                       style={styles.iconButton}
                     >
-                      <Unlink color="white" size={18} />
+                      <Unlink color={palette.text} size={18} />
                     </Pressable>
                   ) : null}
                 </Pressable>
@@ -332,7 +332,7 @@ export function ZoneSheet({
                   color: plan.allowed
                     ? plan.synced
                       ? palette.success
-                      : "#daab6c"
+                      : palette.brass
                     : palette.secondary,
                 },
               ]}
@@ -407,7 +407,7 @@ function RemoteControls({ zone }: { zone: Zone }) {
           hitSlop={10}
           onPress={() => send({ command: "previous" })}
         >
-          <SkipBack color="white" fill="white" size={26} />
+          <SkipBack color={palette.text} fill={palette.text} size={26} />
         </Pressable>
         <Pressable
           accessibilityLabel={zone.status === "playing" ? "Pause" : "Play"}
@@ -418,9 +418,17 @@ function RemoteControls({ zone }: { zone: Zone }) {
           style={styles.playButton}
         >
           {zone.status === "playing" ? (
-            <Pause color="black" fill="black" size={24} />
+            <Pause
+              color={palette.background}
+              fill={palette.background}
+              size={24}
+            />
           ) : (
-            <Play color="black" fill="black" size={24} />
+            <Play
+              color={palette.background}
+              fill={palette.background}
+              size={24}
+            />
           )}
         </Pressable>
         <Pressable
@@ -429,7 +437,7 @@ function RemoteControls({ zone }: { zone: Zone }) {
           hitSlop={10}
           onPress={() => send({ command: "next" })}
         >
-          <SkipForward color="white" fill="white" size={26} />
+          <SkipForward color={palette.text} fill={palette.text} size={26} />
         </Pressable>
       </View>
       {zone.volume && zone.capabilities.volume ? (
@@ -441,7 +449,7 @@ function RemoteControls({ zone }: { zone: Zone }) {
             onPress={() => send({ command: "adjust_volume", delta: -4 })}
             style={styles.iconButton}
           >
-            <Minus color="white" size={18} />
+            <Minus color={palette.text} size={18} />
           </Pressable>
           <Text style={styles.volumeText}>
             {zone.volume.muted
@@ -459,7 +467,7 @@ function RemoteControls({ zone }: { zone: Zone }) {
             onPress={() => send({ command: "adjust_volume", delta: 4 })}
             style={styles.iconButton}
           >
-            <Plus color="white" size={18} />
+            <Plus color={palette.text} size={18} />
           </Pressable>
         </View>
       ) : null}
@@ -490,16 +498,16 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  title: { color: "white", fontSize: 24, fontWeight: "700" },
+  title: { color: palette.text, fontSize: 24, fontWeight: "700" },
   subtitle: { color: palette.secondary, fontSize: 13, marginTop: 6 },
   outputsFooter: {
-    borderTopColor: "rgba(255,255,255,0.08)",
+    borderTopColor: tint(0.08),
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: 4,
     paddingHorizontal: 20,
     paddingVertical: 12,
   },
-  outputsTitle: { color: "white", fontSize: 12, fontWeight: "600" },
+  outputsTitle: { color: palette.text, fontSize: 12, fontWeight: "600" },
   outputsNote: { color: palette.secondary, fontSize: 11, lineHeight: 15 },
   toolbar: { flexDirection: "row", gap: 8, marginTop: 14 },
   chip: {
@@ -509,9 +517,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
   },
-  chipActive: { backgroundColor: "white", borderColor: "white" },
-  chipText: { color: "white", fontSize: 13, fontWeight: "600" },
-  chipTextActive: { color: "black" },
+  chipActive: { backgroundColor: palette.text, borderColor: palette.text },
+  chipText: { color: palette.text, fontSize: 13, fontWeight: "600" },
+  chipTextActive: { color: palette.background },
   list: { gap: 8, paddingVertical: 14 },
   row: {
     alignItems: "center",
@@ -528,7 +536,7 @@ const styles = StyleSheet.create({
     borderColor: palette.borderStrong,
   },
   rowText: { flex: 1, minWidth: 0 },
-  rowTitle: { color: "white", fontSize: 15, fontWeight: "600" },
+  rowTitle: { color: palette.text, fontSize: 15, fontWeight: "600" },
   rowSubtitle: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   rowDevice: {
     color: palette.muted,
@@ -553,7 +561,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     padding: 16,
   },
-  remoteTitle: { color: "white", fontSize: 16, fontWeight: "700" },
+  remoteTitle: { color: palette.text, fontSize: 16, fontWeight: "700" },
   transport: {
     alignItems: "center",
     flexDirection: "row",
@@ -563,7 +571,7 @@ const styles = StyleSheet.create({
   },
   playButton: {
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 999,
     height: 52,
     justifyContent: "center",
@@ -577,7 +585,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   volumeText: {
-    color: "white",
+    color: palette.text,
     fontSize: 13,
     minWidth: 90,
     textAlign: "center",
@@ -591,11 +599,11 @@ const styles = StyleSheet.create({
   planText: { fontSize: 13, lineHeight: 18 },
   primary: {
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 999,
     paddingVertical: 12,
   },
-  primaryText: { color: "black", fontSize: 15, fontWeight: "700" },
+  primaryText: { color: palette.background, fontSize: 15, fontWeight: "700" },
   disabled: { opacity: 0.4 },
   zoneButton: {
     alignItems: "center",
@@ -608,6 +616,6 @@ const styles = StyleSheet.create({
     minWidth: 32,
     paddingHorizontal: 6,
   },
-  zoneButtonActive: { backgroundColor: "rgba(163,201,139,0.15)" },
+  zoneButtonActive: { backgroundColor: alpha(palette.success, 0.15) },
   zoneButtonText: { color: palette.success, fontSize: 12, fontWeight: "600" },
 });

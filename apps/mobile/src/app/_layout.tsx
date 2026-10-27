@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 import {
   DarkTheme,
+  DefaultTheme,
   Stack,
   ThemeProvider,
   useRouter,
@@ -24,17 +25,20 @@ import { ActionDrawerProvider } from "@/components/action-drawer";
 import { PlayerProvider } from "@/providers/player-provider";
 import { SessionProvider, useSession } from "@/providers/session-provider";
 import { ZonesProvider } from "@/providers/zones-provider";
+import { AppearanceSync } from "@/providers/appearance-sync";
 
 void SplashScreen.preventAutoHideAsync();
 
+const baseTheme = palette.mode === "light" ? DefaultTheme : DarkTheme;
 const theme = {
-  ...DarkTheme,
+  ...baseTheme,
   colors: {
-    ...DarkTheme.colors,
+    ...baseTheme.colors,
     background: palette.background,
     card: palette.background,
     border: palette.border,
     primary: palette.text,
+    text: palette.text,
   },
 };
 
@@ -133,7 +137,10 @@ export default function RootLayout() {
             <ZonesProvider>
               <ActionDrawerProvider>
                 <ThemeProvider value={theme}>
-                  <StatusBar style="light" />
+                  <StatusBar
+                    style={palette.mode === "light" ? "dark" : "light"}
+                  />
+                  <AppearanceSync />
                   <Stack
                     screenOptions={{
                       headerShown: false,

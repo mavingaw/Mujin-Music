@@ -41,7 +41,7 @@ export function FactSourceBadge({
   return (
     <span
       aria-label={`Source: ${label}`}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${style.className} ${
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide ${style.className} ${
         fact.fallback ? "border-dashed" : ""
       }`}
       title={label}

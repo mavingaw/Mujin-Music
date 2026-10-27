@@ -12,6 +12,7 @@ import {
   refreshEnrichment,
   isStreamingId,
   localAlbumFormat,
+  releaseTypeLabel,
   type AlbumVersionSubject,
   type LibraryAlbum,
 } from "@parson/music-sdk";
@@ -307,11 +308,9 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   const titleParts = titleWrapped ? splitQualifiedTitle(album.name) : null;
 
   const year = releaseYear(album, aboutQuery.data);
-  // MusicBrainz' release type for a matched album (a few tracks of a long
-  // album are still that album); the guess from the files otherwise.
-  const typeLabel = releaseTypeLabel(
-    aboutQuery.data?.facts?.release_type || album.primary_type,
-  );
+  // Only a named release type (an edit, MusicBrainz or the tags): never a
+  // guess from the track count or running time.
+  const typeLabel = releaseTypeLabel(aboutQuery.data);
   const heroCover =
     albumCoverURL ?? generatedCover(album.name, artist?.name ?? "");
 
@@ -321,9 +320,9 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
       <div className="relative mx-auto max-w-[1240px] px-5 pb-24 pt-8 sm:px-8 md:pt-12 lg:px-12">
         <div className="mb-9 grid w-full gap-7 md:grid-cols-[minmax(220px,340px)_minmax(0,1fr)] md:items-end lg:grid-cols-[minmax(260px,380px)_minmax(0,1fr)] lg:gap-12">
           <div
-            className="relative aspect-square w-full max-w-[300px] shrink-0 overflow-hidden rounded-[8px] bg-mujin-surface-1 md:max-w-none"
+            className="relative aspect-square w-full max-w-[300px] shrink-0 overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1 md:max-w-none"
             style={{
-              boxShadow: `0 0 0 1px rgb(242 238 230 / 0.08), 0 40px 90px -36px ${rgbString(heroPalette.glow, 0.6)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
+              boxShadow: `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 40px 90px -36px ${rgbString(heroPalette.glow, 0.6)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
             }}
           >
             <Image
@@ -373,12 +372,12 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
               )}
               <Link
                 href={`/artist?id=${artist.id}`}
-                className="mj-title cursor-pointer text-[20px] text-mujin-text hover:underline md:text-[22px]"
+                className="mj-title cursor-pointer text-[1.25rem] text-mujin-text hover:underline md:text-[1.375rem]"
               >
                 {artist.name}
               </Link>
             </div>
-            <div className="mj-tnum mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-mujin-text-secondary">
+            <div className="mj-tnum mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem] text-mujin-text-secondary">
               {year && <span title="Original release">{year}</span>}
               {year && <span className="text-mujin-text-disabled">•</span>}
               <span>
@@ -601,7 +600,7 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
             <button
               aria-controls={`album-${key}`}
               aria-selected={tab === key}
-              className={`-mb-px border-b-2 pb-3 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+              className={`-mb-px border-b-2 pb-3 text-[0.75rem] font-semibold uppercase tracking-[0.14em] transition-colors ${
                 tab === key
                   ? "border-mujin-copper text-mujin-text"
                   : "border-transparent text-mujin-text-tertiary hover:text-mujin-text"
@@ -702,20 +701,12 @@ function LibraryAlbumDetails({ devAlbum }: AlbumDetailsProps = {}) {
   );
 }
 
-/** "Album", "EP", "Single", "Live" … for the eyebrow above the title. */
-function releaseTypeLabel(primaryType: string | undefined) {
-  const value = (primaryType ?? "").trim();
-  if (!value) return "Album";
-  if (value.length <= 3) return value.toUpperCase();
-  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
-}
-
 /** The cover, blurred and faded into the canvas behind the album header. */
 function AlbumHeroBackdrop({ cover }: { cover: string }) {
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[620px] overflow-hidden"
+      className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[620px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
     >
       <div
         className="mj-art-backdrop opacity-50!"

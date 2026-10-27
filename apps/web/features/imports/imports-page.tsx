@@ -536,7 +536,7 @@ function Landing() {
   return (
     <div className="grid gap-9">
       <header>
-        <h1 className="mj-display text-[40px] text-mujin-text md:text-[48px]">
+        <h1 className="mj-display text-[2.5rem] text-mujin-text md:text-[3rem]">
           Import playlists
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">

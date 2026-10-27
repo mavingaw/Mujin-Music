@@ -21,10 +21,10 @@ export function QualityBadge({
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center gap-1.5 rounded-[4px] px-1.5 font-mono text-[10px] font-medium leading-none tracking-[0.02em]",
+        "inline-flex h-5 items-center gap-1.5 rounded-[4px] px-1.5 font-mono text-[0.625rem] font-medium leading-none tracking-[0.02em]",
         variant === "overlay"
-          ? "bg-black/62 text-mujin-text shadow-[inset_0_0_0_1px_rgba(242,238,230,0.1)] backdrop-blur-md"
-          : "bg-white/[0.05] text-mujin-text-secondary shadow-[inset_0_0_0_1px_rgba(242,238,230,0.1)]",
+          ? "bg-black/62 text-mujin-text shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.1)] backdrop-blur-md"
+          : "bg-white/[0.05] text-mujin-text-secondary shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.1)]",
         className,
       )}
       title={

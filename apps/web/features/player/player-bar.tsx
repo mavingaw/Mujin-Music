@@ -21,7 +21,7 @@ import {
   useLyricsAvailability,
 } from "@/features/library/timed-lyrics-mark";
 import { useZonePlayback } from "./zones/use-zone-playback";
-import { IdleFooter, PlayerFooter } from "./player-footer";
+import { IdleFooter, PhoneIdleDock, PlayerFooter } from "./player-footer";
 import { getLibraryImageUrl } from "@/lib/images/image-url";
 import { generatedCover } from "@/features/library/artwork/generated-cover";
 import { useNowPlayingFacts } from "./use-now-playing-facts";
@@ -642,9 +642,7 @@ export default function PlayerBar() {
         <IdleFooter zonePicker={<ZonePickerButton />} />
         {lyricsSheetView}
         {zones.zones.length > 1 ? (
-          <div className="fixed bottom-[calc(var(--shell-footer)+10px)] right-3 z-50 rounded-full border border-white/10 bg-mujin-surface-1 p-1 shadow-2xl md:hidden">
-            <ZonePickerButton />
-          </div>
+          <PhoneIdleDock zonePicker={<ZonePickerButton />} />
         ) : null}
       </>
     );

@@ -1185,12 +1185,14 @@ export function usePlayerController() {
   }, [armCrossfade, audio, audioVersion, handleEnded, source]);
 
   useTransientPlayerError(error, setError);
+  const knownDuration = useCallback(() => activeSong.current.duration, []);
   useAudioEvents({
     audio,
     audioVersion,
     currentOrigin,
     handleEnded,
     handleMediaError,
+    knownDuration,
     resumeOnReconnect,
     sendPlaybackEvent,
     setCurrentTime,

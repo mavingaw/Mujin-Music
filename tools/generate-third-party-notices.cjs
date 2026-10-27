@@ -17,9 +17,10 @@ their own licenses:
 - JavaScript dependencies and their exact versions are listed in \`bun.lock\`.
 - Container images retain operating-system package notices under
   \`/usr/share/doc\`.
-- The web app bundles the Jost, Inter and JetBrains Mono fonts under the SIL
-  Open Font License 1.1; each font folder in \`apps/web/public/fonts\` carries
-  its \`OFL.txt\`.
+- The web app bundles the Jost, Inter, JetBrains Mono, Fraunces, Atkinson
+  Hyperlegible Next, IBM Plex Sans and Roboto Flex fonts under the SIL Open
+  Font License 1.1; each font folder in \`apps/web/public/fonts\` carries its
+  \`OFL.txt\`.
 
 The corresponding source and locked dependency manifests are available from
 the release tag at <https://github.com/mavingaw/parson-jin>. The upstream

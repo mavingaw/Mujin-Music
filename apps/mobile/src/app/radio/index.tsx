@@ -73,7 +73,7 @@ export default function LiveRadioScreen() {
             <RefreshControl
               onRefresh={() => void home.refetch()}
               refreshing={home.isRefetching}
-              tintColor="white"
+              tintColor={palette.text}
             />
           }
         >
@@ -84,7 +84,7 @@ export default function LiveRadioScreen() {
             onPress={() => router.back()}
             style={styles.back}
           >
-            <ChevronLeft color="white" size={26} />
+            <ChevronLeft color={palette.text} size={26} />
           </Pressable>
           <PageTitle subtitle="Stations from around the world, through your Mujin Music server">
             Live Radio
@@ -107,7 +107,7 @@ export default function LiveRadioScreen() {
                 accessibilityRole="button"
                 onPress={() => setText("")}
               >
-                <X color="white" size={18} />
+                <X color={palette.text} size={18} />
               </Pressable>
             ) : null}
           </View>
@@ -127,11 +127,18 @@ export default function LiveRadioScreen() {
                     onPress={() => setCategory(selected ? null : item)}
                     style={[
                       styles.chip,
-                      { backgroundColor: selected ? "white" : item.colors[1] },
+                      {
+                        backgroundColor: selected
+                          ? palette.text
+                          : item.colors[1],
+                      },
                     ]}
                   >
                     <Text
-                      style={[styles.chipText, selected && { color: "black" }]}
+                      style={[
+                        styles.chipText,
+                        selected && { color: palette.background },
+                      ]}
                     >
                       {item.label}
                     </Text>
@@ -142,7 +149,10 @@ export default function LiveRadioScreen() {
           ) : null}
           {search ? (
             results.isPending ? (
-              <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+              <ActivityIndicator
+                color={palette.text}
+                style={{ marginTop: 40 }}
+              />
             ) : results.data?.items.length ? (
               <View style={{ marginTop: 8 }}>
                 {results.data.items.map((station) => (
@@ -157,7 +167,7 @@ export default function LiveRadioScreen() {
               </Text>
             )
           ) : home.isPending ? (
-            <ActivityIndicator color="white" style={{ marginTop: 60 }} />
+            <ActivityIndicator color={palette.text} style={{ marginTop: 60 }} />
           ) : data ? (
             <>
               {data.directory_error ? (
@@ -222,13 +232,13 @@ const styles = StyleSheet.create({
     marginTop: 4,
     paddingHorizontal: 14,
   },
-  input: { color: "white", flex: 1, fontSize: 16 },
+  input: { color: palette.text, flex: 1, fontSize: 16 },
   chips: { gap: 8, paddingHorizontal: layout.horizontal, paddingVertical: 14 },
   chip: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
-  chipText: { color: "white", fontSize: 13, fontWeight: "700" },
+  chipText: { color: palette.text, fontSize: 13, fontWeight: "700" },
   empty: { color: palette.secondary, marginTop: 40, textAlign: "center" },
   notice: {
-    color: "#f0dcc2",
+    color: palette.brass,
     fontSize: 13,
     marginHorizontal: layout.horizontal,
     marginTop: 8,

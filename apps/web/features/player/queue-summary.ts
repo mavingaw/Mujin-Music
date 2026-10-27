@@ -17,3 +17,15 @@ export function queueSummary(
       : `${minutes} min`;
   return `${tracks} · ${time} left`;
 }
+
+/** A queue row's length: "3:07", "1:02:45", or "" when unknown. */
+export function queueRowDuration(seconds: number | undefined): string {
+  const total = Math.round(Number(seconds));
+  if (!Number.isFinite(total) || total <= 0) return "";
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = String(total % 60).padStart(2, "0");
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}`
+    : `${minutes}:${rest}`;
+}

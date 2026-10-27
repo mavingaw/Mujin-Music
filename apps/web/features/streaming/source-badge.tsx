@@ -24,7 +24,7 @@ export function ProviderMark({
     <span
       aria-hidden="true"
       className={cn(
-        "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[9px] font-black leading-none",
+        "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[0.5625rem] font-black leading-none",
         provider === "tidal"
           ? onLight
             ? "bg-black text-white"
@@ -52,7 +52,7 @@ export function SourceBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full text-[11px] font-semibold leading-none",
+        "inline-flex items-center gap-1.5 rounded-full text-[0.6875rem] font-semibold leading-none",
         variant === "overlay"
           ? "bg-black/70 py-1 pl-1 pr-2 text-white shadow-[0_1px_8px_rgba(0,0,0,0.4)] backdrop-blur-md"
           : "text-zinc-400",
@@ -71,7 +71,7 @@ export function LocalSourceBadge({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 text-[11px] font-semibold text-zinc-400",
+        "inline-flex items-center gap-1.5 text-[0.6875rem] font-semibold text-zinc-400",
         className,
       )}
       title="Plays from your music folder"
@@ -101,7 +101,7 @@ export function FormatBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums leading-none tracking-wide",
+        "inline-flex items-center rounded-[5px] border px-1.5 py-0.5 text-[0.6562rem] font-semibold tabular-nums leading-none tracking-wide",
         toneClasses[tone ?? "lossy"],
         className,
       )}

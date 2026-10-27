@@ -48,7 +48,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { palette } from "@/constants/colors";
+import { alpha, palette, tint } from "@/constants/colors";
 import {
   chipTone,
   facetChipAccessibilityLabel,
@@ -193,7 +193,7 @@ export function FocusSheet({
             onPress={onClose}
             style={styles.close}
           >
-            <X color="white" size={20} />
+            <X color={palette.text} size={20} />
           </Pressable>
         </View>
         <ScrollView
@@ -264,16 +264,16 @@ export function FocusSheet({
                 style={styles.iconChip}
               >
                 {direction === "asc" ? (
-                  <ArrowUpNarrowWide color="white" size={16} />
+                  <ArrowUpNarrowWide color={palette.text} size={16} />
                 ) : (
-                  <ArrowDownWideNarrow color="white" size={16} />
+                  <ArrowDownWideNarrow color={palette.text} size={16} />
                 )}
               </Pressable>
             ) : null}
           </View>
 
           {facets.isPending && !facets.data ? (
-            <ActivityIndicator color="white" style={{ marginTop: 28 }} />
+            <ActivityIndicator color={palette.text} style={{ marginTop: 28 }} />
           ) : null}
           {columns.map((facet, index) => (
             <FacetSection
@@ -364,7 +364,7 @@ export function FocusSheet({
               onPress={() => void smartPlaylist()}
               style={[styles.smart, busy !== null && styles.disabled]}
             >
-              <ListMusic color="black" size={18} />
+              <ListMusic color={palette.background} size={18} />
               <Text style={styles.smartText}>
                 {busy === "smart" ? "Creating…" : "Create smart playlist"}
               </Text>
@@ -593,21 +593,25 @@ function Chip({
 }
 
 const styles = StyleSheet.create({
-  sheet: { flex: 1, backgroundColor: "#0b0b0d", paddingHorizontal: 20 },
+  sheet: {
+    flex: 1,
+    backgroundColor: palette.background,
+    paddingHorizontal: 20,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     paddingBottom: 12,
   },
-  title: { flex: 1, color: "white", fontSize: 24, fontWeight: "800" },
+  title: { flex: 1, color: palette.text, fontSize: 24, fontWeight: "800" },
   headerButton: { paddingHorizontal: 10, paddingVertical: 8 },
   headerButtonText: { color: palette.secondary, fontWeight: "700" },
   close: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: tint(0.08),
     alignItems: "center",
     justifyContent: "center",
   },
@@ -621,9 +625,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   segmentItem: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16 },
-  segmentActive: { backgroundColor: "white" },
+  segmentActive: { backgroundColor: palette.text },
   segmentText: { color: palette.secondary, fontWeight: "700", fontSize: 13 },
-  segmentActiveText: { color: "black" },
+  segmentActiveText: { color: palette.background },
   section: {
     color: palette.secondary,
     fontSize: 12,
@@ -653,7 +657,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   facetSummary: { color: palette.muted, fontSize: 14, marginTop: 3 },
-  facetActive: { color: "white", fontWeight: "600" },
+  facetActive: { color: palette.text, fontWeight: "600" },
   facetBody: { paddingBottom: 16 },
   facetSearch: { flex: 0, height: 42, marginBottom: 10 },
   chip: {
@@ -667,16 +671,24 @@ const styles = StyleSheet.create({
     borderColor: palette.borderStrong,
     paddingHorizontal: 13,
   },
-  chipInclude: { backgroundColor: "white", borderColor: "white" },
+  chipInclude: { backgroundColor: palette.text, borderColor: palette.text },
   chipExclude: {
     borderColor: "rgba(246,128,122,.5)",
-    backgroundColor: "rgba(242,71,63,.12)",
+    backgroundColor: alpha(palette.danger, 0.12),
   },
-  chipText: { color: "white", fontSize: 14, fontWeight: "600", flexShrink: 1 },
-  chipIncludeText: { color: "black" },
-  chipExcludeText: { color: "#fbdcda", textDecorationLine: "line-through" },
+  chipText: {
+    color: palette.text,
+    fontSize: 14,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  chipIncludeText: { color: palette.background },
+  chipExcludeText: {
+    color: palette.danger,
+    textDecorationLine: "line-through",
+  },
   chipCount: { color: palette.muted, fontSize: 12, fontWeight: "700" },
-  chipIncludeCount: { color: "#5c5955" },
+  chipIncludeCount: { color: palette.muted },
   iconChip: {
     width: 36,
     height: 36,
@@ -694,7 +706,7 @@ const styles = StyleSheet.create({
   moreText: { color: palette.secondary, fontWeight: "700" },
   savedRow: { flexDirection: "row", alignItems: "center", minHeight: 52 },
   savedMain: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
-  savedName: { color: "white", fontWeight: "700", fontSize: 15 },
+  savedName: { color: palette.text, fontWeight: "700", fontSize: 15 },
   savedMeta: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   savedDelete: {
     width: 44,
@@ -707,29 +719,29 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 46,
     borderRadius: 10,
-    backgroundColor: "#202024",
-    color: "white",
+    backgroundColor: palette.elevatedStrong,
+    color: palette.text,
     paddingHorizontal: 13,
   },
   primary: {
     height: 46,
     borderRadius: 23,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     paddingHorizontal: 18,
     justifyContent: "center",
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
   smart: {
     marginTop: 22,
     minHeight: 50,
     borderRadius: 25,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
   },
-  smartText: { color: "black", fontWeight: "800", fontSize: 15 },
+  smartText: { color: palette.background, fontWeight: "800", fontSize: 15 },
   message: { color: palette.secondary, marginTop: 12, textAlign: "center" },
 });

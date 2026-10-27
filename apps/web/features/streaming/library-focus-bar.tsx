@@ -41,7 +41,7 @@ function Chip({
     <button
       aria-pressed={active}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors",
+        "inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-[0.8125rem] font-medium transition-colors",
         active
           ? "border-white bg-white text-black"
           : "border-white/12 text-zinc-300 hover:border-white/30 hover:text-white",
@@ -55,7 +55,7 @@ function Chip({
       {count !== undefined && (
         <span
           className={cn(
-            "tabular-nums text-[11px]",
+            "tabular-nums text-[0.6875rem]",
             active ? "text-black/55" : "text-zinc-500",
           )}
         >
@@ -75,7 +75,7 @@ function FacetRow({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-3">
-      <span className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500">
+      <span className="w-16 shrink-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-500">
         {label}
       </span>
       <div
@@ -148,7 +148,7 @@ export function LibraryFocusBar({
           label: `${STREAMING_PROVIDER_NAMES[value]} library`,
           icon: (
             <ProviderMark
-              className="h-3.5 w-3.5 text-[8px]"
+              className="h-3.5 w-3.5 text-[0.5rem]"
               onLight={focus.source === value}
               provider={value}
             />
@@ -164,7 +164,7 @@ export function LibraryFocusBar({
         <FacetRow label="Sort">
           <select
             aria-label="Sort albums"
-            className="h-8 shrink-0 rounded-full border border-white/12 bg-zinc-950 px-3 text-[13px] text-zinc-200 hover:border-white/30"
+            className="h-8 shrink-0 rounded-full border border-white/12 bg-zinc-950 px-3 text-[0.8125rem] text-zinc-200 hover:border-white/30"
             onChange={(event) =>
               onSortChange(event.target.value as CatalogSort)
             }
@@ -216,7 +216,7 @@ export function LibraryFocusBar({
           {genres.more.length > 0 && (
             <select
               aria-label="More genres"
-              className="h-8 shrink-0 rounded-full border border-white/12 bg-transparent px-3 text-[13px] text-zinc-300 hover:border-white/30"
+              className="h-8 shrink-0 rounded-full border border-white/12 bg-transparent px-3 text-[0.8125rem] text-zinc-300 hover:border-white/30"
               onChange={(event) =>
                 event.target.value && set({ genre: event.target.value })
               }
@@ -265,7 +265,7 @@ export function LibraryFocusBar({
         </FacetRow>
       )}
       {activeFocusCount(focus) > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/6 pt-2.5 text-[13px]">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/6 pt-2.5 text-[0.8125rem]">
           <p className="min-w-0 text-zinc-400" aria-live="polite">
             {total === undefined
               ? "…"

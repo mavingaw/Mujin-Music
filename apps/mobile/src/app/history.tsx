@@ -90,7 +90,10 @@ export default function HistoryScreen() {
           keyExtractor={(entry) => String(entry.id)}
           ListEmptyComponent={
             timeline.isPending ? (
-              <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+              <ActivityIndicator
+                color={palette.text}
+                style={{ marginTop: 40 }}
+              />
             ) : (
               <View style={styles.empty}>
                 <HistoryIcon color={palette.accent} size={36} />
@@ -111,7 +114,7 @@ export default function HistoryScreen() {
                 style={local.more}
               >
                 {timeline.isFetchingNextPage ? (
-                  <ActivityIndicator color="white" />
+                  <ActivityIndicator color={palette.text} />
                 ) : (
                   <Text style={local.moreText}>Load earlier plays</Text>
                 )}
@@ -253,8 +256,18 @@ const local = StyleSheet.create({
     letterSpacing: 1,
     textTransform: "uppercase",
   },
-  tileValue: { color: "white", fontSize: 18, fontWeight: "800", marginTop: 4 },
-  rankName: { color: "white", fontSize: 12, fontWeight: "700", marginTop: 6 },
+  tileValue: {
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 4,
+  },
+  rankName: {
+    color: palette.text,
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 6,
+  },
   rankMeta: { color: palette.muted, fontSize: 11 },
   time: {
     width: 40,
@@ -272,5 +285,5 @@ const local = StyleSheet.create({
     borderColor: palette.borderStrong,
     justifyContent: "center",
   },
-  moreText: { color: "white", fontWeight: "700" },
+  moreText: { color: palette.text, fontWeight: "700" },
 });

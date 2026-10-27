@@ -11,7 +11,7 @@ import {
 import { Heart, SlidersHorizontal, X } from "lucide-react-native";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { alpha, palette, tint } from "@/constants/colors";
 
 /** Focus button, liked toggle and active filter chips for a library browser. */
 export function LibraryFocusBar({
@@ -43,7 +43,7 @@ export function LibraryFocusBar({
           style={[styles.focus, query.filters.length > 0 && styles.focusActive]}
         >
           <SlidersHorizontal
-            color={query.filters.length ? "black" : "white"}
+            color={query.filters.length ? palette.background : palette.text}
             size={16}
           />
           <Text
@@ -73,8 +73,8 @@ export function LibraryFocusBar({
           ]}
         >
           <Heart
-            color={liked === "include" ? "#f9b3af" : "white"}
-            fill={liked === "include" ? "#f9b3af" : "transparent"}
+            color={liked === "include" ? palette.danger : palette.text}
+            fill={liked === "include" ? palette.danger : "transparent"}
             size={16}
           />
         </Pressable>
@@ -147,9 +147,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  focusActive: { backgroundColor: "white", borderColor: "white" },
-  focusText: { color: "white", fontWeight: "700", fontSize: 13 },
-  focusActiveText: { color: "black" },
+  focusActive: { backgroundColor: palette.text, borderColor: palette.text },
+  focusText: { color: palette.text, fontWeight: "700", fontSize: 13 },
+  focusActiveText: { color: palette.background },
   heart: {
     width: 36,
     height: 36,
@@ -161,7 +161,7 @@ const styles = StyleSheet.create({
   },
   heartOn: {
     borderColor: "rgba(249,179,175,.6)",
-    backgroundColor: "rgba(242,71,63,.18)",
+    backgroundColor: alpha(palette.danger, 0.18),
   },
   heartOff: { opacity: 0.5 },
   chip: {
@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
     borderColor: palette.borderStrong,
-    backgroundColor: "rgba(255,255,255,.07)",
+    backgroundColor: tint(0.07),
     paddingLeft: 13,
     paddingRight: 10,
     flexDirection: "row",
@@ -179,10 +179,13 @@ const styles = StyleSheet.create({
   },
   chipExcluded: {
     borderColor: "rgba(246,128,122,.45)",
-    backgroundColor: "rgba(242,71,63,.1)",
+    backgroundColor: alpha(palette.danger, 0.1),
   },
-  chipText: { color: "white", fontSize: 13, fontWeight: "600" },
-  chipExcludedText: { color: "#fbdcda", textDecorationLine: "line-through" },
+  chipText: { color: palette.text, fontSize: 13, fontWeight: "600" },
+  chipExcludedText: {
+    color: palette.danger,
+    textDecorationLine: "line-through",
+  },
   count: {
     color: palette.secondary,
     fontSize: 12,

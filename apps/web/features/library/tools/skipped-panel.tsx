@@ -371,7 +371,7 @@ function SkippedRow({
             {item.file_name}
           </p>
           <p
-            className="truncate font-mono text-[11px] text-zinc-500"
+            className="truncate font-mono text-[0.6875rem] text-zinc-500"
             title={item.folder}
           >
             {item.folder}
@@ -432,7 +432,7 @@ function SkippedRow({
           <p className="text-xs leading-5 text-zinc-300">{item.fix.summary}</p>
           {item.fix.command && (
             <div className="mt-2 flex items-center gap-2 rounded-md bg-white/[0.04] py-1.5 pl-3 pr-1.5">
-              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-300">
+              <code className="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-zinc-300">
                 {item.fix.command}
               </code>
               <button
@@ -449,7 +449,7 @@ function SkippedRow({
               </button>
             </div>
           )}
-          <p className="mt-2 font-mono text-[11px] text-zinc-600">
+          <p className="mt-2 font-mono text-[0.6875rem] text-zinc-600">
             {item.path}
           </p>
         </div>

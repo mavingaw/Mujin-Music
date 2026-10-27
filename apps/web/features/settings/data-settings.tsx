@@ -220,7 +220,7 @@ export default function DataSettings({ isAdmin }: { isAdmin: boolean }) {
                     <span className="border-l border-white/10 pl-3 tabular-nums">
                       {formatBytes(latest.size_bytes)}
                     </span>
-                    <span className="rounded px-1.5 py-0.5 text-[11px] capitalize text-zinc-400 bg-white/5">
+                    <span className="rounded px-1.5 py-0.5 text-[0.6875rem] capitalize text-zinc-400 bg-white/5">
                       {latest.tier ?? "manual"}
                     </span>
                   </div>

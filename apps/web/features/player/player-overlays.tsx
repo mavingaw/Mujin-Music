@@ -61,6 +61,8 @@ import PlayerMoreMenu from "./player-more-menu";
 import Link from "next/link";
 import { rgbString, type ArtworkPalette } from "./artwork-palette";
 import { useArtworkPalette } from "./use-artwork-palette";
+import { useOptionalAppearance } from "@/features/appearance/theme-provider";
+import { cn } from "@/lib/cn";
 import {
   DropdownMenuItem,
   DropdownMenuCheckboxItem,
@@ -94,37 +96,71 @@ export interface UpNextItem {
 function NowPlayingBackdrop({
   cover,
   dim,
+  immersive,
+  light,
   palette,
 }: {
   cover: string;
   dim: boolean;
+  /** Immersive layout: the cover itself fills the screen, sharp. */
+  immersive: boolean;
+  /** A light theme: the art washes over paper instead of black. */
+  light: boolean;
   palette: ArtworkPalette;
 }) {
+  const shade = light ? undefined : rgbString(palette.deep);
+  const shadeAt = (alpha: number) =>
+    light
+      ? `rgb(var(--mj-canvas-rgb) / ${alpha})`
+      : rgbString(palette.deep, alpha);
   return (
     <div
       aria-hidden="true"
       className="fixed inset-0 overflow-hidden bg-mujin-deep"
-      style={{ backgroundColor: rgbString(palette.deep) }}
+      data-np-backdrop={immersive ? "immersive" : "blur"}
+      style={{ backgroundColor: shade }}
     >
-      <div className="absolute -inset-[12%]">
-        <Image
-          alt=""
-          className="scale-110 object-cover opacity-55 blur-[90px] saturate-[1.35]"
-          fill
-          sizes="40vw"
-          src={cover}
-        />
-      </div>
+      {immersive ? (
+        <div className="absolute inset-0">
+          <Image
+            alt=""
+            className="object-cover object-center"
+            fill
+            priority
+            sizes="100vw"
+            src={cover}
+          />
+        </div>
+      ) : (
+        <div className="absolute -inset-[12%]">
+          <Image
+            alt=""
+            className={`scale-110 object-cover blur-[90px] saturate-[1.35] ${light ? "opacity-40" : "opacity-55"}`}
+            fill
+            sizes="40vw"
+            src={cover}
+          />
+        </div>
+      )}
       <div
         className="absolute inset-0 transition-opacity duration-500"
         style={{
-          background: `radial-gradient(70% 60% at 28% 45%, ${rgbString(palette.glow, 0.28)}, transparent 70%), radial-gradient(120% 100% at 50% 110%, ${rgbString(palette.deep, 0.95)} 20%, transparent 70%)`,
+          background: immersive
+            ? `linear-gradient(to top, ${shadeAt(0.96)} 8%, ${shadeAt(0.7)} 38%, ${shadeAt(0.15)} 70%, ${shadeAt(0.35)} 100%), linear-gradient(to right, ${shadeAt(0.75)} 0%, transparent 55%)`
+            : `radial-gradient(70% 60% at 28% 45%, ${rgbString(palette.glow, light ? 0.18 : 0.28)}, transparent 70%), radial-gradient(120% 100% at 50% 110%, ${shadeAt(0.95)} 20%, transparent 70%)`,
         }}
       />
       <div
-        className={`absolute inset-0 transition-colors duration-500 ${dim ? "bg-black/60" : "bg-black/35"}`}
+        className={`absolute inset-0 transition-colors duration-500 ${dim ? "bg-black/60" : immersive ? "bg-black/10" : "bg-black/35"}`}
       />
-      <div className="absolute inset-0 bg-[radial-gradient(140%_100%_at_50%_40%,transparent_45%,rgba(5,5,6,0.85)_100%)]" />
+      {!immersive && (
+        <div
+          className="absolute inset-0"
+          style={{
+            background: `radial-gradient(140% 100% at 50% 40%, transparent 45%, ${light ? "rgb(var(--mj-canvas-rgb) / 0.85)" : "rgba(5,5,6,0.85)"} 100%)`,
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -167,10 +203,12 @@ function NowPlayingFacts({
   if (details.label) rows.push({ label: "Label", value: details.label });
   if (!rows.length) return null;
   return (
-    <dl className="mt-6 grid max-w-md grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 border-t border-white/[0.08] pt-5 text-[13.5px] md:mt-8">
+    <dl className="mt-6 grid max-w-md grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 border-t border-white/[0.08] pt-5 text-[0.8438rem] md:mt-8">
       {rows.map((row) => (
         <div className="contents" key={row.label}>
-          <dt className="mj-eyebrow self-center text-[10px]!">{row.label}</dt>
+          <dt className="mj-eyebrow self-center text-[0.625rem]!">
+            {row.label}
+          </dt>
           <dd className="truncate text-mujin-text-secondary">{row.value}</dd>
         </div>
       ))}
@@ -316,6 +354,9 @@ export function FullscreenPlayer({
 }) {
   const live = isLiveRadioId(songId);
   const palette = useArtworkPalette(cover);
+  const appearance = useOptionalAppearance();
+  const layout = appearance?.appearance.now_playing_layout ?? "art-left";
+  const lightTheme = appearance?.theme.mode === "light";
   const dragStart = useRef<number | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const [dragOffset, setDragOffset] = useState(0);
@@ -405,6 +446,8 @@ export function FullscreenPlayer({
               <NowPlayingBackdrop
                 cover={cover}
                 dim={queueOpen}
+                immersive={layout === "immersive" && !queueOpen}
+                light={lightTheme}
                 palette={palette}
               />
             )}
@@ -452,9 +495,9 @@ export function FullscreenPlayer({
                 <div className="mx-auto grid min-h-0 w-full max-w-[1320px] flex-1 md:grid-cols-[minmax(240px,360px)_minmax(0,1fr)] md:gap-[clamp(32px,5vw,88px)] md:px-12">
                   <aside className="hidden min-w-0 flex-col justify-center md:flex">
                     <div
-                      className="relative aspect-square w-full max-w-[300px] overflow-hidden rounded-[8px] bg-mujin-surface-1"
+                      className="relative aspect-square w-full max-w-[300px] overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1"
                       style={{
-                        boxShadow: `0 0 0 1px rgb(242 238 230 / 0.08), 0 40px 90px -36px ${rgbString(palette.glow, 0.55)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
+                        boxShadow: `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 40px 90px -36px ${rgbString(palette.glow, 0.55)}, 0 24px 50px -26px rgb(0 0 0 / 0.9)`,
                       }}
                     >
                       <Image
@@ -467,12 +510,12 @@ export function FullscreenPlayer({
                     </div>
                     <p className="mj-eyebrow mt-7">Lyrics</p>
                     <h2
-                      className="mj-display mt-2 line-clamp-2 text-[30px] leading-tight text-mujin-text lg:text-[36px]"
+                      className="mj-display mt-2 line-clamp-2 text-[1.875rem] leading-tight text-mujin-text lg:text-[2.25rem]"
                       title={title}
                     >
                       {title}
                     </h2>
-                    <p className="mt-2 truncate text-[16px] text-mujin-text-secondary">
+                    <p className="mt-2 truncate text-[1rem] text-mujin-text-secondary">
                       <ArtistCreditLinks
                         credits={artistCredits}
                         onNavigate={onClose}
@@ -518,7 +561,7 @@ export function FullscreenPlayer({
               ) : queueOpen ? (
                 <div className="mx-auto min-h-0 w-full max-w-160 flex-1 overflow-y-auto px-4 pt-4 md:pt-16">
                   <div className="mb-4 flex items-center justify-between gap-3">
-                    <h2 className="mj-title text-[28px] text-mujin-text">
+                    <h2 className="mj-title text-[1.75rem] text-mujin-text">
                       Queue
                     </h2>
                     {queueEditing && (
@@ -541,17 +584,35 @@ export function FullscreenPlayer({
                   )}
                 </div>
               ) : (
-                <div className="mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col items-center justify-start gap-6 overflow-y-auto px-6 py-5 md:grid md:grid-cols-2 md:content-center md:items-center md:gap-[clamp(32px,5vw,96px)] md:px-12 md:py-[clamp(16px,4dvh,48px)]">
+                <div
+                  className={cn(
+                    "mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col items-center justify-start gap-6 overflow-y-auto px-6 py-5 md:px-12 md:py-[clamp(16px,4dvh,48px)]",
+                    layout === "art-left" &&
+                      "md:grid md:grid-cols-2 md:content-center md:items-center md:gap-[clamp(32px,5vw,96px)]",
+                    layout === "art-centred" &&
+                      "md:justify-center md:gap-[clamp(20px,3dvh,36px)] md:text-center",
+                    layout === "immersive" &&
+                      "justify-end md:items-start md:justify-end md:pb-[clamp(28px,6dvh,72px)]",
+                  )}
+                  data-np-layout={layout}
+                >
                   <div
-                    className="relative mx-auto aspect-square w-full max-w-[min(78vw,340px,max(120px,calc(100dvh-360px)))] shrink-0 overflow-hidden rounded-[8px] bg-mujin-surface-1 md:mx-0 md:max-w-[min(560px,calc(100dvh-230px))] md:justify-self-end"
+                    className={cn(
+                      "relative mx-auto aspect-square w-full max-w-[min(78vw,340px,max(120px,calc(100dvh-360px)))] shrink-0 overflow-hidden rounded-[calc(8px*var(--mj-radius-scale,1))] bg-mujin-surface-1",
+                      layout === "art-left" &&
+                        "md:mx-0 md:max-w-[min(560px,calc(100dvh-230px))] md:justify-self-end",
+                      layout === "art-centred" &&
+                        "md:max-w-[min(440px,calc(100dvh-380px))]",
+                      layout === "immersive" && "hidden",
+                    )}
                     style={{
-                      boxShadow: `0 0 0 1px rgb(242 238 230 / 0.08), 0 50px 120px -40px ${rgbString(palette.glow, 0.55)}, 0 30px 60px -30px rgb(0 0 0 / 0.9)`,
+                      boxShadow: `0 0 0 1px rgb(var(--mj-ink) / 0.08), 0 50px 120px -40px ${rgbString(palette.glow, 0.55)}, 0 30px 60px -30px rgb(0 0 0 / 0.9)`,
                     }}
                   >
                     {live ? (
                       <StationArtwork
                         className="absolute inset-0 h-full w-full"
-                        rounded="rounded-[8px]"
+                        rounded="rounded-[calc(8px*var(--mj-radius-scale,1))]"
                         sizes="560px"
                         station={{
                           name: title,
@@ -569,13 +630,21 @@ export function FullscreenPlayer({
                       />
                     )}
                   </div>
-                  <div className="w-full min-w-0 max-w-[560px] md:justify-self-start">
+                  <div
+                    className={cn(
+                      "w-full min-w-0 max-w-[560px]",
+                      layout === "art-left" && "md:justify-self-start",
+                      layout === "art-centred" &&
+                        "md:max-w-[680px] [&_.mj-facts]:md:justify-center",
+                      layout === "immersive" && "md:max-w-[760px]",
+                    )}
+                  >
                     {live ? (
                       <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-300/90">
                         <LiveBadge /> Live radio
                       </p>
                     ) : radioLabel ? (
-                      <p className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-mujin-copper">
+                      <p className="mb-3 flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-mujin-copper">
                         <Radio aria-hidden="true" className="h-3.5 w-3.5" />
                         <span className="truncate">{radioLabel}</span>
                       </p>
@@ -590,12 +659,12 @@ export function FullscreenPlayer({
                     <div className="flex items-start gap-3">
                       <div className="min-w-0 flex-1">
                         <h1
-                          className="mj-display wrap-break-word text-[32px] text-mujin-text md:text-[clamp(38px,min(5vw,7dvh),72px)]"
+                          className="mj-display wrap-break-word text-[2rem] text-mujin-text md:text-[clamp(38px,min(5vw,7dvh),72px)]"
                           title={title}
                         >
                           {title}
                         </h1>
-                        <p className="mt-2 text-[16px] leading-7 text-mujin-text-secondary md:mt-4 md:text-[22px] md:leading-8">
+                        <p className="mt-2 text-[1rem] leading-7 text-mujin-text-secondary md:mt-4 md:text-[1.375rem] md:leading-8">
                           {explicit && <ExplicitBadge />}
                           <ArtistCreditLinks
                             credits={artistCredits}
@@ -652,10 +721,10 @@ export function FullscreenPlayer({
                           onClick={onOpenQueue}
                           type="button"
                         >
-                          <span className="mj-eyebrow text-[10px]!">
+                          <span className="mj-eyebrow text-[0.625rem]!">
                             Up next
                           </span>
-                          <span className="flex items-center gap-0.5 text-[12px] text-mujin-text-secondary">
+                          <span className="flex items-center gap-0.5 text-[0.75rem] text-mujin-text-secondary">
                             Queue
                             <ChevronRight
                               aria-hidden="true"
@@ -681,10 +750,10 @@ export function FullscreenPlayer({
                                   />
                                 </span>
                                 <span className="min-w-0 flex-1">
-                                  <span className="block truncate text-[14px] text-mujin-text">
+                                  <span className="block truncate text-[0.875rem] text-mujin-text">
                                     {item.title}
                                   </span>
-                                  <span className="block truncate text-[12px] text-mujin-text-tertiary">
+                                  <span className="block truncate text-[0.75rem] text-mujin-text-tertiary">
                                     {item.artist}
                                   </span>
                                 </span>
@@ -711,13 +780,13 @@ export function FullscreenPlayer({
                           />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="mj-eyebrow block text-[10px]!">
+                          <span className="mj-eyebrow block text-[0.625rem]!">
                             Up next
                           </span>
-                          <span className="block truncate text-[13.5px] font-medium text-mujin-text">
+                          <span className="block truncate text-[0.8438rem] font-medium text-mujin-text">
                             {upNext.title}
                           </span>
-                          <span className="block truncate text-[12px] text-mujin-text-tertiary">
+                          <span className="block truncate text-[0.75rem] text-mujin-text-tertiary">
                             {upNext.artist}
                           </span>
                         </span>

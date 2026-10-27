@@ -532,8 +532,16 @@ export interface ReviewScores {
   license_url: string;
 }
 
+/** Where an album's release type comes from; it is never guessed. */
+export interface ReleaseTypeFact {
+  value: string;
+  source: "edited" | "musicbrainz" | "tags";
+}
+
 export interface AlbumAbout {
   album_id: string;
+  /** From an edit, the MusicBrainz release group or the tags; else null. */
+  release_type?: ReleaseTypeFact | null;
   credits: AboutCredit[];
   /** The Wikipedia article lead about the album. */
   background: EditorialText | null;

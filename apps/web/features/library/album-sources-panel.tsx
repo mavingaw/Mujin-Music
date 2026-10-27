@@ -32,11 +32,11 @@ function Candidate({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+      <dt className="text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-zinc-500">
         {label}
       </dt>
       <dd
-        className={`truncate text-[13px] ${
+        className={`truncate text-[0.8125rem] ${
           value
             ? active
               ? "text-white"
@@ -79,7 +79,7 @@ function ChoiceControl({
       {options.map((option) => (
         <button
           aria-checked={value === option.key}
-          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50 ${
+          className={`rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold transition-colors disabled:opacity-50 ${
             value === option.key
               ? "bg-white text-black"
               : "text-zinc-400 hover:text-white"
@@ -131,7 +131,7 @@ export function AlbumSourcesPanel({
         album up again or identifying it never changes it.
       </p>
       {!sources.online_release && (
-        <p className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-[13px] leading-5 text-zinc-400">
+        <p className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-[0.8125rem] leading-5 text-zinc-400">
           No verified MusicBrainz release backs this album, so only file tags
           and your own values are available.
         </p>
@@ -139,7 +139,7 @@ export function AlbumSourcesPanel({
       {sources.online_release &&
         sources.online_edition &&
         sources.edition_guessed && (
-          <p className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-[13px] leading-5 text-zinc-400">
+          <p className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-[0.8125rem] leading-5 text-zinc-400">
             The release was matched automatically, so it may be another
             pressing: its edition date, catalog number, country and barcode only
             show where you choose Online. Identify the exact release to trust
@@ -147,7 +147,7 @@ export function AlbumSourcesPanel({
           </p>
         )}
       {sources.online_release && !sources.online_edition && (
-        <p className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-[13px] leading-5 text-zinc-400">
+        <p className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-2 text-[0.8125rem] leading-5 text-zinc-400">
           The matched release may be another edition, so its date, label,
           catalog number, country and barcode are not offered. Identify the
           exact release to use them.
@@ -211,14 +211,14 @@ export function AlbumSourcesPanel({
                   )}
                   <input
                     aria-label={`Your ${ALBUM_FIELD_LABELS[fact.field].toLowerCase()}`}
-                    className="h-8 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2.5 text-[13px] text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
+                    className="h-8 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2.5 text-[0.8125rem] text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none"
                     onChange={(event) => setEdit(fact, event.target.value)}
                     placeholder={`Type your own (${PLACEHOLDERS[fact.field] ?? "value"}) to freeze it`}
                     value={typed}
                   />
                   {frozen && (
                     <button
-                      className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold text-zinc-400 hover:bg-white/8 hover:text-white"
+                      className="shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold text-zinc-400 hover:bg-white/8 hover:text-white"
                       onClick={() => setEdit(fact, "")}
                       type="button"
                     >

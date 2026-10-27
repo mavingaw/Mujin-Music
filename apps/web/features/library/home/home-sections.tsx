@@ -49,14 +49,14 @@ export function SectionHeader({
     <div className="mb-4 flex items-end justify-between gap-4 border-b border-white/[0.06] pb-3">
       <div className="min-w-0">
         {eyebrow && <p className="mj-eyebrow mb-1.5">{eyebrow}</p>}
-        <h2 className="mj-title truncate text-[22px] leading-tight text-mujin-text md:text-[24px]">
+        <h2 className="mj-title truncate text-[1.375rem] leading-tight text-mujin-text md:text-[1.5rem]">
           {title}
         </h2>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         {action && (
           <Link
-            className="mr-1 rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-mujin-text-tertiary transition-colors hover:bg-white/[0.05] hover:text-mujin-text"
+            className="mr-1 rounded-full px-3 py-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-mujin-text-tertiary transition-colors hover:bg-white/[0.05] hover:text-mujin-text"
             href={action.href}
           >
             {action.label}
@@ -178,10 +178,10 @@ export function ArtistCircle({ artist }: { artist: HomeArtist }) {
           name={artist.name}
           photoUrl={artist.photo_url}
         />
-        <span className="mt-3 block truncate text-[13.5px] font-medium text-mujin-text group-hover:underline">
+        <span className="mt-3 block truncate text-[0.8438rem] font-medium text-mujin-text group-hover:underline">
           {artist.name}
         </span>
-        <span className="block truncate text-[12px] text-mujin-text-tertiary">
+        <span className="block truncate text-[0.75rem] text-mujin-text-tertiary">
           {artist.reason ??
             `${artist.album_count} ${artist.album_count === 1 ? "album" : "albums"}`}
         </span>
@@ -233,14 +233,14 @@ export function DailyPicksBand({
       <div className="grid gap-8 p-6 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] md:items-center md:p-9 lg:p-10">
         <div className="min-w-0">
           <p className="mj-eyebrow text-mujin-copper!">{day}</p>
-          <h2 className="mj-display mt-3 text-[44px] text-mujin-text md:text-[56px]">
+          <h2 className="mj-display mt-3 text-[2.75rem] text-mujin-text md:text-[3.5rem]">
             Daily Picks
           </h2>
-          <p className="mt-3 max-w-md text-[14px] leading-6 text-mujin-text-secondary">
+          <p className="mt-3 max-w-md text-[0.875rem] leading-6 text-mujin-text-secondary">
             {lead.reason}. Recommendations from {artists}.
           </p>
           <button
-            className="mj-primary mt-6 inline-flex h-10 items-center gap-2 rounded-full px-5 text-[13px] font-semibold"
+            className="mj-primary mt-6 inline-flex h-10 items-center gap-2 rounded-full px-5 text-[0.8125rem] font-semibold"
             onClick={() => void playAlbum(lead.album.id)}
             type="button"
           >
@@ -271,10 +271,10 @@ export function DailyPicksBand({
                     )}
                   />
                 </span>
-                <span className="mt-2 block truncate text-[12.5px] font-medium text-mujin-text">
+                <span className="mt-2 block truncate text-[0.7812rem] font-medium text-mujin-text">
                   {pick.album.name}
                 </span>
-                <span className="block truncate text-[11.5px] text-mujin-text-tertiary">
+                <span className="block truncate text-[0.7188rem] text-mujin-text-tertiary">
                   {pick.album.artist.name}
                 </span>
               </Link>
@@ -336,30 +336,30 @@ export function BestYearsBand({ prime }: { prime: HomeBestYears }) {
         className={cn(
           "absolute inset-0 -z-10",
           photo
-            ? "bg-[radial-gradient(120%_120%_at_0%_100%,rgba(217,139,95,0.2),transparent_55%),linear-gradient(90deg,rgba(10,10,11,0.97)_30%,rgba(10,10,11,0.55)_62%,rgba(10,10,11,0.2))]"
-            : "bg-[radial-gradient(120%_120%_at_0%_100%,rgba(217,139,95,0.22),transparent_55%),linear-gradient(90deg,rgba(10,10,11,0.94),rgba(10,10,11,0.6))]",
+            ? "bg-[radial-gradient(120%_120%_at_0%_100%,rgb(var(--mj-accent-rgb)/0.2),transparent_55%),linear-gradient(90deg,rgb(var(--mj-canvas-rgb)/0.97)_30%,rgb(var(--mj-canvas-rgb)/0.55)_62%,rgb(var(--mj-canvas-rgb)/0.2))]"
+            : "bg-[radial-gradient(120%_120%_at_0%_100%,rgb(var(--mj-accent-rgb)/0.22),transparent_55%),linear-gradient(90deg,rgb(var(--mj-canvas-rgb)/0.94),rgb(var(--mj-canvas-rgb)/0.6))]",
         )}
       />
       <div className="grid gap-8 p-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] md:items-center md:p-9">
         <div>
           <p className="mj-eyebrow">In their prime</p>
           <Link
-            className="mj-display mt-3 block text-[40px] text-mujin-text hover:underline md:text-[52px]"
+            className="mj-display mt-3 block text-[2.5rem] text-mujin-text hover:underline md:text-[3.25rem]"
             href={`/artist?id=${encodeURIComponent(prime.artist.id)}`}
           >
             {prime.artist.name}
           </Link>
-          <p className="mj-display mt-1 text-[40px] text-mujin-copper md:text-[52px]">
+          <p className="mj-display mt-1 text-[2.5rem] text-mujin-copper md:text-[3.25rem]">
             {years}
           </p>
-          <p className="mt-3 text-[13.5px] leading-6 text-mujin-text-secondary">
+          <p className="mt-3 text-[0.8438rem] leading-6 text-mujin-text-secondary">
             {prime.albums.length}{" "}
             {prime.albums.length === 1 ? "release" : "releases"} from their most
             prolific stretch in your library.
           </p>
           {prime.albums[0] && (
             <button
-              className="mt-6 inline-flex h-10 items-center gap-2 rounded-full border border-white/15 px-5 text-[13px] font-semibold text-mujin-text transition-colors hover:border-white/30 hover:bg-white/[0.05]"
+              className="mt-6 inline-flex h-10 items-center gap-2 rounded-full border border-white/15 px-5 text-[0.8125rem] font-semibold text-mujin-text transition-colors hover:border-white/30 hover:bg-white/[0.05]"
               onClick={() => void playAlbum(prime.albums[0]!.id)}
               type="button"
             >
@@ -388,13 +388,13 @@ export function GenreTile({ genre }: { genre: HomeGenre }) {
       <GenreArt covers={genre.covers} name={genre.name} photos={genre.photos} />
       <span
         aria-hidden="true"
-        className="absolute inset-0 z-[2] bg-[linear-gradient(to_top,rgba(10,10,11,0.92)_0%,rgba(10,10,11,0.45)_55%,rgba(10,10,11,0.1)_100%)]"
+        className="absolute inset-0 z-[2] bg-[linear-gradient(to_top,rgb(var(--mj-canvas-rgb)/0.92)_0%,rgb(var(--mj-canvas-rgb)/0.45)_55%,rgb(var(--mj-canvas-rgb)/0.1)_100%)]"
       />
       <span className="absolute inset-x-4 bottom-3.5 z-[3]">
-        <span className="mj-title block truncate text-[22px] leading-tight text-mujin-text">
+        <span className="mj-title block truncate text-[1.375rem] leading-tight text-mujin-text">
           {genre.name}
         </span>
-        <span className="mj-tnum block text-[11.5px] text-mujin-text-secondary">
+        <span className="mj-tnum block text-[0.7188rem] text-mujin-text-secondary">
           {genre.album_count} {genre.album_count === 1 ? "album" : "albums"} ·{" "}
           {genre.artist_count} {genre.artist_count === 1 ? "artist" : "artists"}
         </span>
@@ -428,12 +428,12 @@ export function StationTile({ station }: { station: LiveStation }) {
         </button>
       </div>
       <Link
-        className="mt-2.5 block truncate text-[13.5px] font-medium text-mujin-text hover:underline"
+        className="mt-2.5 block truncate text-[0.8438rem] font-medium text-mujin-text hover:underline"
         href={stationHref(station.id)}
       >
         {station.name}
       </Link>
-      <p className="flex items-center gap-1.5 truncate text-[12px] text-mujin-text-tertiary">
+      <p className="flex items-center gap-1.5 truncate text-[0.75rem] text-mujin-text-tertiary">
         <Radio aria-hidden="true" className="h-3 w-3 shrink-0" />
         {[
           station.codec?.toUpperCase(),

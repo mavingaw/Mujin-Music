@@ -37,7 +37,10 @@ export function LiveTimeline({
   return (
     <div
       aria-label="Live stream"
-      className={cn("items-center gap-2 text-[11px] text-zinc-500", className)}
+      className={cn(
+        "items-center gap-2 text-[0.6875rem] text-zinc-500",
+        className,
+      )}
       role="group"
     >
       <span className="w-10 text-right tabular-nums">{clock(currentTime)}</span>

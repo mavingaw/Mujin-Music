@@ -144,7 +144,7 @@ function SwitcherPanel({
   return (
     <div>
       <div className="flex items-center justify-between px-4 pb-2 pt-3.5">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
           Who&apos;s listening?
         </p>
         <UsersRound aria-hidden="true" className="h-3.5 w-3.5 text-zinc-600" />
@@ -198,7 +198,7 @@ function SwitcherPanel({
                         {profile.name}
                       </span>
                       {badge && (
-                        <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+                        <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-px text-[0.625rem] font-medium uppercase tracking-wide text-zinc-400">
                           {badge}
                         </span>
                       )}

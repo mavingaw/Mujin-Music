@@ -341,7 +341,7 @@ export function AlbumActions({
       >
         {editorLoading ? (
           <View style={styles.editorLoading}>
-            <ActivityIndicator color="white" />
+            <ActivityIndicator color={palette.text} />
             <Text style={styles.editorLoadingText}>Loading album…</Text>
           </View>
         ) : (
@@ -429,8 +429,8 @@ const styles = StyleSheet.create({
   input: {
     minHeight: 48,
     borderRadius: 10,
-    backgroundColor: "#29292e",
-    color: "white",
+    backgroundColor: palette.surfaceStrong,
+    color: palette.text,
     paddingHorizontal: 13,
     paddingVertical: 11,
   },
@@ -438,11 +438,11 @@ const styles = StyleSheet.create({
   save: {
     height: 50,
     borderRadius: 25,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  saveText: { color: "black", fontWeight: "800" },
+  saveText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
-  error: { color: "#f6807a", paddingHorizontal: 16, paddingVertical: 8 },
+  error: { color: palette.danger, paddingHorizontal: 16, paddingVertical: 8 },
 });

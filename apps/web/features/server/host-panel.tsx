@@ -141,7 +141,7 @@ export default function HostPanel() {
   return (
     <section
       aria-labelledby="host-heading"
-      className="overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(255,255,255,0.06),transparent_55%)]"
+      className="overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(120%_140%_at_0%_0%,rgb(var(--mj-ink)/0.06),transparent_55%)]"
     >
       <div className="grid gap-7 p-5 sm:p-6 md:grid-cols-[224px_minmax(0,1fr)]">
         <div className="flex flex-col items-center gap-3">
@@ -217,7 +217,7 @@ export default function HostPanel() {
               {primary ? (
                 <div className="mt-5 flex items-center gap-2 rounded-xl border border-white/10 bg-black/40 py-1.5 pl-4 pr-1.5">
                   <Wifi className="h-4 w-4 shrink-0 text-zinc-500" />
-                  <code className="min-w-0 flex-1 truncate font-mono text-[15px] text-white">
+                  <code className="min-w-0 flex-1 truncate font-mono text-[0.9375rem] text-white">
                     {primary}
                   </code>
                   <CopyButton label="Copy address" value={primary} />
@@ -241,10 +241,10 @@ export default function HostPanel() {
                           className="flex items-center gap-3 py-1.5"
                           key={origin}
                         >
-                          <code className="min-w-0 flex-1 truncate font-mono text-[13px] text-zinc-300">
+                          <code className="min-w-0 flex-1 truncate font-mono text-[0.8125rem] text-zinc-300">
                             {origin}
                           </code>
-                          <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
+                          <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[0.6875rem] font-medium text-zinc-400">
                             {address ? hostAddressLabel(address) : "Public URL"}
                           </span>
                           <CopyButton label={`Copy ${origin}`} value={origin} />

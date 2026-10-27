@@ -63,7 +63,7 @@ export function ServiceMark({
   return (
     <span
       aria-hidden="true"
-      className="inline-flex shrink-0 items-center justify-center rounded-xl font-bold tracking-tight text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14)]"
+      className="inline-flex shrink-0 items-center justify-center rounded-xl font-bold tracking-tight text-white shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.14)]"
       style={{
         width: size,
         height: size,
@@ -200,7 +200,7 @@ function ServiceCard({
         </div>
         <span
           className={cn(
-            "ml-auto shrink-0 whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-medium",
+            "ml-auto shrink-0 whitespace-nowrap rounded-full px-2 py-1 text-[0.6875rem] font-medium",
             toneStyles[summary.tone],
           )}
         >
@@ -317,7 +317,7 @@ function ServiceCard({
                 <dd className="text-base font-semibold tabular-nums text-white">
                   {value}
                 </dd>
-                <dt className="text-[10px] uppercase tracking-wide text-zinc-500">
+                <dt className="text-[0.625rem] uppercase tracking-wide text-zinc-500">
                   {label}
                 </dt>
               </div>
@@ -456,7 +456,7 @@ function LastfmServerSetup({ status }: { status: ScrobblingStatus }) {
                     ? "Sandbox key (recorded replies)"
                     : "Saved"}
               </span>
-              <code className="rounded bg-white/6 px-1.5 py-0.5 font-mono text-[11px] text-zinc-400">
+              <code className="rounded bg-white/6 px-1.5 py-0.5 font-mono text-[0.6875rem] text-zinc-400">
                 {setup.keyHint}
               </code>
               {setup.source === "settings" && (
@@ -546,7 +546,7 @@ function Activity({ status }: { status: ScrobblingStatus }) {
             </span>
             <span
               className={cn(
-                "flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                "flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium",
                 toneStyles[label.tone],
               )}
               title={entry.lastError ?? undefined}

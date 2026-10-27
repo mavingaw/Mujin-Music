@@ -43,6 +43,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
+import { holdPhoneDock } from "./phone-dock";
 import { DSP_SHORTCUT_LABEL } from "./dsp-panel";
 import {
   ActionButton,
@@ -148,8 +149,12 @@ export function PlayerFooter({
   lyricsMark?: ReactNode;
 }) {
   const live = isLiveRadioId(songId);
+  usePhoneDock();
   const footer = (
-    <footer className="fixed bottom-[calc(var(--shell-footer)+8px)] left-2 right-2 z-50 isolate overflow-hidden rounded-xl border border-white/[0.07] bg-mujin-surface-1/94 px-2.5 py-2 text-mujin-text shadow-[0_18px_50px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl md:inset-x-0 md:bottom-0 md:h-(--shell-footer) md:overflow-visible md:rounded-none md:border-x-0 md:border-b-0 md:border-t md:border-white/[0.06] md:bg-mujin-raised/96 md:px-5 md:py-0 md:shadow-[0_-24px_60px_-30px_rgba(0,0,0,0.9)]">
+    <footer
+      data-surface="footer"
+      className="fixed bottom-[calc(var(--shell-footer)+8px)] left-2 right-2 z-50 isolate overflow-hidden rounded-xl border border-white/[0.07] bg-mujin-surface-1/94 px-2.5 py-2 text-mujin-text shadow-[0_18px_50px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl md:inset-x-0 md:bottom-0 md:h-(--shell-footer) md:overflow-visible md:rounded-none md:border-x-0 md:border-b-0 md:border-t md:border-white/[0.06] md:bg-mujin-raised/96 md:px-5 md:py-0 md:shadow-[0_-24px_60px_-30px_rgba(0,0,0,0.9)]"
+    >
       <button
         aria-label={`Open now playing: ${title}`}
         className="absolute inset-0 z-20 rounded-xl md:hidden"
@@ -284,7 +289,7 @@ export function PlayerFooter({
               <DropdownMenuItem onSelect={onOpenDsp}>
                 <SlidersHorizontal className="h-4 w-4" />
                 DSP engine
-                <span className="ml-auto text-[11px] text-zinc-500">
+                <span className="ml-auto text-[0.6875rem] text-zinc-500">
                   {DSP_SHORTCUT_LABEL}
                 </span>
               </DropdownMenuItem>
@@ -347,20 +352,23 @@ export function PlayerFooter({
  */
 export function IdleFooter({ zonePicker }: { zonePicker?: ReactNode }) {
   return (
-    <footer className="fixed inset-x-0 bottom-0 z-50 hidden h-(--shell-footer) items-center border-t border-white/[0.06] bg-mujin-raised/96 px-5 text-mujin-text md:flex">
+    <footer
+      data-surface="footer"
+      className="fixed inset-x-0 bottom-0 z-50 hidden h-(--shell-footer) items-center border-t border-white/[0.06] bg-mujin-raised/96 px-5 text-mujin-text md:flex"
+    >
       <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-6">
         <div className="flex min-w-0 items-center gap-3">
           <span
             aria-hidden="true"
-            className="grid h-14 w-14 shrink-0 place-items-center rounded-[5px] bg-mujin-surface-1 shadow-[inset_0_0_0_1px_rgba(242,238,230,0.06)]"
+            className="grid h-14 w-14 shrink-0 place-items-center rounded-[5px] bg-mujin-surface-1 shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.06)]"
           >
             <span className="mj-signal-dot opacity-40" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-[14px] font-medium text-mujin-text-secondary">
+            <p className="truncate text-[0.875rem] font-medium text-mujin-text-secondary">
               Nothing playing
             </p>
-            <p className="truncate text-[12px] text-mujin-text-tertiary">
+            <p className="truncate text-[0.75rem] text-mujin-text-tertiary">
               Pick an album to start listening
             </p>
           </div>
@@ -379,6 +387,36 @@ export function IdleFooter({ zonePicker }: { zonePicker?: ReactNode }) {
         <div className="flex items-center justify-end">{zonePicker}</div>
       </div>
     </footer>
+  );
+}
+
+/**
+ * Marks that a bar floats above the phone tab bar (the mini player, or the
+ * idle zone bar), so the page reserves room for it and nothing it floats
+ * over is hidden at the end of a scroll.
+ */
+export function usePhoneDock() {
+  useEffect(() => holdPhoneDock(document.documentElement), []);
+}
+
+/**
+ * Phones, nothing playing, more than one zone: a slim bar docked where the
+ * mini player sits (never a button floating over the page), naming the
+ * zone and opening the picker.
+ */
+export function PhoneIdleDock({ zonePicker }: { zonePicker: ReactNode }) {
+  usePhoneDock();
+  return (
+    <div
+      data-surface="footer"
+      className="fixed bottom-[calc(var(--shell-footer)+8px)] left-2 right-2 z-50 flex h-12 items-center gap-3 rounded-xl border border-white/[0.07] bg-mujin-surface-1/94 pl-3.5 pr-1.5 text-mujin-text shadow-[0_18px_50px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl md:hidden"
+    >
+      <span aria-hidden="true" className="mj-signal-dot opacity-40" />
+      <p className="min-w-0 flex-1 truncate text-[0.8125rem] text-mujin-text-secondary">
+        Nothing playing here
+      </p>
+      {zonePicker}
+    </div>
   );
 }
 
@@ -460,7 +498,7 @@ function TrackInfo({
       </Link>
       <div className="min-w-0 flex-[0_1_auto] sm:ml-1">
         <MarqueeTitle href={href} title={title} />
-        <span className="flex min-w-0 items-center gap-2 text-[12.5px] text-mujin-text-secondary">
+        <span className="flex min-w-0 items-center gap-2 text-[0.7812rem] text-mujin-text-secondary">
           {liveStation && <LiveBadge className="shrink-0" />}
           <span className="block min-w-0 truncate">
             {explicit && <ExplicitBadge />}
@@ -476,7 +514,7 @@ function TrackInfo({
         </span>
         {zoneLabel && (
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[11px] font-medium text-mujin-copper">
+            <span className="truncate text-[0.6875rem] font-medium text-mujin-copper">
               Playing on {zoneLabel}
             </span>
             {zoneSignal}
@@ -522,7 +560,7 @@ function MarqueeTitle({ href, title }: { href: string; title: string }) {
 
   return (
     <Link
-      className="relative block w-full max-w-full overflow-hidden whitespace-nowrap text-[13.5px] font-semibold text-mujin-text hover:underline md:text-[14.5px]"
+      className="relative block w-full max-w-full overflow-hidden whitespace-nowrap text-[0.8438rem] font-semibold text-mujin-text hover:underline md:text-[0.9062rem]"
       href={href}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

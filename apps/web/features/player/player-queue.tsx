@@ -37,7 +37,7 @@ import {
   useLyricsAvailability,
 } from "@/features/library/timed-lyrics-mark";
 import { queueDropIndex } from "./player-queue-reorder";
-import { queueSummary } from "./queue-summary";
+import { queueRowDuration, queueSummary } from "./queue-summary";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
 import { isExplicitSongTitle } from "@/features/library/song-presentation";
 import { trackArtistCredit } from "@/features/library/track-artist-credit";
@@ -198,10 +198,10 @@ export default function PlayerQueue({
     >
       <header className="flex items-center justify-between gap-2 border-b border-white/[0.06] py-3 pl-5 pr-3">
         <div className="min-w-0">
-          <h2 className="mj-title min-w-0 truncate text-[22px] leading-tight">
+          <h2 className="mj-title min-w-0 truncate text-[1.375rem] leading-tight">
             {title}
           </h2>
-          <p className="mj-tnum text-[11.5px] text-mujin-text-tertiary">
+          <p className="mj-tnum text-[0.7188rem] text-mujin-text-tertiary">
             {queueSummary(queue, editing?.currentIndex)}
           </p>
         </div>
@@ -358,7 +358,7 @@ export function PlayerQueueList({
                 aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}.${rowMovable ? " Drag to reorder, or use the arrow keys." : ""}`}
                 className={`group relative flex h-15.5 w-full items-center gap-2 rounded-xl p-2 pl-1 text-left transition-[background-color,box-shadow] duration-500 ${
                   moved?.index === index
-                    ? "bg-mujin-copper/[0.12] shadow-[inset_0_0_0_1px_rgba(217,139,95,0.45)]"
+                    ? "bg-mujin-copper/[0.12] shadow-[inset_0_0_0_1px_rgb(var(--mj-accent-rgb)/0.45)]"
                     : ""
                 } ${
                   rowMovable ? "cursor-grab active:cursor-grabbing" : ""
@@ -428,7 +428,7 @@ export function PlayerQueueList({
                   aria-hidden="true"
                   className={`h-4 w-4 shrink-0 text-mujin-text-tertiary transition-opacity ${
                     rowMovable
-                      ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-60"
+                      ? "opacity-55 group-hover:opacity-100 group-focus-visible:opacity-100"
                       : "invisible"
                   }`}
                   data-drag-handle
@@ -475,7 +475,18 @@ export function PlayerQueueList({
                   </p>
                 </div>
                 {active && (
-                  <span className="mr-2 h-2 w-2 rounded-full bg-white" />
+                  <span
+                    aria-hidden="true"
+                    className="mj-signal-dot mr-1 shrink-0"
+                  />
+                )}
+                {queueRowDuration(item.song.duration) && (
+                  <span
+                    className={`mj-tnum shrink-0 pr-1 font-mono text-[0.7188rem] ${active ? "text-mujin-text-secondary" : "text-mujin-text-tertiary"}`}
+                  >
+                    <span className="sr-only">Length </span>
+                    {queueRowDuration(item.song.duration)}
+                  </span>
                 )}
               </button>
               {radioPick && (

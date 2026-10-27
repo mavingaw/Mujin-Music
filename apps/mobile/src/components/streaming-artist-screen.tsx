@@ -36,7 +36,7 @@ export function StreamingArtistScreen({ id }: { id: string }) {
   if (artist.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   const data = artist.data;
@@ -62,7 +62,7 @@ export function StreamingArtistScreen({ id }: { id: string }) {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
@@ -100,7 +100,7 @@ const styles = StyleSheet.create({
   nav: { height: 50, paddingHorizontal: 20, justifyContent: "center" },
   hero: { alignItems: "center", gap: 12, paddingVertical: 12 },
   name: {
-    color: "white",
+    color: palette.text,
     fontSize: 30,
     fontWeight: "900",
     textAlign: "center",

@@ -1,6 +1,7 @@
 "use client";
 
 import { Input } from "@/components/ui/input";
+import { ThemeBackdrop } from "@/features/appearance/theme-backdrop";
 import { ArrowRight, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -98,9 +99,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="h-screen overflow-hidden bg-mujin-base text-mujin-text">
+      <ThemeBackdrop />
       <AppSidebar />
 
-      <header className="electron-titlebar-drag fixed left-0 right-0 top-0 z-40 h-(--shell-header) border-b border-white/[0.05] bg-mujin-base/88 px-3 backdrop-blur-xl md:left-(--shell-sidebar) md:px-6">
+      <header
+        className="electron-titlebar-drag fixed left-0 right-0 top-0 z-40 h-(--shell-header) border-b border-white/[0.05] bg-mujin-base/88 px-3 backdrop-blur-xl md:left-(--shell-sidebar) md:px-6"
+        data-surface="header"
+      >
         <div className="app-titlebar relative flex h-full items-center gap-3">
           <Link
             className="electron-titlebar-no-drag flex h-10 w-10 shrink-0 select-none items-center justify-center md:hidden"

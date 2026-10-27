@@ -15,7 +15,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Artwork } from "@/components/artwork";
 import { PersonAvatar } from "@/components/person-avatar";
-import { eyebrow, fonts, layout, palette } from "@/constants/colors";
+import { alpha, eyebrow, fonts, layout, palette } from "@/constants/colors";
 import { apiUrl, imageRequestHeaders, imageUrl } from "@/lib/runtime";
 
 /** "Hi, Mavinga" with the library's stat cards (two per row). */
@@ -97,7 +97,10 @@ export function DailyPicksCard({
         />
       ) : null}
       <LinearGradient
-        colors={["rgba(10,10,11,0.55)", "rgba(10,10,11,0.92)"]}
+        colors={[
+          alpha(palette.background, 0.55),
+          alpha(palette.background, 0.92),
+        ]}
         style={StyleSheet.absoluteFill}
       />
       <Text style={[eyebrow, { color: palette.accent }]}>
@@ -212,7 +215,10 @@ export function ArtistCircles({ artists }: { artists: HomeArtist[] }) {
             />
             {artist.photo_url ? (
               <LinearGradient
-                colors={["rgba(217,139,95,0.0)", "rgba(217,139,95,0.28)"]}
+                colors={[
+                  alpha(palette.accent, 0.0),
+                  alpha(palette.accent, 0.28),
+                ]}
                 pointerEvents="none"
                 style={[StyleSheet.absoluteFill, { borderRadius: 56 }]}
               />
@@ -241,7 +247,7 @@ export function BestYearsCard({ prime }: { prime: HomeBestYears }) {
   return (
     <View style={styles.prime}>
       <LinearGradient
-        colors={["rgba(217,139,95,0.22)", "rgba(10,10,11,0)"]}
+        colors={[alpha(palette.accent, 0.22), alpha(palette.background, 0)]}
         end={{ x: 1, y: 0 }}
         start={{ x: 0, y: 1 }}
         style={StyleSheet.absoluteFill}
@@ -301,7 +307,10 @@ export function GenreTiles({ genres }: { genres: HomeGenre[] }) {
               />
             ) : null}
             <LinearGradient
-              colors={["rgba(184,112,63,0.42)", "rgba(10,10,11,0.92)"]}
+              colors={[
+                "rgba(184,112,63,0.42)",
+                alpha(palette.background, 0.92),
+              ]}
               style={StyleSheet.absoluteFill}
             />
             <Text numberOfLines={1} style={styles.genreName}>

@@ -103,7 +103,7 @@ export function ProtocolBadge({
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-semibold uppercase tracking-wide",
+        "inline-flex h-5 items-center rounded-full border px-2 text-[0.625rem] font-semibold uppercase tracking-wide",
         protocol === "open_home" &&
           "border-white/15 bg-white/[0.05] text-mujin-text-secondary",
         protocol === "upnp_av" &&

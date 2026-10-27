@@ -277,7 +277,7 @@ export default function ListenLaterPage() {
             <label className="flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.03] py-1.5 pl-4 pr-1.5 text-sm text-zinc-300">
               <span>
                 Remove once played
-                <span className="block text-[11px] leading-4 text-zinc-500">
+                <span className="block text-[0.6875rem] leading-4 text-zinc-500">
                   Tracks after a play, albums after most of them
                 </span>
               </span>

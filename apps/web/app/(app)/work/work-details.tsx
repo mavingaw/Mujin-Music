@@ -164,7 +164,7 @@ function RecordingCard({
               </span>
               {format && (
                 <span
-                  className={`rounded px-1.5 py-px text-[10px] font-bold tracking-wide ${
+                  className={`rounded px-1.5 py-px text-[0.625rem] font-bold tracking-wide ${
                     hires
                       ? "bg-amber-300/15 text-amber-200 ring-1 ring-amber-300/30"
                       : "bg-white/6 text-zinc-400 ring-1 ring-white/10"
@@ -178,7 +178,7 @@ function RecordingCard({
               )}
               {coverage && (
                 <span
-                  className={`rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${
+                  className={`rounded border px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide ${
                     recording.complete
                       ? "border-white/15 text-zinc-300"
                       : "border-amber-300/30 text-amber-200"

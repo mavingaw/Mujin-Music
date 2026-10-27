@@ -98,7 +98,7 @@ export function Waveform({
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-[11px] uppercase tracking-[0.12em] text-zinc-500">
+      <dt className="text-[0.6875rem] uppercase tracking-[0.12em] text-zinc-500">
         {label}
       </dt>
       <dd className="mt-0.5 text-sm tabular-nums text-zinc-100">{value}</dd>
@@ -141,7 +141,7 @@ function AnalysisBody({ analysis }: { analysis: SongAnalysis }) {
               : "Not analyzed yet."}
           </p>
         )}
-        <div className="mt-2 flex justify-between text-[10px] tabular-nums text-zinc-600">
+        <div className="mt-2 flex justify-between text-[0.625rem] tabular-nums text-zinc-600">
           <span>0:00</span>
           <span>{formatTrackTime(song.duration)}</span>
         </div>
@@ -198,11 +198,11 @@ function AnalysisBody({ analysis }: { analysis: SongAnalysis }) {
                 key={copy.path}
               >
                 <QualityBadge quality={copy.quality} />
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500">
+                <span className="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-zinc-500">
                   {copy.path}
                 </span>
                 {copy.playing && (
-                  <span className="text-[11px] text-mujin-copper-hover">
+                  <span className="text-[0.6875rem] text-mujin-copper-hover">
                     Playing
                   </span>
                 )}
@@ -212,7 +212,7 @@ function AnalysisBody({ analysis }: { analysis: SongAnalysis }) {
         </div>
       )}
       <p
-        className="truncate font-mono text-[11px] text-zinc-600"
+        className="truncate font-mono text-[0.6875rem] text-zinc-600"
         title={song.path}
       >
         {song.path}

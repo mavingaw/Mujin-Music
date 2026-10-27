@@ -31,7 +31,7 @@ import { StartRadioAction } from "@/components/radio-ui";
 import { BanAction, BannedMark } from "@/components/radio-bans";
 import { ListenLaterAction } from "@/components/listen-later";
 import { TagsAction } from "@/components/tag-picker";
-import { fonts, palette } from "@/constants/colors";
+import { alpha, fonts, palette, tint } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
@@ -436,15 +436,15 @@ export function AlbumRail({ albums }: { albums: ResponseAlbum[] }) {
 const styles = StyleSheet.create({
   lyricsMark: {
     borderWidth: 1,
-    borderColor: "rgba(242,238,230,0.14)",
+    borderColor: tint(0.14),
     borderRadius: 4,
     paddingHorizontal: 4,
     paddingVertical: 1,
     marginLeft: 6,
   },
   lyricsMarkTimed: {
-    borderColor: "rgba(217,139,95,0.4)",
-    backgroundColor: "rgba(217,139,95,0.08)",
+    borderColor: alpha(palette.accent, 0.4),
+    backgroundColor: alpha(palette.accent, 0.08),
   },
   lyricsMarkText: {
     color: palette.tertiary,
@@ -489,7 +489,11 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   pressed: { opacity: 0.62 },
-  actionError: { color: "#f6807a", paddingHorizontal: 16, paddingVertical: 8 },
+  actionError: {
+    color: palette.danger,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
   trackNumber: {
     color: palette.secondary,
     width: 24,

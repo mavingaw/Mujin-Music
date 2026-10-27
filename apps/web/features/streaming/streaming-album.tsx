@@ -116,7 +116,7 @@ export default function StreamingAlbumDetails({ id }: { id: string }) {
                 <FormatBadge label={data.format.label} tone={tone} />
               )}
               {data.explicit && (
-                <span className="rounded-[5px] bg-white/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-zinc-300">
+                <span className="rounded-[5px] bg-white/10 px-1.5 py-0.5 text-[0.6562rem] font-semibold text-zinc-300">
                   E
                 </span>
               )}

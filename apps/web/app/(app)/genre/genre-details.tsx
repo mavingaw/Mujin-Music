@@ -164,10 +164,10 @@ function TreeBranch({ node }: { node: GenreTreeNode }) {
         />
         <span
           aria-hidden="true"
-          className="absolute inset-0 z-[2] bg-[linear-gradient(to_top,rgba(10,10,11,0.92)_0%,rgba(10,10,11,0.35)_60%,rgba(10,10,11,0.05)_100%)]"
+          className="absolute inset-0 z-[2] bg-[linear-gradient(to_top,rgb(var(--mj-canvas-rgb)/0.92)_0%,rgb(var(--mj-canvas-rgb)/0.35)_60%,rgb(var(--mj-canvas-rgb)/0.05)_100%)]"
         />
         <span className="absolute inset-x-4 bottom-3 z-[3] flex items-baseline justify-between gap-3">
-          <span className="mj-title truncate text-[24px] leading-tight text-mujin-text group-hover:underline">
+          <span className="mj-title truncate text-[1.5rem] leading-tight text-mujin-text group-hover:underline">
             {node.name}
           </span>
           <span className="mj-tnum shrink-0 text-xs font-medium text-mujin-text-secondary">

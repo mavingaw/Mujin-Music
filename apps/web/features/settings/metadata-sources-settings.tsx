@@ -125,7 +125,7 @@ export default function MetadataSourcesSettings() {
                 ).map(([source, label, Icon]) => (
                   <button
                     aria-checked={value === source}
-                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50 ${
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold transition-colors disabled:opacity-50 ${
                       value === source
                         ? "bg-white text-black"
                         : "text-zinc-400 hover:text-white"

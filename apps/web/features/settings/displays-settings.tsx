@@ -47,7 +47,7 @@ function ZoneSelect({
   return (
     <select
       aria-label={label}
-      className="h-9 w-full min-w-0 rounded-lg border border-white/12 bg-mujin-surface-1 px-3 text-[13px] text-mujin-text outline-none transition-colors hover:border-white/25 focus-visible:border-mujin-copper/70"
+      className="h-9 w-full min-w-0 rounded-lg border border-white/12 bg-mujin-surface-1 px-3 text-[0.8125rem] text-mujin-text outline-none transition-colors hover:border-white/25 focus-visible:border-mujin-copper/70"
       id={id}
       onChange={(event) =>
         onChange(event.target.value === FOLLOW ? null : event.target.value)
@@ -141,7 +141,7 @@ export default function DisplaysSettings() {
       <h2 className="text-base font-semibold text-white" id="displays-title">
         Displays
       </h2>
-      <p className="mt-1 max-w-xl text-[13px] leading-6 text-zinc-400">
+      <p className="mt-1 max-w-xl text-[0.8125rem] leading-6 text-zinc-400">
         Turn a TV, tablet or spare screen into a now-playing display. It follows
         a zone and shows the artist photo, the artwork, the track and its
         format, a waveform and timed lyrics in large type. It has no controls
@@ -193,7 +193,7 @@ export default function DisplaysSettings() {
             />
           </div>
           <button
-            className="mj-primary mt-3 h-9 w-full rounded-full text-[13px] font-semibold disabled:opacity-50"
+            className="mj-primary mt-3 h-9 w-full rounded-full text-[0.8125rem] font-semibold disabled:opacity-50"
             disabled={code.replace(/\D/g, "").length !== 6 || approve.isPending}
             type="submit"
           >
@@ -223,7 +223,7 @@ export default function DisplaysSettings() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
-              className="flex h-9 items-center justify-center gap-2 rounded-full border border-white/15 text-[13px] font-medium text-mujin-text hover:border-white/35 hover:bg-white/[0.05]"
+              className="flex h-9 items-center justify-center gap-2 rounded-full border border-white/15 text-[0.8125rem] font-medium text-mujin-text hover:border-white/35 hover:bg-white/[0.05]"
               onClick={() => {
                 const zone = zoneFor(openZone);
                 void openZoneDisplay(zone)
@@ -239,7 +239,7 @@ export default function DisplaysSettings() {
               <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" /> Open
             </button>
             <button
-              className="flex h-9 items-center justify-center gap-2 rounded-full border border-white/15 text-[13px] font-medium text-mujin-text hover:border-white/35 hover:bg-white/[0.05]"
+              className="flex h-9 items-center justify-center gap-2 rounded-full border border-white/15 text-[0.8125rem] font-medium text-mujin-text hover:border-white/35 hover:bg-white/[0.05]"
               onClick={() => {
                 void displayLinkForZone(zoneFor(openZone))
                   .then(async (link) => {

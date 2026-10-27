@@ -54,7 +54,7 @@ export function TimedLyricsMark({
   return (
     <span
       aria-label={label}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-[4px] border px-1 py-px align-middle text-[9.5px] font-semibold uppercase leading-3 tracking-[0.08em] ${
+      className={`inline-flex shrink-0 items-center gap-1 rounded-[4px] border px-1 py-px align-middle text-[0.5938rem] font-semibold uppercase leading-3 tracking-[0.08em] ${
         availability.synced
           ? "border-mujin-copper/35 bg-mujin-copper/[0.08] text-mujin-copper"
           : "border-white/12 text-mujin-text-tertiary"

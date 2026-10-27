@@ -55,6 +55,30 @@ test("album quality labels show bit depth and rate for lossless files", () => {
   expect(albumQualityLabel(null)).toBeNull();
 });
 
+test("the server's label wins, so Home and Library show one badge", () => {
+  expect(
+    albumQualityLabel({
+      codec: "mp3",
+      lossless: false,
+      hi_res: false,
+      bit_depth: null,
+      sample_rate: 44_100,
+      mixed: true,
+      label: "Mixed",
+    }),
+  ).toBe("Mixed");
+  expect(
+    albumQualityLabel({
+      codec: "flac",
+      lossless: true,
+      hi_res: true,
+      bit_depth: 24,
+      sample_rate: 96_000,
+      label: "24/96 FLAC",
+    }),
+  ).toBe("24/96 FLAC");
+});
+
 test("greetings follow the local hour", () => {
   expect(greetingForHour(6)).toBe("Good morning");
   expect(greetingForHour(12)).toBe("Good afternoon");

@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, type ViewStyle } from "react-native";
 
 import { Artwork } from "@/components/artwork";
 import { apiUrl } from "@/lib/runtime";
+import { tint } from "@/constants/colors";
 
 /** A round photo of a person, or their initials when there is none. */
 export function PersonAvatar({
@@ -49,7 +50,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.15)",
+    borderColor: tint(0.15),
   },
-  letters: { color: "rgba(255,255,255,0.92)", fontWeight: "800" },
+  letters: { color: tint(0.92), fontWeight: "800" },
 });

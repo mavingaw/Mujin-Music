@@ -21,7 +21,7 @@ import {
   View,
 } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { alpha, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
 
 const plays = new Intl.NumberFormat("en");
@@ -51,7 +51,7 @@ export function ProfileAvatar({
     >
       <Text
         style={{
-          color: "white",
+          color: palette.text,
           fontSize: Math.round(size * 0.38),
           fontWeight: "800",
         }}
@@ -92,7 +92,7 @@ export function ProfilesSettings() {
   const [pin, setPin] = useState("");
   const [color, setColor] = useState<ProfileColor>("violet");
 
-  if (profiles.isPending) return <ActivityIndicator color="white" />;
+  if (profiles.isPending) return <ActivityIndicator color={palette.text} />;
   if (!profiles.data)
     return <Text style={styles.body}>Profiles could not be loaded.</Text>;
   const data = profiles.data;
@@ -178,10 +178,10 @@ export function ProfilesSettings() {
                 <Text style={styles.detail}>{subtitle(profile)}</Text>
               </View>
               {busy === profile.id ? (
-                <ActivityIndicator color="white" />
+                <ActivityIndicator color={palette.text} />
               ) : profile.isCurrent ? (
                 <View style={styles.check}>
-                  <Check color="black" size={14} strokeWidth={3} />
+                  <Check color={palette.background} size={14} strokeWidth={3} />
                 </View>
               ) : profile.unlock !== "none" ? (
                 <Lock color={palette.secondary} size={16} />
@@ -288,7 +288,7 @@ export function ProfilesSettings() {
             style={styles.addRow}
           >
             <View style={styles.addIcon}>
-              <Plus color="white" size={18} />
+              <Plus color={palette.text} size={18} />
             </View>
             <Text style={styles.name}>Add profile</Text>
           </Pressable>
@@ -298,7 +298,7 @@ export function ProfilesSettings() {
 }
 
 const styles = StyleSheet.create({
-  heading: { color: "white", fontSize: 19, fontWeight: "800" },
+  heading: { color: palette.text, fontSize: 19, fontWeight: "800" },
   body: { color: palette.secondary, lineHeight: 21 },
   card: {
     padding: 14,
@@ -307,9 +307,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "transparent",
   },
-  current: { borderColor: "rgba(217,139,95,0.45)" },
+  current: { borderColor: alpha(palette.accent, 0.45) },
   row: { flexDirection: "row", alignItems: "center", gap: 13 },
-  name: { color: "white", fontSize: 15, fontWeight: "700" },
+  name: { color: palette.text, fontSize: 15, fontWeight: "700" },
   detail: { color: palette.secondary, fontSize: 13, marginTop: 3 },
   check: {
     width: 22,
@@ -322,22 +322,22 @@ const styles = StyleSheet.create({
   input: {
     height: 48,
     borderRadius: 10,
-    backgroundColor: "#0b0b0d",
+    backgroundColor: palette.background,
     borderWidth: 1,
     borderColor: palette.border,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 14,
   },
   primary: {
     height: 46,
     borderRadius: 23,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.4 },
-  error: { color: "#f9b3af" },
+  error: { color: palette.danger },
   colors: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   swatch: {
     borderRadius: 18,
@@ -345,7 +345,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "transparent",
   },
-  swatchSelected: { borderColor: "white" },
+  swatchSelected: { borderColor: palette.text },
   addRow: {
     minHeight: 56,
     flexDirection: "row",

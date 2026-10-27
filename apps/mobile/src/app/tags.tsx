@@ -36,7 +36,10 @@ export default function TagsScreen() {
           keyExtractor={(tag) => String(tag.id)}
           ListEmptyComponent={
             tags.isPending ? (
-              <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+              <ActivityIndicator
+                color={palette.text}
+                style={{ marginTop: 40 }}
+              />
             ) : (
               <View style={styles.empty}>
                 <Hash color={palette.accent} size={36} />

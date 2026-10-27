@@ -39,7 +39,7 @@ export const QUALITY_TONES: Record<
   { dot: string; text: string; border: string; line: string }
 > = {
   lossless: {
-    dot: "bg-quality-lossless shadow-[0_0_10px_2px_rgba(217,139,95,0.55)]",
+    dot: "bg-quality-lossless shadow-[0_0_10px_2px_rgb(var(--mj-accent-rgb)/0.55)]",
     text: "text-quality-lossless",
     border: "border-quality-lossless/30",
     line: "from-quality-lossless/70",
@@ -120,12 +120,12 @@ export function SignalPathStages({ zone }: { zone: Zone }) {
             </span>
             <span className="min-w-0 pt-0.5">
               {stage.kicker && (
-                <span className="block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                <span className="block text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-zinc-500">
                   {stage.kicker}
                 </span>
               )}
               <span
-                className={`block text-[13px] leading-5 ${strong ? "font-medium text-white" : "text-zinc-300"}`}
+                className={`block text-[0.8125rem] leading-5 ${strong ? "font-medium text-white" : "text-zinc-300"}`}
               >
                 {stage.label}
               </span>
@@ -145,10 +145,12 @@ export function SignalPathPanel({ zone }: { zone: Zone }) {
   if (!stream) {
     return (
       <div className="space-y-2">
-        <p className="text-[13px] text-zinc-400">
+        <p className="text-[0.8125rem] text-zinc-400">
           Nothing from Mujin Music is playing here right now.
         </p>
-        <p className="text-[11px] leading-4 text-zinc-500">{output.note}</p>
+        <p className="text-[0.6875rem] leading-4 text-zinc-500">
+          {output.note}
+        </p>
       </div>
     );
   }
@@ -166,7 +168,7 @@ export function SignalPathPanel({ zone }: { zone: Zone }) {
           <p className={`text-sm font-semibold ${tone.text}`}>
             {text.label}
             {stream.bit_perfect && (
-              <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-quality-lossless/30 px-1.5 py-px align-middle text-[10px] font-medium text-quality-lossless">
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-quality-lossless/30 px-1.5 py-px align-middle text-[0.625rem] font-medium text-quality-lossless">
                 <BadgeCheck className="h-3 w-3" />
                 Bit-perfect
               </span>
@@ -181,9 +183,11 @@ export function SignalPathPanel({ zone }: { zone: Zone }) {
       </div>
       <SignalPathStages zone={zone} />
       <div className="space-y-1.5 border-t border-white/[0.06] pt-3">
-        <p className="text-[11px] leading-4 text-zinc-400">{output.note}</p>
+        <p className="text-[0.6875rem] leading-4 text-zinc-400">
+          {output.note}
+        </p>
         {caveat && (
-          <p className="text-[11px] leading-4 text-zinc-500">{caveat}</p>
+          <p className="text-[0.6875rem] leading-4 text-zinc-500">{caveat}</p>
         )}
       </div>
     </div>
@@ -238,7 +242,7 @@ export function ZoneQualityLight({
     <>
       <button
         aria-label={`Signal path: ${text.label}`}
-        className={`relative z-30 inline-flex items-center gap-1.5 rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-medium transition hover:border-white/25 hover:bg-white/[0.06] ${QUALITY_TONES[quality].text}`}
+        className={`relative z-30 inline-flex items-center gap-1.5 rounded-full border border-white/10 px-2 py-0.5 text-[0.6875rem] font-medium transition hover:border-white/25 hover:bg-white/[0.06] ${QUALITY_TONES[quality].text}`}
         data-quality-light={quality}
         onClick={(event) => {
           event.stopPropagation();

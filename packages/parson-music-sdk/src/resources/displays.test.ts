@@ -236,13 +236,18 @@ test("the quality chip reads the file and, where planned, the path", () => {
     tier: "Hi-Res",
     path: null,
     light: "lossless",
+    compact: "FLAC 24/96 · Hi-Res",
   });
   expect(
     displayQualityChip(
       track(),
       zone({ quality: "lossless", bit_perfect: true }),
     ),
-  ).toMatchObject({ path: "Bit-perfect", light: "lossless" });
+  ).toMatchObject({
+    path: "Bit-perfect",
+    light: "lossless",
+    compact: "FLAC 24/96 · Bit-perfect",
+  });
   expect(
     displayQualityChip(track(), zone({ quality: "high", bit_perfect: false })),
   ).toMatchObject({ path: "High quality", light: "high" });

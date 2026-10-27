@@ -49,7 +49,7 @@ function GroupColumn({
   const hidden = values.length - shown.length;
   return (
     <section aria-label={group.label} className="min-w-0">
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+      <h3 className="mb-2 text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-zinc-500">
         {group.label}
       </h3>
       {group.values.length > 10 && (
@@ -72,7 +72,7 @@ function GroupColumn({
               <button
                 aria-pressed={chip.selected}
                 className={cn(
-                  "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors",
+                  "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.8125rem] transition-colors",
                   chip.selected
                     ? "bg-white/12 text-white"
                     : "text-zinc-300 hover:bg-white/6 hover:text-white",
@@ -170,7 +170,7 @@ export function FocusPanel({
           aria-controls="focus-groups"
           aria-expanded={open}
           className={cn(
-            "inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-[13px] font-semibold transition-colors",
+            "inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-[0.8125rem] font-semibold transition-colors",
             open || active
               ? "bg-white text-black"
               : "bg-white/8 text-zinc-100 hover:bg-white/14",
@@ -183,7 +183,7 @@ export function FocusPanel({
           <Filter className="h-3.5 w-3.5" />
           Focus
           {active > 0 && (
-            <span className="rounded-full bg-black px-1.5 text-[11px] leading-4 text-white tabular-nums">
+            <span className="rounded-full bg-black px-1.5 text-[0.6875rem] leading-4 text-white tabular-nums">
               {active}
             </span>
           )}
@@ -198,7 +198,7 @@ export function FocusPanel({
           <button
             aria-pressed={hires.selected}
             className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-bold uppercase tracking-[0.08em] transition-colors",
+              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[0.75rem] font-bold uppercase tracking-[0.08em] transition-colors",
               hires.selected
                 ? "border-amber-300/70 bg-amber-300 text-black"
                 : "border-amber-300/35 text-amber-200 hover:border-amber-300/70 hover:bg-amber-300/10",
@@ -210,7 +210,7 @@ export function FocusPanel({
             Hi-Res only
             <span
               className={cn(
-                "text-[11px] font-semibold tabular-nums",
+                "text-[0.6875rem] font-semibold tabular-nums",
                 hires.selected ? "text-black/70" : "text-amber-200/70",
               )}
             >
@@ -223,7 +223,7 @@ export function FocusPanel({
           .map((chip) => (
             <button
               aria-label={`Remove ${chip.label}`}
-              className="group inline-flex h-8 max-w-60 items-center gap-1.5 rounded-full bg-white/12 pl-3 pr-2 text-[13px] font-medium text-white transition-colors hover:bg-white/18"
+              className="group inline-flex h-8 max-w-60 items-center gap-1.5 rounded-full bg-white/12 pl-3 pr-2 text-[0.8125rem] font-medium text-white transition-colors hover:bg-white/18"
               key={chip.key}
               onClick={() => onChange(removeFocusChip(selection, chip.key))}
               type="button"
@@ -232,7 +232,7 @@ export function FocusPanel({
               <X className="h-3.5 w-3.5 shrink-0 text-zinc-400 group-hover:text-white" />
             </button>
           ))}
-        <div className="ml-auto flex items-center gap-3 pl-2 text-[13px]">
+        <div className="ml-auto flex items-center gap-3 pl-2 text-[0.8125rem]">
           {loading && (
             <Loader2
               aria-label="Updating"

@@ -101,14 +101,14 @@ export default function AlbumCard({
       </div>
       <div className="pointer-events-none relative z-1 mt-2.5 w-full">
         <p
-          className="truncate text-[13.5px] font-medium leading-5 text-mujin-text"
+          className="truncate text-[0.8438rem] font-medium leading-5 text-mujin-text"
           title={album_name}
         >
           {album_name}
         </p>
 
         {artist_name && (
-          <p className="flex min-w-0 text-[12.5px] leading-5 text-mujin-text-secondary">
+          <p className="flex min-w-0 text-[0.7812rem] leading-5 text-mujin-text-secondary">
             {typeLabel && (
               <span className="shrink-0">{typeLabel}&nbsp;·&nbsp;</span>
             )}
