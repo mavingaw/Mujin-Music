@@ -42,7 +42,8 @@
     "uuid": "11.1.1",
     "decode-uri-component": "0.5.0",
     "image-size": "2.0.3",
-    "@node-minify/core>glob": "10.5.0"
+    "@node-minify/core>glob": "10.5.0",
+    "qs": "6.16.2"
   },
   "patchedDependencies": {
     "braces@3.0.3": "patches/braces@3.0.3.patch",
