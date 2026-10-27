@@ -89,11 +89,11 @@ export function LyricsSheet({
             </span>
           )}
           <div className="min-w-0">
-            <p className="mj-eyebrow text-[10px]!">Lyrics</p>
-            <DialogTitle className="mj-title truncate text-[20px] text-mujin-text">
+            <p className="mj-eyebrow text-[0.625rem]!">Lyrics</p>
+            <DialogTitle className="mj-title truncate text-[1.25rem] text-mujin-text">
               {request.title}
             </DialogTitle>
-            <DialogDescription className="truncate text-[13px] text-mujin-text-secondary">
+            <DialogDescription className="truncate text-[0.8125rem] text-mujin-text-secondary">
               {request.artist}
             </DialogDescription>
           </div>
@@ -114,30 +114,30 @@ export function LyricsSheet({
                   className="grid grid-cols-[3rem_minmax(0,1fr)] items-baseline gap-3"
                   key={`${line.time}-${index}`}
                 >
-                  <span className="mj-tnum text-right font-mono text-[11px] text-mujin-text-tertiary">
+                  <span className="mj-tnum text-right font-mono text-[0.6875rem] text-mujin-text-tertiary">
                     {stamp(line.time)}
                   </span>
-                  <span className="text-[15px] leading-6 text-mujin-text">
+                  <span className="text-[0.9375rem] leading-6 text-mujin-text">
                     {line.text}
                   </span>
                 </li>
               ))}
             </ol>
           ) : plain ? (
-            <p className="whitespace-pre-line text-[15px] leading-7 text-mujin-text">
+            <p className="whitespace-pre-line text-[0.9375rem] leading-7 text-mujin-text">
               {plain}
             </p>
           ) : (
             <div role="status">
-              <p className="mj-title text-[20px] text-mujin-text">
+              <p className="mj-title text-[1.25rem] text-mujin-text">
                 {empty.title}
               </p>
-              <p className="mt-1.5 text-[13px] leading-5 text-mujin-text-secondary">
+              <p className="mt-1.5 text-[0.8125rem] leading-5 text-mujin-text-secondary">
                 {empty.detail}
               </p>
               {empty.retry && (
                 <button
-                  className="mt-4 rounded-full border border-white/15 px-4 py-2 text-[12.5px] font-semibold text-mujin-text hover:bg-white/[0.06]"
+                  className="mt-4 rounded-full border border-white/15 px-4 py-2 text-[0.7812rem] font-semibold text-mujin-text hover:bg-white/[0.06]"
                   onClick={() => void lyrics.refetch()}
                   type="button"
                 >
@@ -158,7 +158,7 @@ export function LyricsSheet({
           )}
           {request.item && (
             <button
-              className="mj-primary inline-flex h-9 items-center gap-2 rounded-full px-4 text-[13px] font-semibold"
+              className="mj-primary inline-flex h-9 items-center gap-2 rounded-full px-4 text-[0.8125rem] font-semibold"
               onClick={() => onFollowAlong(request)}
               type="button"
             >

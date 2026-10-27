@@ -209,7 +209,7 @@ export function ConvolutionControls({
           data-convolution-filter={selected.id}
         >
           <div className="flex items-start gap-2">
-            <p className="min-w-0 flex-1 text-[11px] leading-4 text-zinc-400">
+            <p className="min-w-0 flex-1 text-[0.6875rem] leading-4 text-zinc-400">
               <span className="font-medium text-zinc-200">{selected.name}</span>
               {" · "}
               {describeFilter(selected)}. Peaks at{" "}
@@ -228,13 +228,13 @@ export function ConvolutionControls({
             ) : null}
           </div>
           <FilterCurve filter={selected} />
-          <div className="flex justify-between text-[10px] text-zinc-600">
+          <div className="flex justify-between text-[0.625rem] text-zinc-600">
             <span>20 Hz</span>
             <span>1 kHz</span>
             <span>20 kHz</span>
           </div>
           {headroomShort ? (
-            <p className="flex flex-wrap items-center gap-2 text-[11px] text-amber-300/90">
+            <p className="flex flex-wrap items-center gap-2 text-[0.6875rem] text-amber-300/90">
               <AlertTriangle className="h-3 w-3" />
               This filter boosts up to{" "}
               {formatDecibels(selected.summary.peak_gain_db)}.
@@ -252,7 +252,7 @@ export function ConvolutionControls({
               </button>
             </p>
           ) : null}
-          <p className="text-[10px] leading-4 text-zinc-500">
+          <p className="text-[0.625rem] leading-4 text-zinc-500">
             {serverRun
               ? `The server convolves in 64-bit float with partitioned FFT convolution, no added delay${selected.summary.sample_rate ? `, converting the filter from ${formatSampleRate(selected.summary.sample_rate)} when a track plays at another rate` : ""}.`
               : "This browser convolves with its Web Audio ConvolverNode in 32-bit float, unnormalised, after fetching the filter from the server."}
@@ -260,7 +260,7 @@ export function ConvolutionControls({
         </div>
       ) : null}
       {upload.error || remove.error ? (
-        <p className={cn("text-[11px] text-red-300")}>
+        <p className={cn("text-[0.6875rem] text-red-300")}>
           {outputErrorMessage(
             upload.error ?? remove.error,
             "The filter could not be saved.",
@@ -268,7 +268,7 @@ export function ConvolutionControls({
         </p>
       ) : null}
       {!isAdmin && !filters.data?.length ? (
-        <p className="text-[11px] text-zinc-500">
+        <p className="text-[0.6875rem] text-zinc-500">
           An administrator can upload WAV impulse responses (REW, Dirac,
           Acourate and similar exports).
         </p>

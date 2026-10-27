@@ -107,7 +107,7 @@ export function UnlockEntry({
       <p
         aria-live="polite"
         className={cn(
-          "mt-1.5 min-h-4 text-[11px]",
+          "mt-1.5 min-h-4 text-[0.6875rem]",
           error ? "text-rose-300" : "text-zinc-500",
         )}
       >

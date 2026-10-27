@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { alpha, palette, tint } from "@/constants/colors";
 import { libraryRowDetail, type LibraryRow } from "@/lib/known-libraries";
 
 /** A softly pulsing dot shown while the network is being searched. */
@@ -113,7 +113,7 @@ export function LibraryList({
             ]}
           >
             <View style={styles.icon}>
-              <Server color="white" size={20} />
+              <Server color={palette.text} size={20} />
               <View
                 style={[
                   styles.dot,
@@ -130,7 +130,7 @@ export function LibraryList({
               </Text>
             </View>
             {connecting ? (
-              <ActivityIndicator color="white" size="small" />
+              <ActivityIndicator color={palette.text} size="small" />
             ) : row.current ? (
               <Text style={styles.badge}>In use</Text>
             ) : (
@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  currentCard: { borderColor: "rgba(163,201,139,0.45)" },
+  currentCard: { borderColor: alpha(palette.success, 0.45) },
   pressed: { opacity: 0.75 },
   dimmed: { opacity: 0.55 },
   icon: {
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.07)",
+    backgroundColor: tint(0.07),
   },
   dot: {
     position: "absolute",
@@ -177,19 +177,19 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: palette.elevatedStrong,
   },
-  online: { backgroundColor: "#a3c98b" },
+  online: { backgroundColor: palette.success },
   offline: { backgroundColor: palette.muted },
   text: { flex: 1, minWidth: 0 },
-  name: { color: "white", fontSize: 16, fontWeight: "800" },
+  name: { color: palette.text, fontSize: 16, fontWeight: "800" },
   detail: { color: palette.secondary, fontSize: 13, marginTop: 3 },
   badge: {
-    color: "#bcd8a9",
+    color: palette.success,
     fontSize: 12,
     fontWeight: "800",
     overflow: "hidden",
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(163,201,139,0.4)",
+    borderColor: alpha(palette.success, 0.4),
     paddingHorizontal: 9,
     paddingVertical: 3,
   },
@@ -210,13 +210,13 @@ const styles = StyleSheet.create({
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: "#a3c98b",
+    backgroundColor: palette.success,
   },
   searchingCore: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#a3c98b",
+    backgroundColor: palette.success,
   },
   searchingText: { color: palette.secondary, fontSize: 14 },
 });

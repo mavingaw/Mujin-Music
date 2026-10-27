@@ -55,9 +55,9 @@ export function AwayFromHome({
       <View style={styles.status}>
         <View style={styles.icon}>
           {route === "away" ? (
-            <Globe color="white" size={20} />
+            <Globe color={palette.text} size={20} />
           ) : (
-            <House color="white" size={20} />
+            <House color={palette.text} size={20} />
           )}
         </View>
         <View style={{ flex: 1 }}>
@@ -113,7 +113,7 @@ export function AwayFromHome({
             onPress={() => void runChecks()}
             style={[styles.check, checking && { opacity: 0.5 }]}
           >
-            <ShieldCheck color="white" size={18} />
+            <ShieldCheck color={palette.text} size={18} />
             <Text style={styles.checkText}>
               {checking ? "Checking from this phone…" : "Check from here"}
             </Text>
@@ -143,24 +143,24 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: "#29292e",
+    backgroundColor: palette.surfaceStrong,
     alignItems: "center",
     justifyContent: "center",
   },
-  title: { color: "white", fontWeight: "800", fontSize: 15 },
+  title: { color: palette.text, fontWeight: "800", fontSize: 15 },
   detail: { color: palette.secondary, fontSize: 13, marginTop: 2 },
   caption: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
   row: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 40 },
-  rowTitle: { color: "white", fontSize: 14, fontWeight: "600" },
+  rowTitle: { color: palette.text, fontSize: 14, fontWeight: "600" },
   light: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#5c5955",
+    backgroundColor: palette.muted,
     marginLeft: 4,
   },
-  good: { backgroundColor: "#a3c98b" },
-  bad: { backgroundColor: "#f2473f" },
+  good: { backgroundColor: palette.success },
+  bad: { backgroundColor: palette.danger },
   check: {
     marginTop: 4,
     height: 42,
@@ -172,5 +172,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
   },
-  checkText: { color: "white", fontWeight: "700" },
+  checkText: { color: palette.text, fontWeight: "700" },
 });

@@ -49,7 +49,7 @@ export function EditorialText({
     <div className="space-y-3">
       <div
         lang={text.language}
-        className={`space-y-3 text-[15px] leading-7 text-zinc-300 ${
+        className={`space-y-3 text-[0.9375rem] leading-7 text-zinc-300 ${
           expanded || !long ? "" : "overflow-hidden"
         }`}
         style={

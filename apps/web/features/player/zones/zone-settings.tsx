@@ -189,7 +189,7 @@ function ZoneSettingsForm({
                 placeholder={defaultName}
                 value={draft.name}
               />
-              <span className="mt-1 flex items-center gap-2 text-[11px] text-zinc-600">
+              <span className="mt-1 flex items-center gap-2 text-[0.6875rem] text-zinc-600">
                 <span className="truncate">Device name: {defaultName}</span>
                 {draft.name.trim() !== defaultName && (
                   <button
@@ -314,7 +314,7 @@ function ZoneSettingsForm({
                 unit="dB"
                 value={draft.leveling_adjustment_db}
               />
-              <p className="text-[11px] leading-4 text-zinc-500">
+              <p className="text-[0.6875rem] leading-4 text-zinc-500">
                 Loudness is measured once per track (EBU R128). Peaks stay under
                 -1 dBTP, so quiet tracks are only raised as far as they can go
                 without clipping.
@@ -342,7 +342,7 @@ function ZoneSettingsForm({
                   />
                   Comfort limit
                 </label>
-                <p className="ml-6 mt-0.5 text-[11px] leading-4 text-zinc-500">
+                <p className="ml-6 mt-0.5 text-[0.6875rem] leading-4 text-zinc-500">
                   Volume sliders stop here; the + button can still go past it.
                 </p>
                 {draft.comfort_volume !== null && (
@@ -359,7 +359,7 @@ function ZoneSettingsForm({
               </div>
               <div>
                 <p className="text-sm text-zinc-200">Safety limits</p>
-                <p className="mt-0.5 text-[11px] leading-4 text-zinc-500">
+                <p className="mt-0.5 text-[0.6875rem] leading-4 text-zinc-500">
                   Hard limits: nothing sets the volume outside this range.
                 </p>
                 <div className="mt-2 space-y-2">
@@ -433,7 +433,7 @@ function ZoneSettingsForm({
                 </SelectContent>
               </Select>
             </Row>
-            <p className="text-[11px] leading-4 text-zinc-500">
+            <p className="text-[0.6875rem] leading-4 text-zinc-500">
               {draft.volume_control === "home_assistant"
                 ? "Volume up, down, set and mute go to Home Assistant as events on this zone's volume request entity; an automation carries them out, for example on an amplifier with an IR blaster. Mujin Music leaves the audio at full level."
                 : "Mujin Music sets the volume itself. Hand it to Home Assistant when an amplifier Mujin Music cannot reach should follow the volume controls."}
@@ -445,7 +445,7 @@ function ZoneSettingsForm({
           <div ref={dspRef}>
             <Section title="DSP">
               <div className="flex items-center justify-between gap-3">
-                <p className="min-w-0 text-[13px] text-zinc-300">
+                <p className="min-w-0 text-[0.8125rem] text-zinc-300">
                   {dspSummary(initial.dsp)}
                 </p>
                 <button
@@ -460,7 +460,7 @@ function ZoneSettingsForm({
                   Open DSP engine
                 </button>
               </div>
-              <p className="text-[11px] leading-4 text-zinc-500">
+              <p className="text-[0.6875rem] leading-4 text-zinc-500">
                 {isThisDevice
                   ? "This browser runs the zone's chain: headroom, parametric EQ, sample rate conversion, crossfeed and convolution."
                   : "The server runs the zone's chain in 64-bit float before its output: headroom, parametric EQ, sample rate conversion, crossfeed and convolution."}
@@ -484,7 +484,7 @@ function ZoneSettingsForm({
                   />
                   <span>
                     Exclusive mode (bit-perfect)
-                    <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">
+                    <span className="mt-0.5 block text-[0.6875rem] leading-4 text-zinc-500">
                       Opens the device directly at each file&apos;s own sample
                       rate and bit depth. Other apps cannot use it while Mujin
                       Music plays.
@@ -607,7 +607,7 @@ function ZoneSettingsForm({
                       </SelectContent>
                     </Select>
                   </Row>
-                  <p className="text-[11px] leading-4 text-zinc-500">
+                  <p className="text-[0.6875rem] leading-4 text-zinc-500">
                     {
                       DSD_STRATEGIES.find(
                         (strategy) => strategy.value === draft.dsd_strategy,
@@ -670,7 +670,7 @@ function ZoneSettingsForm({
                 <span className="flex items-center gap-1.5">
                   <Lock className="h-3.5 w-3.5" /> Private zone
                 </span>
-                <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">
+                <span className="mt-0.5 block text-[0.6875rem] leading-4 text-zinc-500">
                   {zone.kind === "device"
                     ? "Only the computer this device is attached to sees and controls it. Remotes cannot see it, and it stays out of groups."
                     : isThisDevice
@@ -685,7 +685,10 @@ function ZoneSettingsForm({
         {settings?.notes && settings.notes.length > 0 && (
           <ul className="space-y-1">
             {settings.notes.map((note) => (
-              <li className="text-[11px] leading-4 text-zinc-500" key={note}>
+              <li
+                className="text-[0.6875rem] leading-4 text-zinc-500"
+                key={note}
+              >
                 {note}
               </li>
             ))}
@@ -693,7 +696,7 @@ function ZoneSettingsForm({
         )}
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-white/10 px-5 py-3">
-        <p className="min-w-0 text-[11px] text-amber-300" role="status">
+        <p className="min-w-0 text-[0.6875rem] text-amber-300" role="status">
           {problem}
         </p>
         <div className="flex shrink-0 gap-2">
@@ -766,7 +769,9 @@ function Row({
         {children}
       </div>
       {note && (
-        <p className="mt-0.5 text-[11px] leading-4 text-zinc-500">{note}</p>
+        <p className="mt-0.5 text-[0.6875rem] leading-4 text-zinc-500">
+          {note}
+        </p>
       )}
     </div>
   );

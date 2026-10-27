@@ -229,7 +229,7 @@ export function OverviewPanel({
       </div>
 
       <div>
-        <h2 className="mb-3 text-[15px] font-semibold text-white">
+        <h2 className="mb-3 text-[0.9375rem] font-semibold text-white">
           Needs attention
         </h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -298,7 +298,7 @@ export function OverviewPanel({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-4 py-3.5">
-      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">
+      <p className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-zinc-500">
         {label}
       </p>
       <p className="mt-1 truncate text-2xl font-semibold tabular-nums tracking-tight text-white">

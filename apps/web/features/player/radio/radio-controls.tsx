@@ -136,7 +136,7 @@ export function RadioQueueSection({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-[15px] font-semibold text-white">
+          <p className="flex items-center gap-2 text-[0.9375rem] font-semibold text-white">
             <Radio
               aria-hidden="true"
               className={`h-4 w-4 ${radio.enabled ? "text-mujin-copper" : "text-mujin-text-disabled"}`}

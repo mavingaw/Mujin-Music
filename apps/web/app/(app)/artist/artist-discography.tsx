@@ -24,7 +24,7 @@ function QualityBadge({ album }: { album: DiscographyFocusAlbum }) {
   return (
     <span
       className={cn(
-        "rounded px-1.5 py-px text-[10px] font-bold tabular-nums tracking-wide",
+        "rounded px-1.5 py-px text-[0.625rem] font-bold tabular-nums tracking-wide",
         album.quality === "hires"
           ? "bg-amber-300/15 text-amber-200 ring-1 ring-amber-300/30"
           : album.quality === "lossless"
@@ -89,7 +89,7 @@ function AlbumTile({
           >
             {entry.album.name}
           </h4>
-          <p className="mt-0.5 truncate text-[13px] text-zinc-400">
+          <p className="mt-0.5 truncate text-[0.8125rem] text-zinc-400">
             {[
               entry.artist.id !== personId ? entry.artist.name : null,
               ...performers,
@@ -102,7 +102,7 @@ function AlbumTile({
             <QualityBadge album={entry} />
             {ownRoles.slice(0, 2).map((role) => (
               <span
-                className="rounded-full bg-white/6 px-2 py-px text-[10px] font-semibold uppercase tracking-wide text-zinc-400"
+                className="rounded-full bg-white/6 px-2 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-zinc-400"
                 key={role}
               >
                 {focusRoleLabel(role)}

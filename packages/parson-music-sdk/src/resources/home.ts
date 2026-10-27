@@ -9,8 +9,15 @@ export interface HomeAlbumQuality {
   bit_depth: number | null;
   /** Every track with a known codec is lossless. */
   lossless: boolean;
-  /** Lossless and above CD resolution. */
+  /** Every track is lossless and above CD resolution. */
   hi_res: boolean;
+  /** More than one codec, or lossless mixed with lossy. */
+  mixed?: boolean;
+  /**
+   * The badge text the server chose ("24/96 FLAC", "MP3 320", "Mixed");
+   * the Library grid shows the same text for the same album.
+   */
+  label?: string;
 }
 
 /** A compact album for discovery rows (no track list). */
@@ -128,6 +135,7 @@ export function albumQualityLabel(
   quality: HomeAlbumQuality | null | undefined,
 ): string | null {
   if (!quality) return null;
+  if (quality.label) return quality.label;
   if (quality.lossless && quality.bit_depth && quality.sample_rate) {
     const khz = quality.sample_rate / 1000;
     const rate = Number.isInteger(khz) ? String(khz) : khz.toFixed(1);

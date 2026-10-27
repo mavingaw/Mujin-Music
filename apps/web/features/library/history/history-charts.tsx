@@ -93,7 +93,7 @@ export function ColumnChart({
       <div className="mt-1.5 flex gap-[2px]" aria-hidden="true">
         {data.map((datum, index) => (
           <span
-            className="min-w-0 flex-1 truncate text-center text-[10px] tabular-nums text-zinc-600"
+            className="min-w-0 flex-1 truncate text-center text-[0.625rem] tabular-nums text-zinc-600"
             key={datum.key}
           >
             {index % labelEvery === 0 ? datum.label : ""}
@@ -118,7 +118,7 @@ export function StatTile({
   const negative = change?.startsWith("−");
   return (
     <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3.5">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+      <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-zinc-500">
         {label}
       </p>
       <p className="mt-1 text-2xl font-bold tabular-nums text-white">{value}</p>
@@ -198,7 +198,7 @@ export function RankedList({
                     style={{ width: `${(item.plays / max) * 100}%` }}
                   />
                 </span>
-                <span className="w-24 shrink-0 truncate text-right text-[11px] tabular-nums text-zinc-500">
+                <span className="w-24 shrink-0 truncate text-right text-[0.6875rem] tabular-nums text-zinc-500">
                   {item.plays} {item.plays === 1 ? "play" : "plays"}
                 </span>
               </span>

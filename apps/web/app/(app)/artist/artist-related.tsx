@@ -98,7 +98,7 @@ function BannerPerson({
   const body = (
     <>
       <Portrait imageUrl={person.image_url} name={person.name} tone={tone} />
-      <span className="mj-title absolute inset-x-2.5 bottom-3 text-[15px] leading-tight text-mujin-text drop-shadow [overflow-wrap:anywhere] [hyphens:auto] sm:inset-x-3 sm:text-[22px]">
+      <span className="mj-title absolute inset-x-2.5 bottom-3 text-[0.9375rem] leading-tight text-mujin-text drop-shadow [overflow-wrap:anywhere] [hyphens:auto] sm:inset-x-3 sm:text-[1.375rem]">
         {person.name}
       </span>
     </>
@@ -245,7 +245,7 @@ function InfluenceRow({ person }: { person: InfluencePerson }) {
     <>
       <PersonAvatar imageUrl={person.image_url} name={person.name} size={44} />
       <span className="min-w-0">
-        <span className="block truncate text-[15px] font-medium text-zinc-100 group-hover:text-white">
+        <span className="block truncate text-[0.9375rem] font-medium text-zinc-100 group-hover:text-white">
           {person.name}
         </span>
         {line && (

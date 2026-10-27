@@ -34,7 +34,7 @@ export function ArtistRoundel({
   return (
     <span
       className={cn(
-        "relative mx-auto block aspect-square w-full overflow-hidden rounded-full bg-mujin-surface-1 shadow-[0_0_0_1px_rgba(242,238,230,0.07),0_18px_40px_-20px_rgba(0,0,0,0.9)]",
+        "relative mx-auto block aspect-square w-full overflow-hidden rounded-full bg-mujin-surface-1 shadow-[0_0_0_1px_rgb(var(--mj-ink)/0.07),0_18px_40px_-20px_rgba(0,0,0,0.9)]",
         photo && "mj-duotone mj-duotone-soft",
         className,
       )}
@@ -62,7 +62,7 @@ export function ArtistRoundel({
           )}
           <span
             aria-hidden="true"
-            className="absolute inset-0 bg-[radial-gradient(80%_80%_at_30%_20%,rgba(217,139,95,0.22),transparent_70%),linear-gradient(to_bottom,rgba(10,10,11,0.35),rgba(10,10,11,0.7))]"
+            className="absolute inset-0 bg-[radial-gradient(80%_80%_at_30%_20%,rgb(var(--mj-accent-rgb)/0.22),transparent_70%),linear-gradient(to_bottom,rgb(var(--mj-canvas-rgb)/0.35),rgb(var(--mj-canvas-rgb)/0.7))]"
           />
           <span
             aria-hidden="true"

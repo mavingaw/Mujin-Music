@@ -8,7 +8,7 @@ import {
 import { Star } from "lucide-react-native";
 import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
 /** One chip per editorial source with text; the active one filled. */
@@ -71,10 +71,10 @@ export function ReviewScoresBlock({ scores }: { scores: ReviewScores }) {
                   <Star
                     color={
                       index < stars.full + stars.half
-                        ? "#e6c599"
-                        : "rgba(255,255,255,0.18)"
+                        ? palette.brass
+                        : tint(0.18)
                     }
-                    fill={index < stars.full ? "#e6c599" : "transparent"}
+                    fill={index < stars.full ? palette.brass : "transparent"}
                     key={index}
                     size={13}
                   />
@@ -129,27 +129,27 @@ const styles = StyleSheet.create({
   chip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: tint(0.12),
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
   chipActive: {
-    borderColor: "rgba(255,255,255,0.45)",
-    backgroundColor: "rgba(255,255,255,0.12)",
+    borderColor: tint(0.45),
+    backgroundColor: tint(0.12),
   },
   chipText: { color: palette.secondary, fontSize: 12, fontWeight: "600" },
-  chipTextActive: { color: "white" },
+  chipTextActive: { color: palette.text },
   scores: {
     marginTop: 14,
     padding: 14,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.03)",
+    borderColor: tint(0.08),
+    backgroundColor: tint(0.03),
     gap: 8,
   },
   scoresTitle: {
-    color: "#c7c2b9",
+    color: palette.secondary,
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 1.2,
@@ -161,9 +161,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  publication: { color: "#c7c2b9", fontSize: 13, flex: 1 },
+  publication: { color: palette.secondary, fontSize: 13, flex: 1 },
   stars: { flexDirection: "row", gap: 2 },
-  rating: { color: "white", fontSize: 13, fontWeight: "700" },
+  rating: { color: palette.text, fontSize: 13, fontWeight: "700" },
   attribution: { color: palette.muted, fontSize: 11, lineHeight: 16 },
   link: { color: palette.secondary, textDecorationLine: "underline" },
 });

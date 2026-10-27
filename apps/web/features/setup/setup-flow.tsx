@@ -362,7 +362,7 @@ function OnlineMetadataChoice({
             onCheckedChange={(value) => onChange(value === true)}
           />
         </span>
-        <span className="mt-1 block text-[13px] leading-5 text-zinc-400">
+        <span className="mt-1 block text-[0.8125rem] leading-5 text-zinc-400">
           Mujin Music looks your artists and albums up on MusicBrainz, then
           reads biographies and album reviews from Wikipedia and photos from
           Wikimedia Commons, with their sources and licences shown. Only artist

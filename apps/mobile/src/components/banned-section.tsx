@@ -119,7 +119,7 @@ export function BannedSection() {
         </Text>
       ) : null}
       {loading ? (
-        <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+        <ActivityIndicator color={palette.text} style={{ marginTop: 40 }} />
       ) : filter === "disliked" ? (
         dislikes.data?.length ? (
           dislikes.data.map(({ song }) => (
@@ -243,10 +243,10 @@ const styles = StyleSheet.create({
   },
   filterActive: {
     backgroundColor: palette.elevatedStrong,
-    borderColor: "white",
+    borderColor: palette.text,
   },
   filterText: { color: palette.secondary, fontSize: 12, fontWeight: "700" },
-  filterTextActive: { color: "white" },
+  filterTextActive: { color: palette.text },
   error: { color: palette.danger, paddingHorizontal: 20, paddingTop: 10 },
   row: {
     alignItems: "center",
@@ -264,7 +264,7 @@ const styles = StyleSheet.create({
     right: -2,
   },
   labels: { flex: 1 },
-  name: { color: "white", fontSize: 15, fontWeight: "700" },
+  name: { color: palette.text, fontSize: 15, fontWeight: "700" },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 4 },
   action: {
     borderColor: palette.borderStrong,
@@ -274,9 +274,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 14,
   },
-  actionText: { color: "white", fontSize: 13, fontWeight: "700" },
+  actionText: { color: palette.text, fontSize: 13, fontWeight: "700" },
   empty: { alignItems: "center", paddingHorizontal: 32, paddingTop: 48 },
-  emptyTitle: { color: "white", fontSize: 17, fontWeight: "700" },
+  emptyTitle: { color: palette.text, fontSize: 17, fontWeight: "700" },
   emptyText: {
     color: palette.secondary,
     fontSize: 14,

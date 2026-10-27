@@ -14,7 +14,7 @@ import {
 } from "@parson/music-sdk";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { palette } from "@/constants/colors";
+import { alpha, palette } from "@/constants/colors";
 import { useState } from "react";
 import {
   networkPlayerLine,
@@ -342,24 +342,29 @@ const styles = StyleSheet.create({
     borderTopColor: palette.borderStrong,
     gap: 8,
   },
-  title: { color: "white", fontSize: 15, fontWeight: "700" },
+  title: { color: palette.text, fontSize: 15, fontWeight: "700" },
   note: { color: palette.secondary, fontSize: 12, lineHeight: 17 },
   session: {
     gap: 6,
     padding: 10,
     borderRadius: 12,
-    backgroundColor: "rgba(217,139,95,0.08)",
+    backgroundColor: alpha(palette.accent, 0.08),
   },
   row: { flexDirection: "row", alignItems: "center", gap: 8 },
-  sessionName: { flex: 1, color: "white", fontSize: 13, fontWeight: "600" },
+  sessionName: {
+    flex: 1,
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: "600",
+  },
   sessionQuality: { fontSize: 12, fontWeight: "700" },
   device: { flexDirection: "row", alignItems: "center", gap: 10 },
   deviceText: { flex: 1, minWidth: 0 },
-  deviceName: { color: "white", fontSize: 13, fontWeight: "600" },
+  deviceName: { color: palette.text, fontSize: 13, fontWeight: "600" },
   detail: { color: palette.secondary, fontSize: 12 },
-  network: { color: "#f0c3a6", fontSize: 12 },
+  network: { color: palette.accentSoft, fontSize: 12 },
   tested: { color: "rgba(230,197,153,0.85)", fontSize: 11, lineHeight: 15 },
-  unsupported: { color: "#f2473f", fontSize: 11 },
+  unsupported: { color: palette.danger, fontSize: 11 },
   button: {
     minHeight: 32,
     justifyContent: "center",
@@ -371,9 +376,9 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.4 },
   chosen: {
     borderColor: signalQualityColors.lossless,
-    backgroundColor: "rgba(217,139,95,0.16)",
+    backgroundColor: alpha(palette.accent, 0.16),
   },
   strategies: { gap: 6 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  buttonText: { color: "white", fontSize: 12, fontWeight: "600" },
+  buttonText: { color: palette.text, fontSize: 12, fontWeight: "600" },
 });

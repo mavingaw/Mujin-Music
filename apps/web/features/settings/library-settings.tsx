@@ -271,7 +271,7 @@ export default function LibrarySettings() {
 
       <section className="border-t border-white/[0.08] pt-7">
         <Link
-          className="group flex items-center gap-4 rounded-xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(217,139,95,0.10),rgba(255,255,255,0.02))] px-4 py-4 transition-colors hover:border-white/[0.16]"
+          className="group flex items-center gap-4 rounded-xl border border-white/[0.08] bg-[linear-gradient(135deg,rgb(var(--mj-accent-rgb)/0.10),rgb(var(--mj-ink)/0.02))] px-4 py-4 transition-colors hover:border-white/[0.16]"
           href="/library/tools"
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-mujin-copper/15 text-mujin-copper">

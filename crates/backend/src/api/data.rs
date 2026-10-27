@@ -232,6 +232,8 @@ struct PersonalDataExport {
     saved_focuses: Vec<serde_json::Value>,
     notes: Vec<serde_json::Value>,
     listen_later: Vec<serde_json::Value>,
+    /// Theme, colours, type and layout choices.
+    appearance: serde_json::Value,
 }
 
 pub(crate) fn safe_backup_filename(value: &str) -> Option<&str> {
@@ -1583,6 +1585,12 @@ async fn export_personal_data(pool: web::Data<DbPool>, request: HttpRequest) -> 
                  FROM listen_later_item WHERE user_id = ? ORDER BY added_at DESC",
                 &mut connection,
             )?,
+            appearance: serde_json::to_value(
+                crate::api::appearance::load(&mut connection, user_id)
+                    .map_err(|error| error.to_string())?
+                    .appearance,
+            )
+            .unwrap_or_default(),
         })
     })
     .await

@@ -10,7 +10,7 @@ export default function MujinLockup({ className }: { className?: string }) {
   return (
     <svg
       aria-hidden="true"
-      className={cn("text-[#f2eee6]", className)}
+      className={cn("text-mujin-text", className)}
       focusable="false"
       viewBox="0 0 2275 416"
     >
@@ -53,7 +53,7 @@ export default function MujinLockup({ className }: { className?: string }) {
       <g
         clipPath="url(#mj-lockup-music)"
         fill="none"
-        stroke="#8e8a84"
+        style={{ stroke: "var(--color-mujin-text-tertiary, #8e8a84)" }}
         strokeLinecap="butt"
         strokeLinejoin="miter"
         strokeMiterlimit={12}

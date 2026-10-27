@@ -1143,6 +1143,37 @@ pub fn people_credits(
     crate::enrichment::preferences::filter_external_credits(connection, rows)
 }
 
+/// The reason a task gives when its album or artist could not be found. A
+/// rebuild of the in-memory library can briefly miss an item that the
+/// catalogue still holds, so this reason is never final for such an item.
+pub const MISSING_ALBUM_REASON: &str = "the album is no longer in the library";
+pub const MISSING_ARTIST_REASON: &str = "the artist is no longer in the library";
+
+/// Whether the catalogue still holds this album.
+pub fn album_exists(connection: &mut SqliteConnection, album_id: &str) -> QueryResult<bool> {
+    let rows = diesel::sql_query("SELECT id AS value FROM album_entity WHERE id = ?")
+        .bind::<Text, _>(album_id)
+        .load::<ValueRow>(connection)?;
+    Ok(!rows.is_empty())
+}
+
+/// Puts back in the queue every task that was skipped as "no longer in the
+/// library" while the catalogue still holds its album or artist (the
+/// in-memory library was being rebuilt when it ran). Returns how many.
+pub fn requeue_items_missed_while_loading(connection: &mut SqliteConnection) -> QueryResult<usize> {
+    diesel::sql_query(
+        "UPDATE metadata_task
+            SET status = 'pending', attempts = 0, last_error = NULL, not_before = NULL,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE status = 'skipped'
+            AND ((last_error = ? AND entity_id IN (SELECT id FROM album_entity))
+              OR (last_error = ? AND entity_id IN (SELECT id FROM artist_entity)))",
+    )
+    .bind::<Text, _>(MISSING_ALBUM_REASON)
+    .bind::<Text, _>(MISSING_ARTIST_REASON)
+    .execute(connection)
+}
+
 pub fn artist_name(
     connection: &mut SqliteConnection,
     artist_id: &str,
@@ -2277,6 +2308,48 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(task.entity_id, format!("mb:{MACERO}"));
+    }
+
+    #[test]
+    fn items_skipped_while_the_library_reloaded_are_queued_again() {
+        let pool = migrated_memory_pool();
+        let mut connection = pool.get().unwrap();
+        connection
+            .batch_execute(
+                "INSERT INTO artist_entity (id, name, normalized_name) VALUES
+                   ('drake', 'Nick Drake', 'nick drake');
+                 INSERT INTO album_entity (id, title, normalized_title) VALUES
+                   ('pink-moon', 'Pink Moon', 'pink moon');
+                 INSERT INTO metadata_task (provider, entity_type, entity_id, status, last_error)
+                   VALUES ('musicbrainz', 'album', 'pink-moon', 'skipped',
+                           'the album is no longer in the library'),
+                          ('musicbrainz', 'album', 'gone', 'skipped',
+                           'the album is no longer in the library'),
+                          ('musicbrainz', 'artist', 'drake', 'skipped',
+                           'the artist is no longer in the library'),
+                          ('wikidata', 'album', 'pink-moon', 'skipped', 'no Wikidata item');",
+            )
+            .unwrap();
+        assert!(album_exists(&mut connection, "pink-moon").unwrap());
+        assert!(!album_exists(&mut connection, "gone").unwrap());
+        // The album and artist the catalogue still holds go back in the
+        // queue; the album that really left and the real skip stay.
+        assert_eq!(
+            requeue_items_missed_while_loading(&mut connection).unwrap(),
+            2
+        );
+        assert_eq!(
+            requeue_items_missed_while_loading(&mut connection).unwrap(),
+            0
+        );
+        let counts = task_counts(&mut connection).unwrap();
+        assert_eq!(counts.pending, 2);
+        assert_eq!(
+            next_task(&mut connection)
+                .unwrap()
+                .map(|task| task.attempts),
+            Some(0)
+        );
     }
 
     #[test]

@@ -226,13 +226,13 @@ export function VersionGroupCard({
                 src={album.cover_url}
               />
               {album.preferred && (
-                <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-mujin-copper-hover backdrop-blur">
+                <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-black/75 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-mujin-copper-hover backdrop-blur">
                   <Star className="h-3 w-3 fill-current" />
                   Preferred
                 </span>
               )}
               {album.hidden && (
-                <span className="absolute left-2 top-2 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                <span className="absolute left-2 top-2 rounded-full bg-black/75 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-zinc-400">
                   Hidden
                 </span>
               )}
@@ -255,7 +255,7 @@ export function VersionGroupCard({
             <div className="mt-2 flex items-center gap-1.5">
               <QualityBadge quality={album.quality} />
               {album.mixed && (
-                <span className="text-[10px] text-zinc-500">mixed</span>
+                <span className="text-[0.625rem] text-zinc-500">mixed</span>
               )}
             </div>
             <div className="mt-2.5 flex items-center gap-1">

@@ -9,12 +9,12 @@ import { Linking, StyleSheet, Text, View } from "react-native";
 
 import { palette } from "@/constants/colors";
 
-const AMBER = "#e6c599";
+const AMBER = palette.brass;
 
 const SIGNAL_ICON = {
-  match: { Icon: Check, color: "#bcd8a9" },
+  match: { Icon: Check, color: palette.success },
   partial: { Icon: CircleHelp, color: AMBER },
-  mismatch: { Icon: X, color: "#f9b3af" },
+  mismatch: { Icon: X, color: palette.danger },
   unknown: { Icon: CircleHelp, color: palette.muted },
 } as const;
 
@@ -92,6 +92,11 @@ const styles = StyleSheet.create({
   body: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
   signal: { flexDirection: "row", alignItems: "flex-start", gap: 7 },
   signalIcon: { marginTop: 3 },
-  signalText: { flex: 1, color: "#c7c2b9", fontSize: 13, lineHeight: 19 },
+  signalText: {
+    flex: 1,
+    color: palette.secondary,
+    fontSize: 13,
+    lineHeight: 19,
+  },
   hint: { color: palette.muted, fontSize: 12, lineHeight: 17, marginTop: 4 },
 });

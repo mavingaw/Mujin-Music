@@ -31,9 +31,9 @@ import { useSession } from "@/providers/session-provider";
 const key = ["scrobbling"] as const;
 const accent = palette.accent;
 const tones = {
-  ok: "#bcd8a9",
-  warn: "#e6c599",
-  error: "#f9b3af",
+  ok: palette.success,
+  warn: palette.brass,
+  error: palette.danger,
   idle: palette.secondary,
 } as const;
 
@@ -71,8 +71,8 @@ function Row({
       <Switch
         accessibilityLabel={label}
         onValueChange={onChange}
-        thumbColor="white"
-        trackColor={{ false: "#34343a", true: accent }}
+        thumbColor={palette.text}
+        trackColor={{ false: palette.washStrong, true: accent }}
         value={value}
       />
     </View>
@@ -126,7 +126,7 @@ function ServiceCard({ service }: { service: ScrobbleServiceStatus }) {
             {summary.text}
           </Text>
         </View>
-        {busy ? <ActivityIndicator color="white" /> : null}
+        {busy ? <ActivityIndicator color={palette.text} /> : null}
       </View>
       {connection?.lastError ? (
         <Text style={styles.note}>{connection.lastError}</Text>
@@ -244,7 +244,7 @@ function ServiceCard({ service }: { service: ScrobbleServiceStatus }) {
               }
               style={styles.secondary}
             >
-              <Text style={[styles.secondaryText, { color: "#f9b3af" }]}>
+              <Text style={[styles.secondaryText, { color: palette.danger }]}>
                 Disconnect
               </Text>
             </Pressable>
@@ -270,7 +270,7 @@ export function ScrobblingSettings() {
         ? 3_000
         : 15_000,
   });
-  if (status.isPending) return <ActivityIndicator color="white" />;
+  if (status.isPending) return <ActivityIndicator color={palette.text} />;
   if (!status.data)
     return <Text style={styles.body}>Scrobbling could not be loaded.</Text>;
   return (
@@ -289,7 +289,7 @@ export function ScrobblingSettings() {
 }
 
 const styles = StyleSheet.create({
-  heading: { color: "white", fontSize: 19, fontWeight: "800" },
+  heading: { color: palette.text, fontSize: 19, fontWeight: "800" },
   body: { color: palette.secondary, lineHeight: 21 },
   card: {
     padding: 16,
@@ -305,11 +305,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  markText: { color: "white", fontWeight: "900", fontSize: 15 },
-  name: { color: "white", fontSize: 15, fontWeight: "800" },
+  markText: { color: palette.text, fontWeight: "900", fontSize: 15 },
+  name: { color: palette.text, fontSize: 15, fontWeight: "800" },
   status: { fontSize: 13, marginTop: 3 },
   note: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
-  error: { color: "#f9b3af", fontSize: 13 },
+  error: { color: palette.danger, fontSize: 13 },
   counts: { color: palette.secondary, fontSize: 13 },
   toggle: {
     minHeight: 44,
@@ -317,24 +317,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  toggleLabel: { color: "white", fontSize: 15 },
+  toggleLabel: { color: palette.text, fontSize: 15 },
   input: {
     height: 48,
     borderRadius: 10,
-    backgroundColor: "#0b0b0d",
+    backgroundColor: palette.background,
     borderWidth: 1,
     borderColor: palette.border,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 14,
   },
   primary: {
     height: 46,
     borderRadius: 23,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.4 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   secondary: {
@@ -345,5 +345,5 @@ const styles = StyleSheet.create({
     borderColor: palette.borderStrong,
     justifyContent: "center",
   },
-  secondaryText: { color: "white", fontSize: 13, fontWeight: "700" },
+  secondaryText: { color: palette.text, fontSize: 13, fontWeight: "700" },
 });

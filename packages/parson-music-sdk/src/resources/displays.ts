@@ -376,6 +376,28 @@ export interface DisplayQualityChip {
   path: string | null;
   /** The signal light's colour. */
   light: "lossless" | "enhanced" | "high" | "low" | "unknown";
+  /**
+   * The chip in a phone's width (`FLAC 24/96 · Hi-Res`): the same facts,
+   * short enough to show whole instead of ending in "…".
+   */
+  compact: string;
+}
+
+/** `FLAC 24/96`, `ALAC 16/44.1`, `MP3`: the short format a phone shows. */
+export function compactDisplayFormat(
+  format: Pick<
+    DisplayTrackFormat,
+    "label" | "codec" | "sample_rate" | "bit_depth" | "tier"
+  > | null,
+): string | null {
+  if (!format) return null;
+  const codec = format.codec?.toUpperCase() ?? null;
+  if (format.tier !== "lossy" && format.bit_depth && format.sample_rate) {
+    const khz = format.sample_rate / 1000;
+    const rate = Number.isInteger(khz) ? String(khz) : khz.toFixed(1);
+    return `${codec ? `${codec} ` : ""}${format.bit_depth}/${rate}`;
+  }
+  return codec ?? format.label;
 }
 
 const TIER_TEXT: Record<DisplayFormatTier, string | null> = {
@@ -415,7 +437,10 @@ export function displayQualityChip(
   else if (track.format?.tier === "hi_res" || track.format?.tier === "lossless")
     light = "lossless";
   if (!format && !tier && !path) return null;
-  return { format, tier, path, light };
+  const compact = [compactDisplayFormat(track.format) ?? format, path ?? tier]
+    .filter(Boolean)
+    .join(" · ");
+  return { format, tier, path, light, compact };
 }
 
 /**

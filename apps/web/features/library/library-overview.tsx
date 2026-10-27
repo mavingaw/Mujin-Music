@@ -413,7 +413,7 @@ export default function LibraryOverview() {
       <header className="flex items-end justify-between gap-5">
         <div>
           <p className="mj-eyebrow mb-2">My library</p>
-          <h1 className="mj-display text-[40px] text-mujin-text md:text-[52px]">
+          <h1 className="mj-display text-[2.5rem] text-mujin-text md:text-[3.25rem]">
             {libraryViewTitle(view)}
           </h1>
           {browsing && countLabel && (
@@ -709,7 +709,7 @@ function LibraryTab({
   return (
     <button
       aria-selected={active}
-      className={`relative flex h-11 shrink-0 items-center gap-2 px-4 text-[13px] font-medium transition-colors [&_svg]:h-4 [&_svg]:w-4 ${
+      className={`relative flex h-11 shrink-0 items-center gap-2 px-4 text-[0.8125rem] font-medium transition-colors [&_svg]:h-4 [&_svg]:w-4 ${
         active
           ? "text-mujin-text [&_svg]:text-mujin-copper"
           : "text-mujin-text-tertiary hover:text-mujin-text"
@@ -992,7 +992,7 @@ function CatalogSongRow({
             </DropdownMenuItem>
           </PlayNowSplit>
           {song.badge && (
-            <span className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 md:inline">
+            <span className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-zinc-400 md:inline">
               {song.badge}
             </span>
           )}

@@ -195,7 +195,7 @@ export function browserRegion(
 export const QUALITY_BADGE_CLASSES: Record<LiveQualityTier, string> = {
   // The brand's quality colours, as on the signal-path light.
   lossless:
-    "border-quality-lossless/45 bg-quality-lossless/15 text-quality-lossless shadow-[0_0_12px_rgba(217,139,95,0.25)]",
+    "border-quality-lossless/45 bg-quality-lossless/15 text-quality-lossless shadow-[0_0_12px_rgb(var(--mj-accent-rgb)/0.25)]",
   high: "border-quality-high/35 bg-quality-high/10 text-quality-high",
   standard: "border-white/12 bg-white/5 text-zinc-300",
   low: "border-quality-low/45 bg-quality-low/10 text-zinc-400",

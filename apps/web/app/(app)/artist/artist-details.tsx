@@ -312,7 +312,7 @@ function LibraryArtistDetails({
         ) : (
           <div
             aria-hidden
-            className="absolute inset-0 -z-10 bg-[radial-gradient(90%_120%_at_15%_0%,rgba(217,139,95,0.16),transparent_60%),linear-gradient(to_bottom,var(--color-mujin-surface-1),var(--color-mujin-base))]"
+            className="absolute inset-0 -z-10 bg-[radial-gradient(90%_120%_at_15%_0%,rgb(var(--mj-accent-rgb)/0.16),transparent_60%),linear-gradient(to_bottom,var(--color-mujin-surface-1),var(--color-mujin-base))]"
           />
         )}
         <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-6 px-5 pb-9 pt-24 sm:flex-row sm:items-end sm:px-8 lg:px-12">
@@ -327,16 +327,16 @@ function LibraryArtistDetails({
           ) : null}
           <div className="min-w-0 pb-1">
             <p className="mj-eyebrow mb-3">{kicker}</p>
-            <h1 className="mj-display min-w-0 wrap-break-word text-[48px] text-mujin-text sm:text-[72px] lg:text-[88px]">
+            <h1 className="mj-display min-w-0 wrap-break-word text-[3rem] text-mujin-text sm:text-[4.5rem] lg:text-[5.5rem]">
               {name}
             </h1>
             {(subtitle || lifeSpan) && (
-              <p className="mt-3 text-[14px] text-mujin-text-secondary">
+              <p className="mt-3 text-[0.875rem] text-mujin-text-secondary">
                 {[subtitle, lifeSpan].filter(Boolean).join(" · ")}
               </p>
             )}
             {artist && (
-              <p className="mj-tnum mt-2 text-[13px] text-mujin-text-tertiary">
+              <p className="mj-tnum mt-2 text-[0.8125rem] text-mujin-text-tertiary">
                 {albums.length} {albums.length === 1 ? "album" : "albums"} in
                 your library
                 {artistYears(albums) ? ` · ${artistYears(albums)}` : ""}
@@ -417,13 +417,13 @@ function LibraryArtistDetails({
         {tabs.length > 1 && (
           <div
             aria-label="Artist sections"
-            className="mb-9 flex gap-6 overflow-x-auto shadow-[inset_0_-1px_0_rgba(242,238,230,0.08)] [scrollbar-width:none] sm:gap-8"
+            className="mb-9 flex gap-6 overflow-x-auto shadow-[inset_0_-1px_0_rgb(var(--mj-ink)/0.08)] [scrollbar-width:none] sm:gap-8"
             role="tablist"
           >
             {tabs.map((tab) => (
               <button
                 aria-selected={activeTab === tab.key}
-                className={`shrink-0 whitespace-nowrap border-b-2 pb-3 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+                className={`shrink-0 whitespace-nowrap border-b-2 pb-3 text-[0.75rem] font-semibold uppercase tracking-[0.14em] transition-colors ${
                   activeTab === tab.key
                     ? "border-mujin-copper text-mujin-text"
                     : "border-transparent text-mujin-text-tertiary hover:text-mujin-text"
@@ -665,7 +665,7 @@ function ArtistPhotoHero({ src }: { src: string }) {
           src={src}
         />
       </div>
-      <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_0%,rgba(10,10,11,0.55)_38%,rgba(10,10,11,0)_75%),linear-gradient(to_right,rgba(10,10,11,0.92)_0%,rgba(10,10,11,0.55)_45%,transparent_80%),radial-gradient(60%_80%_at_80%_20%,rgba(217,139,95,0.12),transparent_70%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_0%,rgb(var(--mj-canvas-rgb)/0.55)_38%,rgb(var(--mj-canvas-rgb)/0)_75%),linear-gradient(to_right,rgb(var(--mj-canvas-rgb)/0.92)_0%,rgb(var(--mj-canvas-rgb)/0.55)_45%,transparent_80%),radial-gradient(60%_80%_at_80%_20%,rgb(var(--mj-accent-rgb)/0.12),transparent_70%)]" />
     </div>
   );
 }
@@ -697,7 +697,7 @@ function ArtistMosaic({ covers }: { covers: string[] }) {
           </div>
         ))}
       </div>
-      <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_5%,rgba(10,10,11,0.82)_45%,rgba(10,10,11,0.45)_100%),linear-gradient(to_right,rgba(10,10,11,0.9),rgba(10,10,11,0.2)_75%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--color-mujin-base)_5%,rgb(var(--mj-canvas-rgb)/0.82)_45%,rgb(var(--mj-canvas-rgb)/0.45)_100%),linear-gradient(to_right,rgb(var(--mj-canvas-rgb)/0.9),rgb(var(--mj-canvas-rgb)/0.2)_75%)]" />
     </div>
   );
 }

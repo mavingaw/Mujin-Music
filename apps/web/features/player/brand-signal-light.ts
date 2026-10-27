@@ -1,6 +1,7 @@
 "use client";
 
-import { signalLightColor, type SignalPath } from "@parson/music-sdk";
+import { type SignalPath } from "@parson/music-sdk";
+import { signalLightColor } from "./themed-signal";
 import { useEffect } from "react";
 
 /**

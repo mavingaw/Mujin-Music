@@ -80,7 +80,7 @@ export function PlaylistPicker({
     <ActionDrawer open={open} onClose={onClose} title="Add to playlist">
       {playlists.isPending ? (
         <View style={styles.loading}>
-          <ActivityIndicator color="white" />
+          <ActivityIndicator color={palette.text} />
           <Text style={styles.loadingText}>Loading playlists…</Text>
         </View>
       ) : null}
@@ -155,18 +155,18 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 48,
     borderRadius: 10,
-    backgroundColor: "#29292e",
-    color: "white",
+    backgroundColor: palette.surfaceStrong,
+    color: palette.text,
     paddingHorizontal: 13,
   },
   button: {
     height: 48,
     borderRadius: 24,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     paddingHorizontal: 18,
     justifyContent: "center",
   },
-  buttonText: { color: "black", fontWeight: "800" },
+  buttonText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
-  error: { color: "#f6807a", paddingHorizontal: 16, paddingVertical: 8 },
+  error: { color: palette.danger, paddingHorizontal: 16, paddingVertical: 8 },
 });

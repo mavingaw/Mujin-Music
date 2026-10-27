@@ -2,6 +2,9 @@ import {
   getHomeEssentials,
   getProfiles,
   greetingForHour,
+  visibleHomeRows,
+  type HomeEssentials,
+  type HomeRowId,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
@@ -33,7 +36,8 @@ import {
   HomeGreeting,
   HomeSectionHeader,
 } from "@/components/home-sections";
-import { layout, palette } from "@/constants/colors";
+import { alpha, layout, palette, storedAppearance } from "@/constants/colors";
+import { Fragment, type ReactNode } from "react";
 import { useSession } from "@/providers/session-provider";
 
 function LiveRadioEntry() {
@@ -64,6 +68,98 @@ function firstName(name: string) {
   return first ? first.charAt(0).toLocaleUpperCase() + first.slice(1) : "";
 }
 
+/** One Home row, in the order the profile chose (Settings → Appearance). */
+function homeRow(
+  row: HomeRowId,
+  data: HomeEssentials,
+  recommendedSongs: HomeEssentials["recommended"],
+): ReactNode {
+  switch (row) {
+    case "daily-picks":
+      return data.daily_picks?.picks.length ? (
+        <DailyPicksCard
+          date={data.daily_picks.date}
+          picks={data.daily_picks.picks}
+        />
+      ) : null;
+    case "recently-added":
+      return data.recently_added?.length ? (
+        <>
+          <HomeSectionHeader eyebrow="Your library" title="Recently added" />
+          <HomeAlbumRail albums={data.recently_added} />
+        </>
+      ) : null;
+    case "live-radio":
+      return <LiveRadioEntry />;
+    case "recently-played":
+      return data.continue_listening.length ? (
+        <>
+          <SectionTitle>Recently played</SectionTitle>
+          {data.continue_listening.slice(0, 8).map((song) => (
+            <SongRow
+              key={song.id}
+              song={song}
+              queue={data.continue_listening}
+              showAlbum={false}
+            />
+          ))}
+        </>
+      ) : null;
+    case "new-for-you":
+      return data.new_for_you?.length ? (
+        <>
+          <HomeSectionHeader
+            eyebrow="Newest releases you own"
+            title="New for you"
+          />
+          <HomeAlbumRail albums={data.new_for_you} />
+        </>
+      ) : null;
+    case "similar-artists":
+      return data.similar_artists?.length ? (
+        <>
+          <HomeSectionHeader
+            eyebrow={
+              data.similar_artists.find((artist) => artist.reason)?.reason ??
+              "From your library"
+            }
+            title="Similar artists"
+          />
+          <ArtistCircles artists={data.similar_artists} />
+        </>
+      ) : null;
+    case "best-years":
+      return data.best_years?.albums.length ? (
+        <BestYearsCard prime={data.best_years} />
+      ) : null;
+    case "recommended-songs":
+      return recommendedSongs.length ? (
+        <>
+          <SectionTitle>Recommended songs</SectionTitle>
+          {recommendedSongs.slice(0, 10).map((song) => (
+            <SongRow key={song.id} song={song} queue={recommendedSongs} />
+          ))}
+        </>
+      ) : null;
+    case "genres":
+      return data.genres?.length ? (
+        <>
+          <HomeSectionHeader eyebrow="Browse" title="Genres" />
+          <GenreTiles genres={data.genres} />
+        </>
+      ) : null;
+    case "albums-you-might-like":
+      return data.albums.length ? (
+        <>
+          <SectionTitle>Albums you might like</SectionTitle>
+          <AlbumRail albums={data.albums.slice(0, 6)} />
+        </>
+      ) : null;
+    default:
+      return null;
+  }
+}
+
 export default function HomeScreen() {
   const session = useSession();
   const profiles = useQuery({
@@ -92,7 +188,7 @@ export default function HomeScreen() {
         <ScrollView
           refreshControl={
             <RefreshControl
-              tintColor="white"
+              tintColor={palette.text}
               refreshing={home.isRefetching}
               onRefresh={() => void home.refetch()}
             />
@@ -111,7 +207,7 @@ export default function HomeScreen() {
             <PageTitle>Home</PageTitle>
           )}
           {home.isPending ? (
-            <ActivityIndicator color="white" style={{ marginTop: 70 }} />
+            <ActivityIndicator color={palette.text} style={{ marginTop: 70 }} />
           ) : home.error ? (
             <Pressable
               accessibilityRole="button"
@@ -123,67 +219,11 @@ export default function HomeScreen() {
             </Pressable>
           ) : home.data ? (
             <>
-              {home.data.daily_picks?.picks.length ? (
-                <DailyPicksCard
-                  date={home.data.daily_picks.date}
-                  picks={home.data.daily_picks.picks}
-                />
-              ) : null}
-              {home.data.recently_added?.length ? (
-                <>
-                  <HomeSectionHeader
-                    eyebrow="Your library"
-                    title="Recently added"
-                  />
-                  <HomeAlbumRail albums={home.data.recently_added} />
-                </>
-              ) : null}
-              <LiveRadioEntry />
-              <SectionTitle>Recently played</SectionTitle>
-              {home.data.continue_listening.slice(0, 8).map((song) => (
-                <SongRow
-                  key={song.id}
-                  song={song}
-                  queue={home.data.continue_listening}
-                  showAlbum={false}
-                />
+              {visibleHomeRows(storedAppearance.appearance).map((row) => (
+                <Fragment key={row}>
+                  {homeRow(row, home.data!, recommendedSongs)}
+                </Fragment>
               ))}
-              {home.data.new_for_you?.length ? (
-                <>
-                  <HomeSectionHeader
-                    eyebrow="Newest releases you own"
-                    title="New for you"
-                  />
-                  <HomeAlbumRail albums={home.data.new_for_you} />
-                </>
-              ) : null}
-              {home.data.similar_artists?.length ? (
-                <>
-                  <HomeSectionHeader
-                    eyebrow={
-                      home.data.similar_artists.find((artist) => artist.reason)
-                        ?.reason ?? "From your library"
-                    }
-                    title="Similar artists"
-                  />
-                  <ArtistCircles artists={home.data.similar_artists} />
-                </>
-              ) : null}
-              {home.data.best_years?.albums.length ? (
-                <BestYearsCard prime={home.data.best_years} />
-              ) : null}
-              <SectionTitle>Recommended songs</SectionTitle>
-              {recommendedSongs.slice(0, 10).map((song) => (
-                <SongRow key={song.id} song={song} queue={recommendedSongs} />
-              ))}
-              {home.data.genres?.length ? (
-                <>
-                  <HomeSectionHeader eyebrow="Browse" title="Genres" />
-                  <GenreTiles genres={home.data.genres} />
-                </>
-              ) : null}
-              <SectionTitle>Albums you might like</SectionTitle>
-              <AlbumRail albums={home.data.albums.slice(0, 6)} />
             </>
           ) : null}
         </ScrollView>
@@ -195,8 +235,8 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   radioEntry: {
     alignItems: "center",
-    backgroundColor: "rgba(217,139,95,0.10)",
-    borderColor: "rgba(217,139,95,0.25)",
+    backgroundColor: alpha(palette.accent, 0.1),
+    borderColor: alpha(palette.accent, 0.25),
     borderRadius: layout.radius,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
@@ -218,5 +258,5 @@ const styles = StyleSheet.create({
   radioSubtitle: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   error: { color: palette.secondary, textAlign: "center", marginTop: 80 },
   errorState: { alignItems: "center" },
-  retry: { color: "white", fontWeight: "700", marginTop: 10 },
+  retry: { color: palette.text, fontWeight: "700", marginTop: 10 },
 });

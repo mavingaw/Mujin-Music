@@ -47,7 +47,9 @@ export function GenreChips({
           </li>
         ))}
       </ul>
-      {origin && <span className="text-[11px] text-zinc-500">{origin}</span>}
+      {origin && (
+        <span className="text-[0.6875rem] text-zinc-500">{origin}</span>
+      )}
       {onEdit && (
         <button
           aria-label="Edit genres"

@@ -71,7 +71,7 @@ export default function LibraryToolsPage() {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mujin-copper">
             Library
           </p>
-          <h1 className="mt-1 mj-display text-[40px] text-mujin-text md:text-[48px]">
+          <h1 className="mt-1 mj-display text-[2.5rem] text-mujin-text md:text-[3rem]">
             Library tools
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-500">

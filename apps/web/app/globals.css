@@ -92,6 +92,16 @@
   --font-mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
+  /* Corner radius follows Settings → Appearance (--mj-radius-scale). */
+  --radius-xs: calc(2px * var(--mj-radius-scale, 1));
+  --radius-sm: calc(4px * var(--mj-radius-scale, 1));
+  --radius-md: calc(6px * var(--mj-radius-scale, 1));
+  --radius-lg: calc(8px * var(--mj-radius-scale, 1));
+  --radius-xl: calc(12px * var(--mj-radius-scale, 1));
+  --radius-2xl: calc(16px * var(--mj-radius-scale, 1));
+  --radius-3xl: calc(24px * var(--mj-radius-scale, 1));
+  --radius-4xl: calc(32px * var(--mj-radius-scale, 1));
+
   --color-black: #0a0a0b;
   --color-white: #f2eee6;
   --color-zinc-50: #f2eee6;
@@ -346,9 +356,6 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
 }
 
 :root {
@@ -373,11 +380,31 @@
   --input: 240 5% 21%;
   --ring: 22 61% 61%;
   --mujin-quality: #d98b5f;
+  /* Theme triplets for rgb(var(--x) / alpha); the theme engine rewrites them. */
+  --mj-ink: 242 238 230;
+  --mj-canvas-rgb: 10 10 11;
+  --mj-deep-rgb: 5 5 6;
+  --mj-raised-rgb: 17 17 19;
+  --mj-surface-rgb: 23 23 26;
+  --mj-surface-2-rgb: 30 30 34;
+  --mj-accent-rgb: 217 139 95;
+  --mj-radius-scale: 1;
+  --mj-text-scale: 1;
+  --mj-glass-opacity: 0.58;
+  --mj-glass-blur: 28px;
+  --color-mujin-accent-container: #3a271d;
+  --color-mujin-on-accent-container: #f7e2d4;
+  color-scheme: dark;
+}
+
+/* Text size from Settings → Appearance: every rem-based size follows. */
+html {
+  font-size: calc(100% * var(--mj-text-scale, 1));
 }
 
 * {
   border-color: hsl(var(--border));
-  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  scrollbar-color: rgb(var(--mj-ink) / 0.22) transparent;
 }
 
 html,
@@ -439,6 +466,14 @@ body {
   left: var(--shell-sidebar);
 }
 
+/* Phones: room for the bar that floats above the tab bar (mini player or
+   idle zone bar), so the end of a page scrolls clear of it. */
+@media (max-width: 767px) {
+  html[data-phone-dock] .app-content-shell {
+    padding-bottom: 68px;
+  }
+}
+
 /* Small caps label above a title ("ALBUM", "DAILY PICKS"). */
 .mj-eyebrow {
   font-family: var(--font-sans);
@@ -473,7 +508,7 @@ body {
 .mj-artwork {
   border-radius: 6px;
   box-shadow:
-    0 0 0 1px rgb(242 238 230 / 0.06),
+    0 0 0 1px rgb(var(--mj-ink) / 0.06),
     0 18px 40px -18px rgb(0 0 0 / 0.85);
 }
 
@@ -492,14 +527,14 @@ body {
   background:
     linear-gradient(
       to bottom,
-      rgb(10 10 11 / 0.25) 0%,
-      rgb(10 10 11 / 0.55) 55%,
+      rgb(var(--mj-canvas-rgb) / 0.25) 0%,
+      rgb(var(--mj-canvas-rgb) / 0.55) 55%,
       var(--color-mujin-base) 100%
     ),
     radial-gradient(
       120% 90% at 18% 0%,
       transparent 0%,
-      rgb(10 10 11 / 0.45) 100%
+      rgb(var(--mj-canvas-rgb) / 0.45) 100%
     );
 }
 
@@ -587,7 +622,7 @@ body {
 .app-shell-scroll {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+  scrollbar-color: rgb(var(--mj-ink) / 0.18) transparent;
 }
 
 @supports selector(::-webkit-scrollbar) {
@@ -608,12 +643,12 @@ body {
   .app-shell-scroll::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 999px;
-    background: rgb(255 255 255 / 0.18);
+    background: rgb(var(--mj-ink) / 0.18);
     background-clip: padding-box;
   }
 
   .app-shell-scroll::-webkit-scrollbar-thumb:hover {
-    background-color: rgb(255 255 255 / 0.3);
+    background-color: rgb(var(--mj-ink) / 0.3);
   }
 
   .app-shell-scroll::-webkit-scrollbar-button {
@@ -749,14 +784,14 @@ html[data-window-controls] .app-titlebar-search {
 }
 
 ::selection {
-  background: rgb(217 139 95 / 0.32);
-  color: #f2eee6;
+  background: rgb(var(--mj-accent-rgb) / 0.32);
+  color: var(--color-mujin-text);
 }
 
 @layer base {
   a:focus-visible:not([role^="menuitem"]),
   button:focus-visible:not([role^="menuitem"]) {
-    outline: 2px solid rgb(217 139 95 / 0.75);
+    outline: 2px solid rgb(var(--mj-accent-rgb) / 0.75);
     outline-offset: 3px;
   }
 }
@@ -883,7 +918,7 @@ html[data-window-controls] .app-titlebar-search {
 }
 
 .mj-duotone::after {
-  background: #1d130d;
+  background: var(--mj-duotone-shadow, #1d130d);
   mix-blend-mode: lighten;
 }
 
@@ -1015,4 +1050,288 @@ html[data-window-controls] .app-titlebar-search {
   .mj-display-drift {
     transition: none;
   }
+}
+
+/*
+ * Themes (Settings → Appearance). The theme engine writes every colour,
+ * radius, font and spacing variable on :root and sets these attributes on
+ * <html>; the rules below are the parts a variable cannot express.
+ */
+
+/* Sidebar: a 76px icon rail on desktop when the profile chose compact. */
+@custom-variant wide {
+  @media (min-width: 64rem) {
+    html:not([data-sidebar="compact"]) & {
+      @slot;
+    }
+  }
+}
+
+@custom-variant rail {
+  @media (max-width: 63.999rem) {
+    @slot;
+  }
+  html[data-sidebar="compact"] & {
+    @slot;
+  }
+}
+
+@media (min-width: 1024px) {
+  html[data-sidebar="compact"] {
+    --shell-sidebar: 76px;
+  }
+}
+
+/* Light themes: soft shadows instead of black ones on paper. */
+html[data-mode="light"] .mj-artwork {
+  box-shadow:
+    0 0 0 1px rgb(var(--mj-ink) / 0.08),
+    0 18px 40px -22px rgb(40 30 20 / 0.45);
+}
+
+html[data-mode="light"] {
+  --mj-duotone-shadow: #f3e6dc;
+}
+
+html[data-mode="light"] .mj-duotone::before {
+  mix-blend-mode: multiply;
+}
+
+html[data-mode="light"] .mj-duotone::after {
+  mix-blend-mode: darken;
+  opacity: 0.35;
+}
+
+/* Material You: M3 shapes, tonal elevation and the M3 type scale. */
+html[data-shape="material"] .mj-primary,
+html[data-shape="material"] button.rounded-lg,
+html[data-shape="material"] button.rounded-md {
+  border-radius: 999px;
+}
+
+html[data-shape="material"] .mj-eyebrow {
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  color: var(--color-mujin-text-secondary);
+}
+
+html[data-shape="material"] .mj-display {
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  line-height: 1.12;
+}
+
+html[data-shape="material"] .mj-title,
+html[data-shape="material"] h1,
+html[data-shape="material"] h2 {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+html[data-shape="material"] .mj-artwork {
+  box-shadow: none;
+  outline: 1px solid rgb(var(--mj-ink) / 0.06);
+}
+
+html[data-shape="material"] .mj-card:hover .mj-artwork {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.3),
+    0 2px 6px 2px rgb(0 0 0 / 0.15);
+}
+
+/* M3 "surface tint": raised panels carry a whisper of the primary. */
+html[data-shape="material"] [data-surface="sidebar"],
+html[data-shape="material"] [data-surface="footer"] {
+  background-color: var(--color-mujin-raised);
+}
+
+html[data-shape="material"] [data-surface="sidebar"] [aria-current="page"] {
+  background-color: var(--color-mujin-accent-container);
+  color: var(--color-mujin-on-accent-container);
+  border-radius: 999px;
+}
+
+/* High Contrast: visible edges, thick focus, underlined links. */
+html[data-contrast="high"] * {
+  scrollbar-color: var(--color-mujin-text) transparent;
+}
+
+html[data-contrast="high"] :focus-visible {
+  outline: 3px solid var(--color-mujin-text) !important;
+  outline-offset: 2px !important;
+}
+
+html[data-contrast="high"] main a:not([role]):not(.mj-card *) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+html[data-contrast="high"] [data-surface],
+html[data-contrast="high"] .mj-artwork {
+  box-shadow: 0 0 0 1px var(--color-mujin-border);
+}
+
+html[data-contrast="high"] .mj-art-backdrop,
+html[data-contrast="high"] .mj-hero-fade {
+  display: none;
+}
+
+html[data-contrast="high"] .mj-eyebrow {
+  color: var(--color-mujin-text-secondary);
+}
+
+/* Frosted Glass: translucent sidebar, bars and panels over a blurred
+   backdrop of the playing album (or the accent), with a fine grain. */
+.mj-wallpaper {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      90% 70% at 15% 10%,
+      rgb(var(--mj-accent-rgb) / 0.32),
+      transparent 70%
+    ),
+    radial-gradient(
+      80% 80% at 90% 90%,
+      rgb(var(--mj-accent-rgb) / 0.18),
+      transparent 70%
+    ),
+    var(--color-mujin-deep);
+}
+
+/* Keeps bright covers from washing out the text over the glass. */
+.mj-wallpaper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(var(--mj-canvas-rgb) / 0.5);
+}
+
+.mj-wallpaper-art {
+  position: absolute;
+  inset: -12%;
+  background-position: center;
+  background-size: cover;
+  filter: blur(80px) saturate(1.6);
+  opacity: 0.9;
+  transform: scale(1.15);
+  transition: background-image 900ms ease;
+}
+
+.mj-noise {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 1.4 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+html[data-glass] body,
+html[data-glass] .bg-mujin-base,
+html[data-glass] .app-content-shell {
+  background-color: transparent !important;
+}
+
+html[data-glass] .app-content-shell {
+  background-color: rgb(var(--mj-canvas-rgb) / 0.3) !important;
+}
+
+html[data-glass] [data-surface] {
+  background-color: rgb(
+    var(--mj-raised-rgb) / var(--mj-glass-opacity)
+  ) !important;
+  -webkit-backdrop-filter: blur(var(--mj-glass-blur)) saturate(1.6);
+  backdrop-filter: blur(var(--mj-glass-blur)) saturate(1.6);
+  border-color: rgb(var(--mj-ink) / 0.1) !important;
+}
+
+html[data-glass] [data-surface="menu"],
+html[data-glass] [data-surface="dialog"] {
+  background-color: rgb(var(--mj-surface-2-rgb) / 0.72) !important;
+}
+
+html[data-glass][data-mode="light"] [data-surface] {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.55),
+    0 10px 30px -18px rgb(40 30 20 / 0.35);
+}
+
+html[data-glass][data-mode="dark"] [data-surface] {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+/* Native Mica, Acrylic or vibrancy shows through: no painted backdrop. */
+html[data-native-material],
+html[data-native-material] body {
+  background: transparent !important;
+}
+
+html[data-native-material] .mj-wallpaper {
+  background: transparent;
+}
+
+html[data-native-material] .mj-wallpaper-art {
+  opacity: 0.22;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .mj-wallpaper-art,
+  .mj-noise {
+    display: none;
+  }
+}
+
+/* Compact density: tighter rows on top of the smaller spacing unit. */
+html[data-density="compact"] .mj-display {
+  line-height: 1;
+}
+
+html[data-density="compact"] .h-15\.5 {
+  height: 3.25rem;
+}
+
+/* Reduced motion chosen in Appearance (the system setting is above). */
+html[data-motion="reduced"] *,
+html[data-motion="reduced"] *::before,
+html[data-motion="reduced"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 1ms !important;
+}
+
+/* Live preview of a theme inside Settings → Appearance. */
+.mj-theme-preview {
+  isolation: isolate;
+  background: var(--color-mujin-base);
+  color: var(--color-mujin-text);
+  font-family: var(--font-sans);
+}
+
+/* Bars that float over moving content stay readable on glass. */
+html[data-glass] [data-surface="footer"],
+html[data-glass] [data-surface="tabbar"],
+html[data-glass] [data-surface="header"] {
+  background-color: rgb(var(--mj-raised-rgb) / 0.9) !important;
+}
+
+/* Hero art fades into the glass instead of ending on an opaque edge. */
+html[data-glass] .mj-art-backdrop {
+  -webkit-mask-image: linear-gradient(to bottom, black 30%, transparent 78%);
+  mask-image: linear-gradient(to bottom, black 30%, transparent 78%);
+}
+
+html[data-glass] .mj-hero-fade {
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--mj-canvas-rgb) / 0.2) 0%,
+    rgb(var(--mj-canvas-rgb) / 0.4) 60%,
+    transparent 100%
+  );
 }

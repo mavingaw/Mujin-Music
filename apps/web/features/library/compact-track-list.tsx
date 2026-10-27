@@ -38,7 +38,7 @@ export function QualityBadge({
   return (
     <span
       className={cn(
-        "rounded-[4px] border px-1 py-px text-[10px] font-bold uppercase leading-3 tracking-wide",
+        "rounded-[4px] border px-1 py-px text-[0.625rem] font-bold uppercase leading-3 tracking-wide",
         quality === "hires"
           ? "border-mujin-copper/45 text-mujin-copper"
           : "border-white/20 text-zinc-300",

@@ -13,6 +13,8 @@ import {
   Library,
   ListMusic,
   Music2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Radio,
   ScrollText,
@@ -28,6 +30,7 @@ import { Suspense, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getPlaylists } from "@parson/music-sdk";
 import ParsonBrandMark from "@/components/icons/parson-brand-mark";
+import { useOptionalAppearance } from "@/features/appearance/theme-provider";
 import MujinLockup from "@/components/icons/mujin-lockup";
 import CreatePlaylistDialog from "@/features/library/create-playlist-dialog";
 import { useSession } from "@/features/account/session-provider";
@@ -68,6 +71,7 @@ export default function AppSidebar() {
       <aside
         aria-label="Main navigation"
         className="fixed bottom-(--shell-footer) left-0 top-0 z-50 hidden w-(--shell-sidebar) flex-col border-r border-white/[0.06] bg-mujin-raised md:flex"
+        data-surface="sidebar"
       >
         <Suspense fallback={<SidebarContent pathname="" search={null} />}>
           <SidebarWithLocation />
@@ -114,22 +118,22 @@ function SidebarContent({
         href="/"
         aria-label="Mujin Music home"
         draggable={false}
-        className="electron-titlebar-drag mx-auto mt-4 flex h-10 shrink-0 select-none items-center lg:mx-0 lg:mt-5 lg:px-6"
+        className="electron-titlebar-drag mx-auto mt-4 flex h-10 shrink-0 select-none items-center wide:mx-0 wide:mt-5 wide:px-6"
         onClick={() => announceNavigation("/")}
       >
-        <ParsonBrandMark className="h-9 w-9 lg:hidden" />
-        <MujinLockup className="hidden h-[22px] w-auto lg:block" />
+        <ParsonBrandMark className="h-9 w-9 wide:hidden" />
+        <MujinLockup className="hidden h-[22px] w-auto wide:block" />
       </Link>
 
       <nav className="app-shell-scroll mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pb-4 [scrollbar-gutter:auto]">
         {sidebarSections.map((section) => (
           <div className="mb-5" key={section.title}>
-            <p className="mj-eyebrow mb-1.5 hidden px-6 text-[10.5px]! lg:block">
+            <p className="mj-eyebrow mb-1.5 hidden px-6 text-[0.6562rem]! wide:block">
               {section.title}
             </p>
             <span
               aria-hidden="true"
-              className="mx-auto mb-2 block h-px w-6 bg-white/8 lg:hidden"
+              className="mx-auto mb-2 block h-px w-6 bg-white/8 wide:hidden"
             />
             <ul className="flex flex-col gap-0.5 px-3">
               {section.items.map((item) => (
@@ -144,10 +148,10 @@ function SidebarContent({
           </div>
         ))}
 
-        <div className="mb-2 hidden lg:block">
+        <div className="mb-2 hidden wide:block">
           <div className="mb-1.5 flex items-center justify-between pl-6 pr-4">
             <Link
-              className="mj-eyebrow text-[10.5px]! transition-colors hover:text-mujin-text"
+              className="mj-eyebrow text-[0.6562rem]! transition-colors hover:text-mujin-text"
               href="/library?view=playlists"
             >
               Playlists
@@ -202,6 +206,7 @@ function SidebarContent({
           active={pathname.startsWith("/settings")}
           item={{ href: "/settings", label: "Settings", icon: "settings" }}
         />
+        <SidebarModeToggle />
       </div>
       <CreatePlaylistDialog onOpenChange={setCreating} open={creating} />
     </div>
@@ -215,7 +220,7 @@ function SidebarLink({ active, item }: { active: boolean; item: NavItem }) {
       aria-current={active ? "page" : undefined}
       aria-label={item.label}
       className={cn(
-        "group relative flex h-10 items-center gap-3 rounded-lg px-3 text-[13.5px] font-medium transition-colors duration-150 max-lg:mx-auto max-lg:w-12 max-lg:justify-center max-lg:px-0 lg:h-9",
+        "group relative flex h-10 items-center gap-3 rounded-lg px-3 text-[0.8438rem] font-medium transition-colors duration-150 rail:mx-auto rail:w-12 rail:justify-center rail:px-0 wide:h-9",
         active
           ? "bg-mujin-copper/[0.12] text-mujin-text"
           : "text-mujin-text-secondary hover:bg-white/[0.04] hover:text-mujin-text",
@@ -228,7 +233,7 @@ function SidebarLink({ active, item }: { active: boolean; item: NavItem }) {
       {active && (
         <span
           aria-hidden="true"
-          className="absolute left-0 top-1/2 h-4 w-[3px] -translate-x-3 -translate-y-1/2 rounded-r-full bg-mujin-copper max-lg:-translate-x-0"
+          className="absolute left-0 top-1/2 h-4 w-[3px] -translate-x-3 -translate-y-1/2 rounded-r-full bg-mujin-copper rail:-translate-x-0"
         />
       )}
       <Icon
@@ -240,7 +245,7 @@ function SidebarLink({ active, item }: { active: boolean; item: NavItem }) {
         )}
         strokeWidth={1.7}
       />
-      <span className="truncate max-lg:sr-only">{item.label}</span>
+      <span className="truncate rail:sr-only">{item.label}</span>
     </Link>
   );
 }
@@ -259,7 +264,7 @@ function PlaylistLink({
   return (
     <Link
       className={cn(
-        "flex h-8 items-center gap-3 rounded-lg px-3 text-[13px] transition-colors",
+        "flex h-8 items-center gap-3 rounded-lg px-3 text-[0.8125rem] transition-colors",
         active
           ? "bg-white/[0.06] text-mujin-text"
           : "text-mujin-text-secondary hover:bg-white/[0.04] hover:text-mujin-text",
@@ -281,6 +286,7 @@ function MobileTabBar() {
     <nav
       aria-label="Main navigation"
       className="fixed inset-x-0 bottom-0 z-50 flex h-(--shell-footer) items-stretch border-t border-white/[0.07] bg-mujin-base/92 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
+      data-surface="tabbar"
     >
       {mobileNavigation.map(({ href, label, icon: Icon }) => {
         const active = isActive(href);
@@ -292,7 +298,7 @@ function MobileTabBar() {
             aria-label={label}
             onClick={() => announceNavigation(href)}
             className={cn(
-              "relative flex min-w-0 flex-1 touch-manipulation flex-col items-center justify-center gap-1 text-[10.5px] font-medium tracking-wide transition-colors",
+              "relative flex min-w-0 flex-1 touch-manipulation flex-col items-center justify-center gap-1 text-[0.6562rem] font-medium tracking-wide transition-colors",
               active
                 ? "text-mujin-text"
                 : "text-mujin-text-tertiary active:text-mujin-text-secondary",
@@ -307,5 +313,28 @@ function MobileTabBar() {
         );
       })}
     </nav>
+  );
+}
+
+/** Desktop only: folds the sidebar to an icon rail and back (saved). */
+function SidebarModeToggle() {
+  const appearance = useOptionalAppearance();
+  if (!appearance) return null;
+  const compact = appearance.appearance.sidebar === "compact";
+  const Icon = compact ? PanelLeftOpen : PanelLeftClose;
+  const label = compact ? "Expand sidebar" : "Collapse sidebar";
+  return (
+    <button
+      aria-label={label}
+      className="mt-1 hidden h-9 w-full items-center gap-3 rounded-lg px-3 text-[0.8125rem] text-mujin-text-tertiary transition-colors hover:bg-white/[0.05] hover:text-mujin-text lg:flex rail:mx-auto rail:w-12 rail:justify-center rail:px-0"
+      onClick={() =>
+        appearance.update({ sidebar: compact ? "expanded" : "compact" })
+      }
+      title={label}
+      type="button"
+    >
+      <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.7} />
+      <span className="truncate rail:sr-only">{label}</span>
+    </button>
   );
 }

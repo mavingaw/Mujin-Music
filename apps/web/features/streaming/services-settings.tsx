@@ -158,7 +158,7 @@ export default function ServicesSettings() {
             {/* Name above status: the status gets the full width on a phone
                 instead of a squeezed middle column. */}
             <div className="min-w-0 flex-1">
-              <p className="text-[17px] font-semibold tracking-wide text-white">
+              <p className="text-[1.0625rem] font-semibold tracking-wide text-white">
                 {provider.name}
               </p>
               <p
@@ -272,7 +272,7 @@ function KeysNotice({ providers }: { providers: StreamingProviderStatus[] }) {
     const issuer = service?.issuer ?? "Mujin Music";
     const names = viaService.map((provider) => provider.name).join(" and ");
     return (
-      <div className="flex gap-3 rounded-xl border border-emerald-300/15 bg-emerald-300/5 px-4 py-3.5 text-[13px] leading-5 text-zinc-300">
+      <div className="flex gap-3 rounded-xl border border-emerald-300/15 bg-emerald-300/5 px-4 py-3.5 text-[0.8125rem] leading-5 text-zinc-300">
         <ShieldCheck
           aria-hidden="true"
           className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300"
@@ -292,7 +292,7 @@ function KeysNotice({ providers }: { providers: StreamingProviderStatus[] }) {
     );
   }
   return (
-    <div className="flex gap-3 rounded-xl bg-white/3 px-4 py-3.5 text-[13px] leading-5 text-zinc-400">
+    <div className="flex gap-3 rounded-xl bg-white/3 px-4 py-3.5 text-[0.8125rem] leading-5 text-zinc-400">
       <ShieldCheck
         aria-hidden="true"
         className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300"
@@ -317,7 +317,7 @@ function KeysNotice({ providers }: { providers: StreamingProviderStatus[] }) {
 
 export function SandboxNotice({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex gap-3 rounded-xl border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-[13px] leading-5 text-amber-100">
+    <div className="flex gap-3 rounded-xl border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-[0.8125rem] leading-5 text-amber-100">
       <FlaskConical aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
       <p>
         <span className="font-semibold">Sandbox mode.</span>{" "}
@@ -450,7 +450,7 @@ function SubscriberSetup({
           ? `Add ${labels.server.replace("this server's", "a")} once under Server credentials, and everyone on this server connects by signing in: they ${labels.account}, nothing else.`
           : `With a ${provider.name} subscription you only need to ${labels.account}, once this server has ${labels.server.replace("this server's", "a")}. It has none yet: ask the person who runs this Mujin Music server to add one in Settings, Services, Server credentials.`}
       </p>
-      <p className="rounded-lg border border-white/8 px-3 py-2.5 text-[13px] leading-5 text-zinc-500">
+      <p className="rounded-lg border border-white/8 px-3 py-2.5 text-[0.8125rem] leading-5 text-zinc-500">
         {provider.name} does not issue credentials to Mujin Music, and Mujin
         Music never copies keys out of {provider.name}&apos;s own apps.{" "}
         {labels.source}
@@ -904,10 +904,10 @@ function Detail({
 }) {
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+      <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
         {label}
       </p>
-      <div className="mt-1.5 text-[15px] text-zinc-100">{children}</div>
+      <div className="mt-1.5 text-[0.9375rem] text-zinc-100">{children}</div>
     </div>
   );
 }
@@ -1002,7 +1002,7 @@ function AccountStep({
         <Detail label="In your library">{libraryCountLabel(provider)}</Detail>
       </div>
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
           Streaming quality
         </p>
         <Select
@@ -1141,7 +1141,10 @@ function ConnectionCheckPanel({
       {check && (
         <ol aria-live="polite" className="mt-3 space-y-2">
           {check.steps.map((step) => (
-            <li className="flex items-start gap-2.5 text-[13px]" key={step.id}>
+            <li
+              className="flex items-start gap-2.5 text-[0.8125rem]"
+              key={step.id}
+            >
               {step.ok ? (
                 <CheckCircle2
                   aria-label="Passed"
@@ -1164,7 +1167,7 @@ function ConnectionCheckPanel({
             </li>
           ))}
           {summary && check.delivery && (
-            <li className="flex flex-wrap items-center gap-2 pl-6.5 pt-1 text-[13px] text-zinc-400">
+            <li className="flex flex-wrap items-center gap-2 pl-6.5 pt-1 text-[0.8125rem] text-zinc-400">
               <FormatBadge label={summary.badge} tone={summary.tone} />
               {check.track && (
                 <span className="truncate">

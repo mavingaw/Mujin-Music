@@ -340,7 +340,8 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "history",
             "profiles",
             "scrobbling",
-            "live_radio"
+            "live_radio",
+            "appearance"
         ],
     });
     if let (Ok(secret), Some(challenge)) = (

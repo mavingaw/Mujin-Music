@@ -68,7 +68,7 @@ function TrackPicker({
       <DropdownMenuTrigger asChild>
         <button
           aria-label={`Tracks for ${row.name || "this credit"}`}
-          className="flex h-8 w-full min-w-0 items-center justify-between gap-1 rounded-md border border-white/10 bg-black/30 px-2 text-left text-[13px] text-zinc-200 hover:border-white/25"
+          className="flex h-8 w-full min-w-0 items-center justify-between gap-1 rounded-md border border-white/10 bg-black/30 px-2 text-left text-[0.8125rem] text-zinc-200 hover:border-white/25"
           type="button"
         >
           <span className="truncate">
@@ -186,7 +186,7 @@ export function CreditsEditor({
   return (
     <section aria-label="Edit credits" className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-mujin-copper/15 bg-mujin-copper/[0.04] px-4 py-3">
-        <p className="flex max-w-2xl items-start gap-2 text-[13px] leading-5 text-zinc-300">
+        <p className="flex max-w-2xl items-start gap-2 text-[0.8125rem] leading-5 text-zinc-300">
           <Lock
             aria-hidden
             className="mt-0.5 h-3.5 w-3.5 shrink-0 text-mujin-copper"
@@ -214,7 +214,7 @@ export function CreditsEditor({
       </datalist>
       <div
         aria-hidden
-        className="hidden grid-cols-[minmax(0,1.4fr)_9.5rem_minmax(0,1fr)_minmax(0,1fr)_2rem] gap-2 px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500 sm:grid"
+        className="hidden grid-cols-[minmax(0,1.4fr)_9.5rem_minmax(0,1fr)_minmax(0,1fr)_2rem] gap-2 px-1 text-[0.625rem] font-semibold uppercase tracking-[0.12em] text-zinc-500 sm:grid"
       >
         <span>Person</span>
         <span>Role</span>
@@ -231,7 +231,7 @@ export function CreditsEditor({
             <input
               aria-label="Person"
               autoFocus={!row.name}
-              className="col-span-2 h-8 min-w-0 rounded-md border border-white/10 bg-black/30 px-2.5 text-[13px] text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none sm:col-span-1"
+              className="col-span-2 h-8 min-w-0 rounded-md border border-white/10 bg-black/30 px-2.5 text-[0.8125rem] text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none sm:col-span-1"
               list={`credit-people-${albumId}`}
               onChange={(event) =>
                 update(row.key, { name: event.target.value })
@@ -241,7 +241,7 @@ export function CreditsEditor({
             />
             <select
               aria-label={`Role for ${row.name || "this credit"}`}
-              className="h-8 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-[13px] text-white focus:border-white/30 focus:outline-none"
+              className="h-8 min-w-0 rounded-md border border-white/10 bg-zinc-950 px-2 text-[0.8125rem] text-white focus:border-white/30 focus:outline-none"
               onChange={(event) =>
                 update(row.key, {
                   role: event.target.value,
@@ -259,7 +259,7 @@ export function CreditsEditor({
             </select>
             <input
               aria-label={`Instrument for ${row.name || "this credit"}`}
-              className="h-8 min-w-0 rounded-md border border-white/10 bg-black/30 px-2.5 text-[13px] text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none disabled:opacity-40"
+              className="h-8 min-w-0 rounded-md border border-white/10 bg-black/30 px-2.5 text-[0.8125rem] text-white placeholder:text-zinc-600 focus:border-white/30 focus:outline-none disabled:opacity-40"
               disabled={row.role !== "performer"}
               onChange={(event) =>
                 update(row.key, { instrument: event.target.value })

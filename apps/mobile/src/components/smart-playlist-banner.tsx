@@ -15,7 +15,7 @@ import {
   View,
 } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 
 /** Shows a smart playlist's focus and keeps its tracks current. */
 export function SmartPlaylistBanner({
@@ -60,7 +60,7 @@ export function SmartPlaylistBanner({
 
   return (
     <View style={styles.banner}>
-      <Sparkles color="#f0dcc2" size={18} />
+      <Sparkles color={palette.brass} size={18} />
       <View style={{ flex: 1 }}>
         <Text style={styles.title}>Smart playlist</Text>
         <Text numberOfLines={2} style={styles.meta}>
@@ -80,9 +80,9 @@ export function SmartPlaylistBanner({
         style={styles.icon}
       >
         {busy ? (
-          <ActivityIndicator color="white" size="small" />
+          <ActivityIndicator color={palette.text} size="small" />
         ) : (
-          <RefreshCw color="white" size={18} />
+          <RefreshCw color={palette.text} size={18} />
         )}
       </Pressable>
       <Pressable
@@ -112,18 +112,18 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "rgba(255,255,255,.04)",
+    backgroundColor: tint(0.04),
   },
-  title: { color: "white", fontWeight: "800" },
+  title: { color: palette.text, fontWeight: "800" },
   meta: { color: palette.secondary, fontSize: 12, marginTop: 2 },
-  error: { color: "#f9b3af", fontSize: 12, marginTop: 4 },
+  error: { color: palette.danger, fontSize: 12, marginTop: 4 },
   icon: {
     width: 40,
     height: 40,
     borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: tint(0.08),
   },
   detach: { paddingVertical: 8 },
   detachText: { color: palette.secondary, fontSize: 12, fontWeight: "700" },

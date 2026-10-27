@@ -18,7 +18,7 @@ import {
 } from "react-native";
 
 import { PersonAvatar } from "@/components/person-avatar";
-import { fonts } from "@/constants/colors";
+import { fonts, palette, tint } from "@/constants/colors";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
 /** Each section's tone, as on the web person page: the brand's copper,
@@ -235,13 +235,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   kicker: {
-    color: "rgba(255,255,255,0.85)",
+    color: tint(0.85),
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.6,
   },
   title: {
-    color: "white",
+    color: palette.text,
     fontFamily: fonts.display,
     fontSize: 30,
     lineHeight: 32,
@@ -250,14 +250,14 @@ const styles = StyleSheet.create({
   card: { width: 120, alignItems: "center", padding: 6, borderRadius: 12 },
   name: {
     marginTop: 8,
-    color: "white",
+    color: palette.text,
     fontSize: 13,
     fontWeight: "700",
     textAlign: "center",
   },
   line: {
     marginTop: 2,
-    color: "rgba(255,255,255,0.55)",
+    color: tint(0.55),
     fontSize: 11,
     lineHeight: 15,
     textAlign: "center",
@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
   influences: { marginTop: 14, paddingHorizontal: 20 },
   columnTitle: {
     marginBottom: 4,
-    color: "rgba(255,255,255,0.5)",
+    color: tint(0.5),
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.2,
@@ -278,12 +278,12 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   influenceText: { flex: 1, minWidth: 0 },
-  influenceName: { color: "white", fontSize: 15, fontWeight: "600" },
-  influenceLine: { color: "rgba(255,255,255,0.55)", fontSize: 12 },
+  influenceName: { color: palette.text, fontSize: 15, fontWeight: "600" },
+  influenceLine: { color: tint(0.55), fontSize: 12 },
   source: {
     marginTop: 10,
     paddingHorizontal: 20,
-    color: "rgba(255,255,255,0.4)",
+    color: tint(0.4),
     fontSize: 11,
   },
 });

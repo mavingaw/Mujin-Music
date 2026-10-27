@@ -61,11 +61,11 @@ function ItemRow({
   const song = item.song_id ? job.songs[item.song_id] : undefined;
   const tone =
     item.status === "matched" || item.status === "confirmed"
-      ? "#bcd8a9"
+      ? palette.success
       : item.status === "review"
-        ? "#e6c599"
+        ? palette.brass
         : item.status === "unmatched"
-          ? "#f9b3af"
+          ? palette.danger
           : palette.muted;
   return (
     <Pressable
@@ -157,7 +157,7 @@ export default function ImportReviewScreen() {
       onPress={() => router.back()}
       style={styles.back}
     >
-      <ArrowLeft color="white" size={22} />
+      <ArrowLeft color={palette.text} size={22} />
     </Pressable>
   );
 
@@ -167,7 +167,7 @@ export default function ImportReviewScreen() {
         <SafeAreaView edges={["top"]} style={{ flex: 1 }}>
           {header}
           {query.isPending ? (
-            <ActivityIndicator color="white" style={{ flex: 1 }} />
+            <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
           ) : (
             <Text style={styles.empty}>This import could not be found.</Text>
           )}
@@ -209,7 +209,7 @@ export default function ImportReviewScreen() {
         {isJobRunning(job) || job.status === "failed" ? (
           <View style={styles.pending}>
             {job.status === "failed" ? null : (
-              <ActivityIndicator color="white" />
+              <ActivityIndicator color={palette.text} />
             )}
             <Text style={styles.meta}>{importStatusLine(job)}</Text>
           </View>
@@ -247,7 +247,7 @@ export default function ImportReviewScreen() {
                 onPress={() => void apply(suggestions)}
                 style={styles.secondary}
               >
-                <Check color="white" size={16} />
+                <Check color={palette.text} size={16} />
                 <Text style={styles.secondaryText}>
                   Accept {suggestions.length} suggestions
                 </Text>
@@ -277,7 +277,7 @@ export default function ImportReviewScreen() {
                 ]}
               >
                 {busy ? (
-                  <ActivityIndicator color="black" />
+                  <ActivityIndicator color={palette.background} />
                 ) : (
                   <Text style={styles.primaryText}>
                     {job.playlist_id ? "Update playlist" : "Save as playlist"} (
@@ -367,7 +367,7 @@ const styles = StyleSheet.create({
   serviceLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   dot: { height: 8, width: 8, borderRadius: 4 },
   service: { color: palette.secondary, fontSize: 12, fontWeight: "700" },
-  name: { color: "white", fontSize: 26, fontWeight: "800" },
+  name: { color: palette.text, fontSize: 26, fontWeight: "800" },
   meta: { color: palette.secondary, fontSize: 13 },
   pending: { alignItems: "center", gap: 12, paddingTop: 60 },
   filters: {
@@ -382,9 +382,9 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: palette.elevatedStrong,
   },
-  filterActive: { backgroundColor: "white" },
+  filterActive: { backgroundColor: palette.text },
   filterText: { color: palette.secondary, fontSize: 13, fontWeight: "600" },
-  filterTextActive: { color: "black" },
+  filterTextActive: { color: palette.background },
   secondary: {
     flexDirection: "row",
     alignItems: "center",
@@ -398,14 +398,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.borderStrong,
   },
-  secondaryText: { color: "white", fontSize: 13, fontWeight: "600" },
+  secondaryText: { color: palette.text, fontSize: 13, fontWeight: "600" },
   row: {
     paddingHorizontal: layout.horizontal,
     paddingVertical: 10,
     borderBottomColor: palette.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  title: { color: "white", fontSize: 15, fontWeight: "600" },
+  title: { color: palette.text, fontSize: 15, fontWeight: "600" },
   match: { fontSize: 12, marginTop: 2 },
   empty: {
     color: palette.secondary,
@@ -421,12 +421,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   primary: {
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
     height: 48,
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   error: { color: palette.danger, fontSize: 13, textAlign: "center" },
 });

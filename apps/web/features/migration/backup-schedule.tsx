@@ -130,7 +130,7 @@ export default function BackupSchedule() {
         <div className="flex flex-wrap gap-2">
           <Input
             autoComplete="off"
-            className="min-w-0 flex-1 font-mono text-[13px]"
+            className="min-w-0 flex-1 font-mono text-[0.8125rem]"
             id="backup-destination"
             onChange={(event) => setDestination(event.target.value)}
             placeholder="/mnt/nas/parson-backups"

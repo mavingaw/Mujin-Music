@@ -309,7 +309,7 @@ export default function SearchResults() {
                   className={`relative z-1 min-w-0 flex-1 ${playable ? "pointer-events-none" : ""}`}
                 >
                   {playable ? (
-                    <span className="block truncate text-[15px] font-medium text-zinc-100">
+                    <span className="block truncate text-[0.9375rem] font-medium text-zinc-100">
                       {item.item_type === "song" ? (
                         <SongTitle title={item.name} />
                       ) : (
@@ -319,7 +319,7 @@ export default function SearchResults() {
                   ) : (
                     <Link
                       href={hrefFor(item)}
-                      className="block truncate text-[15px] font-medium text-zinc-100 hover:underline"
+                      className="block truncate text-[0.9375rem] font-medium text-zinc-100 hover:underline"
                     >
                       {item.name}
                     </Link>

@@ -76,7 +76,7 @@ export function LiveRadioHeader({
     <header className="relative mb-8">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -inset-x-40 -top-24 -z-10 h-72 bg-[radial-gradient(60%_80%_at_20%_0%,rgba(217,139,95,0.16),transparent_70%),radial-gradient(50%_70%_at_80%_10%,rgba(143,195,224,0.07),transparent_70%)]"
+        className="pointer-events-none absolute -inset-x-40 -top-24 -z-10 h-72 bg-[radial-gradient(60%_80%_at_20%_0%,rgb(var(--mj-accent-rgb)/0.16),transparent_70%),radial-gradient(50%_70%_at_80%_10%,rgba(143,195,224,0.07),transparent_70%)]"
       />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <LiveRadioTabs active={active} />

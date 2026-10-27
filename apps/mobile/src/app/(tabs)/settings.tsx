@@ -43,6 +43,7 @@ import { StreamingServicesSettings } from "@/components/streaming-services";
 import { useLibraryDiscovery } from "@/hooks/use-library-discovery";
 import { libraryRows, type LibraryRow } from "@/lib/known-libraries";
 import { ProfilesSettings } from "@/components/profiles";
+import { AppearanceSettings } from "@/components/appearance-settings";
 import { ScrobblingSettings } from "@/components/scrobbling";
 import { layout, palette } from "@/constants/colors";
 import { useSession } from "@/providers/session-provider";
@@ -50,6 +51,7 @@ import { RadioSettingsRows } from "@/components/radio-ui";
 
 type Tab =
   | "account"
+  | "appearance"
   | "profiles"
   | "scrobbling"
   | "playback"
@@ -59,6 +61,7 @@ type Tab =
   | "users";
 const labels: Record<Tab, string> = {
   account: "Account",
+  appearance: "Appearance",
   profiles: "Profiles",
   scrobbling: "Scrobbling",
   playback: "Playback",
@@ -74,10 +77,11 @@ export default function SettingsScreen() {
   const admin = session.claims?.role === "admin";
   const tabs: Tab[] =
     session.phase === "offline"
-      ? ["account", "devices"]
+      ? ["account", "appearance", "devices"]
       : admin
         ? [
             "account",
+            "appearance",
             "profiles",
             "scrobbling",
             "playback",
@@ -88,6 +92,7 @@ export default function SettingsScreen() {
           ]
         : [
             "account",
+            "appearance",
             "profiles",
             "scrobbling",
             "playback",
@@ -395,6 +400,8 @@ export default function SettingsScreen() {
                 usernamePassword={usernamePassword}
                 onUsernamePasswordChange={setUsernamePassword}
               />
+            ) : tab === "appearance" ? (
+              <AppearanceSettings />
             ) : tab === "profiles" ? (
               <ProfilesSettings />
             ) : tab === "scrobbling" ? (
@@ -639,7 +646,7 @@ function AccountSettings({
         style={[styles.action, busy && styles.disabled]}
         onPress={() => void onLogout()}
       >
-        <LogOut color="white" size={21} />
+        <LogOut color={palette.text} size={21} />
         <Text style={styles.actionText}>Log out</Text>
       </Pressable>
     </>
@@ -735,7 +742,7 @@ function ServerSettings({
       {!libraries.length && origin ? (
         <View style={styles.card}>
           <View style={styles.icon}>
-            <Radio color="white" size={21} />
+            <Radio color={palette.text} size={21} />
           </View>
           <Text numberOfLines={1} style={[styles.value, { flex: 1 }]}>
             {origin}
@@ -758,7 +765,7 @@ function ServerSettings({
         style={[styles.action, busy && styles.disabled]}
         onPress={() => void onChange()}
       >
-        <Server color="white" size={21} />
+        <Server color={palette.text} size={21} />
         <Text style={styles.actionText}>Add another library</Text>
       </Pressable>
       {offline ? null : (
@@ -769,7 +776,7 @@ function ServerSettings({
           style={[styles.action, busy && styles.disabled]}
           onPress={onOpenImports}
         >
-          <Import color="white" size={21} />
+          <Import color={palette.text} size={21} />
           <Text style={styles.actionText}>Import playlists</Text>
         </Pressable>
       )}
@@ -811,7 +818,7 @@ function LibrarySettings({
             hitSlop={12}
             onPress={() => onRemove(root)}
           >
-            <Trash2 color="#f6807a" size={20} />
+            <Trash2 color={palette.danger} size={20} />
           </Pressable>
         </View>
       ))}
@@ -840,7 +847,7 @@ function LibrarySettings({
         style={[styles.action, busy && styles.disabled]}
         onPress={() => void onRefresh()}
       >
-        <Radio color="white" size={21} />
+        <Radio color={palette.text} size={21} />
         <Text style={styles.actionText}>Check for changes</Text>
       </Pressable>
       <Pressable
@@ -848,7 +855,7 @@ function LibrarySettings({
         style={styles.action}
         onPress={onOpenTools}
       >
-        <Wrench color="white" size={21} />
+        <Wrench color={palette.text} size={21} />
         <Text style={styles.actionText}>Library tools</Text>
       </Pressable>
     </>
@@ -953,7 +960,7 @@ function UserSettings({
                   hitSlop={12}
                   onPress={() => onDelete(user)}
                 >
-                  <Trash2 color="#f6807a" size={20} />
+                  <Trash2 color={palette.danger} size={20} />
                 </Pressable>
               ) : null}
             </View>
@@ -971,11 +978,16 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
   },
   tab: { height: 44, paddingHorizontal: 14, justifyContent: "center" },
-  activeTab: { borderBottomWidth: 2, borderColor: "white" },
+  activeTab: { borderBottomWidth: 2, borderColor: palette.text },
   tabText: { color: palette.muted, fontSize: 14, fontWeight: "600" },
-  activeTabText: { color: "white" },
+  activeTabText: { color: palette.text },
   panel: { padding: 20, gap: 12 },
-  heading: { color: "white", fontSize: 19, fontWeight: "800", marginBottom: 5 },
+  heading: {
+    color: palette.text,
+    fontSize: 19,
+    fontWeight: "800",
+    marginBottom: 5,
+  },
   offlineNote: { color: palette.secondary, lineHeight: 20 },
   input: {
     height: 50,
@@ -983,17 +995,17 @@ const styles = StyleSheet.create({
     backgroundColor: palette.elevatedStrong,
     borderWidth: 1,
     borderColor: palette.border,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 15,
   },
   primary: {
     height: 48,
     borderRadius: 24,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
   divider: { height: 1, backgroundColor: palette.border, marginVertical: 12 },
   action: {
@@ -1002,7 +1014,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 14,
   },
-  actionText: { color: "white", fontSize: 15, fontWeight: "600" },
+  actionText: { color: palette.text, fontSize: 15, fontWeight: "600" },
   quality: {
     minHeight: 52,
     borderRadius: 10,
@@ -1011,7 +1023,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     justifyContent: "center",
   },
-  selected: { borderColor: "white", backgroundColor: "#19191d" },
+  selected: { borderColor: palette.text, backgroundColor: palette.surface },
   card: {
     padding: 16,
     borderRadius: 14,
@@ -1024,11 +1036,11 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 12,
-    backgroundColor: "#29292e",
+    backgroundColor: palette.surfaceStrong,
     alignItems: "center",
     justifyContent: "center",
   },
-  label: { color: "white", fontWeight: "800" },
+  label: { color: palette.text, fontWeight: "800" },
   value: { color: palette.secondary, fontSize: 13, marginTop: 4 },
   body: { color: palette.secondary, lineHeight: 21 },
   message: { color: palette.secondary, marginTop: 8 },
@@ -1047,8 +1059,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checked: { backgroundColor: "white", borderColor: "white" },
-  check: { color: "black", fontWeight: "900" },
+  checked: { backgroundColor: palette.text, borderColor: palette.text },
+  check: { color: palette.background, fontWeight: "900" },
   userRow: {
     minHeight: 58,
     borderBottomWidth: 1,

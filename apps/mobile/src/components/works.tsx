@@ -18,7 +18,7 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { joinMeta, workRoute } from "@/lib/credit-links";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
@@ -310,7 +310,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 2,
     borderLeftColor: palette.borderStrong,
   },
-  headingTitle: { color: "white", fontSize: 14, fontWeight: "800" },
+  headingTitle: { color: palette.text, fontSize: 14, fontWeight: "800" },
   headingFacts: { color: palette.muted, fontSize: 12, marginTop: 2 },
   section: { gap: 8 },
   rail: { paddingHorizontal: 20, gap: 8, alignItems: "center" },
@@ -326,14 +326,14 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: tint(0.08),
   },
-  chipActive: { backgroundColor: "white" },
-  chipText: { color: "#c7c2b9", fontSize: 12, fontWeight: "700" },
-  chipTextActive: { color: "black" },
+  chipActive: { backgroundColor: palette.text },
+  chipText: { color: palette.secondary, fontSize: 12, fontWeight: "700" },
+  chipTextActive: { color: palette.background },
   group: { marginTop: 10 },
   groupTitle: {
-    color: "white",
+    color: palette.text,
     fontSize: 17,
     fontWeight: "800",
     marginHorizontal: 20,
@@ -346,10 +346,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
   },
-  workTitle: { color: "white", fontSize: 14, fontWeight: "600" },
+  workTitle: { color: palette.text, fontSize: 14, fontWeight: "600" },
   workMeta: { color: palette.muted, fontSize: 12, marginTop: 2 },
-  workTitleMissing: { color: "#c7c2b9", fontWeight: "500" },
-  owned: { color: "#bcd8a9", fontSize: 12, fontWeight: "700" },
+  workTitleMissing: { color: palette.secondary, fontWeight: "500" },
+  owned: { color: palette.success, fontSize: 12, fontWeight: "700" },
   notOwned: { color: palette.muted, fontSize: 11 },
   groupCount: { color: palette.muted, fontSize: 13, fontWeight: "600" },
   more: {
@@ -364,8 +364,8 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.04)",
+    borderColor: tint(0.08),
+    backgroundColor: tint(0.04),
     gap: 3,
   },
   summaryKicker: {
@@ -375,7 +375,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     textTransform: "uppercase",
   },
-  summaryTitle: { color: "white", fontSize: 15, fontWeight: "700" },
+  summaryTitle: { color: palette.text, fontSize: 15, fontWeight: "700" },
   summaryNote: { color: palette.muted, fontSize: 12, lineHeight: 17 },
   cards: { paddingHorizontal: 20, gap: 10 },
   card: {
@@ -384,15 +384,15 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.03)",
+    borderColor: tint(0.08),
+    backgroundColor: tint(0.03),
     justifyContent: "space-between",
     gap: 6,
   },
   cardOwned: {
-    borderColor: "rgba(255,255,255,0.16)",
-    backgroundColor: "rgba(255,255,255,0.07)",
+    borderColor: tint(0.16),
+    backgroundColor: tint(0.07),
   },
-  cardTitle: { color: "white", fontSize: 14, fontWeight: "700" },
+  cardTitle: { color: palette.text, fontSize: 14, fontWeight: "700" },
   empty: { color: palette.secondary, marginHorizontal: 20 },
 });

@@ -46,7 +46,7 @@ function CheckResult({ check }: { check: LiveStreamCheck }) {
           <span className="text-zinc-500">read from the audio</span>
         )}
         {check.transport === "hls" && (
-          <span className="rounded border border-white/10 px-1.5 text-[10px] font-semibold uppercase">
+          <span className="rounded border border-white/10 px-1.5 text-[0.625rem] font-semibold uppercase">
             HLS
           </span>
         )}
@@ -64,7 +64,7 @@ function CheckResult({ check }: { check: LiveStreamCheck }) {
       )}
       {check.resolved_url && (
         <p
-          className="mt-2 truncate text-[11px] text-zinc-500"
+          className="mt-2 truncate text-[0.6875rem] text-zinc-500"
           title={check.resolved_url}
         >
           Plays from {check.resolved_url}

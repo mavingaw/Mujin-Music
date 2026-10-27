@@ -1,5 +1,6 @@
 pub mod album;
 pub mod album_sources;
+pub mod appearance;
 pub mod artist;
 pub mod auth;
 pub mod cast;

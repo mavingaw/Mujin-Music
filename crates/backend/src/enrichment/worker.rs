@@ -1669,9 +1669,7 @@ impl<F: Fetch> Enricher<F> {
         album_id: &str,
     ) -> Result<Outcome, BoxError> {
         let Some(album) = cache.album(album_id) else {
-            return Ok(Outcome::Skipped(
-                "the album is no longer in the library".into(),
-            ));
+            return self.missing_album_outcome(album_id).await;
         };
         let covers = self.covers_directory();
         let own_art = !album.cover_url.trim().is_empty()
@@ -2175,6 +2173,23 @@ impl<F: Fetch> Enricher<F> {
         .await
     }
 
+    /// What to do with an album the in-memory library does not hold. While
+    /// the library is being rebuilt (a scan just added the album) the
+    /// catalogue already has it, so the task waits and runs again; only an
+    /// album the catalogue no longer has is skipped.
+    async fn missing_album_outcome(&self, album_id: &str) -> Result<Outcome, BoxError> {
+        let lookup = album_id.to_string();
+        let exists = db(&self.pool, move |connection| {
+            store::album_exists(connection, &lookup)
+        })
+        .await?;
+        Ok(if exists {
+            Outcome::Retry("the library is still loading this album".into())
+        } else {
+            Outcome::Skipped(store::MISSING_ALBUM_REASON.into())
+        })
+    }
+
     /// Runs one stage for one task.
     pub async fn run_task(
         &self,
@@ -2190,9 +2205,7 @@ impl<F: Fetch> Enricher<F> {
                 };
                 match album_input(cache, &task.entity_id) {
                     Some(input) => self.resolve_album(&input).await,
-                    None => Ok(Outcome::Skipped(
-                        "the album is no longer in the library".into(),
-                    )),
+                    None => self.missing_album_outcome(&task.entity_id).await,
                 }
             }
             (Stage::Musicbrainz, "work") => self.resolve_work(&task.entity_id).await,
@@ -2219,9 +2232,7 @@ impl<F: Fetch> Enricher<F> {
                         )
                         .await
                     }
-                    None => Ok(Outcome::Skipped(
-                        "the artist is no longer in the library".into(),
-                    )),
+                    None => Ok(Outcome::Skipped(store::MISSING_ARTIST_REASON.into())),
                 }
             }
             (Stage::Wikidata, "genre") => {
@@ -3058,6 +3069,13 @@ async fn run_stage(
                 Ok(queued) if queued > 0 => tracing::info!(queued, "queued metadata enrichment"),
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "could not queue metadata enrichment"),
+            }
+            match db(&pool, store::requeue_items_missed_while_loading).await {
+                Ok(requeued) if requeued > 0 => {
+                    tracing::info!(requeued, "queued items skipped while the library loaded");
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "could not requeue skipped items"),
             }
             match db(&pool, store::seed_genre_tasks).await {
                 Ok(queued) if queued > 0 => {

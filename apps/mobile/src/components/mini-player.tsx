@@ -101,7 +101,7 @@ export function MiniPlayer({ bottom }: { bottom: number }) {
           {isPlaying ? (
             <PauseGlyph size={22} />
           ) : (
-            <Play color="white" fill="white" size={23} />
+            <Play color={palette.text} fill={palette.text} size={23} />
           )}
         </Pressable>
         <Pressable
@@ -112,7 +112,7 @@ export function MiniPlayer({ bottom }: { bottom: number }) {
           style={styles.control}
           onPress={next}
         >
-          <SkipForward color="white" fill="white" size={21} />
+          <SkipForward color={palette.text} fill={palette.text} size={21} />
         </Pressable>
         <MiniPlayerProgress />
       </Animated.View>
@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
     right: 8,
     height: layout.miniPlayer,
     borderRadius: 12,
-    backgroundColor: "#202024",
+    backgroundColor: palette.elevatedStrong,
     flexDirection: "row",
     alignItems: "center",
     padding: 8,
@@ -155,6 +155,6 @@ const styles = StyleSheet.create({
     left: 0,
     bottom: 0,
     height: 2,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
   },
 });

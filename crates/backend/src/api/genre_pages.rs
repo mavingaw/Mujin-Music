@@ -373,16 +373,49 @@ pub fn tile_photo_candidates(tree: &GenreTree) -> Vec<String> {
     ids
 }
 
-/// Points each top-level tile at up to three stored artist photos.
+/// Picks up to `take` stored artist photos for each tile, in order. An
+/// artist filed under several genres (a folk singer who is also pop) leads
+/// only one tile: later tiles lead with an artist no earlier tile shows,
+/// so no two tiles open on the same photo while another photo is free.
+pub fn distinct_tile_photos(
+    artist_lists: &[&[String]],
+    with_photos: &HashSet<String>,
+    take: usize,
+) -> Vec<Vec<String>> {
+    let mut used = HashSet::<&str>::new();
+    artist_lists
+        .iter()
+        .map(|artists| {
+            let (fresh, shown): (Vec<&str>, Vec<&str>) = artists
+                .iter()
+                .map(String::as_str)
+                .filter(|id| with_photos.contains(*id))
+                .partition(|id| !used.contains(id));
+            let chosen = fresh
+                .into_iter()
+                .chain(shown)
+                .take(take)
+                .collect::<Vec<_>>();
+            used.extend(chosen.iter().copied());
+            chosen
+                .into_iter()
+                .map(crate::api::editorial::artist_image_url)
+                .collect()
+        })
+        .collect()
+}
+
+/// Points each top-level tile at up to three stored artist photos, no two
+/// tiles leading with the same one (see [`distinct_tile_photos`]).
 pub fn add_tile_photos(tree: &mut GenreTree, with_photos: &HashSet<String>) {
-    for root in &mut tree.genres {
-        root.photos = root
-            .artist_ids
-            .iter()
-            .filter(|id| with_photos.contains(*id))
-            .take(TILE_PHOTOS)
-            .map(|id| crate::api::editorial::artist_image_url(id))
-            .collect();
+    let lists = tree
+        .genres
+        .iter()
+        .map(|root| root.artist_ids.as_slice())
+        .collect::<Vec<_>>();
+    let photos = distinct_tile_photos(&lists, with_photos, TILE_PHOTOS);
+    for (root, photos) in tree.genres.iter_mut().zip(photos) {
+        root.photos = photos;
     }
 }
 
@@ -993,6 +1026,49 @@ mod tests {
         // A child carries no tile art, so its JSON stays as before.
         let child = serde_json::to_value(&jazz.children[0]).unwrap();
         assert!(child.get("covers").is_none() && child.get("photos").is_none());
+    }
+
+    #[test]
+    fn two_genre_tiles_never_open_on_the_same_photo() {
+        let node = |slug: &str, artists: &[&str]| GenreTreeNode {
+            slug: slug.into(),
+            name: slug.into(),
+            album_count: 1,
+            children: Vec::new(),
+            covers: Vec::new(),
+            photos: Vec::new(),
+            artist_ids: artists.iter().map(|id| id.to_string()).collect(),
+        };
+        // Joni Mitchell is filed under both Folk and Pop.
+        let mut tree = GenreTree {
+            genres: vec![
+                node("folk", &["joni", "drake"]),
+                node("pop", &["joni", "carole"]),
+                node("rock", &["joni"]),
+            ],
+            other: Vec::new(),
+            source: GenreSource::Online,
+            catalog: Vec::new(),
+        };
+        let photos = ["joni", "drake", "carole"]
+            .into_iter()
+            .map(String::from)
+            .collect::<HashSet<_>>();
+        add_tile_photos(&mut tree, &photos);
+        let leads = tree
+            .genres
+            .iter()
+            .map(|node| node.photos.first().cloned().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(leads[0], "/artists/joni/image");
+        assert_eq!(leads[1], "/artists/carole/image");
+        // Rock has no other artist: it may repeat a photo rather than
+        // show none.
+        assert_eq!(leads[2], "/artists/joni/image");
+        assert_eq!(
+            tree.genres[1].photos,
+            ["/artists/carole/image", "/artists/joni/image"]
+        );
     }
 
     #[test]

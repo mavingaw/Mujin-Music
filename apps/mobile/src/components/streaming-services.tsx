@@ -53,7 +53,7 @@ export function StreamingServicesSettings() {
     queryFn: getStreamingProviders,
   });
   const [open, setOpen] = useState<string | null>(null);
-  if (providers.isPending) return <ActivityIndicator color="white" />;
+  if (providers.isPending) return <ActivityIndicator color={palette.text} />;
   if (!providers.data)
     return (
       <Pressable
@@ -131,8 +131,8 @@ export function StreamingServicesSettings() {
 
 const proofColors: Record<AccountProofTone, string> = {
   verified: palette.success,
-  partial: "#f0dcc2",
-  failed: "#f9b3af",
+  partial: palette.brass,
+  failed: palette.danger,
   unproven: palette.muted,
 };
 
@@ -518,21 +518,21 @@ function ServicePanel({ provider }: { provider: StreamingProviderStatus }) {
 }
 
 const styles = StyleSheet.create({
-  heading: { color: "white", fontSize: 19, fontWeight: "800" },
-  subheading: { color: "white", fontWeight: "800", marginTop: 6 },
+  heading: { color: palette.text, fontSize: 19, fontWeight: "800" },
+  subheading: { color: palette.text, fontWeight: "800", marginTop: 6 },
   body: { color: palette.secondary, lineHeight: 21 },
   fine: { color: palette.muted, fontSize: 12, lineHeight: 18 },
   proof: { gap: 2, paddingHorizontal: 16, paddingBottom: 12 },
   proofLabel: { fontSize: 13, fontWeight: "600", letterSpacing: 0.2 },
   sandbox: {
-    color: "#f0dcc2",
+    color: palette.brass,
     backgroundColor: "rgba(230,197,153,0.08)",
     borderRadius: 10,
     padding: 12,
     lineHeight: 19,
     overflow: "hidden",
   },
-  warning: { color: "#f0dcc2" },
+  warning: { color: palette.brass },
   card: {
     borderRadius: 14,
     backgroundColor: palette.elevatedStrong,
@@ -548,7 +548,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: { flex: 1, minWidth: 0, gap: 4 },
   status: { color: palette.secondary, fontSize: 13, lineHeight: 18 },
-  link: { color: "#a9d1e6", fontWeight: "700" },
+  link: { color: palette.enhanced, fontWeight: "700" },
   panel: { padding: 16, paddingTop: 4, gap: 10 },
   input: {
     height: 48,
@@ -556,17 +556,17 @@ const styles = StyleSheet.create({
     backgroundColor: palette.elevated,
     borderWidth: 1,
     borderColor: palette.border,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 14,
   },
   primary: {
     height: 46,
     borderRadius: 23,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryText: { color: "black", fontWeight: "800" },
+  primaryText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
   option: {
     minHeight: 46,
@@ -576,8 +576,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     justifyContent: "center",
   },
-  selected: { borderColor: "white", backgroundColor: "#19191d" },
-  optionText: { color: "white", fontWeight: "600" },
+  selected: { borderColor: palette.text, backgroundColor: palette.surface },
+  optionText: { color: palette.text, fontWeight: "600" },
   row: { flexDirection: "row", gap: 10, marginTop: 4 },
   secondary: {
     flex: 1,
@@ -588,9 +588,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  secondaryText: { color: "white", fontWeight: "700" },
+  secondaryText: { color: palette.text, fontWeight: "700" },
   code: {
-    color: "white",
+    color: palette.text,
     fontSize: 34,
     fontWeight: "800",
     letterSpacing: 8,
