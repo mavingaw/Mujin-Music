@@ -29,6 +29,8 @@ pub struct ApiRequest {
     pub url: String,
     pub query: Vec<(String, String)>,
     pub form: Option<Vec<(String, String)>>,
+    /// A JSON request body (ListenBrainz); `form` takes precedence.
+    pub json: Option<serde_json::Value>,
     pub headers: Vec<(String, String)>,
 }
 
@@ -39,6 +41,7 @@ impl ApiRequest {
             url: url.into(),
             query: Vec::new(),
             form: None,
+            json: None,
             headers: Vec::new(),
         }
     }
@@ -64,6 +67,11 @@ impl ApiRequest {
         self.form
             .get_or_insert_with(Vec::new)
             .push((key.to_string(), value.into()));
+        self
+    }
+
+    pub fn json(mut self, body: serde_json::Value) -> Self {
+        self.json = Some(body);
         self
     }
 
@@ -166,6 +174,10 @@ impl Transport for ReqwestTransport {
                 builder = builder
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(body);
+            } else if let Some(json) = &request.json {
+                builder = builder
+                    .header("content-type", "application/json")
+                    .body(serde_json::to_vec(json).unwrap_or_default());
             }
             let mut response = builder.send().await.map_err(|error| {
                 if error.is_timeout() {

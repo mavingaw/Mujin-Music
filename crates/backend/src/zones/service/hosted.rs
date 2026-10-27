@@ -766,6 +766,29 @@ impl ZoneService {
                 Step::Nothing
             }
         };
+        // Plays here count for the profile listening in this zone.
+        if self.zone_listener(zone_id).is_some() {
+            let observed = {
+                let zones = self.lock();
+                zones.hosted.get(zone_id).and_then(|queue| {
+                    (state.serial == Some(queue.current_serial))
+                        .then(|| queue.song_ids.get(queue.current).cloned())
+                        .flatten()
+                        .map(|song| (queue.current_serial, song))
+                })
+            };
+            if let Some((serial, song_id)) = observed {
+                let cache = self.library_cache().await;
+                self.track_zone_listen(
+                    zone_id,
+                    serial,
+                    &song_id,
+                    state.position_ms,
+                    state.state == PlayState::Playing,
+                    cache.as_ref(),
+                );
+            }
+        }
         let Some(cache) = (match step {
             Step::Nothing => None,
             _ => self.library_cache().await,

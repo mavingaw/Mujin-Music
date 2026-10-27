@@ -9,6 +9,7 @@
 //! sample-synced.
 
 mod hosted;
+mod listens;
 
 pub use hosted::{HostedStream, render_scope};
 
@@ -404,6 +405,10 @@ struct State {
     hosted: HashMap<String, hosted::HostedQueue>,
     /// Last published view of each server-driven zone, to notice changes.
     hosted_seen: HashMap<String, String>,
+    /// The profile listening in each server-driven zone.
+    listeners: HashMap<String, i32>,
+    /// The listen in progress in each server-driven zone.
+    zone_listens: HashMap<String, Option<listens::ListenProgress>>,
 }
 
 /// Server-side zones.
@@ -421,6 +426,8 @@ pub struct ZoneService {
     outputs: OnceLock<Arc<crate::outputs::Outputs>>,
     /// The library, for server-driven zones that move on by themselves.
     library: OnceLock<Arc<crate::library::state::LibraryLifecycle>>,
+    /// Scrobbling, for plays in server-driven zones.
+    scrobbling: OnceLock<Arc<crate::scrobbling::ScrobbleHub>>,
     track_serial: AtomicU64,
 }
 
@@ -544,6 +551,7 @@ impl ZoneService {
             sleep_fade: Mutex::new(SLEEP_FADE),
             outputs: OnceLock::new(),
             library: OnceLock::new(),
+            scrobbling: OnceLock::new(),
             track_serial: AtomicU64::new(1),
         }
     }
@@ -1294,6 +1302,7 @@ impl ZoneService {
             return self.sonos_command(user_id, uuid, command, cache).await;
         }
         if hosted_zone_id(zone_id) {
+            self.note_listener(zone_id, user_id, &command);
             return self.hosted_command(zone_id, command, cache).await;
         }
         if zone_id.starts_with("client:") {
