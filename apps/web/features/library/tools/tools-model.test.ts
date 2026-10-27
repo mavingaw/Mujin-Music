@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { DuplicateGroup, SkippedFile, ToolJob } from "@parson/music-sdk";
 import {
   barSegments,
+  duplicateComparison,
   duplicateEvidenceLabel,
   finishedJobs,
   formatBytes,
@@ -139,4 +140,22 @@ test("server timestamps are read as UTC", () => {
   );
   expect(parseServerTime("nonsense")).toBeNull();
   expect(parseServerTime(null)).toBeNull();
+});
+
+test("the duplicates page says what it compares", () => {
+  const none = duplicateComparison({ tracks: 0, total: 120, method: null });
+  expect(none).toContain("titles, artists, lengths and ISRC codes");
+  expect(none).toContain("The sound itself is not compared yet");
+  expect(
+    duplicateComparison({ tracks: 30, total: 120, method: "chromaprint" }),
+  ).toBe(
+    "Compared: titles, artists, lengths and ISRC codes for every track, and the sound for the 30 of 120 tracks fingerprinted so far. Fingerprints are Chromaprint (AcoustID).",
+  );
+  const envelope = duplicateComparison({
+    tracks: 120,
+    total: 120,
+    method: "envelope",
+  });
+  expect(envelope).toContain("the sound of every track");
+  expect(envelope).toContain("loudness outlines");
 });
