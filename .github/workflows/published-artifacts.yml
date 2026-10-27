@@ -93,8 +93,8 @@ jobs:
           version="${TAG#v}"
           gh release download "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "Parson_${version}_${{ matrix.appimage_arch }}.AppImage" \
-            --pattern "Parson_${version}_${{ matrix.deb_arch }}.deb"
+            --pattern "Mujin-Music-${version}-${{ matrix.appimage_arch }}.AppImage" \
+            --pattern "Mujin-Music-${version}-${{ matrix.deb_arch }}.deb"
       - name: Exercise AppImage installation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -141,13 +141,20 @@ jobs:
           sudo apt-get update
           if [[ -n "$PREVIOUS_TAG" ]]; then
             previous_version="${PREVIOUS_TAG#v}"
-            gh release download "$PREVIOUS_TAG" \
+            # Releases before the Mujin Music rename are a different package
+            # (Parson_*.deb); upgrade and rollback are tested between Mujin
+            # Music releases only.
+            if gh release download "$PREVIOUS_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --pattern "Parson_${previous_version}_${{ matrix.deb_arch }}.deb"
-            previous_deb="$(
-              find . -maxdepth 1 -name "Parson_${previous_version}_*.deb" -print -quit
-            )"
-            sudo apt-get install -y "$previous_deb"
+              --pattern "Mujin-Music-${previous_version}-${{ matrix.deb_arch }}.deb"; then
+              previous_deb="$(
+                find . -maxdepth 1 -name "Mujin-Music-${previous_version}-*.deb" -print -quit
+              )"
+              sudo apt-get install -y "$previous_deb"
+            else
+              echo "::warning::$PREVIOUS_TAG predates the Mujin Music packages; skipping upgrade and rollback."
+              PREVIOUS_TAG=""
+            fi
           fi
           sudo apt-get install -y "$current_deb"
           test "$(dpkg-query -W -f='${Status}' "$package")" = "install ok installed"
@@ -182,8 +189,8 @@ jobs:
           $version = $env:TAG.TrimStart("v")
           gh release download $env:TAG `
             --repo $env:GITHUB_REPOSITORY `
-            --pattern "Parson_${version}_${{ matrix.arch }}-setup.exe" `
-            --pattern "Parson_${version}_${{ matrix.arch }}-portable.exe"
+            --pattern "Mujin-Music-Setup-${version}-${{ matrix.arch }}.exe" `
+            --pattern "Mujin-Music-${version}-${{ matrix.arch }}-portable.exe"
       - name: Verify provenance and exercise installer lifecycle
         shell: pwsh
         env:
@@ -191,8 +198,8 @@ jobs:
           CURRENT_TAG: ${{ needs.resolve.outputs.current }}
           PREVIOUS_TAG: ${{ needs.resolve.outputs.previous }}
         run: |
-          $installer = Get-ChildItem "Parson_*-setup.exe" | Select-Object -First 1
-          $portable = Get-ChildItem "Parson_*-portable.exe" | Select-Object -First 1
+          $installer = Get-ChildItem "Mujin-Music-Setup-*.exe" | Select-Object -First 1
+          $portable = Get-ChildItem "Mujin-Music-*-portable.exe" | Select-Object -First 1
           foreach ($artifact in @($installer, $portable)) {
             gh attestation verify $artifact.FullName --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) {
@@ -202,7 +209,7 @@ jobs:
           function Wait-InstalledVersion {
             param([string]$Directory, [string]$Version, [switch]$RequirePayload)
             $expected = [Version]$Version
-            $executable = Join-Path $Directory "Parson.exe"
+            $executable = Join-Path $Directory "Mujin Music.exe"
             $deadline = (Get-Date).AddMinutes(2)
             do {
               if (Test-Path -LiteralPath $executable) {
@@ -216,7 +223,7 @@ jobs:
                     "resources\THIRD_PARTY_NOTICES.md",
                     "resources\app.asar",
                     "resources\parson-music-server.exe",
-                    "Uninstall Parson.exe"
+                    "Uninstall Mujin Music.exe"
                   ).Where({ -not (Test-Path -LiteralPath (Join-Path $Directory $_)) }).Count -eq 0
                   if ($matches -and $payloadReady) { return $executable }
                 } catch {
@@ -234,7 +241,7 @@ jobs:
             )) {
               Get-ChildItem $registryRoot -ErrorAction SilentlyContinue |
                 ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue } |
-                Where-Object DisplayName -eq "Parson" |
+                Where-Object DisplayName -eq "Mujin Music" |
                 Select-Object DisplayName, DisplayVersion, InstallLocation | Format-Table | Out-Host
             }
             Get-MpThreatDetection -ErrorAction SilentlyContinue |
@@ -244,7 +251,7 @@ jobs:
               Id = 1116, 1117
             } -MaxEvents 10 -ErrorAction SilentlyContinue |
               Select-Object TimeCreated, Message | Format-List | Out-Host
-            throw "Parson $Version was not installed successfully in $Directory."
+            throw "Mujin Music $Version was not installed successfully in $Directory."
           }
           $currentVersion = $env:CURRENT_TAG.TrimStart("v")
           $install = Join-Path $env:RUNNER_TEMP "ParsonLifecycle"
@@ -252,12 +259,23 @@ jobs:
           $process = Start-Process $installer.FullName -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Fresh installation failed." }
           Wait-InstalledVersion $install $currentVersion -RequirePayload | Out-Null
+          $brokenPreviousArmInstaller = $false
           if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS_TAG)) {
             $previousVersion = $env:PREVIOUS_TAG.TrimStart("v")
+            # Releases before the Mujin Music rename are a different app
+            # (another app id); upgrade and rollback are tested between Mujin
+            # Music releases only.
             gh release download $env:PREVIOUS_TAG `
               --repo $env:GITHUB_REPOSITORY `
-              --pattern "Parson_${previousVersion}_${{ matrix.arch }}-setup.exe"
-            $previous = Get-Item "Parson_${previousVersion}_${{ matrix.arch }}-setup.exe"
+              --pattern "Mujin-Music-Setup-${previousVersion}-${{ matrix.arch }}.exe"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::warning::$($env:PREVIOUS_TAG) predates the Mujin Music installers; skipping upgrade and rollback."
+              $global:LASTEXITCODE = 0
+              $env:PREVIOUS_TAG = ""
+            }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS_TAG)) {
+            $previous = Get-Item "Mujin-Music-Setup-${previousVersion}-${{ matrix.arch }}.exe"
             $process = Start-Process $previous.FullName -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
             if ($process.ExitCode -ne 0) { throw "Previous release installation failed." }
             $brokenPreviousArmInstaller = "${{ matrix.arch }}" -eq "arm64" -and $previousVersion -eq "1.0.0"
@@ -286,7 +304,7 @@ jobs:
             if ($process.ExitCode -ne 0) { throw "Rollback installation failed." }
             Wait-InstalledVersion $install $previousVersion | Out-Null
           }
-          $uninstaller = Join-Path $install "Uninstall Parson.exe"
+          $uninstaller = Join-Path $install "Uninstall Mujin Music.exe"
           if (-not (Test-Path $uninstaller)) { throw "Uninstaller is missing." }
           $process = Start-Process $uninstaller -ArgumentList "/S" -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Uninstall failed." }
@@ -320,16 +338,16 @@ jobs:
           version="${TAG#v}"
           gh release download "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "Parson_${version}_${{ matrix.arch }}.dmg" \
-            --pattern "Parson_${version}_${{ matrix.arch }}.zip"
+            --pattern "Mujin-Music-${version}-${{ matrix.arch }}.dmg" \
+            --pattern "Mujin-Music-${version}-${{ matrix.arch }}.zip"
       - name: Verify provenance, architecture, and payload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.resolve.outputs.current }}
         run: |
           version="${TAG#v}"
-          dmg="Parson_${version}_${{ matrix.arch }}.dmg"
-          zip="Parson_${version}_${{ matrix.arch }}.zip"
+          dmg="Mujin-Music-${version}-${{ matrix.arch }}.dmg"
+          zip="Mujin-Music-${version}-${{ matrix.arch }}.zip"
           for artifact in "$dmg" "$zip"; do
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
           done
@@ -341,7 +359,7 @@ jobs:
             -readonly \
             -mountpoint "$mount_point"
           trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true' EXIT
-          app="$mount_point/Parson.app"
+          app="$mount_point/Mujin Music.app"
 
           for path in \
             "$app/Contents/Resources/LICENSE" \
@@ -350,7 +368,7 @@ jobs:
             test -s "$path"
           done
           for executable in \
-            "$app/Contents/MacOS/Parson" \
+            "$app/Contents/MacOS/Mujin Music" \
             "$app/Contents/Resources/parson-music-server"; do
             lipo -archs "$executable" |
               tr ' ' '\n' |
@@ -366,9 +384,9 @@ jobs:
           installed_root="$RUNNER_TEMP/ParsonApplications"
           data_root="$RUNNER_TEMP/ParsonData"
           mkdir -p "$installed_root" "$data_root"
-          ditto "$RUNNER_TEMP/ParsonZIP/Parson.app" "$installed_root/Parson.app"
+          ditto "$RUNNER_TEMP/ParsonZIP/Mujin Music.app" "$installed_root/Mujin Music.app"
           export PARSON_DATA_DIR="$data_root"
-          "$installed_root/Parson.app/Contents/MacOS/Parson" --disable-gpu \
+          "$installed_root/Mujin Music.app/Contents/MacOS/Mujin Music" --disable-gpu \
             >"$RUNNER_TEMP/parson-macos.log" 2>&1 &
           app_pid="$!"
           trap 'kill "$app_pid" >/dev/null 2>&1 || true' EXIT

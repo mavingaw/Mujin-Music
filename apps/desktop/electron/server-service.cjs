@@ -31,10 +31,10 @@ const STAMP_FILE = "parson-desktop.json";
 const DEFAULT_PORT = 1993;
 
 const KIND_LABELS = Object.freeze({
-  "windows-tray": "Parson Server (notification area)",
-  "launch-agent": "Parson Server (menu bar)",
+  "windows-tray": "Mujin Music Server (notification area)",
+  "launch-agent": "Mujin Music Server (menu bar)",
   "systemd-user": "systemd user service",
-  "xdg-autostart": "Parson Server (background app)",
+  "xdg-autostart": "Mujin Music Server (background app)",
 });
 
 function joinFor(platform) {
@@ -61,7 +61,7 @@ function hostStateDir({ platform, env = {}, home, join = joinFor(platform) }) {
   if (platform === "win32") {
     return join(
       env.APPDATA || join(home, "AppData", "Roaming"),
-      "Parson Server",
+      "Mujin Music Server",
     );
   }
   return join(env.XDG_CONFIG_HOME || join(home, ".config"), "Parson Server");
@@ -81,8 +81,13 @@ function hostFileContents(existing, { token, localAudio = "on" }) {
   const kept = lines.filter(
     (line) => keyOf(line) !== "PARSON_DESKTOP_INSTANCE_TOKEN",
   );
-  const header = "# Written by Parson Desktop for the background server.";
-  const body = kept.filter((line) => line !== header);
+  const header = "# Written by Mujin Music Desktop for the background server.";
+  // Files written before the rename carry the old header; keep just one.
+  const headers = new Set([
+    header,
+    "# Written by Parson Desktop for the background server.",
+  ]);
+  const body = kept.filter((line) => !headers.has(line));
   if (
     !body.some((line) => keyOf(line) === "PARSON_LOCAL_AUDIO") &&
     localAudio
@@ -125,12 +130,12 @@ function systemdUnit({ executable, env = {} }) {
     ...(env.PARSON_DATA_DIR ? [["PARSON_DATA_DIR", env.PARSON_DATA_DIR]] : []),
   ];
   return [
-    "# Written by Parson Desktop when you chose “Use this computer”. It runs",
-    "# the Parson server in the background, so phones, browsers and other",
+    "# Written by Mujin Music Desktop when you chose “Use this computer”. It runs",
+    "# the Mujin Music server in the background, so phones, browsers and other",
     "# computers keep their library when the desktop window closes.",
     "# Based on crates/backend/packaging/parson-music.service.",
     "[Unit]",
-    "Description=Parson music server",
+    "Description=Mujin Music server",
     "After=network-online.target sound.target",
     "Wants=network-online.target",
     "",
@@ -214,8 +219,8 @@ function xdgAutostartEntry({ program, enabled, env = {} }) {
   return [
     "[Desktop Entry]",
     "Type=Application",
-    "Name=Parson Server",
-    "Comment=Keeps your Parson library available to your phones and other computers",
+    "Name=Mujin Music Server",
+    "Comment=Keeps your Mujin Music library available to your phones and other computers",
     `Exec=${[...prefix, ...program].map(desktopExecQuote).join(" ")}`,
     "Icon=com.parsonlabs.parson",
     "Terminal=false",
@@ -347,7 +352,7 @@ function createServerService({
     tray: join(
       env.LOCALAPPDATA || join(home, "AppData", "Local"),
       "Programs",
-      "Parson Server",
+      "Mujin Music Server",
       TRAY_EXECUTABLE,
     ),
   };

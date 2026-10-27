@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { releaseBase, releaseVersion } from "../../lib/release-downloads";
+import {
+  releaseBase,
+  releaseVersion,
+  windowsSetup,
+} from "../../lib/release-downloads";
 import styles from "./updates.module.css";
 
 export default function Downloads() {
@@ -11,17 +15,17 @@ export default function Downloads() {
     linux: "x64",
   });
   const download = (suffix: string) =>
-    `${releaseBase}/Parson_${releaseVersion}_${suffix}`;
+    `${releaseBase}/Mujin-Music-${releaseVersion}-${suffix}`;
   return (
     <div className={styles.page}>
       <div className={styles.container}>
         <header>
           <a className={styles.brand} href="https://parson.dev">
             <img src="/icons/icon.svg" alt="" />
-            Parson
+            Mujin Music
           </a>
           <a className={styles["header-link"]} href="https://parson.dev">
-            Back to Parson <span aria-hidden="true">↗</span>
+            Back to Mujin Music <span aria-hidden="true">↗</span>
           </a>
         </header>
         <main>
@@ -73,7 +77,7 @@ export default function Downloads() {
               <a
                 className={styles.download}
                 data-download
-                href={download(architecture.windows + "-setup.exe")}
+                href={windowsSetup(architecture.windows)}
               >
                 Download Windows{" "}
                 <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -204,10 +208,10 @@ export default function Downloads() {
           </section>
         </main>
         <footer>
-          <span>Parson · Your music. Instantly.</span>
+          <span>Mujin Music · Your music. Instantly.</span>
           <div className={styles["footer-links"]}>
             <a href="https://parson.dev/docs">Documentation</a>
-            <a href="https://github.com/ParsonLabs/parson">GitHub</a>
+            <a href="https://github.com/mavingaw/parson-jin">GitHub</a>
           </div>
         </footer>
       </div>

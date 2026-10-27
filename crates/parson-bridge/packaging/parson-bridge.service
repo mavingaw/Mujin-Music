@@ -2,7 +2,7 @@
 # Install: sudo cp parson-bridge /usr/local/bin/ && sudo cp parson-bridge.service /etc/systemd/system/
 #          sudo systemctl enable --now parson-bridge
 [Unit]
-Description=Parson Bridge (makes this machine's DACs Parson zones)
+Description=Mujin Bridge (makes this machine's DACs Mujin Music zones)
 After=network-online.target sound.target
 Wants=network-online.target
 

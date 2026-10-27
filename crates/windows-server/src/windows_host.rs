@@ -27,7 +27,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 
-const APP_NAME: &str = "Parson";
+const APP_NAME: &str = "Mujin Music";
 const RUN_VALUE_NAME: &str = "ParsonMusicServer";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const WM_TRAY: u32 = WM_APP + 1;
@@ -192,7 +192,7 @@ fn configure_logging(data_dir: &Path) -> Result<(), Box<dyn std::error::Error>> 
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        "Parson for Windows host logging initialized"
+        "Mujin Music for Windows host logging initialized"
     );
     Ok(())
 }
@@ -299,7 +299,7 @@ fn start_server(
         match result {
             Ok(()) => send_status(&events, ServerStatus::Stopped),
             Err(error) => {
-                tracing::error!(%error, "Parson server stopped with an error");
+                tracing::error!(%error, "Mujin Music server stopped with an error");
                 send_status(&events, ServerStatus::Failed(error.to_string()));
             }
         }
@@ -382,16 +382,16 @@ fn drain_server_events() {
                 || detail.to_ascii_lowercase().contains("schema");
             show_message(
                 if migration_failed {
-                    "Parson database update failed"
+                    "Mujin Music database update failed"
                 } else {
-                    "Parson host unavailable"
+                    "Mujin Music host unavailable"
                 },
                 &format!(
                     "{}\n\nDetails: {detail}",
                     if migration_failed {
-                        "Parson could not update its library database. Your music files were not changed. Open Logs from the Parson tray menu before trying again."
+                        "Mujin Music could not update its library database. Your music files were not changed. Open Logs from the Mujin Music tray menu before trying again."
                     } else {
-                        "The Parson music service could not start. Your library was not changed. Open Logs from the tray menu, then choose Restart."
+                        "The Mujin Music service could not start. Your library was not changed. Open Logs from the tray menu, then choose Restart."
                     }
                 ),
             );
@@ -476,9 +476,9 @@ fn drain_update_events(hwnd: HWND) {
             UpdateEvent::Current => {
                 set_update_status(UpdateStatus::Current);
                 show_information(
-                    "Parson for Windows Updater",
+                    "Mujin Music for Windows Updater",
                     &format!(
-                        "Parson for Windows {} is already the latest version.",
+                        "Mujin Music for Windows {} is already the latest version.",
                         crate::updater::CURRENT_VERSION
                     ),
                 );
@@ -487,16 +487,16 @@ fn drain_update_events(hwnd: HWND) {
                 set_update_status(UpdateStatus::Failed);
                 tracing::error!(%error, "update failed");
                 show_message(
-                    "Parson update failed",
+                    "Mujin Music update failed",
                     &format!(
-                        "Parson could not download or install the update. The current version is still installed and your library was not changed.\n\nDetails: {error}"
+                        "Mujin Music could not download or install the update. The current version is still installed and your library was not changed.\n\nDetails: {error}"
                     ),
                 );
             }
             UpdateEvent::Ready { version, path } => {
                 let target = std::env::current_exe();
                 let result = target
-                    .map_err(|error| format!("could not locate Parson for Windows: {error}"))
+                    .map_err(|error| format!("could not locate Mujin Music for Windows: {error}"))
                     .and_then(|target| crate::updater::start_apply_helper(&path, &target));
                 match result {
                     Ok(()) => {
@@ -506,9 +506,9 @@ fn drain_update_events(hwnd: HWND) {
                     Err(error) => {
                         set_update_status(UpdateStatus::Failed);
                         show_message(
-                            "Parson update failed",
+                            "Mujin Music update failed",
                             &format!(
-                                "Parson could not install the verified update. The current version is still installed and your library was not changed.\n\nDetails: {error}"
+                                "Mujin Music could not install the verified update. The current version is still installed and your library was not changed.\n\nDetails: {error}"
                             ),
                         );
                     }
@@ -540,7 +540,7 @@ fn handle_menu_command(hwnd: HWND, command_id: usize) {
             if let Err(error) = set_autostart(!autostart_enabled()) {
                 tracing::error!(%error, "could not update start-with-Windows setting");
                 show_message(
-                    "Parson for Windows",
+                    "Mujin Music for Windows",
                     &format!("Could not update Start with Windows:\n{error}"),
                 );
             }
@@ -669,7 +669,7 @@ fn show_context_menu(hwnd: HWND) {
         &status_label(&status),
     );
     unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
-    append_menu(menu, item_flags(running), MENU_OPEN, "Open Parson");
+    append_menu(menu, item_flags(running), MENU_OPEN, "Open Mujin Music");
     append_menu(
         menu,
         item_flags(running),
@@ -753,11 +753,11 @@ fn item_flags(enabled: bool) -> u32 {
 
 fn status_label(status: &ServerStatus) -> String {
     match status {
-        ServerStatus::Starting => "Parson — Starting…".to_string(),
+        ServerStatus::Starting => "Mujin Music — Starting…".to_string(),
         ServerStatus::Running(_) => APP_NAME.to_string(),
-        ServerStatus::Stopping => "Parson — Stopping…".to_string(),
-        ServerStatus::Stopped => "Parson — Stopped".to_string(),
-        ServerStatus::Failed(error) => format!("Parson — Error: {error}"),
+        ServerStatus::Stopping => "Mujin Music — Stopping…".to_string(),
+        ServerStatus::Stopped => "Mujin Music — Stopped".to_string(),
+        ServerStatus::Failed(error) => format!("Mujin Music — Error: {error}"),
     }
 }
 
@@ -799,7 +799,7 @@ fn open_url(url: String) {
 fn open_path(path: PathBuf) {
     if let Err(error) = std::fs::create_dir_all(&path) {
         show_message(
-            "Parson for Windows",
+            "Mujin Music for Windows",
             &format!("Could not open folder:\n{error}"),
         );
         return;

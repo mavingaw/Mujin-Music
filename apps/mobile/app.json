@@ -1,29 +1,30 @@
 {
   "expo": {
-    "name": "Parson",
-    "slug": "parson",
+    "name": "Mujin Music",
+    "slug": "mujin-music",
     "version": "1.0.1",
     "orientation": "default",
-    "icon": "./assets/images/parson-icon.png",
+    "icon": "./assets/images/mujin-icon.png",
     "scheme": "parson",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#000000",
+    "backgroundColor": "#0A0A0B",
     "ios": {
-      "bundleIdentifier": "com.parsonlabs.parson",
+      "bundleIdentifier": "music.mujin.app",
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Parson finds music libraries running on your local network.",
+        "NSLocalNetworkUsageDescription": "Mujin Music finds music libraries running on your local network.",
         "NSBonjourServices": ["_parson._tcp"]
       },
       "buildNumber": "1000001"
     },
     "android": {
-      "package": "com.parsonlabs.parson",
+      "package": "music.mujin.app",
       "allowBackup": false,
       "adaptiveIcon": {
-        "backgroundColor": "#000000",
-        "foregroundImage": "./assets/images/parson-maskable.png",
-        "monochromeImage": "./assets/images/parson-monochrome.png"
+        "backgroundColor": "#0A0A0B",
+        "foregroundImage": "./assets/images/mujin-adaptive-foreground.png",
+        "backgroundImage": "./assets/images/mujin-adaptive-background.png",
+        "monochromeImage": "./assets/images/mujin-adaptive-monochrome.png"
       },
       "predictiveBackGestureEnabled": true,
       "permissions": [
@@ -42,7 +43,7 @@
     },
     "web": {
       "output": "single",
-      "favicon": "./assets/images/parson-icon.png"
+      "favicon": "./assets/images/mujin-icon.png"
     },
     "plugins": [
       "./plugins/with-fast-player-transitions",
@@ -90,9 +91,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#000000",
-          "image": "./assets/images/parson-icon.png",
-          "imageWidth": 112
+          "backgroundColor": "#050506",
+          "image": "./assets/images/mujin-splash.png",
+          "imageWidth": 220
         }
       ],
       [
