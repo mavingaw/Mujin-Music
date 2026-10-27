@@ -55,9 +55,16 @@ function versionFiles(directory, version) {
     }
   }
 
+  // Expo prebuild writes expo.version as the Android versionName and
+  // expo.android.versionCode as the versionCode (1 when it is missing, which
+  // would keep every APK at the same versionCode).
   updateJson("apps/mobile/app.json", (document) => {
     document.expo.version = version;
     document.expo.ios.buildNumber = String(mobileBuildNumber);
+    document.expo.android = {
+      ...document.expo.android,
+      versionCode: mobileBuildNumber,
+    };
   });
 
   // The Home Assistant integration ships with the server it talks to.

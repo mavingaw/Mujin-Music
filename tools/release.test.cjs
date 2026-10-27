@@ -36,6 +36,7 @@ test("synchronises packages, Expo build numbers and Rust locks without changing 
   const changes = versionFiles(root, "2.3.4");
   const mobile = JSON.parse(changes.get("apps/mobile/app.json"));
   assert.equal(mobile.expo.ios.buildNumber, "2003004");
+  assert.equal(mobile.expo.android.versionCode, 2003004);
   assert.equal(
     JSON.parse(changes.get("apps/mobile/package.json")).dependencies.test,
     "9.0.0",
