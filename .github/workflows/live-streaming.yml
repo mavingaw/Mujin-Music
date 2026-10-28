@@ -35,6 +35,8 @@ concurrency:
 jobs:
   live-accounts:
     name: TIDAL and Qobuz with real accounts
+    # .gitea/workflows/live-streaming.yml once BUILDS_ON is "gitea".
+    if: vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

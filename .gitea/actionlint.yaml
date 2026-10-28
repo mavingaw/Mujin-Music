@@ -1,0 +1,6 @@
+# actionlint settings for the Gitea workflows:
+#   actionlint -config-file .gitea/actionlint.yaml .gitea/workflows/*.yml
+self-hosted-runner:
+  labels:
+    - linux-x64
+    - windows-x64

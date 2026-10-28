@@ -48,6 +48,8 @@ concurrency:
 jobs:
   apk:
     name: Android app (${{ inputs.abi || 'arm64-v8a' }})
+    # Android builds on the Gitea runners once BUILDS_ON is "gitea".
+    if: vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     outputs:
       signing_key: ${{ steps.signing.outputs.kind == 'release' && 'upload' || 'debug' }}

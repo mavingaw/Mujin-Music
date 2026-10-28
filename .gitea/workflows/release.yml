@@ -1,0 +1,324 @@
+# The stable release, built on the project's Gitea runners when a v*.*.*
+# tag is pushed to Gitea (the Gitea counterpart of
+# .github/workflows/release.yml).
+#
+# Linux (x64; arm64 with LINUX_ARM64), Windows (x64 and arm64), the Windows
+# server, both Android APKs and the container image are built here. macOS is
+# built by GitHub Actions on the GitHub mirror (macos-for-gitea.yml), which
+# adds its files to the GitHub release later; macos-from-github.yml copies
+# them into the Gitea release. Until they arrive, the release carries the
+# previous macOS update feed, so Mac clients see no update instead of an
+# error.
+#
+# The release is published on Gitea and, when the MIRROR_RELEASE_TOKEN
+# secret is set, also on the GitHub mirror, where clients away from home
+# (and every build made with the default MUJIN_RELEASES_BASE) look for
+# updates. Files are verified by SHA256SUMS (and an optional minisign
+# signature) instead of GitHub build provenance, which only GitHub-hosted
+# builds can have.
+#
+# Repository secrets (Gitea): REGISTRY_TOKEN (container), optional
+# RELEASE_TOKEN (falls back to the job token), MIRROR_RELEASE_TOKEN,
+# MINISIGN_SECRET_KEY, ANDROID_UPLOAD_*, WINDOWS_CSC_*.
+# Repository variables: optional MUJIN_RELEASES_BASE, MIRROR_REPOSITORY
+# (default mavingaw/Mujin-Music), LINUX_ARM64, CONTAINER_ARM64,
+# CONTAINER_IMAGE (the image named in the release notes).
+name: Publish Stable Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild.
+        required: true
+        type: string
+      replace:
+        description: Replace packages in the existing release after successful builds.
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-stable-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate release version
+    runs-on: linux-x64
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Validate the tag and synchronized versions
+        id: version
+        env:
+          FORGE: gitea
+          FORGE_URL: ${{ github.server_url }}
+          FORGE_REPOSITORY: ${{ github.repository }}
+          FORGE_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          REPLACE: ${{ inputs.replace == true }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          node tools/release.cjs --check "$version"
+          if [[ "$(node tools/publish-release.cjs exists --tag "$RELEASE_TAG")" == "true" && "$REPLACE" != "true" ]]; then
+            echo "Release $RELEASE_TAG already exists; use the explicit replacement run." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build release packages
+    needs: validate
+    uses: ./.gitea/workflows/test.yml
+    with:
+      release: true
+    secrets: inherit
+
+  # Two jobs rather than a matrix of reusable-workflow calls.
+  android-arm64:
+    name: Build Android APK (arm64-v8a)
+    needs: validate
+    uses: ./.gitea/workflows/android.yml
+    with:
+      abi: arm64-v8a
+      release: true
+    secrets: inherit
+
+  android-armv7:
+    name: Build Android APK (armeabi-v7a)
+    needs: validate
+    uses: ./.gitea/workflows/android.yml
+    with:
+      abi: armeabi-v7a
+      release: true
+    secrets: inherit
+
+  # The image gets its version tag only once every package has built.
+  container:
+    name: Publish release container
+    needs:
+      - validate
+      - build
+      - android-arm64
+      - android-armv7
+    uses: ./.gitea/workflows/container-image.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+      publish_latest: true
+    secrets: inherit
+
+  release:
+    name: Publish the release
+    needs:
+      - validate
+      - build
+      - android-arm64
+      - android-armv7
+      - container
+    runs-on: linux-x64
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      LINUX_ARM64: ${{ vars.LINUX_ARM64 == 'true' }}
+      # Where clients download from and check for updates: the GitHub
+      # mirror unless MUJIN_RELEASES_BASE names another HTTPS releases page.
+      MUJIN_RELEASES_BASE: ${{ vars.MUJIN_RELEASES_BASE }}
+      MIRROR_REPOSITORY: ${{ vars.MIRROR_REPOSITORY || 'mavingaw/Mujin-Music' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Download release packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: mujin-music-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify exact release package set
+        run: |
+          while IFS= read -r -d '' package; do
+            destination="artifacts/$(basename "$package")"
+            if [[ -e "$destination" ]]; then
+              echo "Duplicate release package: $(basename "$package")" >&2
+              exit 1
+            fi
+            mv "$package" "$destination"
+          done < <(find artifacts -mindepth 2 -type f -print0)
+          require_count() {
+            local expected="$1"
+            local pattern="$2"
+            local actual
+            actual="$(find artifacts -maxdepth 1 -type f -name "$pattern" | wc -l)"
+            if [[ "$actual" -ne "$expected" ]]; then
+              echo "Expected $expected file(s) matching $pattern, found $actual." >&2
+              exit 1
+            fi
+          }
+          linux=1
+          if [[ "$LINUX_ARM64" == "true" ]]; then linux=2; fi
+          require_count "$linux" "Mujin-Music-${VERSION}-*.AppImage"
+          require_count "$linux" "Mujin-Music-${VERSION}-*.deb"
+          require_count 2 "Mujin-Music-Setup-${VERSION}-*.exe"
+          require_count 2 "Mujin-Music-${VERSION}-*-portable.exe"
+          require_count 1 "Mujin-Music-Server-${VERSION}-win-x64.zip"
+          require_count 1 "ParsonMusicServer.exe"
+          require_count 1 "ParsonMusicServer.exe.sha256"
+          require_count 1 "windows-server-update.json"
+          require_count 1 "Mujin-Music-${VERSION}-android-arm64-v8a.apk"
+          require_count 1 "Mujin-Music-${VERSION}-android-armeabi-v7a.apk"
+          # The macOS dmg and zip files follow from GitHub
+          # (macos-for-gitea.yml); nothing else, apart from block maps.
+          total="$(find artifacts -maxdepth 1 -type f ! -name '*.blockmap' | wc -l)"
+          if [[ "$total" -ne $((12 + 2 * linux)) ]]; then
+            echo "Expected $((12 + 2 * linux)) release packages, found $total:" >&2
+            find artifacts -maxdepth 1 -type f ! -name '*.blockmap' -printf '%f\n' | sort >&2
+            exit 1
+          fi
+          unexpected="$(find artifacts -maxdepth 1 -type f -name '*.blockmap' ! -name "*-${VERSION}-*.blockmap")"
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected block maps: $unexpected" >&2
+            exit 1
+          fi
+          # The server's update manifest names the download clients use.
+          expected="$(node tools/releases-base.cjs tag "$RELEASE_TAG")/ParsonMusicServer.exe"
+          jq --exit-status --arg url "$expected" '.url == $url' artifacts/windows-server-update.json
+
+      - name: Generate architecture-specific update feeds
+        run: |
+          channels="latest.yml,latest-linux.yml"
+          if [[ "$LINUX_ARM64" == "true" ]]; then channels+=",latest-linux-arm64.yml"; fi
+          node tools/update-metadata.cjs artifacts "$VERSION" --only "$channels"
+
+      # Before the carried feeds are added: those are replaced when the
+      # macOS packages arrive, and belong to the previous release.
+      - name: Write checksums (and sign them when a minisign key is set)
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          (cd artifacts && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum) > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" artifacts/SHA256SUMS
+          cat artifacts/SHA256SUMS
+          if [[ -n "$MINISIGN_SECRET_KEY" ]]; then
+            # A key created with `minisign -G -W` (no password), stored whole.
+            key="$RUNNER_TEMP/minisign.key"
+            printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+            minisign -S -s "$key" -m artifacts/SHA256SUMS -t "Mujin Music $VERSION"
+            rm -f "$key"
+          fi
+
+      # Clients read latest-mac.yml (and, without the arm64 Linux build,
+      # latest-linux-arm64.yml) from the newest release. Until this release
+      # has those packages, it carries the previous release's feed, with
+      # absolute links to the previous files.
+      - name: Carry over the feeds of packages built elsewhere
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_RELEASE_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          base="$(node tools/releases-base.cjs base)"
+          repository="$(node tools/releases-base.cjs repository)"
+          if [[ "$base" == https://github.com/* ]]; then
+            export FORGE=github FORGE_TOKEN="$MIRROR_TOKEN"
+          else
+            export FORGE=gitea FORGE_TOKEN="$GITEA_TOKEN"
+          fi
+          export FORGE_URL="${repository%/*/*}"
+          export FORGE_REPOSITORY="${repository#"$FORGE_URL"/}"
+          previous="$(node tools/publish-release.cjs latest-tag || true)"
+          feeds=(latest-mac.yml)
+          if [[ "$LINUX_ARM64" != "true" ]]; then feeds+=(latest-linux-arm64.yml); fi
+          for feed in "${feeds[@]}"; do
+            if [[ -z "$previous" || "$previous" == "$RELEASE_TAG" ]]; then
+              echo "::warning::No previous release to carry $feed from."
+              continue
+            fi
+            folder="$base/download/$previous"
+            if curl -fsSL --retry 3 -o "$RUNNER_TEMP/$feed" "$folder/$feed"; then
+              node tools/carry-update-feed.cjs "$RUNNER_TEMP/$feed" "$folder" > "artifacts/$feed"
+              echo "Carried $feed over from $previous."
+            else
+              echo "::warning::$previous has no $feed to carry over."
+            fi
+          done
+
+      # The two APKs come from the same secrets; the release notes say which
+      # key signed them, read from the APKs themselves.
+      - name: Write the release notes
+        id: notes
+        env:
+          TEMPLATE_DEBUG_CERTIFICATE: fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c
+          CONTAINER_IMAGE: ${{ vars.CONTAINER_IMAGE }}
+        run: |
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          certificates=()
+          for abi in arm64-v8a armeabi-v7a; do
+            certificates+=("$(
+              "$build_tools/apksigner" verify --print-certs "artifacts/Mujin-Music-${VERSION}-android-${abi}.apk" |
+                sed -n 's/.*certificate SHA-256 digest: \([0-9a-f]\{64\}\).*/\1/p' | sort -u
+            )")
+          done
+          if [[ "${certificates[0]}" != "${certificates[1]}" || ! "${certificates[0]}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "The two Android APKs were not signed with the same single key." >&2
+            exit 1
+          fi
+          signing_key=upload
+          if [[ "${certificates[0]}" == "$TEMPLATE_DEBUG_CERTIFICATE" ]]; then signing_key=debug; fi
+          registry="${GITHUB_SERVER_URL#*://}"
+          image="${CONTAINER_IMAGE:-${registry%%/*}/${GITHUB_REPOSITORY_OWNER,,}/mujin-music}"
+          without=""
+          if [[ "$LINUX_ARM64" != "true" ]]; then without="linux-arm64"; fi
+          # Notes for the release clients download from, and for the Gitea
+          # copy (whose links stay on Gitea).
+          MUJIN_PROVENANCE=checksums MUJIN_CONTAINER_IMAGE="$image" MUJIN_WITHOUT="$without" \
+            node tools/release-notes.cjs "$VERSION" "$MIRROR_REPOSITORY" "$signing_key" "${certificates[0]}" \
+            > "$RUNNER_TEMP/release-notes-mirror.md"
+          MUJIN_RELEASES_BASE="${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}/releases" \
+            MUJIN_PROVENANCE=checksums MUJIN_CONTAINER_IMAGE="$image" MUJIN_WITHOUT="$without" \
+            node tools/release-notes.cjs "$VERSION" "$GITHUB_REPOSITORY" "$signing_key" "${certificates[0]}" \
+            > "$RUNNER_TEMP/release-notes-gitea.md"
+          cat "$RUNNER_TEMP/release-notes-gitea.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the release on Gitea
+        env:
+          FORGE: gitea
+          FORGE_URL: ${{ github.server_url }}
+          FORGE_REPOSITORY: ${{ github.repository }}
+          FORGE_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          REPLACE: ${{ inputs.replace == true }}
+        run: |
+          mapfile -d '' packages < <(find artifacts -maxdepth 1 -type f -print0 | sort -z)
+          flags=()
+          if [[ "$REPLACE" == "true" ]]; then flags+=(--replace); fi
+          node tools/publish-release.cjs publish --tag "$RELEASE_TAG" --target "$(git rev-parse HEAD)" \
+            --title "Mujin Music $VERSION" --notes-file "$RUNNER_TEMP/release-notes-gitea.md" \
+            "${flags[@]}" "${packages[@]}"
+
+      # The tag reaches GitHub through Gitea's push mirror.
+      - name: Publish the same release on the GitHub mirror
+        env:
+          FORGE: github
+          FORGE_URL: https://github.com
+          FORGE_REPOSITORY: ${{ env.MIRROR_REPOSITORY }}
+          FORGE_TOKEN: ${{ secrets.MIRROR_RELEASE_TOKEN }}
+          REPLACE: ${{ inputs.replace == true }}
+        run: |
+          if [[ -z "$FORGE_TOKEN" ]]; then
+            echo "::warning::No MIRROR_RELEASE_TOKEN secret: the release is on Gitea only, and clients that update from GitHub do not see it."
+            exit 0
+          fi
+          mapfile -d '' packages < <(find artifacts -maxdepth 1 -type f -print0 | sort -z)
+          flags=()
+          if [[ "$REPLACE" == "true" ]]; then flags+=(--replace); fi
+          node tools/publish-release.cjs publish --tag "$RELEASE_TAG" --target "$(git rev-parse HEAD)" \
+            --title "Mujin Music $VERSION" --notes-file "$RUNNER_TEMP/release-notes-mirror.md" \
+            "${flags[@]}" "${packages[@]}"

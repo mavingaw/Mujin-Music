@@ -1,0 +1,216 @@
+# macOS packages for releases built on the project's Gitea server.
+#
+# Once the repository variable BUILDS_ON is "gitea", Gitea builds every
+# other package (.gitea/workflows/release.yml) and its push mirror brings
+# the v*.*.* tag here. This workflow builds the macOS dmg and zip files for
+# both architectures on GitHub-hosted runners, writes their update feed
+# (latest-mac.yml) and checksums (SHA256SUMS-macos), attests them, and adds
+# them to the release:
+#
+#   - on GitHub, to the mirror release the Gitea release job publishes
+#     (unless the variable MIRROR_RELEASES is "false"); Gitea's
+#     macos-from-github.yml then copies them into the Gitea release;
+#   - on Gitea directly, when the variable GITEA_URL names an address
+#     GitHub can reach (with the secret GITEA_RELEASE_TOKEN, and optionally
+#     a Cloudflare Access service token in CF_ACCESS_CLIENT_ID and
+#     CF_ACCESS_CLIENT_SECRET).
+#
+# Either way it waits (up to five hours) for that release to be published.
+name: macOS for Gitea Releases
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build the macOS packages for.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-for-gitea-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  macos-packages:
+    name: macOS desktop (${{ matrix.arch }})
+    if: vars.BUILDS_ON == 'gitea'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: 1.99.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Check the release version
+        run: node tools/release.cjs --check "${RELEASE_TAG#v}"
+      - name: Install packaging dependencies
+        run: |
+          brew list nasm >/dev/null 2>&1 || brew install nasm
+          bun install --frozen-lockfile --ignore-scripts
+          node node_modules/electron/install.js
+      - name: Build macOS packages
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          PARSON_BUILD_ARCH: ${{ matrix.arch }}
+          # The same releases page the Gitea builds use (tools/releases-base.cjs).
+          MUJIN_RELEASES_BASE: ${{ vars.MUJIN_RELEASES_BASE }}
+        run: bun --filter parson-music-desktop desktop:build
+      - name: Verify macOS package and architecture
+        env:
+          PARSON_BUILD_ARCH: ${{ matrix.arch }}
+        run: bash ./apps/desktop/scripts/verify-macos-package.sh
+      - name: Upload macOS DMG and ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mujin-music-macos-${{ matrix.arch }}
+          path: |
+            target/release/bundle/electron/Mujin-Music-*.dmg
+            target/release/bundle/electron/Mujin-Music-*.zip
+            target/release/bundle/electron/*.blockmap
+          if-no-files-found: error
+
+  feed:
+    name: macOS update feed, checksums and provenance
+    needs: macos-packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Download the macOS packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: mujin-music-macos-*
+          path: macos
+          merge-multiple: true
+      - name: Verify the package set and write the feed and checksums
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          find macos -mindepth 2 -type f -exec mv -n {} macos/ \;
+          for arch in x64 arm64; do
+            for ext in dmg zip dmg.blockmap zip.blockmap; do
+              test -f "macos/Mujin-Music-${version}-${arch}.${ext}"
+            done
+          done
+          test "$(find macos -maxdepth 1 -type f | wc -l)" -eq 8
+          node tools/update-metadata.cjs macos "$version" --only latest-mac.yml
+          (cd macos && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum) > SHA256SUMS-macos
+          mv SHA256SUMS-macos macos/
+          cat macos/SHA256SUMS-macos
+          if [[ -n "$MINISIGN_SECRET_KEY" ]]; then
+            sudo apt-get update && sudo apt-get install -y minisign
+            printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+            minisign -S -s "$RUNNER_TEMP/minisign.key" -m macos/SHA256SUMS-macos -t "Mujin Music $version (macOS)"
+            rm -f "$RUNNER_TEMP/minisign.key"
+          fi
+      - name: Attest macOS package provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: |
+            macos/*.dmg
+            macos/*.zip
+            macos/*.yml
+      - name: Keep the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: macos-release-files
+          path: macos/*
+          if-no-files-found: error
+          retention-days: 90
+
+  github-release:
+    name: Add to the GitHub mirror release
+    needs: feed
+    if: vars.MIRROR_RELEASES != 'false'
+    runs-on: ubuntu-latest
+    # Gitea publishes the release after its own builds (about one to two
+    # hours after the tag).
+    timeout-minutes: 330
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: macos-release-files
+          path: macos
+      - name: Upload once the release is published
+        env:
+          FORGE: github
+          FORGE_URL: https://github.com
+          FORGE_REPOSITORY: ${{ github.repository }}
+          FORGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/publish-release.cjs upload --tag "$RELEASE_TAG" --wait 300 macos/*
+      - name: Validate the published release on every platform
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run published-artifacts.yml --ref master -f "tag=$RELEASE_TAG"
+
+  gitea-release:
+    name: Add to the Gitea release
+    needs: feed
+    if: vars.GITEA_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: macos-release-files
+          path: macos
+      - name: Upload once the release is published
+        env:
+          FORGE: gitea
+          FORGE_URL: ${{ vars.GITEA_URL }}
+          FORGE_REPOSITORY: ${{ vars.GITEA_REPOSITORY || github.repository }}
+          FORGE_TOKEN: ${{ secrets.GITEA_RELEASE_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: node tools/publish-release.cjs upload --tag "$RELEASE_TAG" --wait 300 macos/*

@@ -23,6 +23,8 @@ concurrency:
 jobs:
   publish_architecture:
     name: Linux container (${{ matrix.arch }})
+    # The Gitea runners publish the image once BUILDS_ON is "gitea".
+    if: vars.BUILDS_ON != 'gitea'
     strategy:
       fail-fast: false
       matrix:

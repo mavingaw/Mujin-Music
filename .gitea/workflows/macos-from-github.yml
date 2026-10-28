@@ -1,0 +1,84 @@
+# Copies the macOS packages of the newest release from the GitHub mirror
+# release into the Gitea release.
+#
+# macOS is built by GitHub Actions (.github/workflows/macos-for-gitea.yml),
+# which adds the files to the GitHub release; a Gitea server on the home
+# network cannot be reached from GitHub, so Gitea fetches them instead. The
+# files are public release downloads, so no GitHub token is needed. They
+# are checked against SHA256SUMS-macos before they are uploaded.
+name: macOS Packages from GitHub
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to copy the macOS packages for (default the newest release).
+        required: false
+        type: string
+
+concurrency:
+  group: macos-from-github
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    name: Copy macOS packages
+    runs-on: linux-x64
+    timeout-minutes: 30
+    env:
+      FORGE: gitea
+      FORGE_URL: ${{ github.server_url }}
+      FORGE_REPOSITORY: ${{ github.repository }}
+      FORGE_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      MIRROR_REPOSITORY: ${{ vars.MIRROR_REPOSITORY || 'mavingaw/Mujin-Music' }}
+      REQUESTED_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Copy the files the Gitea release is missing
+        run: |
+          tag="${REQUESTED_TAG:-$(node tools/publish-release.cjs latest-tag)}"
+          if [[ -z "$tag" ]]; then
+            echo "There is no release yet."
+            exit 0
+          fi
+          version="${tag#v}"
+          gitea_release="${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          if curl -fsI "${gitea_release}/SHA256SUMS-macos" >/dev/null 2>&1; then
+            echo "$tag already has its macOS packages."
+            exit 0
+          fi
+          github_release="https://github.com/${MIRROR_REPOSITORY}/releases/download/${tag}"
+          if ! curl -fsIL "${github_release}/SHA256SUMS-macos" >/dev/null 2>&1; then
+            echo "The GitHub release $tag has no macOS packages yet."
+            exit 0
+          fi
+          mkdir -p macos
+          cd macos
+          curl -fsSL --retry 3 -o SHA256SUMS-macos "${github_release}/SHA256SUMS-macos"
+          names=()
+          for arch in x64 arm64; do
+            for ext in dmg zip dmg.blockmap zip.blockmap; do
+              names+=("Mujin-Music-${version}-${arch}.${ext}")
+            done
+          done
+          names+=(latest-mac.yml)
+          for name in "${names[@]}"; do
+            curl -fsSL --retry 3 -o "$name" "${github_release}/${name}"
+          done
+          if curl -fsSL -o SHA256SUMS-macos.minisig "${github_release}/SHA256SUMS-macos.minisig"; then
+            names+=(SHA256SUMS-macos.minisig)
+          else
+            rm -f SHA256SUMS-macos.minisig
+          fi
+          # Every downloaded file is listed, and matches.
+          sha256sum --check --strict SHA256SUMS-macos
+          for name in "${names[@]}"; do
+            [[ "$name" == *.minisig ]] && continue
+            grep -qE "^[0-9a-f]{64}  ${name//./\\.}\$" SHA256SUMS-macos
+          done
+          cd ..
+          # The checksum list goes last: its presence marks the copy complete.
+          node tools/publish-release.cjs upload --tag "$tag" "${names[@]/#/macos/}"
+          node tools/publish-release.cjs upload --tag "$tag" macos/SHA256SUMS-macos

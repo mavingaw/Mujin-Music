@@ -1,0 +1,34 @@
+# Gitea runner settings for the Linux build machines (docker-compose.yml).
+log:
+  level: info
+
+runner:
+  file: .runner
+  # Jobs at the same time. A Rust or Android job uses about 8 GB of memory
+  # and every core it gets: 3 suits the Unraid server (64 threads, 125 GB),
+  # 2 the Ubuntu box (32 threads, 92 GB).
+  capacity: 3
+  # Gitea stops a job after ENDLESS_TASK_TIMEOUT (raised to 5h in
+  # README.md); the arm64 container build under emulation is the longest.
+  timeout: 5h
+  labels:
+    # The job image, from this Gitea's package registry. Change the tag
+    # when deploy/runner-images/linux/VERSION changes, then restart the
+    # runner.
+    - "linux-x64:docker://192.168.1.58:3002/mavingaw/mujin-runner-linux:1"
+
+cache:
+  enabled: true
+  dir: /data/cache
+
+container:
+  # A network per job; the job containers reach Gitea at its LAN address.
+  network: ""
+  privileged: false
+  # The machine's Docker is mounted into the job containers (empty
+  # docker_host), for the container image job.
+  docker_host: ""
+  force_pull: false
+
+host:
+  workdir_parent:

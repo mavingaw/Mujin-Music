@@ -1,0 +1,194 @@
+# The server container image, built on a Gitea runner and pushed to the
+# Gitea package registry (<gitea host>/<owner>/mujin-music), optionally
+# copied to ghcr.io. The Gitea counterpart of
+# .github/workflows/container-image.yml and container-scan.yml.
+#
+# The image is built for amd64 and, under QEMU on the x86_64 runner, arm64
+# (Raspberry Pi and ARM NAS users), unless the repository variable
+# CONTAINER_ARM64 is "false". Both architectures are pushed under a
+# per-commit tag first and scanned with Trivy; only then does the image get
+# its version tag (and latest), so a failed scan never publishes a release
+# image.
+#
+# Needs the repository secret REGISTRY_TOKEN: a Gitea access token with the
+# package write scope (Gitea's automatic job token cannot push packages).
+# Optional: GHCR_TOKEN (a GitHub token with write:packages) and the variable
+# GHCR_IMAGE (default ghcr.io/mavingaw/mujin-music) to copy the image there.
+name: Publish Container Image
+
+on:
+  push:
+    branches:
+      - nightly
+  pull_request:
+  workflow_call:
+    inputs:
+      version:
+        description: Container version tag. Defaults to the branch or tag name.
+        type: string
+      publish_latest:
+        description: Also publish the latest tag.
+        type: boolean
+  workflow_dispatch:
+
+concurrency:
+  group: container-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image:
+    name: Server container (build, scan, publish)
+    runs-on: linux-x64
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve image coordinates
+        id: image
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          ARM64: ${{ vars.CONTAINER_ARM64 != 'false' }}
+          REGISTRY_USER: ${{ vars.REGISTRY_USER || github.repository_owner }}
+        run: |
+          # The registry is the Gitea server itself, at the address in
+          # ROOT_URL, e.g. 192.168.1.58:3002.
+          registry="${GITHUB_SERVER_URL#*://}"
+          registry="${registry%%/*}"
+          image="${registry}/${GITHUB_REPOSITORY_OWNER,,}/mujin-music"
+          version="${RELEASE_VERSION:-${GITHUB_REF_NAME#v}}"
+          version="${version//\//-}"
+          platforms="linux/amd64"
+          # A pull request builds amd64 only: QEMU makes arm64 slow.
+          if [[ "$ARM64" == "true" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            platforms="linux/amd64,linux/arm64"
+          fi
+          insecure=false
+          if [[ "$GITHUB_SERVER_URL" == http://* ]]; then insecure=true; fi
+          {
+            echo "registry=$registry"
+            echo "image=$image"
+            echo "version=$version"
+            echo "staging=${image}:sha-${GITHUB_SHA::7}"
+            echo "platforms=$platforms"
+            echo "insecure=$insecure"
+            echo "user=$REGISTRY_USER"
+          } >> "$GITHUB_OUTPUT"
+
+      # A pull request only checks that the image builds and passes the scan;
+      # nothing is pushed and no registry token is needed.
+      - name: Sign in to the Gitea registry
+        if: github.event_name != 'pull_request'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REGISTRY: ${{ steps.image.outputs.registry }}
+          REGISTRY_USER: ${{ steps.image.outputs.user }}
+          INSECURE: ${{ steps.image.outputs.insecure }}
+        run: |
+          if [[ -z "$REGISTRY_TOKEN" ]]; then
+            echo "::error::Set the REGISTRY_TOKEN secret (a Gitea token with package write access)." >&2
+            exit 1
+          fi
+          flags=()
+          if [[ "$INSECURE" == "true" ]]; then flags+=(--insecure); fi
+          printf '%s' "$REGISTRY_TOKEN" | crane auth login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin "${flags[@]}"
+
+      - name: Register arm64 emulation on the build host
+        if: contains(steps.image.outputs.platforms, 'arm64')
+        run: docker run --privileged --rm docker.io/tonistiigi/binfmt:qemu-v10.2.3 --install arm64
+
+      # A BuildKit container on the build host, kept between runs so its
+      # layer cache makes later builds fast, and told that a Gitea registry
+      # without TLS (a LAN address in ROOT_URL) is plain HTTP. Delete the
+      # buildx_buildkit_mujin-gitea0 container to start it afresh.
+      - name: Set up the image builder
+        env:
+          REGISTRY: ${{ steps.image.outputs.registry }}
+          INSECURE: ${{ steps.image.outputs.insecure }}
+        run: |
+          config="$RUNNER_TEMP/buildkitd.toml"
+          : > "$config"
+          if [[ "$INSECURE" == "true" ]]; then
+            printf '[registry."%s"]\n  http = true\n  insecure = true\n' "$REGISTRY" > "$config"
+          fi
+          docker buildx create --name mujin-gitea --driver docker-container \
+            --driver-opt image=docker.io/moby/buildkit:v0.34.1 --driver-opt network=host \
+            --buildkitd-config "$config" --use
+          docker buildx inspect --bootstrap
+
+      - name: Build the image (and push it under the commit tag)
+        env:
+          STAGING: ${{ steps.image.outputs.staging }}
+          PLATFORMS: ${{ steps.image.outputs.platforms }}
+          PUSH: ${{ github.event_name != 'pull_request' }}
+        run: |
+          if [[ "$PUSH" == "true" ]]; then
+            output="type=image,name=${STAGING},push=true"
+          else
+            output="type=oci,dest=$RUNNER_TEMP/image.tar"
+          fi
+          docker buildx build . \
+            --platform "$PLATFORMS" \
+            --output "$output" \
+            --provenance=false
+
+      - name: Scan every architecture (HIGH and CRITICAL, fixed upstream)
+        env:
+          STAGING: ${{ steps.image.outputs.staging }}
+          PLATFORMS: ${{ steps.image.outputs.platforms }}
+          PUSH: ${{ github.event_name != 'pull_request' }}
+          INSECURE: ${{ steps.image.outputs.insecure }}
+        run: |
+          flags=()
+          if [[ "$INSECURE" == "true" ]]; then flags+=(--insecure); fi
+          IFS=, read -ra platforms <<<"$PLATFORMS"
+          for platform in "${platforms[@]}"; do
+            tarball="$RUNNER_TEMP/scan-${platform//\//-}.tar"
+            if [[ "$PUSH" == "true" ]]; then
+              crane pull "${flags[@]}" --platform "$platform" "$STAGING" "$tarball"
+            else
+              # The OCI layout from the build holds every platform.
+              tarball="$RUNNER_TEMP/image.tar"
+            fi
+            trivy image --input "$tarball" --platform "$platform" \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+          done
+
+      - name: Publish the version tags
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          STAGING: ${{ steps.image.outputs.staging }}
+          VERSION: ${{ steps.image.outputs.version }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest == true }}
+          INSECURE: ${{ steps.image.outputs.insecure }}
+        run: |
+          flags=()
+          if [[ "$INSECURE" == "true" ]]; then flags+=(--insecure); fi
+          crane tag "${flags[@]}" "$STAGING" "$VERSION"
+          if [[ "$PUBLISH_LATEST" == "true" ]]; then
+            crane tag "${flags[@]}" "$STAGING" latest
+          fi
+          crane digest "${flags[@]}" "${IMAGE}:${VERSION}"
+
+      - name: Copy the image to ghcr.io (optional)
+        if: github.event_name != 'pull_request'
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GHCR_IMAGE: ${{ vars.GHCR_IMAGE || 'ghcr.io/mavingaw/mujin-music' }}
+          GHCR_USER: ${{ vars.GHCR_USER || 'mavingaw' }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          VERSION: ${{ steps.image.outputs.version }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest == true }}
+          INSECURE: ${{ steps.image.outputs.insecure }}
+        run: |
+          if [[ -z "$GHCR_TOKEN" ]]; then
+            echo "No GHCR_TOKEN secret; the image is published to the Gitea registry only."
+            exit 0
+          fi
+          printf '%s' "$GHCR_TOKEN" | crane auth login ghcr.io -u "$GHCR_USER" --password-stdin
+          flags=()
+          if [[ "$INSECURE" == "true" ]]; then flags+=(--insecure); fi
+          crane copy "${flags[@]}" "${IMAGE}:${VERSION}" "${GHCR_IMAGE}:${VERSION}"
+          if [[ "$PUBLISH_LATEST" == "true" ]]; then
+            crane tag "${GHCR_IMAGE}:${VERSION}" latest
+          fi

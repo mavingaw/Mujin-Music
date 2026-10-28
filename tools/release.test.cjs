@@ -98,6 +98,30 @@ test("generates complete update channels with verified hashes and correct archit
   assert.match(read("latest.yml").files[0].sha512, /^[A-Za-z0-9+/]{86}==$/);
   fs.unlinkSync(path.join(root, "Mujin-Music-Setup-2.3.4-arm64.exe"));
   await assert.rejects(generate(root, "2.3.4"), /expected 2 artifacts/);
+
+  // A release built without some packages writes only the channels it has.
+  for (const name of [
+    "latest.yml",
+    "latest-mac.yml",
+    "latest-linux-arm64.yml",
+  ]) {
+    fs.unlinkSync(path.join(root, name));
+  }
+  await generate(root, "2.3.4", { only: ["latest.yml:1", "latest-linux.yml"] });
+  assert.deepEqual(
+    read("latest.yml").files.map((file) => file.url),
+    ["Mujin-Music-Setup-2.3.4-x64.exe"],
+  );
+  assert.equal(fs.existsSync(path.join(root, "latest-mac.yml")), false);
+  assert.equal(fs.existsSync(path.join(root, "latest-linux-arm64.yml")), false);
+  await assert.rejects(
+    generate(root, "2.3.4", { only: ["latest-mac.yml:3"] }),
+    /invalid artifact count/,
+  );
+  await assert.rejects(
+    generate(root, "2.3.4", { only: ["latest-windows.yml"] }),
+    /Unknown update channel/,
+  );
 });
 
 test("renders the release notes with a link to each package the stable release publishes", () => {
@@ -193,6 +217,83 @@ test("renders the release notes with a link to each package the stable release p
     () => render("{{version}} {{other}}", { ...options, signingKey: "debug" }),
     /android-signing/,
   );
+});
+
+test("renders release notes for a release published on Gitea", () => {
+  const template = fs.readFileSync(templatePath, "utf8");
+  const notes = render(template, {
+    version: "2.3.4",
+    repository: "Owner/Mujin-Music",
+    certificate: "ab".repeat(32),
+    signingKey: "upload",
+    releasesBase: "https://git.example.test/Owner/Mujin-Music/releases",
+    image: "git.example.test/owner/mujin-music",
+    provenance: "checksums",
+    without: ["linux-arm64"],
+  });
+  assert.doesNotMatch(notes, /\{\{|\}\}|<!--/);
+  assert.doesNotMatch(notes, /github\.com\/Owner/);
+  assert.match(
+    notes,
+    /\(https:\/\/git\.example\.test\/Owner\/Mujin-Music\/releases\/download\/v2\.3\.4\/Mujin-Music-Setup-2\.3\.4-x64\.exe\)/,
+  );
+  assert.match(notes, /src\/tag\/v2\.3\.4\/docs\/server\.md/);
+  assert.match(notes, /commits\/tag\/v2\.3\.4/);
+  assert.match(
+    notes,
+    /docker pull git\.example\.test\/owner\/mujin-music:2\.3\.4/,
+  );
+  assert.match(notes, /SHA256SUMS/);
+  assert.doesNotMatch(notes, /arm64\.AppImage/);
+  // The table stays one table without the optional row.
+  assert.match(notes, /amd64\.deb\) +\|\n\| \*\*Android, 64-bit/);
+
+  const options = {
+    version: "2.3.4",
+    repository: "Owner/Mujin-Music",
+    certificate: "ab".repeat(32),
+    signingKey: "upload",
+  };
+  assert.throws(() => render(template, { ...options, provenance: "signed" }));
+  assert.throws(() => render(template, { ...options, without: ["macos"] }));
+  assert.throws(() => render(template, { ...options, image: "Not An Image" }));
+  // The copy of the notes on a LAN-only Gitea links to Gitea itself.
+  assert.match(
+    render(template, {
+      ...options,
+      releasesBase: "http://192.168.1.58:3002/Owner/Mujin-Music/releases",
+    }),
+    /\(http:\/\/192\.168\.1\.58:3002\/Owner\/Mujin-Music\/releases\/download\/v2\.3\.4\/Mujin-Music-Setup-2\.3\.4-x64\.exe\)/,
+  );
+  assert.throws(() =>
+    render(template, { ...options, releasesBase: "ftp://x.test/o/r/releases" }),
+  );
+});
+
+test("the Gitea release publishes the GitHub release's packages, macOS from GitHub", () => {
+  const read = (file) =>
+    fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+  const patterns = (workflow) =>
+    new Set(
+      [...workflow.matchAll(/require_count (?:\d+|"\$linux") "([^"]+)"/g)].map(
+        (match) => match[1],
+      ),
+    );
+  const github = patterns(read(".github/workflows/release.yml"));
+  const gitea = patterns(read(".gitea/workflows/release.yml"));
+  const macos = [
+    "Mujin-Music-${VERSION}-*.dmg",
+    "Mujin-Music-${VERSION}-*.zip",
+  ];
+  assert.deepEqual(
+    [...github].filter((pattern) => !macos.includes(pattern)).sort(),
+    [...gitea].sort(),
+  );
+  const macWorkflow = read(".github/workflows/macos-for-gitea.yml");
+  assert.match(macWorkflow, /for ext in dmg zip dmg\.blockmap zip\.blockmap/);
+  assert.match(macWorkflow, /--only latest-mac\.yml/);
+  const copy = read(".gitea/workflows/macos-from-github.yml");
+  assert.match(copy, /for ext in dmg zip dmg\.blockmap zip\.blockmap/);
 });
 
 test("removes nested release-note comments completely and rejects unclosed ones", () => {

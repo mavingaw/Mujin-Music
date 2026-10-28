@@ -18,6 +18,13 @@ on:
 permissions:
   contents: read
 
+# Once BUILDS_ON is "gitea", the Gitea server builds the Linux, Windows and
+# Android packages and mirrors the release here: those files are checked
+# against the release's SHA256SUMS instead of GitHub build provenance, and
+# macos-for-gitea.yml starts this workflow after it adds the macOS files.
+env:
+  BUILDS_ON: ${{ vars.BUILDS_ON }}
+
 concurrency:
   group: validate-published-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
@@ -25,7 +32,9 @@ concurrency:
 jobs:
   resolve:
     name: Resolve immutable releases
-    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.release.prerelease == false && vars.BUILDS_ON != 'gitea')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -102,8 +111,15 @@ jobs:
           appimage="$(find . -maxdepth 1 -name '*.AppImage' -print -quit)"
           deb="$(find . -maxdepth 1 -name '*.deb' -print -quit)"
           test -n "$appimage"
-          gh attestation verify "$appimage" --repo "$GITHUB_REPOSITORY"
-          gh attestation verify "$deb" --repo "$GITHUB_REPOSITORY"
+          if [[ "$BUILDS_ON" == "gitea" ]]; then
+            gh release download "${{ needs.resolve.outputs.current }}" \
+              --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --clobber
+            sha256sum --check --ignore-missing --strict SHA256SUMS
+            test "$(sha256sum --check --ignore-missing SHA256SUMS | grep -c ': OK$')" -eq 2
+          else
+            gh attestation verify "$appimage" --repo "$GITHUB_REPOSITORY"
+            gh attestation verify "$deb" --repo "$GITHUB_REPOSITORY"
+          fi
           chmod +x "$appimage"
           sudo apt-get update
           sudo apt-get install -y "$deb" xvfb
@@ -200,7 +216,23 @@ jobs:
         run: |
           $installer = Get-ChildItem "Mujin-Music-Setup-*.exe" | Select-Object -First 1
           $portable = Get-ChildItem "Mujin-Music-*-portable.exe" | Select-Object -First 1
+          if ($env:BUILDS_ON -eq "gitea") {
+            gh release download $env:CURRENT_TAG --repo $env:GITHUB_REPOSITORY --pattern SHA256SUMS --clobber
+            if ($LASTEXITCODE -ne 0) { throw "The release has no SHA256SUMS." }
+            $sums = @{}
+            foreach ($line in Get-Content SHA256SUMS) {
+              $hash, $name = $line -split '\s+\*?', 2
+              $sums[$name] = $hash
+            }
+          }
           foreach ($artifact in @($installer, $portable)) {
+            if ($env:BUILDS_ON -eq "gitea") {
+              $actual = (Get-FileHash -LiteralPath $artifact.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($sums[$artifact.Name] -ne $actual) {
+                throw "$($artifact.Name) does not match SHA256SUMS."
+              }
+              continue
+            }
             gh attestation verify $artifact.FullName --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) {
               throw "$($artifact.Name) has no valid build provenance."
@@ -428,9 +460,16 @@ jobs:
           IFS=. read -r major minor patch <<<"$version"
           version_code=$((major * 1000000 + minor * 1000 + patch))
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          if [[ "$BUILDS_ON" == "gitea" ]]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --clobber
+          fi
           for abi in arm64-v8a armeabi-v7a; do
             apk="Mujin-Music-${version}-android-${abi}.apk"
-            gh attestation verify "$apk" --repo "$GITHUB_REPOSITORY"
+            if [[ "$BUILDS_ON" == "gitea" ]]; then
+              grep -E "^[0-9a-f]{64} [ *]${apk}\$" SHA256SUMS | sha256sum --check --strict
+            else
+              gh attestation verify "$apk" --repo "$GITHUB_REPOSITORY"
+            fi
             "$build_tools/apksigner" verify --print-certs "$apk"
             # Captured first: under pipefail, a reader that stops early
             # (head, grep -q) can fail the step with SIGPIPE.
@@ -450,9 +489,12 @@ jobs:
             fi
           done
 
+  # The Gitea runners publish the image to the Gitea registry, and to
+  # ghcr.io only when PUBLISH_GHCR is "true" (without GitHub provenance).
   container:
     name: Server container provenance and startup
     needs: resolve
+    if: vars.BUILDS_ON != 'gitea' || vars.PUBLISH_GHCR == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -462,7 +504,9 @@ jobs:
           TAG: ${{ needs.resolve.outputs.current }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}"
-          gh attestation verify "oci://${image}" --repo "$GITHUB_REPOSITORY"
+          if [[ "$BUILDS_ON" != "gitea" ]]; then
+            gh attestation verify "oci://${image}" --repo "$GITHUB_REPOSITORY"
+          fi
           docker buildx imagetools inspect "$image" --raw > "$RUNNER_TEMP/manifest.json"
           jq --exit-status '
             [.manifests[] | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")] as $images |

@@ -1,0 +1,34 @@
+# A Gitea Actions runner for the Mujin Music Linux build jobs (label
+# linux-x64). It sits next to the existing Gitea; it is not a Gitea server.
+#
+# The same file runs on the Unraid server and on any other Linux machine
+# with Docker (the front-desk Ubuntu box): copy this folder, create .env
+# from .env.example, then
+#
+#   docker compose up -d
+#
+# See README.md. The runner starts each job in a container of the job image
+# (deploy/runner-images/linux) on this machine's Docker, and gives the job
+# that Docker too (the container image and arm64 jobs need it). Only run
+# workflows you trust: a job can control this machine's Docker.
+name: mujin-gitea-runner
+
+services:
+  runner:
+    image: docker.io/gitea/runner:5.1.0
+    container_name: mujin-gitea-runner
+    restart: unless-stopped
+    # Host networking lets the job containers reach the runner's cache
+    # server and Gitea at the machine's LAN address.
+    network_mode: host
+    environment:
+      CONFIG_FILE: /config/config.yaml
+      GITEA_INSTANCE_URL: ${GITEA_INSTANCE_URL:-http://192.168.1.58:3002}
+      # Only read the first time, to register; the runner then keeps its
+      # credentials in the data folder (.runner).
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_REGISTRATION_TOKEN:-}
+      GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME:-mujin-linux}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ${RUNNER_DATA:-/mnt/storage/appdata/mujin-gitea-runner}:/data
+      - /var/run/docker.sock:/var/run/docker.sock

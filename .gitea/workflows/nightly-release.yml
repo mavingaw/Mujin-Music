@@ -1,0 +1,77 @@
+# A rolling "nightly" pre-release on Gitea from the nightly branch (the
+# Gitea counterpart of .github/workflows/nightly-release.yml), with the
+# packages the Gitea runners build. It is not mirrored to GitHub, and the
+# container image from the same push is tagged "nightly"
+# (container-image.yml).
+name: Publish Nightly Release
+
+on:
+  push:
+    branches:
+      - nightly
+  workflow_dispatch:
+
+concurrency:
+  group: publish-nightly-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release packages
+    uses: ./.gitea/workflows/test.yml
+    with:
+      release: true
+    secrets: inherit
+
+  release:
+    name: Gitea nightly release
+    needs: build
+    runs-on: linux-x64
+    timeout-minutes: 30
+    env:
+      FORGE: gitea
+      FORGE_URL: ${{ github.server_url }}
+      FORGE_REPOSITORY: ${{ github.repository }}
+      FORGE_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Download release packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: mujin-music-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify release package set
+        run: |
+          while IFS= read -r -d '' package; do
+            destination="artifacts/$(basename "$package")"
+            if [[ -e "$destination" ]]; then
+              echo "Duplicate release package: $(basename "$package")" >&2
+              exit 1
+            fi
+            mv "$package" "$destination"
+          done < <(find artifacts -mindepth 2 -type f -print0)
+          # The standalone server's one-click update files name the stable
+          # release's download URL, so they belong to stable releases only.
+          rm -f \
+            artifacts/ParsonMusicServer.exe \
+            artifacts/ParsonMusicServer.exe.sha256 \
+            artifacts/windows-server-update.json
+          test "$(find artifacts -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -ge 1
+          test "$(find artifacts -maxdepth 1 -type f -name '*.deb' | wc -l)" -ge 1
+          test "$(find artifacts -maxdepth 1 -type f -name 'Mujin-Music-Setup-*.exe' | wc -l)" -eq 2
+          test "$(find artifacts -maxdepth 1 -type f -name '*-portable.exe' | wc -l)" -eq 2
+          test "$(find artifacts -maxdepth 1 -type f -name 'Mujin-Music-Server-*-win-x64.zip' | wc -l)" -eq 1
+          (cd artifacts && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum) > SHA256SUMS
+          mv SHA256SUMS artifacts/
+      - name: Publish rolling nightly release
+        run: |
+          node tools/publish-release.cjs delete --tag nightly
+          git tag --force nightly "$GITHUB_SHA"
+          git push origin refs/tags/nightly --force
+          printf '%s\n' "Automated nightly packages for Linux and Windows, and the Windows server-only package, built on the project's Gitea runners." > "$RUNNER_TEMP/notes.md"
+          mapfile -d '' packages < <(find artifacts -maxdepth 1 -type f -print0 | sort -z)
+          node tools/publish-release.cjs publish --tag nightly --target "$GITHUB_SHA" --prerelease \
+            --title "Mujin Music Nightly" --notes-file "$RUNNER_TEMP/notes.md" "${packages[@]}"

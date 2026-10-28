@@ -1,0 +1,43 @@
+# Builds the Linux job image (deploy/runner-images/linux) and pushes it to
+# the Gitea registry as <gitea host>/<owner>/mujin-runner-linux:<VERSION>.
+# Raise deploy/runner-images/linux/VERSION with every change and point the
+# runners' linux-x64 label at the new tag (deploy/unraid/README.md).
+#
+# It runs on the current job image (the first image is built by hand, see
+# deploy/unraid/README.md) and uses the build host's Docker daemon, which must
+# trust the registry address (insecure-registries for a plain-HTTP Gitea).
+name: Runner Image
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - deploy/runner-images/linux/**
+  workflow_dispatch:
+
+concurrency:
+  group: runner-image
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: Linux job image
+    runs-on: linux-x64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build and push
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REGISTRY_USER: ${{ vars.REGISTRY_USER || github.repository_owner }}
+        run: |
+          registry="${GITHUB_SERVER_URL#*://}"
+          registry="${registry%%/*}"
+          version="$(tr -d '[:space:]' < deploy/runner-images/linux/VERSION)"
+          [[ "$version" =~ ^[0-9]+$ ]]
+          image="${registry}/${GITHUB_REPOSITORY_OWNER,,}/mujin-runner-linux:${version}"
+          printf '%s' "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+          docker build --pull -t "$image" deploy/runner-images/linux
+          docker push "$image"
+          echo "Pushed $image"

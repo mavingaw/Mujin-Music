@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build:
     name: Build release packages
+    # .gitea/workflows/nightly-release.yml once BUILDS_ON is "gitea".
+    if: vars.BUILDS_ON != 'gitea'
     uses: ./.github/workflows/test.yml
     with:
       release: true

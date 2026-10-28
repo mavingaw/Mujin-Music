@@ -22,9 +22,13 @@ concurrency:
   group: build-test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Builds and releases move to the project's Gitea server when the repository
+# variable BUILDS_ON is "gitea" (.gitea/workflows); these jobs then skip on
+# GitHub, apart from macOS (macos-for-gitea.yml) and CodeQL.
 jobs:
   verify:
     name: Code quality and tests
+    if: vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     # The Rust checks run in parallel in `rust` and `rust-release`, so this
     # job only carries the JavaScript checks and the web export.
@@ -91,6 +95,7 @@ jobs:
 
   rust:
     name: Rust formatting, lints and tests
+    if: vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     # The workspace test suite (backend, outputs, bridge) compiles twice:
     # once for clippy, once for the tests. Debug info is limited to line
@@ -128,6 +133,7 @@ jobs:
 
   rust-release:
     name: Optimized backend and native bridge
+    if: vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     # The release binary embeds the web export, so it is built here first.
     timeout-minutes: 60
@@ -153,7 +159,7 @@ jobs:
 
   home-assistant:
     name: Home Assistant integration
-    if: inputs.release != true
+    if: inputs.release != true && vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -167,7 +173,7 @@ jobs:
 
   enhancer:
     name: AI enhancer worker
-    if: inputs.release != true
+    if: inputs.release != true && vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -190,6 +196,7 @@ jobs:
 
   linux-packages:
     name: Linux desktop (${{ matrix.arch }})
+    if: vars.BUILDS_ON != 'gitea'
     strategy:
       fail-fast: false
       matrix:
@@ -246,6 +253,7 @@ jobs:
 
   windows-installer-portable:
     name: Windows desktop (${{ matrix.arch }})
+    if: vars.BUILDS_ON != 'gitea'
     strategy:
       fail-fast: false
       matrix:

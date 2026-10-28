@@ -1,0 +1,98 @@
+# Streams real TIDAL and Qobuz audio with the repository's own accounts, on
+# the Gitea runners (the counterpart of .github/workflows/live-streaming.yml;
+# the secrets are set in Gitea).
+#
+# The services do not license credentials to Parson, so this runs only
+# when the repository owner adds a subscriber's credentials as secrets:
+#
+#   Qobuz: PARSON_LIVE_QOBUZ_APP_ID, PARSON_LIVE_QOBUZ_APP_SECRET,
+#          PARSON_LIVE_QOBUZ_EMAIL, PARSON_LIVE_QOBUZ_PASSWORD
+#   TIDAL: PARSON_LIVE_TIDAL_CLIENT_ID (a developer.tidal.com client),
+#          PARSON_LIVE_TIDAL_REFRESH_TOKEN (printed by one local run of
+#          the same test after approving the sign-in), optionally
+#          PARSON_LIVE_TIDAL_CLIENT_SECRET
+#   Either: PARSON_LIVE_*_TRACK to test a particular track id.
+#   Subscriber-only: PARSON_LIVE_KEY_SERVICE_URL (a Parson key service)
+#          in place of the app and client ids, with only the Qobuz email
+#          and password and the TIDAL refresh token.
+#
+# The test signs in, syncs favorites, streams a favorite at the highest
+# quality through Parson's proxy and fails unless the delivered format
+# matches the announced one and the whole track arrives (not a preview).
+# Without secrets the job reports that it was skipped and passes.
+name: Live Streaming Accounts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+concurrency:
+  group: live-streaming
+  cancel-in-progress: false
+
+jobs:
+  live-accounts:
+    name: TIDAL and Qobuz with real accounts
+    runs-on: linux-x64
+    timeout-minutes: 30
+    env:
+      PARSON_LIVE_QOBUZ_APP_ID: ${{ secrets.PARSON_LIVE_QOBUZ_APP_ID }}
+      PARSON_LIVE_QOBUZ_APP_SECRET: ${{ secrets.PARSON_LIVE_QOBUZ_APP_SECRET }}
+      PARSON_LIVE_QOBUZ_EMAIL: ${{ secrets.PARSON_LIVE_QOBUZ_EMAIL }}
+      PARSON_LIVE_QOBUZ_PASSWORD: ${{ secrets.PARSON_LIVE_QOBUZ_PASSWORD }}
+      PARSON_LIVE_QOBUZ_TRACK: ${{ secrets.PARSON_LIVE_QOBUZ_TRACK }}
+      PARSON_LIVE_TIDAL_CLIENT_ID: ${{ secrets.PARSON_LIVE_TIDAL_CLIENT_ID }}
+      PARSON_LIVE_TIDAL_CLIENT_SECRET: ${{ secrets.PARSON_LIVE_TIDAL_CLIENT_SECRET }}
+      PARSON_LIVE_TIDAL_REFRESH_TOKEN: ${{ secrets.PARSON_LIVE_TIDAL_REFRESH_TOKEN }}
+      PARSON_LIVE_TIDAL_TRACK: ${{ secrets.PARSON_LIVE_TIDAL_TRACK }}
+      PARSON_LIVE_KEY_SERVICE_URL: ${{ secrets.PARSON_LIVE_KEY_SERVICE_URL }}
+    steps:
+      - name: Check for account secrets
+        id: accounts
+        run: |
+          qobuz=false
+          tidal=false
+          keys=false
+          if [ -n "$PARSON_LIVE_KEY_SERVICE_URL" ] || { [ -n "$PARSON_LIVE_QOBUZ_APP_ID" ] && [ -n "$PARSON_LIVE_QOBUZ_APP_SECRET" ]; }; then
+            keys=true
+          fi
+          if [ "$keys" = true ] && [ -n "$PARSON_LIVE_QOBUZ_EMAIL" ] && [ -n "$PARSON_LIVE_QOBUZ_PASSWORD" ]; then
+            qobuz=true
+          fi
+          # TIDAL needs a refresh token here: nobody can approve a sign-in
+          # code in CI.
+          if { [ -n "$PARSON_LIVE_TIDAL_CLIENT_ID" ] || [ -n "$PARSON_LIVE_KEY_SERVICE_URL" ]; } \
+            && [ -n "$PARSON_LIVE_TIDAL_REFRESH_TOKEN" ]; then
+            tidal=true
+          elif [ -n "$PARSON_LIVE_TIDAL_CLIENT_ID" ] || [ -n "$PARSON_LIVE_KEY_SERVICE_URL" ]; then
+            echo "::warning::TIDAL keys are set without PARSON_LIVE_TIDAL_REFRESH_TOKEN; TIDAL is skipped."
+            echo "PARSON_LIVE_TIDAL_CLIENT_ID=" >> "$GITHUB_ENV"
+            echo "PARSON_LIVE_TIDAL_SKIP=1" >> "$GITHUB_ENV"
+          fi
+          if [ "$qobuz" = false ] && [ "$tidal" = false ]; then
+            echo "::notice::No live account secrets; real TIDAL and Qobuz streaming was not tested."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Testing: Qobuz=$qobuz TIDAL=$tidal"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.accounts.outputs.run == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        if: steps.accounts.outputs.run == 'true'
+      - name: Stream from the real services
+        if: steps.accounts.outputs.run == 'true'
+        run: cargo test -p parson-music live_accounts -- --ignored --nocapture
+        env:
+          PARSON_LIVE_RESULT_DIR: ${{ runner.temp }}/live-results
+      # The record of what each real account received (format, full length
+      # or preview). It holds no tokens or credentials.
+      - name: Keep the result
+        if: always() && steps.accounts.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: live-streaming-results
+          path: ${{ runner.temp }}/live-results
+          if-no-files-found: warn
+          retention-days: 90

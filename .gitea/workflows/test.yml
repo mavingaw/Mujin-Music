@@ -1,0 +1,430 @@
+# Build and test on the project's own Gitea runners (deploy/unraid/README.md):
+#
+#   linux-x64    Docker runners (Unraid server, Ubuntu box) running the job
+#                image from deploy/runner-images/linux
+#   windows-x64  the Windows PC, host mode (deploy/windows-runner)
+#
+# This is the Gitea counterpart of .github/workflows/test.yml. Gitea reads
+# .gitea/workflows and ignores .github/workflows once this folder exists.
+# macOS is built on GitHub (.github/workflows/macos-for-gitea.yml).
+name: Build and Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_call:
+    inputs:
+      release:
+        description: Build the desktop release package set.
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Build the desktop release package set.
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Gitea leaves a workflow_call input without a value empty instead of using
+# its default, so the release switch is always tested as `== true` /
+# `!= true`.
+env:
+  # Where the packages built here look for updates and link their
+  # downloads: the GitHub mirror's releases unless the repository variable
+  # names another HTTPS releases page (tools/releases-base.cjs).
+  MUJIN_RELEASES_BASE: ${{ vars.MUJIN_RELEASES_BASE }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Code quality and tests
+    runs-on: linux-x64
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Check repository formatting
+        if: inputs.release != true
+        run: bun run format:check
+      - name: Check desktop release formatting
+        if: inputs.release == true
+        run: |
+          bunx prettier --check \
+            .gitea \
+            .github \
+            apps/desktop \
+            apps/site \
+            apps/web \
+            packages/parson-music-sdk \
+            tools \
+            patches \
+            package.json \
+            README.md \
+            docker-compose.yml \
+            --ignore-unknown
+      - name: Check web types
+        run: bun --filter parson-music-web type-check
+      - name: Check site and mobile types
+        if: inputs.release != true
+        run: bun --filter parson-site type-check && bun --filter parson-mobile type-check
+      - name: Lint mobile client
+        if: inputs.release != true
+        run: bun --filter parson-mobile lint
+      - name: Test client and SDK
+        run: bun test packages/parson-music-sdk/src apps/web/components apps/web/features
+      - name: Test mobile client
+        if: inputs.release != true
+        run: bun test apps/mobile/src/lib
+      - name: Check release versions and tooling
+        run: bun run version:check && node --test tools/*.test.cjs
+      - name: Test desktop integration
+        run: bun --filter parson-music-desktop desktop:test
+      - name: Test mobile build plugins
+        if: inputs.release != true
+        run: node --test apps/mobile/plugins/*.test.cjs
+      - name: Validate distribution metadata
+        if: ${{ hashFiles('distribution/scripts/validate.sh') != '' }}
+        run: bash ./distribution/scripts/validate.sh
+      - name: Audit complete JavaScript dependency graph
+        run: bun run audit:dependencies
+      - name: Build web export
+        run: bun --filter parson-music-web build
+      - name: Build website and documentation
+        if: inputs.release != true
+        run: bun --filter parson-site build:worker && bun --filter parson-site verify:worker
+
+  rust:
+    name: Rust formatting, lints and tests
+    runs-on: linux-x64
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Check Rust formatting
+        run: cargo fmt --check
+      - name: Lint backend
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build backend tests
+        run: cargo test --workspace --no-run
+      - name: Test backend
+        run: cargo test --workspace
+      # The job image ships cargo-audit 0.22.2.
+      - name: Audit Rust dependencies
+        run: cargo audit
+
+  rust-release:
+    name: Optimized backend and native bridge
+    runs-on: linux-x64
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Build web export
+        run: bun --filter parson-music-web build
+      - name: Build optimized backend and native bridge
+        run: cargo build --release --workspace
+
+  home-assistant:
+    name: Home Assistant integration
+    if: inputs.release != true
+    runs-on: linux-x64
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install the Home Assistant test harness
+        run: |
+          pipx run uv venv --python 3.13 .venv-ha
+          pipx run uv pip install --python .venv-ha/bin/python -r tests/home_assistant/requirements.txt
+      - name: Test the Mujin Music integration against a fake server
+        run: .venv-ha/bin/python -m pytest -c tests/home_assistant/pytest.ini tests/home_assistant -q
+
+  enhancer:
+    name: AI enhancer worker
+    if: inputs.release != true
+    runs-on: linux-x64
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/enhancer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Lint the worker
+        run: |
+          pipx run uv==0.11.32 tool run ruff@0.17.3 check .
+          pipx run uv==0.11.32 tool run ruff@0.17.3 format --check .
+      - name: Test the worker's API, chunking and resampling
+        run: pipx run uv==0.11.32 run --frozen --extra test pytest -q
+
+  linux-packages:
+    name: Linux desktop (x64)
+    runs-on: linux-x64
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Build Linux packages from a clean checkout
+        run: bun --filter parson-music-desktop desktop:build
+      - name: Verify Linux package contents
+        run: bash ./apps/desktop/scripts/verify-linux-package.sh
+      - name: Upload Linux AppImage and Debian package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mujin-music-linux-x64
+          path: |
+            target/release/bundle/electron/*.AppImage
+            target/release/bundle/electron/*.deb
+          if-no-files-found: error
+
+  # The runners are x86_64, so the arm64 packages are cross-built: the
+  # backend with the aarch64 cross compiler in the job image, Electron for
+  # arm64 by electron-builder. Off unless the repository variable
+  # LINUX_ARM64 is "true"; without it, releases carry the previous arm64
+  # update feed forward (see release.yml) and arm64 users update manually.
+  linux-packages-arm64:
+    name: Linux desktop (arm64, cross-built)
+    if: vars.LINUX_ARM64 == 'true'
+    runs-on: linux-x64
+    timeout-minutes: 90
+    env:
+      PARSON_BUILD_ARCH: arm64
+      PARSON_RUST_TARGET: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: aarch64
+      # Lets the x86_64 host run the arm64 AppImage runtime when the
+      # package is verified (registers QEMU on the host's kernel).
+      - name: Register arm64 emulation on the build host
+        run: docker run --privileged --rm docker.io/tonistiigi/binfmt:qemu-v10.2.3 --install arm64
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Cross-build Linux arm64 packages
+        run: bun --filter parson-music-desktop desktop:build
+      - name: Verify Linux package contents
+        run: bash ./apps/desktop/scripts/verify-linux-package.sh
+      - name: Upload Linux AppImage and Debian package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mujin-music-linux-arm64
+          path: |
+            target/release/bundle/electron/*.AppImage
+            target/release/bundle/electron/*.deb
+          if-no-files-found: error
+
+  windows-installer-portable:
+    name: Windows desktop (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            rust_target: ""
+          # Cross-built on the x64 PC with the MSVC ARM64 build tools.
+          - arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+    runs-on: windows-x64
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PARSON_BUILD_ARCH: ${{ matrix.arch }}
+      PARSON_RUST_TARGET: ${{ matrix.rust_target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.rust_target }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: ${{ matrix.arch }}
+      # The WASAPI and bridge tests run natively, so only on x64.
+      - name: Lint the WASAPI output and the bridge natively
+        if: matrix.arch == 'x64'
+        run: cargo clippy -p parson-output -p parson-bridge --all-targets -- -D warnings
+      - name: Test the WASAPI output logic and the bridge natively
+        if: matrix.arch == 'x64'
+        run: |
+          cargo test -p parson-output wasapi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p parson-bridge
+      - name: Install packaging dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install Electron runtime
+        run: node node_modules/electron/install.js
+      - name: Build embedded web UI
+        run: bun --filter parson-music-web build
+      - name: Configure optional Windows signing
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_CSC_LINK }}
+          PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: |
+          if ($env:CERTIFICATE) {
+            "CSC_LINK=$env:CERTIFICATE" >> $env:GITHUB_ENV
+            "CSC_KEY_PASSWORD=$env:PASSWORD" >> $env:GITHUB_ENV
+          }
+      # prepare-sidecar.cjs builds the backend for PARSON_RUST_TARGET.
+      - name: Build Windows release
+        run: bun --filter parson-music-desktop desktop:build
+      - name: Verify Windows package payload (licenses, server and tray host)
+        run: |
+          $unpacked = Get-ChildItem target\release\bundle\electron -Directory |
+            Where-Object Name -Like "win*-unpacked" |
+            Select-Object -First 1
+          if ($null -eq $unpacked) {
+            throw "Electron Builder did not retain an unpacked Windows application."
+          }
+          foreach ($relativePath in @(
+            "resources\LICENSE",
+            "resources\THIRD_PARTY_NOTICES.md",
+            "resources\parson-music-server.exe",
+            "resources\ParsonMusicServer.exe",
+            "LICENSE.electron.txt",
+            "LICENSES.chromium.html"
+          )) {
+            $path = Join-Path $unpacked.FullName $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Windows package is missing $relativePath."
+            }
+          }
+          if ($env:PARSON_BUILD_ARCH -eq "arm64") {
+            # IMAGE_FILE_MACHINE_ARM64 in the PE header of the backend.
+            $bytes = [IO.File]::ReadAllBytes((Join-Path $unpacked.FullName "resources\parson-music-server.exe"))
+            $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+            if ($machine -ne 0xAA64) { throw ("The arm64 package holds a backend for machine 0x{0:X4}." -f $machine) }
+          }
+      # build/installer.nsh adds inbound Windows Firewall rules for the app
+      # and its background server on private networks, and the uninstaller
+      # removes them. The runner service runs as an administrator, so the
+      # silent install adds them without a UAC prompt.
+      - name: Check the installer's Windows Firewall rules
+        if: matrix.arch == 'x64'
+        run: |
+          $installer = Get-ChildItem target\release\bundle\electron\Mujin-Music-Setup-*.exe |
+            Select-Object -First 1
+          $install = Join-Path $env:RUNNER_TEMP "MujinMusicFirewall"
+          $expected = [ordered]@{
+            "Mujin Music" = Join-Path $install "Mujin Music.exe"
+            "Mujin Music Server" = Join-Path $env:LOCALAPPDATA "Programs\Mujin Music Server\ParsonMusicServer.exe"
+          }
+          function Get-MujinRule([string]$Name, [string]$Program) {
+            @(Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue |
+              Where-Object {
+                $filter = $_ | Get-NetFirewallApplicationFilter
+                [Environment]::ExpandEnvironmentVariables($filter.Program) -eq $Program
+              })
+          }
+          function Wait-Until([scriptblock]$Condition, [string]$Failure) {
+            $deadline = (Get-Date).AddMinutes(2)
+            while (-not (& $Condition)) {
+              if ((Get-Date) -gt $deadline) { throw $Failure }
+              Start-Sleep -Seconds 2
+            }
+          }
+          $process = Start-Process $installer.FullName -ArgumentList @("/S", "/D=$install") `
+            -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent installation failed." }
+          foreach ($name in $expected.Keys) {
+            $program = $expected[$name]
+            Wait-Until { (Get-MujinRule $name $program).Count -eq 1 } `
+              "The installer did not add exactly one '$name' rule for $program."
+            $rule = (Get-MujinRule $name $program)[0]
+            if ($rule.Direction -ne "Inbound" -or $rule.Action -ne "Allow" -or
+                $rule.Profile -ne "Private" -or $rule.Enabled -ne "True") {
+              $rule | Format-List | Out-Host
+              throw "The '$name' rule is not an enabled inbound allow rule for private networks only."
+            }
+          }
+          $uninstaller = Join-Path $install "Uninstall Mujin Music.exe"
+          $process = Start-Process $uninstaller -ArgumentList "/S" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent uninstall failed." }
+          foreach ($name in $expected.Keys) {
+            $program = $expected[$name]
+            Wait-Until { (Get-MujinRule $name $program).Count -eq 0 } `
+              "The uninstaller left the '$name' rule for $program."
+          }
+      - name: Upload Windows installer and portable executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mujin-music-windows-${{ matrix.arch }}
+          path: |
+            target/release/bundle/electron/Mujin-Music-Setup-*.exe
+            target/release/bundle/electron/Mujin-Music-*-portable.exe
+            target/release/bundle/electron/*.blockmap
+          if-no-files-found: error
+      # The server-only Windows package (tray host, no desktop UI) is built
+      # and verified on every pull request, not only for releases.
+      - name: Build standalone Windows server package
+        if: matrix.arch == 'x64'
+        run: |
+          ./crates/windows-server/package.ps1 -SkipWebBuild
+          ./crates/windows-server/verify-update-assets.ps1
+      - name: Check the server package's contents and Windows Firewall scripts
+        if: matrix.arch == 'x64'
+        run: |
+          $zip = Get-ChildItem artifacts\windows-server\Mujin-Music-Server-*-win-x64.zip |
+            Select-Object -First 1
+          if ($null -eq $zip) { throw "The server-only zip was not created." }
+          $unpacked = Join-Path $env:RUNNER_TEMP "MujinMusicServerZip"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $unpacked -Force
+          foreach ($name in @(
+            "ParsonMusicServer.exe",
+            "README.md",
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
+            "firewall.ps1",
+            "Allow through Windows Firewall.cmd",
+            "Remove from Windows Firewall.cmd"
+          )) {
+            if (-not (Test-Path -LiteralPath (Join-Path $unpacked $name) -PathType Leaf)) {
+              throw "The server-only zip is missing $name."
+            }
+          }
+          $program = Join-Path $unpacked "ParsonMusicServer.exe"
+          function Get-ServerRule {
+            @(Get-NetFirewallRule -DisplayName "Mujin Music Server" -ErrorAction SilentlyContinue |
+              Where-Object {
+                $filter = $_ | Get-NetFirewallApplicationFilter
+                [Environment]::ExpandEnvironmentVariables($filter.Program) -eq $program
+              })
+          }
+          foreach ($attempt in 1..2) {
+            $null | & (Join-Path $unpacked "Allow through Windows Firewall.cmd")
+            if ($LASTEXITCODE -ne 0) { throw "Allow through Windows Firewall.cmd failed." }
+          }
+          $rules = Get-ServerRule
+          if ($rules.Count -ne 1) { throw "Expected one server rule after allowing twice, found $($rules.Count)." }
+          if ($rules[0].Direction -ne "Inbound" -or $rules[0].Action -ne "Allow" -or
+              $rules[0].Profile -ne "Private" -or $rules[0].Enabled -ne "True") {
+            $rules[0] | Format-List | Out-Host
+            throw "The server rule is not an enabled inbound allow rule for private networks only."
+          }
+          $null | & (Join-Path $unpacked "Remove from Windows Firewall.cmd")
+          if ($LASTEXITCODE -ne 0) { throw "Remove from Windows Firewall.cmd failed." }
+          if ((Get-ServerRule).Count -ne 0) { throw "The server rule remains after removing it." }
+      - name: Upload standalone Windows server package
+        if: matrix.arch == 'x64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mujin-music-windows-server
+          path: artifacts/windows-server/*
+          if-no-files-found: error

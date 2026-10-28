@@ -18,6 +18,8 @@ concurrency:
 jobs:
   scan:
     name: Container scan
+    # .gitea/workflows/container-image.yml scans once BUILDS_ON is "gitea".
+    if: vars.BUILDS_ON != 'gitea'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

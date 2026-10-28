@@ -33,8 +33,13 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # With BUILDS_ON set to "gitea", the Gitea server builds and publishes
+  # releases (.gitea/workflows/release.yml) and macos-for-gitea.yml adds the
+  # macOS packages; nothing here runs.
   validate:
-    if: github.event_name != 'push' || github.event.created == true
+    if: >-
+      vars.BUILDS_ON != 'gitea' &&
+      (github.event_name != 'push' || github.event.created == true)
     name: Validate release version
     runs-on: ubuntu-latest
     timeout-minutes: 10
