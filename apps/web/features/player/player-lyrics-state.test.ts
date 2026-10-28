@@ -120,4 +120,20 @@ describe("lyrics request failures", () => {
     ).toBe("failed");
     expect(lyricsRequestFailure(new Error("offline"))).toBe("failed");
   });
+
+  test("tells a 503 and lookups turned off apart from a missing answer", () => {
+    expect(
+      lyricsRequestFailure({
+        response: {
+          data: { code: "lyrics_provider_unavailable" },
+          status: 503,
+        },
+      }),
+    ).toBe("unavailable");
+    expect(
+      lyricsRequestFailure({
+        response: { data: { code: "lyrics_not_found_offline" }, status: 404 },
+      }),
+    ).toBe("offline");
+  });
 });

@@ -40,8 +40,8 @@ export function RadioThumbs({
   const { radio, currentIndex } = usePlayer();
   const current = index === currentIndex;
   const up = solid
-    ? `${liked ? "bg-sky-400 text-black" : "bg-sky-500 text-white hover:bg-sky-400"}`
-    : `${liked ? "text-sky-300" : "text-zinc-400 hover:bg-white/10 hover:text-white"}`;
+    ? `${liked ? "bg-mujin-copper-hover text-mujin-on-copper" : "bg-mujin-copper text-mujin-on-copper hover:bg-mujin-copper-hover"}`
+    : `${liked ? "text-mujin-copper" : "text-mujin-text-secondary hover:bg-white/10 hover:text-mujin-text"}`;
   const down = solid
     ? "bg-white text-black hover:bg-zinc-200"
     : "text-zinc-400 hover:bg-white/10 hover:text-white";
@@ -112,7 +112,7 @@ export function RadioSwitch({
     >
       <span
         aria-hidden="true"
-        className={`h-4.5 w-4.5 rounded-full bg-white shadow transition-transform ${
+        className={`h-4.5 w-4.5 rounded-full bg-mujin-text shadow transition-transform ${
           checked ? "translate-x-5" : "translate-x-0.5"
         }`}
       />
@@ -136,10 +136,10 @@ export function RadioQueueSection({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-[15px] font-semibold text-white">
+          <p className="flex items-center gap-2 text-[0.9375rem] font-semibold text-white">
             <Radio
               aria-hidden="true"
-              className={`h-4 w-4 ${radio.enabled ? "text-sky-400" : "text-zinc-600"}`}
+              className={`h-4 w-4 ${radio.enabled ? "text-mujin-copper" : "text-mujin-text-disabled"}`}
             />
             Radio
           </p>
@@ -195,7 +195,7 @@ export function GenreStations({ limit = 8 }: { limit?: number }) {
               aria-pressed={active}
               className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60 ${
                 active
-                  ? "border-sky-400/60 bg-sky-500/15 text-sky-200"
+                  ? "border-mujin-copper/60 bg-mujin-copper/15 text-mujin-copper-hover"
                   : "border-white/10 text-zinc-300 hover:border-white/25 hover:text-white"
               }`}
               disabled={starting !== null}
@@ -259,7 +259,7 @@ export function StartRadioButton({
       title={label}
       type="button"
     >
-      <Radio aria-hidden="true" className="h-4 w-4 text-sky-400" />
+      <Radio aria-hidden="true" className="h-4 w-4 text-mujin-copper" />
       Radio
     </button>
   );

@@ -5,6 +5,7 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const patches = [
   ["braces@3.0.3", "GHSA-vfj7-8cjw-p6xm"],
+  ["deepmerge@4.3.1", "GHSA-gcqx-w48m-w2h4"],
   ["node-forge@1.4.0", "GHSA-86w9-cpqp-85rv"],
   ["sprintf-js@1.1.3", "GHSA-hp3w-g68c-fv3c"],
 ];

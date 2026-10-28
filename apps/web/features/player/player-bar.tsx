@@ -10,7 +10,26 @@ import {
   usePlayerShortcuts,
 } from "./player-bar-hooks";
 import { FullscreenPlayer, LyricsPanel } from "./player-overlays";
-import { PlayerFooter } from "./player-footer";
+import { useLyricsBackdropImage } from "./lyrics-view";
+import {
+  LyricsSheet,
+  VIEW_LYRICS_EVENT,
+  type ViewLyricsRequest,
+} from "./view-lyrics";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
+import { useZonePlayback } from "./zones/use-zone-playback";
+import { IdleFooter, PhoneIdleDock, PlayerFooter } from "./player-footer";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
+import { generatedCover } from "@/features/library/artwork/generated-cover";
+import { useNowPlayingFacts } from "./use-now-playing-facts";
+import { NowPlayingArtistBio } from "./now-playing-artist";
+import FavoriteButton from "@/features/library/favorite-button";
+import { openZoneDisplay } from "@/features/display/display-links";
+import { toast } from "sonner";
+import { useArtistAbout } from "@/features/library/credits/use-editorial";
 import PlayerQueue, { type QueueEditing } from "./player-queue";
 import { timelinePlaybackRate } from "./player-controls-state";
 import { useMediaSession } from "./use-media-session";
@@ -324,6 +343,10 @@ export default function PlayerBar() {
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [lyricsSheet, setLyricsSheet] = useState<ViewLyricsRequest | null>(
+    null,
+  );
+  const zonePlayback = useZonePlayback();
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
   const closeFullscreen = useCallback(() => {
     setFullscreenOpen(false);
@@ -445,13 +468,57 @@ export default function PlayerBar() {
     activeLine,
     activeLineRef,
     fallback: fallbackLyrics,
-    failed: lyricsFailed,
+    failure: lyricsFailure,
     instrumental: lyricsInstrumental,
     loading: lyricsLoading,
     retry: retryLyrics,
     scrollRef: lyricsScrollRef,
+    source: lyricsSource,
     timed: timedLyrics,
   } = useLyrics(effectiveSong, effectiveCurrentTime, lyricsOpen && !live);
+  const lyricsBackdrop = useLyricsBackdropImage(
+    effectiveSong.artist_object.id || artist.id || undefined,
+    effectiveSong.artist_object.icon_url || undefined,
+    lyricsOpen && !live,
+  );
+  const lyricsSongId = live ? "" : effectiveSong.id;
+  const lyricsAvailability = useLyricsAvailability(
+    useMemo(() => (lyricsSongId ? [lyricsSongId] : []), [lyricsSongId]),
+  );
+  // "View lyrics" in a track menu: the playing track opens the full-screen
+  // lyrics; any other track opens a sheet with its words.
+  useEffect(() => {
+    const onViewLyrics = (event: Event) => {
+      const request = (event as CustomEvent<ViewLyricsRequest>).detail;
+      if (!request?.songId) return;
+      if (request.songId === lyricsSongId) {
+        setQueueOpen(false);
+        setFullscreenOpen(true);
+        setLyricsOpen(true);
+      } else {
+        setLyricsSheet(request);
+      }
+    };
+    window.addEventListener(VIEW_LYRICS_EVENT, onViewLyrics);
+    return () => window.removeEventListener(VIEW_LYRICS_EVENT, onViewLyrics);
+  }, [lyricsSongId]);
+  const lyricsSheetView = lyricsSheet ? (
+    <LyricsSheet
+      onFollowAlong={(request) => {
+        setLyricsSheet(null);
+        if (!request.item) return;
+        void zonePlayback.playQueue([request.item]).then(() => {
+          setQueueOpen(false);
+          setFullscreenOpen(true);
+          setLyricsOpen(true);
+        });
+      }}
+      onOpenChange={(open) => {
+        if (!open) setLyricsSheet(null);
+      }}
+      request={lyricsSheet}
+    />
+  ) : null;
   useFullscreenDismiss(fullscreenOpen, closeFullscreen);
   useEffect(() => {
     if (!lyricsOpen || fullscreenOpen) {
@@ -473,6 +540,40 @@ export default function PlayerBar() {
   useCloseLyricsOnNavigation(closeLyrics);
 
   const playerQueue = remote ? remoteQueue : queue;
+  const nextQueueItem = casting
+    ? undefined
+    : playerQueue[(remote ? remote.queue.current_position : currentIndex) + 1];
+  const upcomingStart =
+    (remote ? remote.queue.current_position : currentIndex) + 1;
+  const upNextItems = casting
+    ? []
+    : playerQueue.slice(upcomingStart, upcomingStart + 3).map((item) => ({
+        title: displaySongTitle(item.song.name || "Untitled"),
+        artist: item.artist.name || item.song.artist,
+        cover:
+          getLibraryImageUrl(item.album.cover_url, getBaseURL) ??
+          generatedCover(item.album.name || item.song.name, item.artist.name),
+      }));
+  const upNext = nextQueueItem
+    ? {
+        title: displaySongTitle(nextQueueItem.song.name || "Untitled"),
+        artist: nextQueueItem.artist.name || nextQueueItem.song.artist,
+        cover:
+          getLibraryImageUrl(nextQueueItem.album.cover_url, getBaseURL) ??
+          generatedCover(
+            nextQueueItem.album.name || nextQueueItem.song.name,
+            nextQueueItem.artist.name,
+          ),
+      }
+    : null;
+  // Read from the server, so the table is the same after Next or
+  // auto-advance as for a track started from its album page.
+  const nowPlayingDetails = useNowPlayingFacts(effectiveSong, album, !live);
+  // The artist's biography for the full-screen view's "About the artist".
+  const bioArtistId = effectiveSong.artist_object.id || artist.id || null;
+  const artistAbout = useArtistAbout(
+    fullscreenOpen && !live && !isStreamingId(bioArtistId) ? bioArtistId : null,
+  ).data;
   const selectQueueItem = remote
     ? (index: number) => sendRemote({ command: "jump", queue_position: index })
     : playQueueItem;
@@ -536,11 +637,15 @@ export default function PlayerBar() {
   if (!song.id && !castItem && !remote) {
     // Nothing plays here: keep the zone picker reachable so a remote zone
     // can be chosen and controlled.
-    return zones.zones.length > 1 ? (
-      <div className="fixed bottom-22 right-3 z-50 rounded-full border border-white/10 bg-[#080808] p-1 shadow-2xl md:bottom-5 md:right-5">
-        <ZonePickerButton />
-      </div>
-    ) : null;
+    return (
+      <>
+        <IdleFooter zonePicker={<ZonePickerButton />} />
+        {lyricsSheetView}
+        {zones.zones.length > 1 ? (
+          <PhoneIdleDock zonePicker={<ZonePickerButton />} />
+        ) : null}
+      </>
+    );
   }
 
   return (
@@ -563,10 +668,12 @@ export default function PlayerBar() {
           queueEditing={queueEditing}
           lyricsOpen={lyricsOpen}
           lyricsFallback={fallbackLyrics}
-          lyricsFailed={lyricsFailed}
+          lyricsFailure={lyricsFailure}
           lyricsInstrumental={lyricsInstrumental}
           lyricsLoading={lyricsLoading}
           lyricsScrollRef={lyricsScrollRef}
+          lyricsSource={lyricsSource}
+          lyricsBackdrop={lyricsBackdrop}
           muted={effectiveMuted}
           onClose={closeFullscreen}
           onNext={next}
@@ -614,6 +721,32 @@ export default function PlayerBar() {
           volume={effectiveVolume}
           zonePicker={<ZonePickerButton compact />}
           livePlaying={live ? livePlaying : null}
+          details={nowPlayingDetails}
+          upNext={upNext}
+          upNextItems={upNextItems}
+          favorite={
+            playingSongId && !live ? (
+              <FavoriteButton songId={playingSongId} songName={displayTitle} />
+            ) : null
+          }
+          shuffle={queueEditing?.shuffle ?? false}
+          onToggleShuffle={
+            queueEditing?.onShuffleChange
+              ? () => queueEditing.onShuffleChange?.(!queueEditing.shuffle)
+              : null
+          }
+          onOpenDisplay={() => {
+            const zone = remote ?? zones.localZone;
+            void openZoneDisplay(
+              zone ? { id: zone.id, name: zone.name } : null,
+            ).catch(() => toast.error("Could not open a display."));
+          }}
+          artistBio={
+            <NowPlayingArtistBio
+              about={artistAbout}
+              onNavigate={closeFullscreen}
+            />
+          }
         />
       )}
 
@@ -621,15 +754,18 @@ export default function PlayerBar() {
         <LyricsPanel
           activeLine={activeLine}
           activeLineRef={activeLineRef}
+          backdrop={lyricsBackdrop}
           cover={cover}
           fallback={fallbackLyrics}
-          failed={lyricsFailed}
+          failure={lyricsFailure}
           instrumental={lyricsInstrumental}
           loading={lyricsLoading}
           onRetry={retryLyrics}
           scrollRef={lyricsScrollRef}
           onSeek={handleTimeChange}
+          source={lyricsSource}
           timed={timedLyrics}
+          title={displayTitle}
         />
       )}
 
@@ -647,7 +783,7 @@ export default function PlayerBar() {
 
       {error?.startsWith("This audio format") ? (
         <div
-          className="fixed bottom-42 left-1/2 z-80 w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-300/20 bg-zinc-950 p-4 shadow-2xl md:bottom-32 md:left-[calc(50%+40px)]"
+          className="fixed bottom-42 left-1/2 z-80 w-[min(92vw,520px)] -translate-x-1/2 rounded-xl border border-amber-300/20 bg-mujin-surface-2 p-4 shadow-2xl md:bottom-28 md:left-[calc(50%+var(--shell-sidebar)/2)]"
           role="alert"
         >
           <p className="font-semibold text-white">
@@ -728,7 +864,16 @@ export default function PlayerBar() {
           ) : null
         }
         livePlaying={live ? livePlaying : null}
+        lyricsMark={
+          lyricsSongId && lyricsAvailability[lyricsSongId] ? (
+            <TimedLyricsMark
+              availability={lyricsAvailability[lyricsSongId]}
+              showLabel
+            />
+          ) : null
+        }
       />
+      {lyricsSheetView}
       {!casting && !fullscreenOpen && !queueOpen && <RadioNotices />}
       {handoffOpen && (
         <SpotifyHandoffDialog

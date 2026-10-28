@@ -104,7 +104,7 @@ export default function SearchScreen() {
               accessibilityRole="button"
               onPress={() => setQuery("")}
             >
-              <X color="white" size={20} />
+              <X color={palette.text} size={20} />
             </Pressable>
           ) : null}
         </View>
@@ -129,7 +129,7 @@ export default function SearchScreen() {
           ))}
         </View>
         {results.isFetching ? (
-          <ActivityIndicator color="white" style={{ marginTop: 30 }} />
+          <ActivityIndicator color={palette.text} style={{ marginTop: 30 }} />
         ) : results.isError ? (
           <Pressable
             accessibilityRole="button"
@@ -218,7 +218,7 @@ export default function SearchScreen() {
                 )
               : null}
           {scope === "everywhere" && streaming.isFetching ? (
-            <ActivityIndicator color="white" style={{ marginTop: 16 }} />
+            <ActivityIndicator color={palette.text} style={{ marginTop: 16 }} />
           ) : null}
         </ScrollView>
       </SafeAreaView>
@@ -284,7 +284,7 @@ function SearchResult({ item }: { item: CombinedItem }) {
         </Pressable>
         {type.includes("album") ? (
           playing ? (
-            <ActivityIndicator color="white" />
+            <ActivityIndicator color={palette.text} />
           ) : (
             <Pressable
               accessibilityLabel={`${playFailed ? "Try playing" : "Play"} ${item.name}`}
@@ -336,7 +336,7 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 12,
   },
-  input: { flex: 1, color: "white", fontSize: 16, paddingVertical: 0 },
+  input: { flex: 1, color: palette.text, fontSize: 16, paddingVertical: 0 },
   scopes: {
     flexDirection: "row",
     gap: 8,
@@ -351,18 +351,22 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     justifyContent: "center",
   },
-  scopeActive: { backgroundColor: "white", borderColor: "white" },
+  scopeActive: { backgroundColor: palette.text, borderColor: palette.text },
   scopeText: { color: palette.secondary, fontWeight: "700", fontSize: 13 },
-  scopeTextActive: { color: "black" },
+  scopeTextActive: { color: palette.background },
   sectionHeading: {
-    color: "white",
+    color: palette.text,
     fontSize: 17,
     fontWeight: "800",
     marginHorizontal: 20,
     marginTop: 22,
     marginBottom: 6,
   },
-  sectionHeadingInline: { color: "white", fontSize: 17, fontWeight: "800" },
+  sectionHeadingInline: {
+    color: palette.text,
+    fontSize: 17,
+    fontWeight: "800",
+  },
   serviceHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -373,7 +377,7 @@ const styles = StyleSheet.create({
   },
   serviceNote: { flex: 1, color: palette.secondary, fontSize: 13 },
   artistChip: {
-    color: "white",
+    color: palette.text,
     fontWeight: "700",
     marginHorizontal: 20,
     paddingVertical: 10,
@@ -394,7 +398,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 13,
   },
-  resultName: { color: "white", fontWeight: "700", fontSize: 15 },
+  resultName: { color: palette.text, fontWeight: "700", fontSize: 15 },
   resultType: {
     color: palette.secondary,
     fontSize: 13,

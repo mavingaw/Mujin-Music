@@ -1,9 +1,9 @@
-import { genreChipTitle } from "@parson/music-sdk";
+import { genreChipTitle, genreDisplayName } from "@parson/music-sdk";
 import type { GenreRef } from "@parson/music-sdk/types";
 import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { genreRoute } from "@/lib/credit-links";
 import { immediatePressFeedback } from "@/lib/press-feedback";
 
@@ -32,7 +32,7 @@ export function GenreChips({
           onPress={() => router.push(genreRoute(genre.slug))}
           style={styles.chip}
         >
-          <Text style={styles.text}>{genre.name}</Text>
+          <Text style={styles.text}>{genreDisplayName(genre.name)}</Text>
         </Pressable>
       ))}
     </View>
@@ -43,10 +43,10 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 },
   centered: { justifyContent: "center" },
   chip: {
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: tint(0.14),
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: tint(0.06),
     paddingHorizontal: 10,
     paddingVertical: 4,
   },

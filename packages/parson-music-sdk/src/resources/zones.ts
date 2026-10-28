@@ -471,6 +471,8 @@ export interface ClientZoneRegistration {
 export type ZoneSocketMessage =
   | { type: "ready" }
   | { type: "zones_changed" }
+  /** Settings → Appearance was saved (on any device of this profile). */
+  | { type: "appearance_changed"; revision?: number }
   | {
       type: "zone_command";
       zone_id: string;

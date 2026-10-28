@@ -1,7 +1,8 @@
 import { StyleSheet, View } from "react-native";
+import { palette } from "@/constants/colors";
 
 export function PauseGlyph({
-  color = "white",
+  color = palette.text,
   size = 24,
 }: {
   color?: string;

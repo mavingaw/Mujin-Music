@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const braces = require("braces");
+const deepmerge = require("deepmerge");
 const forge = require("node-forge");
 const { sprintf } = require("sprintf-js");
 
@@ -106,4 +107,21 @@ test("format strings reject unbounded widths and precisions", () => {
       /width or precision exceeds the limit/,
     );
   }
+});
+
+test("deep merges keep an own __proto__ key from replacing the result's prototype", () => {
+  assert.deepEqual(deepmerge({ a: { b: 1 } }, { a: { c: 2 } }), {
+    a: { b: 1, c: 2 },
+  });
+  const poisoned = JSON.parse('{"__proto__": {"polluted": true}, "kept": 1}');
+  for (const merged of [
+    deepmerge({}, poisoned),
+    deepmerge(poisoned, {}),
+    deepmerge({ nested: {} }, { nested: poisoned }).nested,
+  ]) {
+    assert.equal(Object.getPrototypeOf(merged), Object.prototype);
+    assert.equal(merged.polluted, undefined);
+    assert.equal(merged.kept, 1);
+  }
+  assert.equal({}.polluted, undefined);
 });

@@ -17,7 +17,7 @@ function ControlTooltip({ children }: { children: ReactNode }) {
   return (
     <span
       role="tooltip"
-      className="pointer-events-none absolute bottom-full left-1/2 z-100 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-zinc-950 px-2 py-1 text-[11px] font-medium text-zinc-200 opacity-0 shadow-lg group-hover/control:animate-[control-tooltip_1800ms_ease_forwards] group-focus-within/control:animate-[control-tooltip_1800ms_ease_forwards]"
+      className="pointer-events-none absolute bottom-full left-1/2 z-100 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-mujin-surface-2 px-2 py-1 text-[0.6875rem] font-medium text-mujin-text opacity-0 shadow-lg group-hover/control:animate-[control-tooltip_1800ms_ease_forwards] group-focus-within/control:animate-[control-tooltip_1800ms_ease_forwards]"
     >
       {children}
     </span>
@@ -76,7 +76,7 @@ export function PlaybackControls({
       <button
         aria-label={displayedPlaying ? "Pause" : "Play"}
         aria-keyshortcuts="Space"
-        className={`flex shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105 ${prominent ? "h-11 w-11" : "h-9 w-9"}`}
+        className={`mj-primary flex shrink-0 items-center justify-center rounded-full shadow-[0_6px_20px_-6px_rgb(var(--mj-accent-rgb)/0.55)] motion-safe:hover:scale-[1.04] ${prominent ? "h-11 w-11" : "h-9 w-9"}`}
         onClick={toggle}
         type="button"
       >
@@ -141,7 +141,7 @@ export function Timeline({
   const position = isPlaying && readPosition ? smoothTime : currentTime;
   return (
     <div className={`${className} items-center gap-2`}>
-      <span className="w-8 text-right font-mono text-[9px] text-zinc-400">
+      <span className="mj-tnum w-10 text-right font-mono text-[0.6562rem] text-mujin-text-tertiary">
         {formatPlaybackTime(currentTime / safePlaybackRate)}
       </span>
       <Slider
@@ -151,7 +151,7 @@ export function Timeline({
           position / safePlaybackRate,
           duration / safePlaybackRate,
         )}
-        className="flex-1 cursor-pointer before:absolute before:-inset-y-3 before:inset-x-0 before:content-[''] **:data-[slot=slider-range]:bg-white **:data-[slot=slider-thumb]:h-2.5 **:data-[slot=slider-thumb]:w-2.5 **:data-[slot=slider-thumb]:border-0 **:data-[slot=slider-thumb]:bg-white **:data-[slot=slider-thumb]:opacity-0 **:data-[slot=slider-track]:h-1 **:data-[slot=slider-track]:bg-white/15 [&:focus-within_[data-slot=slider-thumb]]:opacity-100 [&:hover_[data-slot=slider-thumb]]:opacity-100"
+        className="flex-1 cursor-pointer before:absolute before:-inset-y-3 before:inset-x-0 before:content-[''] **:data-[slot=slider-range]:bg-mujin-text **:data-[slot=slider-thumb]:h-3 **:data-[slot=slider-thumb]:w-3 **:data-[slot=slider-thumb]:border-0 **:data-[slot=slider-thumb]:bg-mujin-text **:data-[slot=slider-thumb]:opacity-0 **:data-[slot=slider-track]:h-[3px] **:data-[slot=slider-track]:bg-white/12 [&:focus-within_[data-slot=slider-thumb]]:opacity-100 [&:hover_[data-slot=slider-thumb]]:opacity-100"
         max={duration || 100}
         min={0}
         step={0.01}
@@ -175,7 +175,7 @@ export function Timeline({
         }
         value={[Math.min(position, duration || position)]}
       />
-      <span className="w-8 font-mono text-[9px] text-zinc-400">
+      <span className="mj-tnum w-10 font-mono text-[0.6562rem] text-mujin-text-tertiary">
         {formatPlaybackTime(duration / safePlaybackRate)}
       </span>
     </div>
@@ -183,26 +183,32 @@ export function Timeline({
 }
 
 export function VolumeControl({
+  expanded = false,
   muted,
   onChange,
   onToggleMute,
   volume,
 }: {
+  /** Keep the slider and the level readout visible on wide screens. */
+  expanded?: boolean;
   muted: boolean;
   onChange: (value: number) => void;
   onToggleMute: () => void;
   volume: number;
 }) {
   const wheelRef = useVolumeWheel(muted, volume, onChange);
+  const level = Math.round(muted ? 0 : volume * 100);
   return (
     <div
       ref={wheelRef}
       className="volume-control group/volume flex min-h-10 items-center justify-end"
     >
-      <div className="w-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 group-hover/volume:w-20 group-hover/volume:opacity-100 group-focus-within/volume:w-20 group-focus-within/volume:opacity-100">
+      <div
+        className={`w-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 group-hover/volume:w-20 group-hover/volume:opacity-100 group-focus-within/volume:w-20 group-focus-within/volume:opacity-100 ${expanded ? "xl:w-24! xl:opacity-100!" : ""}`}
+      >
         <Slider
           aria-label="Volume"
-          className="mr-1 h-10 w-17 **:data-[slot=slider-range]:bg-white **:data-[slot=slider-thumb]:h-3.5 **:data-[slot=slider-thumb]:w-3.5 **:data-[slot=slider-thumb]:border-0 **:data-[slot=slider-thumb]:bg-white **:data-[slot=slider-thumb]:opacity-0 **:data-[slot=slider-track]:h-1 **:data-[slot=slider-track]:bg-white/15 [&:hover_[data-slot=slider-thumb]]:opacity-100"
+          className="mr-1 h-10 w-17 xl:w-[88px] **:data-[slot=slider-range]:bg-mujin-text **:data-[slot=slider-thumb]:h-3 **:data-[slot=slider-thumb]:w-3 **:data-[slot=slider-thumb]:border-0 **:data-[slot=slider-thumb]:bg-mujin-text **:data-[slot=slider-thumb]:opacity-0 **:data-[slot=slider-track]:h-[3px] **:data-[slot=slider-track]:bg-white/12 [&:hover_[data-slot=slider-thumb]]:opacity-100"
           max={100}
           min={0}
           onValueChange={([value]) => onChange(value ?? 0)}
@@ -227,6 +233,14 @@ export function VolumeControl({
           {muted || volume === 0 ? "Unmute" : "Mute"} · M
         </ControlTooltip>
       </span>
+      {expanded && (
+        <span
+          aria-hidden="true"
+          className="mj-tnum hidden w-7 font-mono text-[0.6875rem] text-mujin-text-tertiary xl:inline"
+        >
+          {level}
+        </span>
+      )}
     </div>
   );
 }
@@ -294,7 +308,7 @@ export function ActionButton({
         aria-label={label}
         aria-keyshortcuts={shortcut}
         aria-pressed={active}
-        className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${active ? "bg-white text-black" : "text-zinc-400 hover:bg-white/10 hover:text-white"}`}
+        className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${active ? "bg-mujin-copper/[0.16] text-mujin-copper" : "text-mujin-text-secondary hover:bg-white/[0.07] hover:text-mujin-text"}`}
         onClick={onClick}
         type="button"
       >
@@ -325,7 +339,7 @@ function IconButton({
     <button
       aria-label={label}
       aria-keyshortcuts={shortcut}
-      className={`flex items-center justify-center rounded-full hover:bg-white/10 hover:text-white ${prominent ? "h-10 w-10 text-zinc-200" : "h-8 w-8 text-zinc-400"}`}
+      className={`flex items-center justify-center rounded-full transition-colors hover:bg-white/[0.07] hover:text-mujin-text ${prominent ? "h-10 w-10 text-mujin-text" : "h-8 w-8 text-mujin-text-secondary"}`}
       onClick={onClick}
       type="button"
     >

@@ -4,11 +4,8 @@ import {
   describeCollectionFormat,
   formatDecibels,
   formatRealtimeFactor,
-  SIGNAL_CLIPPING_COLOR,
-  signalLightColor,
   signalLightLabel,
   signalPathSummary,
-  signalQualityColors,
   signalQualityLabels,
   type SignalPath,
   type SignalQuality,
@@ -17,6 +14,11 @@ import {
   type VolumeLevelingMode,
   type AudioProperties,
 } from "@parson/music-sdk";
+import {
+  SIGNAL_CLIPPING_COLOR,
+  signalLightColor,
+  signalQualityColors,
+} from "./themed-signal";
 import {
   ArrowLeftRight,
   AudioWaveform,
@@ -103,7 +105,9 @@ export function QualityGlyph({
       width={size}
       style={{
         color,
-        filter: quality ? `drop-shadow(0 0 4px ${color}aa)` : undefined,
+        filter: quality
+          ? `drop-shadow(0 0 4px color-mix(in srgb, ${color} 66%, transparent))`
+          : undefined,
       }}
     >
       {sparkle ? (
@@ -206,7 +210,7 @@ export function SignalPathLight({
 
 function HiResBadge() {
   return (
-    <span className="shrink-0 rounded-[5px] border border-current px-1 text-[9px] font-bold leading-3.5 tracking-wide text-[#c9a2ff]">
+    <span className="shrink-0 rounded-[4px] border border-current px-1 font-mono text-[0.5625rem] font-medium leading-3.5 tracking-wide text-mujin-copper">
       HI-RES
     </span>
   );
@@ -381,7 +385,7 @@ function SignalPathPanel({
   return createPortal(
     <div
       aria-labelledby={titleId}
-      className="fixed z-120 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f]/98 text-left text-white shadow-[0_24px_80px_rgba(0,0,0,0.75)] outline-none backdrop-blur-xl"
+      className="fixed z-120 flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-mujin-raised/98 text-left text-white shadow-[0_24px_80px_rgba(0,0,0,0.75)] outline-none backdrop-blur-xl"
       data-signal-path-panel
       id={id}
       onContextMenu={(event) => event.stopPropagation()}
@@ -402,7 +406,7 @@ function SignalPathPanel({
           />
         ) : null}
         <div className="min-w-0 flex-1">
-          <h2 className="text-[17px] font-semibold leading-6" id={titleId}>
+          <h2 className="text-[1.0625rem] font-semibold leading-6" id={titleId}>
             Signal path:{" "}
             <span
               style={{
@@ -465,7 +469,7 @@ function SignalPathPanel({
           ) : null}
           {serverOutput && deviceFacts.length ? (
             <p
-              className="mt-0.5 text-[11px] leading-4 text-zinc-400"
+              className="mt-0.5 text-[0.6875rem] leading-4 text-zinc-400"
               data-output-device
             >
               {deviceFacts.join(" · ")}
@@ -473,7 +477,7 @@ function SignalPathPanel({
           ) : null}
           {serverOutput && device?.kernel_emulator ? (
             <p
-              className="mt-0.5 text-[11px] leading-4 text-amber-300/90"
+              className="mt-0.5 text-[0.6875rem] leading-4 text-amber-300/90"
               data-kernel-emulator
             >
               Test bench: Mujin Music&apos;s kernel-ABI emulator answers for the
@@ -482,7 +486,7 @@ function SignalPathPanel({
           ) : null}
           {serverOutput && network ? (
             <p
-              className="mt-0.5 text-[11px] leading-4 text-amber-300/90"
+              className="mt-0.5 text-[0.6875rem] leading-4 text-amber-300/90"
               data-network-verification
             >
               {network.protocol === "air_play"
@@ -493,7 +497,7 @@ function SignalPathPanel({
           {path?.hardwareVerified !== null &&
           path?.hardwareVerified !== undefined ? (
             <p
-              className="mt-1 text-[11px] leading-4"
+              className="mt-1 text-[0.6875rem] leading-4"
               data-hardware-verified={path.hardwareVerified}
               style={{
                 color: path.hardwareVerified
@@ -513,7 +517,7 @@ function SignalPathPanel({
             </p>
           ) : null}
           {path && !serverOutput && !casting ? (
-            <p className="mt-1 text-[11px] leading-4 text-zinc-500">
+            <p className="mt-1 text-[0.6875rem] leading-4 text-zinc-500">
               Browsers only reach the device in shared mode. For exclusive,
               bit-perfect playback, pick one of the server&apos;s zones in the
               zone picker.
@@ -661,7 +665,7 @@ function PathNotes({ path }: { path: SignalPath | null }) {
         </p>
       ) : null}
       <p
-        className="mx-2 mt-2 text-[11px] leading-4 text-zinc-500"
+        className="mx-2 mt-2 text-[0.6875rem] leading-4 text-zinc-500"
         data-signal-description
       >
         {path.description} The light describes formats and processing, not the
@@ -683,7 +687,7 @@ function ProcessingSummary({ path }: { path: SignalPath }) {
       style={{
         borderColor: status?.clipping
           ? `${SIGNAL_CLIPPING_COLOR}66`
-          : "rgba(255,255,255,0.08)",
+          : "rgb(var(--mj-ink)/0.08)",
       }}
     >
       <p className="flex items-center gap-1.5 text-zinc-300">
@@ -757,7 +761,7 @@ function StageRow({
         onClick={onToggle}
         type="button"
       >
-        <span className="relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/14 bg-[#141416] text-zinc-300">
+        <span className="relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/14 bg-mujin-surface-1 text-zinc-300">
           <Icon className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0 flex-1">
@@ -769,7 +773,7 @@ function StageRow({
             </span>
           </span>
           <span
-            className="block text-[13px] leading-5"
+            className="block text-[0.8125rem] leading-5"
             style={{ color: stage.quality ? `${color}` : "#a1a1aa" }}
           >
             {stage.detail}
@@ -804,7 +808,7 @@ function LevelingControl({
           <button
             aria-checked={mode === option}
             className={cn(
-              "h-6 rounded-full px-2.5 text-[11px] font-medium transition-colors",
+              "h-6 rounded-full px-2.5 text-[0.6875rem] font-medium transition-colors",
               mode === option
                 ? "bg-white text-black"
                 : "text-zinc-400 hover:text-white",
@@ -826,7 +830,7 @@ function Legend() {
   return (
     <ul
       aria-label="Light colours"
-      className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500"
+      className="flex flex-wrap gap-x-3 gap-y-1 text-[0.6875rem] text-zinc-500"
     >
       {QUALITY_ORDER.map((quality) => (
         <li className="flex items-center gap-1.5" key={quality}>

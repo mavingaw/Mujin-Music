@@ -2,6 +2,8 @@
 
 import { ReactNode, Suspense, useEffect, useState } from "react";
 import { PlayerProvider } from "@/features/player/player-context";
+import { usePlayer } from "@/features/player/player-api";
+import { AppearanceProvider } from "@/features/appearance/theme-provider";
 import { ZonesProvider } from "@/features/player/zones/zones-provider";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import TitleMetadata from "@/components/app/title-metadata";
@@ -48,12 +50,24 @@ export default function AppProviders({ children }: AppProvidersProps) {
     <QueryClientProvider client={queryClient}>
       <PlayerProvider>
         <ZonesProvider>
-          <Suspense>
-            <TitleMetadata />
-          </Suspense>
-          {children}
+          <PlayerAppearance>
+            <Suspense>
+              <TitleMetadata />
+            </Suspense>
+            {children}
+          </PlayerAppearance>
         </ZonesProvider>
       </PlayerProvider>
     </QueryClientProvider>
+  );
+}
+
+/** The profile's theme, with the playing cover for colour from artwork. */
+function PlayerAppearance({ children }: { children: ReactNode }) {
+  const { imageSrc } = usePlayer();
+  return (
+    <AppearanceProvider artworkSrc={imageSrc || null}>
+      {children}
+    </AppearanceProvider>
   );
 }

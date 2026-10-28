@@ -59,7 +59,7 @@ export default function WorkScreen() {
   if (work.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   if (!work.data)
@@ -87,7 +87,7 @@ export default function WorkScreen() {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
@@ -246,16 +246,21 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 28,
     lineHeight: 32,
     fontWeight: "900",
     letterSpacing: -0.6,
     marginTop: 8,
   },
-  composer: { color: "white", fontSize: 16, fontWeight: "700", marginTop: 10 },
+  composer: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 10,
+  },
   facts: { color: palette.secondary, fontSize: 13, marginTop: 6 },
-  parent: { color: "#d4d4d8", fontSize: 13, marginTop: 8 },
+  parent: { color: palette.secondary, fontSize: 13, marginTop: 8 },
   block: { marginBottom: 6 },
   part: {
     color: palette.secondary,
@@ -270,7 +275,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   groupTitle: {
-    color: "white",
+    color: palette.text,
     fontSize: 15,
     fontWeight: "800",
     marginHorizontal: 20,
@@ -283,7 +288,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     alignItems: "center",
   },
-  albumName: { color: "white", fontSize: 15, fontWeight: "700" },
+  albumName: { color: palette.text, fontSize: 15, fontWeight: "700" },
   people: { color: palette.secondary, fontSize: 12, marginTop: 2 },
   meta: { color: palette.muted, fontSize: 12, marginTop: 2 },
   error: { color: palette.secondary, margin: 30 },

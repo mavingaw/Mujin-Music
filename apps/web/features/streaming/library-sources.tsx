@@ -115,7 +115,7 @@ export function SourceFilterChips({
       label: `${STREAMING_PROVIDER_NAMES[provider]} library`,
       icon: (
         <ProviderMark
-          className="h-3.5 w-3.5 text-[8px]"
+          className="h-3.5 w-3.5 text-[0.5rem]"
           onLight={source === provider}
           provider={provider}
         />
@@ -132,7 +132,7 @@ export function SourceFilterChips({
         <button
           aria-checked={source === chip.value}
           className={cn(
-            "inline-flex h-8 items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors",
+            "inline-flex h-8 items-center gap-2 rounded-full border px-3 text-[0.8125rem] font-medium transition-colors",
             source === chip.value
               ? "border-white bg-white text-black"
               : "border-white/12 text-zinc-300 hover:border-white/30 hover:text-white",

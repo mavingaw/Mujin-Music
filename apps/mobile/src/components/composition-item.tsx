@@ -57,7 +57,11 @@ export function CompositionItem({
           onPress={() => play(0)}
           style={styles.playSmall}
         >
-          <Play color="black" fill="black" size={14} />
+          <Play
+            color={palette.background}
+            fill={palette.background}
+            size={14}
+          />
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -202,12 +206,12 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  name: { color: "white", fontWeight: "700", fontSize: 15 },
-  description: { color: "#d4d4d8", fontSize: 13, marginTop: 2 },
+  name: { color: palette.text, fontWeight: "700", fontSize: 15 },
+  description: { color: palette.secondary, fontSize: 13, marginTop: 2 },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 2 },
   recording: {
     flexDirection: "row",
@@ -216,6 +220,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingLeft: 44,
   },
-  recordingName: { color: "white", fontWeight: "600" },
+  recordingName: { color: palette.text, fontWeight: "600" },
   movement: { color: palette.muted, fontSize: 12, marginTop: 2 },
 });

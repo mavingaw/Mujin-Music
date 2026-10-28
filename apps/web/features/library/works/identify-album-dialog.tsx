@@ -243,24 +243,24 @@ export function IdentifyAlbumDialog({
                           {release.title}
                         </span>
                         {release.same_track_count && (
-                          <span className="shrink-0 rounded border border-emerald-400/30 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                          <span className="shrink-0 rounded border border-emerald-400/30 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-emerald-300">
                             {localTrackCount} tracks, like yours
                           </span>
                         )}
                         {differs && (
-                          <span className="shrink-0 rounded border border-amber-300/30 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                          <span className="shrink-0 rounded border border-amber-300/30 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-amber-200">
                             {release.track_count} tracks, yours has{" "}
                             {localTrackCount}
                           </span>
                         )}
                         {release.fit === "likely" && !release.suggested && (
-                          <span className="hidden shrink-0 rounded bg-white/8 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-zinc-300 sm:inline">
+                          <span className="hidden shrink-0 rounded bg-white/8 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-zinc-300 sm:inline">
                             Likely match
                           </span>
                         )}
                         {release.suggested && (
                           <span
-                            className="hidden shrink-0 rounded bg-amber-300/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-amber-200 sm:inline"
+                            className="hidden shrink-0 rounded bg-amber-300/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-amber-200 sm:inline"
                             title="Automatic matching found this release, but it did not pass the match check."
                           >
                             Failed the check
@@ -271,12 +271,12 @@ export function IdentifyAlbumDialog({
                         release.credits_tagged_conductor) && (
                         <p className="mt-0.5 flex flex-wrap gap-1">
                           {release.credits_tagged_composer && (
-                            <span className="rounded bg-emerald-300/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-200">
+                            <span className="rounded bg-emerald-300/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-emerald-200">
                               Credits {composers[0] ?? "your composer"}
                             </span>
                           )}
                           {release.credits_tagged_conductor && (
-                            <span className="rounded bg-emerald-300/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-200">
+                            <span className="rounded bg-emerald-300/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wide text-emerald-200">
                               Credits {conductors[0] ?? "your conductor"}
                             </span>
                           )}
@@ -326,7 +326,7 @@ export function IdentifyAlbumDialog({
                       className="mt-2.5 flex flex-col gap-2.5 rounded-md border border-amber-300/25 bg-black/30 px-3 py-2.5 sm:flex-row sm:items-center"
                       role="alert"
                     >
-                      <p className="flex min-w-0 flex-1 items-start gap-2 text-[13px] leading-5 text-amber-100">
+                      <p className="flex min-w-0 flex-1 items-start gap-2 text-[0.8125rem] leading-5 text-amber-100">
                         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
                         {warning}
                       </p>

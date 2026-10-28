@@ -96,7 +96,7 @@ export default function FocusBar({
           />
           Focus
           {query.filters.length > 0 && (
-            <span className="ml-0.5 rounded-full bg-white px-1.5 text-[11px] font-semibold leading-4 text-black tabular-nums">
+            <span className="ml-0.5 rounded-full bg-white px-1.5 text-[0.6875rem] font-semibold leading-4 text-black tabular-nums">
               {query.filters.length}
             </span>
           )}
@@ -152,7 +152,7 @@ export default function FocusBar({
             <>
               <button
                 aria-label="Play focused music"
-                className="grid h-9 w-9 place-items-center rounded-full bg-white text-black hover:bg-zinc-200"
+                className="mj-primary grid h-9 w-9 place-items-center rounded-full"
                 onClick={() => onPlay(false)}
                 title="Play"
                 type="button"

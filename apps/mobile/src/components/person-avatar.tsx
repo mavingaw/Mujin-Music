@@ -1,8 +1,9 @@
-import { personHue, personInitials } from "@parson/music-sdk";
+import { personInitials, personTone } from "@parson/music-sdk";
 import { StyleSheet, Text, View, type ViewStyle } from "react-native";
 
 import { Artwork } from "@/components/artwork";
 import { apiUrl } from "@/lib/runtime";
+import { tint } from "@/constants/colors";
 
 /** A round photo of a person, or their initials when there is none. */
 export function PersonAvatar({
@@ -21,7 +22,7 @@ export function PersonAvatar({
     const path = /^https?:\/\//.test(imageUrl) ? imageUrl : apiUrl(imageUrl);
     return <Artwork path={path} rounded={size / 2} size={size} style={style} />;
   }
-  const hue = personHue(name);
+  const [tone] = personTone(name);
   return (
     <View
       accessibilityElementsHidden
@@ -32,7 +33,7 @@ export function PersonAvatar({
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: `hsl(${hue}, 30%, 28%)`,
+          backgroundColor: tone,
         },
         style,
       ]}
@@ -49,7 +50,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.15)",
+    borderColor: tint(0.15),
   },
-  letters: { color: "rgba(255,255,255,0.92)", fontWeight: "800" },
+  letters: { color: tint(0.92), fontWeight: "800" },
 });

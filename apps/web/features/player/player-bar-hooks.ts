@@ -1,9 +1,14 @@
 "use client";
 
 import {
+  activeLyricIndex,
   findLyrics,
   getCachedLyrics,
+  parseLrc,
+  type LyricsFailure,
   type LyricsResult,
+  type LyricsSourceKind,
+  type TimedLyricLine,
 } from "@parson/music-sdk";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,25 +19,11 @@ import {
   shouldRequestLyrics,
 } from "./player-lyrics-state";
 
-export type TimedLyric = { time: number; text: string };
+export type TimedLyric = TimedLyricLine;
 
+/** Timed lines of LRC text (see the SDK's `parseLrc`). */
 export function parseSyncedLyrics(value?: string | null): TimedLyric[] {
-  if (!value) {
-    return [];
-  }
-  return value
-    .split(/\r?\n/)
-    .map((line) => {
-      const match = line.match(/^\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\]\s*(.*)$/);
-      if (!match) {
-        return null;
-      }
-      return {
-        time: Number(match[1]) * 60 + Number(match[2]),
-        text: match[3]?.trim() || " ",
-      };
-    })
-    .filter((line): line is TimedLyric => Boolean(line));
+  return parseLrc(value);
 }
 
 function isKeyboardShortcutTarget(target: EventTarget | null) {
@@ -110,7 +101,10 @@ export function useLyrics(
 ) {
   const [lyrics, setLyrics] = useState<LyricsResult | null>(null);
   const [lyricsSongId, setLyricsSongId] = useState("");
-  const [lyricsErrorSongId, setLyricsErrorSongId] = useState("");
+  const [failure, setFailure] = useState<{
+    songId: string;
+    kind: LyricsFailure;
+  } | null>(null);
   const activeLineRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const positionedSongRef = useRef("");
@@ -142,15 +136,13 @@ export function useLyrics(
       .then((result) => {
         if (!cancelled) {
           setLyrics(result);
-          setLyricsErrorSongId("");
+          setFailure(null);
         }
       })
       .catch((error) => {
         if (!cancelled) {
           setLyrics(null);
-          setLyricsErrorSongId(
-            lyricsRequestFailure(error) === "failed" ? song.id : "",
-          );
+          setFailure({ songId: song.id, kind: lyricsRequestFailure(error) });
         }
       })
       .finally(() => {
@@ -177,10 +169,7 @@ export function useLyrics(
     () => parseSyncedLyrics(currentLyrics?.syncedLyrics),
     [currentLyrics?.syncedLyrics],
   );
-  const activeLine = timed.reduce(
-    (found, line, index) => (line.time <= currentTime ? index : found),
-    -1,
-  );
+  const activeLine = activeLyricIndex(timed, currentTime);
 
   const cancelScrollAnimation = () => {
     if (scrollAnimationRef.current !== null) {
@@ -205,7 +194,9 @@ export function useLyrics(
         container.scrollTop +
           lineBounds.top -
           containerBounds.top -
-          (container.clientHeight - lineBounds.height) / 2,
+          // The sung line sits a little above the middle, with room for
+          // the lines to come below it.
+          (container.clientHeight * 0.38 - lineBounds.height / 2),
       ),
     );
     if (
@@ -218,7 +209,7 @@ export function useLyrics(
     const start = container.scrollTop;
     const startedAt = performance.now();
     const animate = (now: number) => {
-      const progress = Math.min(1, (now - startedAt) / 160);
+      const progress = Math.min(1, (now - startedAt) / 420);
       const eased = 1 - (1 - progress) ** 3;
       container.scrollTop = start + (target - start) * eased;
       scrollAnimationRef.current =
@@ -274,16 +265,21 @@ export function useLyrics(
   }, [activeLine, loading, lyricsSongId, open, song.id, timed.length]);
 
   const retry = useCallback(() => {
-    setLyricsErrorSongId("");
+    setFailure(null);
     setLyricsSongId("");
   }, []);
+  const currentFailure =
+    failure?.songId === song.id && !loading ? failure.kind : null;
 
   return {
     activeLine,
     activeLineRef,
     fallback: currentLyrics?.plainLyrics ?? song.plain_lyrics,
-    failed: lyricsErrorSongId === song.id,
+    failed: currentFailure === "failed",
+    /** Why there is nothing to show, when a request found nothing. */
+    failure: currentFailure,
     instrumental: currentLyrics?.instrumental ?? false,
+    source: (currentLyrics?.source ?? null) as LyricsSourceKind | null,
     loading,
     retry,
     scrollRef,

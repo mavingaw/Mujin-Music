@@ -21,6 +21,7 @@ import type { ReactNode } from "react";
 import { usePageTitle } from "@/components/app/title-metadata";
 import { EditorialText } from "@/features/library/credits/editorial-text";
 import { PersonAvatar } from "@/features/library/credits/person-avatar";
+import { GenreArt } from "@/features/library/artist-imagery";
 import {
   useGenrePage,
   useGenreTree,
@@ -99,9 +100,6 @@ function PersonCard({
   person: GenrePerson;
   detail: string;
 }) {
-  const icon = person.icon_url
-    ? getLibraryImageUrl(person.icon_url, getBaseURL)
-    : null;
   return (
     <li className="min-w-0">
       <Link
@@ -110,7 +108,9 @@ function PersonCard({
       >
         <PersonAvatar
           className="transition-transform duration-300 group-hover:scale-[1.03]"
-          imageUrl={icon ?? person.image_url}
+          // The library's own picture is one of their covers: initials
+          // read more honestly than a cover posing as a portrait.
+          imageUrl={person.image_url}
           name={person.name}
           size={112}
         />
@@ -151,18 +151,32 @@ function Section({
 
 function TreeBranch({ node }: { node: GenreTreeNode }) {
   return (
-    <li className="rounded-xl border border-white/8 bg-white/2 p-4">
+    <li className="overflow-hidden rounded-xl border border-white/8 bg-white/2">
       <Link
-        className="flex items-baseline justify-between gap-3 text-lg font-bold text-white hover:underline"
+        className="group relative block aspect-[16/7] overflow-hidden"
         href={genreHref(node.slug)}
       >
-        {node.name}
-        <span className="text-xs font-medium text-zinc-500">
-          {albumsLabel(node.album_count)}
+        <GenreArt
+          covers={node.covers}
+          name={node.name}
+          photos={node.photos}
+          sizes="(min-width: 640px) 450px, 100vw"
+        />
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 z-[2] bg-[linear-gradient(to_top,rgb(var(--mj-canvas-rgb)/0.92)_0%,rgb(var(--mj-canvas-rgb)/0.35)_60%,rgb(var(--mj-canvas-rgb)/0.05)_100%)]"
+        />
+        <span className="absolute inset-x-4 bottom-3 z-[3] flex items-baseline justify-between gap-3">
+          <span className="mj-title truncate text-[1.5rem] leading-tight text-mujin-text group-hover:underline">
+            {node.name}
+          </span>
+          <span className="mj-tnum shrink-0 text-xs font-medium text-mujin-text-secondary">
+            {albumsLabel(node.album_count)}
+          </span>
         </span>
       </Link>
       {node.children.length > 0 && (
-        <ul className="mt-3 flex flex-wrap gap-1.5">
+        <ul className="flex flex-wrap gap-1.5 p-4">
           {flattenGenreTree(node.children).map((child) => (
             <li key={child.slug}>
               <GenrePill genre={child} />
@@ -185,7 +199,9 @@ function GenreIndex() {
           <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
             <Tags className="h-3.5 w-3.5" /> Library
           </p>
-          <h1 className="text-4xl font-black text-white sm:text-5xl">Genres</h1>
+          <h1 className="text-4xl mj-display text-mujin-text sm:text-5xl">
+            Genres
+          </h1>
           {tree.data && (
             <p className="mt-3 text-sm text-zinc-400">
               {SOURCE_NOTE[tree.data.source]}
@@ -268,6 +284,11 @@ export default function GenreDetails() {
   const subGenres = page.children.filter(
     (child) => child.album_count > 0 || page.children.length <= 12,
   );
+  const heroPhotos = [...page.artists, ...page.composers]
+    .map((person) => person.image_url)
+    .filter((url): url is string => Boolean(url))
+    .filter((url, index, all) => all.indexOf(url) === index)
+    .slice(0, 3);
   const hero = page.albums
     .map((album) => getLibraryImageUrl(album.cover_url, getBaseURL))
     .filter((url): url is string => Boolean(url))
@@ -276,20 +297,16 @@ export default function GenreDetails() {
   return (
     <div className="tidal-route relative text-zinc-50">
       <header className="relative isolate mb-10 overflow-hidden rounded-2xl border border-white/8 bg-zinc-900/60">
-        {hero.length > 0 && (
-          <div aria-hidden className="absolute inset-0 -z-10 flex">
-            {hero.map((url) => (
-              <div className="relative h-full flex-1" key={url}>
-                <Image
-                  alt=""
-                  className="object-cover opacity-40 blur-xl"
-                  fill
-                  sizes="200px"
-                  src={url}
-                />
-              </div>
-            ))}
-            <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/55 to-black/20" />
+        {(hero.length > 0 || heroPhotos.length > 0) && (
+          <div aria-hidden className="absolute inset-0 -z-10">
+            {/* Its artists' photos (or its covers), duotone in copper. */}
+            <GenreArt
+              covers={page.albums.map((album) => album.cover_url)}
+              name={page.name}
+              photos={heroPhotos}
+              sizes="(min-width: 768px) 300px, 100vw"
+            />
+            <div className="absolute inset-0 z-[2] bg-linear-to-t from-black/90 via-black/55 to-black/20" />
           </div>
         )}
         <div className="px-6 pb-7 pt-12 sm:px-8 sm:pt-16">
@@ -312,7 +329,7 @@ export default function GenreDetails() {
               </span>
             ))}
           </nav>
-          <h1 className="text-balance text-4xl font-black leading-none text-white sm:text-6xl">
+          <h1 className="text-balance text-4xl mj-display leading-none text-mujin-text sm:text-6xl">
             {page.name}
           </h1>
           <p className="mt-3 text-sm text-zinc-300">

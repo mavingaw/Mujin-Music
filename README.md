@@ -7,20 +7,26 @@ Mujin Music is a local-first music app for your own collection. Based on
 
 Choose a folder. Start listening.
 
-![Mujin Music library tools](docs/images/library-tools.png)
+![Mujin Music Home: library stats, recently added albums with quality badges and the player bar](docs/images/home.png)
 
-[Download](https://github.com/mavingaw/parson-jin/releases) ·
+[Download](https://github.com/mavingaw/Mujin-Music/releases) ·
 [Docs](apps/site/content/docs) ·
 [What Mujin Music adds](docs/mujin-music.md)
 
 ## Screenshots
 
-|                                                                     |                                                              |
-| ------------------------------------------------------------------- | ------------------------------------------------------------ |
-| ![Album page with format, credits and radio](docs/images/album.png) | ![Live internet radio](docs/images/live-radio.png)           |
-| ![Now playing with the quality light](docs/images/now-playing.png)  | ![Profiles with instant switching](docs/images/profiles.png) |
+|                                                                                 |                                                                           |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| ![Now Playing with the quality light and Up next](docs/images/now-playing.png)  | ![The signal path from file to output](docs/images/signal-path.png)       |
+| ![Album page with release details and format](docs/images/album.png)            | ![Zones: move playback between rooms and devices](docs/images/zones.png)  |
+| ![Focus filters on the album library](docs/images/focus.png)                    | ![Timed lyrics from an LRC file beside the track](docs/images/lyrics.png) |
+| ![Settings → Appearance with the six theme presets](docs/images/appearance.png) | ![Now Playing in each theme preset](docs/images/themes.png)               |
 
-<img src="docs/images/phone-album.png" alt="Album page on a phone" width="320">
+![Home, an album and Now Playing on a phone](docs/images/phone.png)
+
+The six theme presets above are Mujin Dark, Mujin Light, Material You, Frosted
+Glass, OLED Black and High Contrast. The library in these captures is a demo
+library with generated cover art and fictional artists.
 
 ## What Mujin Music adds
 
@@ -37,6 +43,10 @@ and open source:
   Spotify, Apple Music, YouTube Music and Deezer.
 - Profiles, Last.fm and ListenBrainz scrobbling, a Home Assistant
   integration, away-from-home access, backups and library tools.
+- A dark, gallery-style design with timed lyrics, a display mode for TVs and
+  tablets, and six theme presets (Mujin Dark and Light, Material You, Frosted
+  Glass, OLED Black, High Contrast) with full appearance settings that follow
+  your profile to every device.
 
 Read the full write-up, including how it was tested, what is coming next and
 the known limitations, in [docs/mujin-music.md](docs/mujin-music.md).
@@ -52,10 +62,10 @@ Desktop apps include everything needed to run your library.
 
 ## Download
 
-Get Windows, macOS and Linux packages from the [Releases page](https://github.com/mavingaw/parson-jin/releases).
-The Android APK is built by the [Android workflow](.github/workflows/android.yml).
+Get the Windows, macOS, Linux and Android apps and the Windows server from the [Releases page](https://github.com/mavingaw/Mujin-Music/releases).
+Android comes as two APKs: `arm64-v8a` for most phones and tablets, `armeabi-v7a` for 32-bit devices.
 
-The server container is `ghcr.io/mavingaw/parson-jin:latest`. Versioned image tags are also published for pinned deployments.
+The server container is `ghcr.io/mavingaw/mujin-music:latest`. Versioned image tags are also published for pinned deployments.
 
 Build provenance is included with the release.
 
@@ -64,7 +74,7 @@ Build provenance is included with the release.
 ```yaml
 services:
   parson:
-    image: ghcr.io/mavingaw/parson-jin:latest
+    image: ghcr.io/mavingaw/mujin-music:latest
     network_mode: host
     volumes:
       - /path/to/parson-data:/Parson
@@ -83,9 +93,11 @@ The Mujin Music server holds your library. Mujin Music Desktop, the Android app,
 Mujin Music does not upload analytics or crash reports.
 
 Music, accounts, playlists, history, and recommendations stay on infrastructure
-you control. External requests are limited to services you use, such as lyrics,
+you control. External requests are limited to services you use, such as
 updates, casting, and online metadata (credits, biographies and reviews from
-MusicBrainz and Wikipedia), which is off until an administrator turns it on.
+MusicBrainz and Wikipedia, and lyrics from LRCLIB), which is off until an
+administrator turns it on. Lyrics in your files (embedded LRC, ID3 SYLT/USLT, or
+an `.lrc` file beside the track) are always shown, timed when they carry stamps.
 
 [Privacy and security](apps/site/content/docs/accounts-privacy-security.mdx)
 
@@ -118,7 +130,7 @@ bun --filter parson-music-web dev
 ## Security
 
 Report vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/mavingaw/parson-jin/security/advisories/new).
+[GitHub Security Advisories](https://github.com/mavingaw/Mujin-Music/security/advisories/new).
 
 Deployment guidance is in the
 [privacy and security documentation](apps/site/content/docs/accounts-privacy-security.mdx).
@@ -133,8 +145,10 @@ foundation (library indexing, accounts, server, and the web, desktop and
 mobile apps) is their work; see the [credits](docs/mujin-music.md#credits).
 Third-party components are listed in the `THIRD_PARTY_NOTICES.md` shipped with
 every package, generated by `bun run notices:generate`.
-The Mujin Music fonts (Jost, Inter, JetBrains Mono) are under the SIL Open
-Font License 1.1; each ships with its `OFL.txt` in `apps/web/public/fonts`.
+The Mujin Music fonts (Jost, Inter, JetBrains Mono) and the fonts offered in
+Settings → Appearance (Fraunces, Atkinson Hyperlegible Next, IBM Plex Sans,
+Roboto Flex) are under the SIL Open Font License 1.1; each ships with its
+`OFL.txt` in `apps/web/public/fonts`.
 
 Roon is a trademark of Roon Labs; Mujin Music is not affiliated with or
 endorsed by Roon Labs.

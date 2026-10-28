@@ -14,18 +14,44 @@ on:
           - arm64-v8a
           - armeabi-v7a
         default: arm64-v8a
+  # The stable release (release.yml) builds one APK per ABI through this.
+  workflow_call:
+    inputs:
+      abi:
+        description: Native ABI to build, arm64-v8a or armeabi-v7a.
+        type: string
+        default: arm64-v8a
+      release:
+        description: >-
+          Build a release asset: the APK is named
+          Mujin-Music-<version>-android-<abi>.apk whichever key signs it.
+        type: boolean
+        default: false
+    outputs:
+      signing_key:
+        description: Which key signed the APK, "upload" or "debug".
+        value: ${{ jobs.apk.outputs.signing_key }}
+      certificate_sha256:
+        description: SHA-256 digest of the signing certificate.
+        value: ${{ jobs.apk.outputs.certificate_sha256 }}
 
 permissions:
   contents: read
 
+# The ABI is part of the group: the release calls this workflow once per
+# ABI in the same run, and those builds must not cancel each other. A
+# release build is never cancelled by a later push.
 concurrency:
-  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: android-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.abi || 'arm64-v8a' }}
+  cancel-in-progress: ${{ !inputs.release }}
 
 jobs:
   apk:
     name: Android app (${{ inputs.abi || 'arm64-v8a' }})
     runs-on: ubuntu-latest
+    outputs:
+      signing_key: ${{ steps.signing.outputs.kind == 'release' && 'upload' || 'debug' }}
+      certificate_sha256: ${{ steps.verify.outputs.certificate-sha256 }}
     # One ABI keeps the native build (Reanimated, Worklets, Screens, the audio
     # engine) to about a quarter of a universal build: arm64-v8a covers every
     # Android phone and tablet still in use. A cold build, which also installs
@@ -35,6 +61,15 @@ jobs:
       ANDROID_ABI: ${{ inputs.abi || 'arm64-v8a' }}
       EXPO_NO_TELEMETRY: "1"
     steps:
+      - name: Check the requested ABI
+        run: |
+          case "$ANDROID_ABI" in
+            arm64-v8a | armeabi-v7a) ;;
+            *)
+              echo "Unsupported Android ABI: $ANDROID_ABI (use arm64-v8a or armeabi-v7a)." >&2
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
@@ -68,8 +103,13 @@ jobs:
       # Release builds are signed with the upload key when the repository has
       # the four ANDROID_UPLOAD_* secrets. Without them (forks, or before the
       # key is configured) the same release build is signed with the debug
-      # key that prebuild generates, and the artifact name says so. Such an
-      # APK installs for testing but cannot update a store-signed install.
+      # key that prebuild copies from Expo's project template
+      # (expo/template.tgz, android/app/debug.keystore). That key is the
+      # same in every run, so these APKs update each other in place, but it
+      # is publicly known, and an install signed with it cannot be updated
+      # by an APK signed with the upload key (or the other way round). CI
+      # artifacts say so in their name; a release names its APKs plainly
+      # and says so in the release notes.
       - name: Choose the release signing key
         id: signing
         env:
@@ -117,28 +157,63 @@ jobs:
             --no-daemon \
             -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g" \
             -PreactNativeArchitectures="$ANDROID_ABI"
-      - name: Verify the APK (signature, ABI, embedded bundle)
+      - name: Verify the APK (signature, version, ABI, embedded bundle)
+        id: verify
         env:
-          SUFFIX: ${{ steps.signing.outputs.suffix }}
+          SIGNING_KIND: ${{ steps.signing.outputs.kind }}
+          # A release asset is named plainly; the release notes say which
+          # key signed it.
+          SUFFIX: ${{ !inputs.release && steps.signing.outputs.suffix || '' }}
+          # SHA-256 of the certificate in Expo's template debug.keystore
+          # (CN=Android Debug). If a template update ever changed the key,
+          # debug-signed APKs could no longer update earlier installs.
+          TEMPLATE_DEBUG_CERTIFICATE: fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c
         run: |
           set -euo pipefail
           apk=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
           test -f "$apk"
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          "$build_tools/apksigner" verify --print-certs "$apk"
+          certificates="$("$build_tools/apksigner" verify --print-certs "$apk")"
+          echo "$certificates"
+          digests="$(sed -n 's/.*certificate SHA-256 digest: \([0-9a-f]\{64\}\).*/\1/p' <<<"$certificates" | sort -u)"
+          if [[ "$(wc -l <<<"$digests")" -ne 1 || -z "$digests" ]]; then
+            echo "Expected exactly one signing certificate, found: ${digests:-none}" >&2
+            exit 1
+          fi
+          if [[ "$SIGNING_KIND" == "debug" && "$digests" != "$TEMPLATE_DEBUG_CERTIFICATE" ]]; then
+            echo "The debug-signed APK is not signed with the Expo template's debug key ($digests)." >&2
+            exit 1
+          fi
+          if [[ "$SIGNING_KIND" == "release" && "$digests" == "$TEMPLATE_DEBUG_CERTIFICATE" ]]; then
+            echo "The upload key secrets hold the public debug key; use a private upload key." >&2
+            exit 1
+          fi
+          echo "certificate-sha256=$digests" >> "$GITHUB_OUTPUT"
+          # versionName and versionCode come from app.json, which
+          # tools/release.cjs keeps in step with the release version.
+          version="$(node -p "require('./apps/mobile/app.json').expo.version")"
+          version_code="$(node -p "require('./apps/mobile/app.json').expo.android.versionCode")"
+          badging="$("$build_tools/aapt2" dump badging "$apk")"
+          package_line="$(head -n 1 <<<"$badging")"
+          echo "$package_line"
+          for expected in "name='music.mujin.app'" "versionCode='${version_code}'" "versionName='${version}'"; do
+            if [[ "$package_line" != *" $expected"* ]]; then
+              echo "The APK does not have $expected." >&2
+              exit 1
+            fi
+          done
           listing="$(unzip -l "$apk")"
           grep -q "lib/${ANDROID_ABI}/" <<<"$listing" || {
             echo "The APK has no native libraries for ${ANDROID_ABI}." >&2
             exit 1
           }
-          if grep -E "lib/(armeabi-v7a|x86|x86_64)/" <<<"$listing"; then
+          if grep -E "lib/(arm64-v8a|armeabi-v7a|x86|x86_64)/" <<<"$listing" | grep -v "lib/${ANDROID_ABI}/"; then
             echo "::warning::The APK also contains native libraries for ABIs other than ${ANDROID_ABI}."
           fi
           grep -q "assets/index.android.bundle" <<<"$listing" || {
             echo "The APK does not embed the JavaScript bundle." >&2
             exit 1
           }
-          version="$(node -p "require('./apps/mobile/app.json').expo.version")"
           name="Mujin-Music-${version}-android-${ANDROID_ABI}${SUFFIX}.apk"
           mkdir -p artifacts/android
           cp "$apk" "artifacts/android/$name"
@@ -146,6 +221,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: mujin-music-android-${{ env.ANDROID_ABI }}${{ steps.signing.outputs.suffix }}
+          name: mujin-music-android-${{ env.ANDROID_ABI }}${{ !inputs.release && steps.signing.outputs.suffix || '' }}
           path: artifacts/android/*.apk
           if-no-files-found: error

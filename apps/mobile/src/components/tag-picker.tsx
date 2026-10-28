@@ -99,7 +99,7 @@ export function TagPicker({
             hitSlop={12}
             onPress={onClose}
           >
-            <X color="white" size={24} />
+            <X color={palette.text} size={24} />
           </Pressable>
         </View>
         <View style={styles.newRow}>
@@ -123,14 +123,14 @@ export function TagPicker({
             style={[styles.add, !name.trim() && { opacity: 0.4 }]}
           >
             {create.isPending ? (
-              <ActivityIndicator color="black" />
+              <ActivityIndicator color={palette.background} />
             ) : (
-              <Plus color="black" size={20} />
+              <Plus color={palette.background} size={20} />
             )}
           </Pressable>
         </View>
         {tags.isPending || assigned.isPending ? (
-          <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={palette.text} style={{ marginTop: 40 }} />
         ) : (
           <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
             {manual.map((tag) => {
@@ -146,7 +146,11 @@ export function TagPicker({
                 >
                   <View style={[styles.box, checked && styles.boxChecked]}>
                     {checked ? (
-                      <Check color="black" size={15} strokeWidth={3} />
+                      <Check
+                        color={palette.background}
+                        size={15}
+                        strokeWidth={3}
+                      />
                     ) : null}
                   </View>
                   <View
@@ -207,7 +211,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  title: { color: "white", fontSize: 22, fontWeight: "800" },
+  title: { color: palette.text, fontSize: 22, fontWeight: "800" },
   subtitle: { color: palette.secondary, fontSize: 13, marginTop: 2 },
   newRow: {
     flexDirection: "row",
@@ -221,7 +225,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.borderStrong,
-    color: "white",
+    color: palette.text,
     paddingHorizontal: 16,
     fontSize: 15,
   },
@@ -229,7 +233,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -249,9 +253,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  boxChecked: { backgroundColor: "white", borderColor: "white" },
+  boxChecked: { backgroundColor: palette.text, borderColor: palette.text },
   dot: { width: 9, height: 9, borderRadius: 5 },
-  rowText: { flex: 1, color: "white", fontSize: 16, fontWeight: "600" },
+  rowText: { flex: 1, color: palette.text, fontSize: 16, fontWeight: "600" },
   count: { color: palette.muted, fontSize: 13, fontVariant: ["tabular-nums"] },
   empty: {
     color: palette.secondary,

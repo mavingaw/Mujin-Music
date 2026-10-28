@@ -43,7 +43,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Artwork } from "@/components/artwork";
 import { PageTitle, Screen, SongRow } from "@/components/music-ui";
 import { BrowseLinks } from "@/components/browse-links";
-import { layout, palette } from "@/constants/colors";
+import { layout, palette, tint } from "@/constants/colors";
 import { playableCatalogSong } from "@/lib/playable-song";
 import { AlbumActions } from "@/components/album-actions";
 import { ArtistActions } from "@/components/artist-actions";
@@ -427,7 +427,7 @@ export default function LibraryScreen() {
           </ScrollView>
         ) : null}
         {loading ? (
-          <ActivityIndicator color="white" style={{ marginTop: 60 }} />
+          <ActivityIndicator color={palette.text} style={{ marginTop: 60 }} />
         ) : failed ? (
           <Pressable
             accessibilityRole="button"
@@ -463,7 +463,7 @@ export default function LibraryScreen() {
                 style={styles.shuffleCollection}
                 onPress={() => playback.playShuffled(likedSongs)}
               >
-                <Shuffle color="white" size={18} />
+                <Shuffle color={palette.text} size={18} />
                 <Text style={styles.shuffleCollectionText}>Shuffle</Text>
               </Pressable>
             ) : null}
@@ -685,13 +685,13 @@ export default function LibraryScreen() {
                   onPress={() => setSection("liked")}
                 >
                   <LinearGradient
-                    colors={["#f43f5e", "#86198f"]}
+                    colors={[palette.danger, "#7e4524"]}
                     style={[
                       styles.squarePlaylistCover,
                       { width: playlistCardSize, height: playlistCardSize },
                     ]}
                   >
-                    <Heart color="white" fill="white" size={44} />
+                    <Heart color={palette.text} fill={palette.text} size={44} />
                   </LinearGradient>
                   <Text numberOfLines={2} style={styles.playlistCardTitle}>
                     Liked Songs
@@ -788,7 +788,7 @@ function LoadMore({
       onPress={onPress}
     >
       {loading ? (
-        <ActivityIndicator color="white" />
+        <ActivityIndicator color={palette.text} />
       ) : (
         <Text style={styles.loadMoreText}>Load more</Text>
       )}
@@ -818,7 +818,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  shuffleCollectionText: { color: "white", fontWeight: "700" },
+  shuffleCollectionText: { color: palette.text, fontWeight: "700" },
   newPlaylist: {
     alignSelf: "flex-end",
     minHeight: 40,
@@ -827,9 +827,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 14,
     borderRadius: 20,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
   },
-  newPlaylistText: { color: "black", fontWeight: "800" },
+  newPlaylistText: { color: palette.background, fontWeight: "800" },
   pill: {
     borderWidth: 1,
     borderColor: palette.borderStrong,
@@ -838,9 +838,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     justifyContent: "center",
   },
-  activePill: { backgroundColor: "white" },
-  pillText: { color: "white", fontSize: 13, fontWeight: "700" },
-  activePillText: { color: "black" },
+  activePill: { backgroundColor: palette.text },
+  pillText: { color: palette.text, fontSize: 13, fontWeight: "700" },
+  activePillText: { color: palette.background },
   row: {
     minHeight: 72,
     flexDirection: "row",
@@ -863,14 +863,14 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   playlistCardTitle: {
-    color: "white",
+    color: palette.text,
     fontSize: 15,
     fontWeight: "700",
     lineHeight: 19,
     marginTop: 9,
   },
   labels: { flex: 1 },
-  name: { color: "white", fontWeight: "700", fontSize: 15 },
+  name: { color: palette.text, fontWeight: "700", fontSize: 15 },
   meta: { color: palette.secondary, fontSize: 13, marginTop: 4 },
   loadMore: {
     height: 52,
@@ -882,7 +882,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   emptyDownloads: { alignItems: "center", padding: 40, marginTop: 28 },
-  emptyDownloadsTitle: { color: "white", fontSize: 18, fontWeight: "800" },
+  emptyDownloadsTitle: { color: palette.text, fontSize: 18, fontWeight: "800" },
   emptyDownloadsText: {
     color: palette.secondary,
     lineHeight: 20,
@@ -894,12 +894,12 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: tint(0.08),
   },
-  offlineTitle: { color: "white", fontWeight: "800", fontSize: 14 },
+  offlineTitle: { color: palette.text, fontWeight: "800", fontSize: 14 },
   offlineText: { color: palette.secondary, fontSize: 13, marginTop: 4 },
   offlineError: {
-    color: "#fca5a5",
+    color: palette.danger,
     fontSize: 12,
     lineHeight: 17,
     marginTop: 8,
@@ -913,12 +913,16 @@ const styles = StyleSheet.create({
     minHeight: 40,
     flex: 1,
     borderRadius: 20,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
   },
-  offlinePrimaryText: { color: "black", fontSize: 13, fontWeight: "800" },
+  offlinePrimaryText: {
+    color: palette.background,
+    fontSize: 13,
+    fontWeight: "800",
+  },
   offlineSecondary: {
     minHeight: 40,
     flex: 1,
@@ -929,10 +933,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 12,
   },
-  offlineSecondaryText: { color: "white", fontSize: 13, fontWeight: "700" },
-  loadMoreText: { color: "white", fontWeight: "700" },
+  offlineSecondaryText: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  loadMoreText: { color: palette.text, fontWeight: "700" },
   errorState: { alignItems: "center", padding: 36, marginTop: 28 },
-  errorTitle: { color: "white", fontSize: 16, fontWeight: "800" },
+  errorTitle: { color: palette.text, fontSize: 16, fontWeight: "800" },
   errorText: { color: palette.secondary, marginTop: 6 },
   albumMeta: {
     flexDirection: "row",
@@ -955,6 +963,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     justifyContent: "center",
   },
-  focusChipText: { color: "white", fontSize: 13, fontWeight: "600" },
+  focusChipText: { color: palette.text, fontSize: 13, fontWeight: "600" },
   focusChipCount: { color: palette.muted, fontSize: 12, fontWeight: "500" },
 });

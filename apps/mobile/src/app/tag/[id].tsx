@@ -44,7 +44,7 @@ export default function TagScreen() {
   if (page.isPending) {
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   }

@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  enrichmentNoMatch,
   enrichmentStageLine,
   enrichmentWaitingLabel,
   personHue,
+  personTone,
+  PERSON_TONES,
   personInitials,
 } from "./people";
 
@@ -38,6 +41,8 @@ describe("personInitials", () => {
     expect(personHue("Carlos Kleiber")).toBe(personHue("carlos kleiber"));
     expect(personHue("Carlos Kleiber")).toBeGreaterThanOrEqual(0);
     expect(personHue("Carlos Kleiber")).toBeLessThan(360);
+    expect(PERSON_TONES).toContainEqual(personTone("Carlos Kleiber"));
+    expect(personTone("Carlos Kleiber")).toEqual(personTone("carlos kleiber"));
   });
 });
 
@@ -116,5 +121,33 @@ describe("enrichmentStageLine", () => {
         paused_seconds: 0,
       }).label,
     ).toBe("Wikidata Query Service (influences and followers)");
+  });
+});
+
+describe("enrichmentNoMatch", () => {
+  const skipped = (last_error: string | null) => ({
+    status: "skipped",
+    last_error,
+    updated_at: "2026-10-25 06:00:00",
+  });
+
+  test("reports a real no-match with its reason", () => {
+    expect(enrichmentNoMatch(skipped("no release scored above 0.8"))).toEqual({
+      reason: "no release scored above 0.8",
+    });
+    expect(enrichmentNoMatch(skipped(null))).toEqual({ reason: null });
+  });
+
+  test("never claims a present album left the library", () => {
+    expect(
+      enrichmentNoMatch(skipped("the album is no longer in the library")),
+    ).toBe(null);
+    expect(
+      enrichmentNoMatch(skipped("the library is still loading this album")),
+    ).toBe(null);
+    expect(enrichmentNoMatch({ ...skipped(null), status: "pending" })).toBe(
+      null,
+    );
+    expect(enrichmentNoMatch(undefined)).toBe(null);
   });
 });

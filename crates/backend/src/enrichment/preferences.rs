@@ -858,6 +858,42 @@ pub fn album_release_tags(
     .collect())
 }
 
+/// The release type an album's files are tagged with (`RELEASETYPE` /
+/// `MusicBrainz Album Type`), the most common value among its tracks.
+pub fn album_tagged_release_type(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Option<String>> {
+    let rows = diesel::sql_query(
+        "SELECT rfm.release_type AS value
+         FROM track_entity track
+         JOIN track_file tf ON tf.track_id = track.id AND tf.is_primary = true
+         JOIN raw_file_metadata rfm ON rfm.file_id = tf.file_id
+         WHERE track.album_id = ? AND rfm.release_type IS NOT NULL",
+    )
+    .bind::<Text, _>(album_id)
+    .load::<ValueRow>(connection)?;
+    Ok(majority(rows.iter().map(|row| Some(row.value.as_str()))))
+}
+
+/// The release type a person typed in the album editor, if any.
+pub fn album_edited_release_type(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Option<String>> {
+    let rows = diesel::sql_query(
+        "SELECT value_json AS value FROM metadata_override
+         WHERE entity_type = 'album' AND entity_id = ? AND field_name = 'primary_type'",
+    )
+    .bind::<Text, _>(album_id)
+    .load::<ValueRow>(connection)?;
+    Ok(rows
+        .first()
+        .and_then(|row| serde_json::from_str::<String>(&row.value).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
+}
+
 /// The most common value among an album's files (ties go to the first).
 pub fn majority<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Option<String> {
     let mut counts: Vec<(&str, usize)> = Vec::new();

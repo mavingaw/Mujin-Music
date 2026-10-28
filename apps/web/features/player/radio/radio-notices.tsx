@@ -22,7 +22,7 @@ const countdown = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
 const card =
-  "pointer-events-auto w-full rounded-2xl border border-white/10 bg-[#161618]/95 p-4 text-white shadow-[0_24px_80px_rgba(0,0,0,0.7)] backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2";
+  "pointer-events-auto w-full rounded-2xl border border-white/10 bg-mujin-surface-1/95 p-4 text-white shadow-[0_24px_80px_rgba(0,0,0,0.7)] backdrop-blur-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2";
 
 /** Stack for Radio notices, above the player bar. */
 export function RadioNotices() {
@@ -90,7 +90,7 @@ export function RadioComingUp() {
           />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-semibold">{title}</p>
+          <p className="truncate text-[0.9375rem] font-semibold">{title}</p>
           <p className="truncate text-sm text-zinc-400">{artist}</p>
           {next.reason && (
             <p className="truncate text-xs text-zinc-500">

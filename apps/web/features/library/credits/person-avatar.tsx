@@ -1,6 +1,6 @@
 "use client";
 
-import { getApiBaseURL, personHue, personInitials } from "@parson/music-sdk";
+import { getApiBaseURL, personInitials, personTone } from "@parson/music-sdk";
 import Image from "next/image";
 import { useState } from "react";
 
@@ -31,7 +31,7 @@ export function PersonAvatar({
   const src = editorialImageSrc(imageUrl);
   const [failed, setFailed] = useState<string | null>(null);
   const showImage = src && failed !== src;
-  const hue = personHue(name);
+  const [lit, deep] = personTone(name);
   return (
     <span
       aria-hidden={showImage ? undefined : true}
@@ -41,8 +41,8 @@ export function PersonAvatar({
         height: size,
         fontSize: Math.max(10, Math.round(size * 0.36)),
         background: showImage
-          ? "rgb(39 39 42)"
-          : `linear-gradient(135deg, hsl(${hue} 32% 34%), hsl(${(hue + 40) % 360} 38% 20%))`,
+          ? "var(--color-mujin-surface-2)"
+          : `linear-gradient(135deg, ${lit}, ${deep})`,
       }}
     >
       {showImage ? (

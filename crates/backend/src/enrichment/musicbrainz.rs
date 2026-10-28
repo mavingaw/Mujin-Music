@@ -41,6 +41,16 @@ pub fn artist_search_url(name: &str) -> String {
     )
 }
 
+/// A search on other names: an artist renamed on MusicBrainz ("Kimiko
+/// Douglass-Ishizaka") keeps the name your files use ("Kimiko Ishizaka") as
+/// an alias, which the name search does not look at.
+pub fn artist_alias_search_url(name: &str) -> String {
+    format!(
+        "{API_ROOT}/artist?query={}&limit=8&fmt=json",
+        encode(&format!("alias:{}", phrase(name)))
+    )
+}
+
 pub fn artist_lookup_url(mbid: &str) -> String {
     format!("{API_ROOT}/artist/{mbid}?inc=url-rels+genres+aliases&fmt=json")
 }
@@ -198,6 +208,8 @@ pub struct ArtistCandidate {
     pub name: String,
     pub score: i64,
     pub disambiguation: Option<String>,
+    /// Other names MusicBrainz lists for the artist.
+    pub aliases: Vec<String>,
 }
 
 pub fn parse_artist_search(body: &Value) -> Vec<ArtistCandidate> {
@@ -209,9 +221,53 @@ pub fn parse_artist_search(body: &Value) -> Vec<ArtistCandidate> {
                 name: text(artist, "name")?,
                 score: artist.get("score").and_then(Value::as_i64).unwrap_or(0),
                 disambiguation: text(artist, "disambiguation"),
+                aliases: array(artist, "aliases")
+                    .iter()
+                    .filter_map(|alias| text(alias, "name"))
+                    .collect(),
             })
         })
         .collect()
+}
+
+/// Whether any search result carries exactly this name (so a namesake
+/// question, not a renamed artist).
+pub fn has_exact_name(name: &str, candidates: &[ArtistCandidate]) -> bool {
+    let wanted = normalize_artist_identity(name);
+    candidates
+        .iter()
+        .any(|candidate| normalize_artist_identity(&candidate.name) == wanted)
+}
+
+/// Picks the single result that lists the name as an alias, by the same
+/// rules as [`choose_artist`]: a strong search score, and two artists with
+/// that alias are ambiguous unless `known` settles it.
+pub fn choose_artist_by_alias(
+    name: &str,
+    candidates: &[ArtistCandidate],
+    known: &[String],
+) -> Option<ArtistCandidate> {
+    let wanted = normalize_artist_identity(name);
+    let matching = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.score >= MIN_SEARCH_SCORE
+                && candidate
+                    .aliases
+                    .iter()
+                    .any(|alias| normalize_artist_identity(alias) == wanted)
+        })
+        .collect::<Vec<_>>();
+    if let Some(known) = matching
+        .iter()
+        .find(|candidate| known.contains(&candidate.mbid))
+    {
+        return Some((*known).clone());
+    }
+    match matching.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
+    }
 }
 
 /// Picks the single search result whose name matches exactly. Two equally
@@ -939,6 +995,38 @@ mod tests {
             {"id": BEATLES, "name": "Nirvana", "score": 60}
         ]}));
         assert_eq!(choose_artist("Nirvana", &weak, &[]), None);
+    }
+
+    #[test]
+    fn a_renamed_artist_is_found_by_the_name_the_files_use() {
+        assert!(
+            artist_alias_search_url("Kimiko Ishizaka")
+                .contains(&encode("alias:\"Kimiko Ishizaka\""))
+        );
+        let renamed = parse_artist_search(&json!({"artists": [
+            {"id": BEATLES, "name": "Kimiko Douglass-Ishizaka", "score": 100,
+             "aliases": [{"name": "Kimiko Ishizaka"}, {"name": "石坂紀美子"}]},
+            {"id": OTHER, "name": "Kimiko", "score": 70}
+        ]}));
+        assert_eq!(renamed[0].aliases.len(), 2);
+        assert!(!has_exact_name("Kimiko Ishizaka", &renamed));
+        assert_eq!(choose_artist("Kimiko Ishizaka", &renamed, &[]), None);
+        assert_eq!(
+            choose_artist_by_alias("kimiko ishizaka", &renamed, &[]).map(|artist| artist.mbid),
+            Some(BEATLES.to_string())
+        );
+        // Two artists sharing an alias stay ambiguous, unless the library
+        // already knows one of them.
+        let shared = parse_artist_search(&json!({"artists": [
+            {"id": BEATLES, "name": "A", "score": 100, "aliases": [{"name": "Prince"}]},
+            {"id": OTHER, "name": "B", "score": 100, "aliases": [{"name": "Prince"}]}
+        ]}));
+        assert_eq!(choose_artist_by_alias("Prince", &shared, &[]), None);
+        assert_eq!(
+            choose_artist_by_alias("Prince", &shared, &[OTHER.to_string()]).map(|a| a.mbid),
+            Some(OTHER.to_string())
+        );
+        assert!(has_exact_name("a", &shared));
     }
 
     #[test]

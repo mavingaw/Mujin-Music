@@ -25,7 +25,12 @@ use crate::persistence::connection::DbPool;
 use crate::settings::data_path;
 
 const IDLE_POLL: Duration = Duration::from_secs(60);
-const MIN_THROTTLE: Duration = Duration::from_secs(30);
+/// The first pause after a host says it is busy. MusicBrainz answers 503 to
+/// the odd request even from a client that keeps to one a second (its limit
+/// is per IP address, and many homes share one), so a single refusal waits a
+/// few seconds, not half a minute; repeated refusals still double the pause
+/// up to [`MAX_THROTTLE`].
+const MIN_THROTTLE: Duration = Duration::from_secs(4);
 const MAX_THROTTLE: Duration = Duration::from_secs(15 * 60);
 
 /// How long one host's queue pauses after that host said it is overloaded
@@ -170,13 +175,27 @@ pub const PAGE_IMAGE_KEY: &str = "page_image";
 /// Profile key of an album article's review scores table.
 pub const REVIEW_SCORES_KEY: &str = "review_scores";
 
-pub const INTERNAL_KEYS: [&str; 5] = [
+/// Profile key marking an album profile that holds only its release
+/// group's article links: the edition failed the match check, so only the
+/// album-level text (background and reception) is used.
+pub const GROUP_ONLY_KEY: &str = "release_group_only";
+
+pub const INTERNAL_KEYS: [&str; 6] = [
     WIKIDATA_KEY,
     COMMONS_IMAGE_KEY,
     WIKIPEDIA_KEY,
     PAGE_IMAGE_KEY,
     REVIEW_SCORES_KEY,
+    GROUP_ONLY_KEY,
 ];
+
+/// Whether an album profile is a release-group-only one ([`GROUP_ONLY_KEY`]).
+pub fn profile_is_group_only(profile: &ProfileRow) -> bool {
+    serde_json::from_str::<Value>(&profile.profile_json)
+        .ok()
+        .and_then(|value| value.get(GROUP_ONLY_KEY).and_then(Value::as_bool))
+        .unwrap_or(false)
+}
 
 /// The review scores an article lists, with what the attribution needs.
 fn review_scores_json(language: &str, page: &wiki::ArticlePage) -> Value {
@@ -739,6 +758,11 @@ impl<F: Fetch> Enricher<F> {
                     Searched::Verified(release) => (MatchMethod::Automatic, *release),
                     Searched::Unverified(release, check) => {
                         self.keep_tags_only(album, &release, &check).await?;
+                        if confidence::same_album_group(&album.title, &release, &check)
+                            && let Some(outcome) = self.keep_group_texts(album, &release).await?
+                        {
+                            return Ok(outcome);
+                        }
                         return Ok(Outcome::Skipped(format!(
                             "the closest release, {}, did not pass the match check",
                             release.title
@@ -939,6 +963,53 @@ impl<F: Fetch> Enricher<F> {
         Ok(())
     }
 
+    /// For an album that is clearly a copy of a release group whose exact
+    /// edition could not be confirmed (a partial or trimmed album): keeps
+    /// only the release group's Wikipedia and Wikidata links, so the album
+    /// still gets its background and reception text. `None` when the group
+    /// has no article to follow.
+    async fn keep_group_texts(
+        &self,
+        album: &AlbumInput,
+        release: &mb::ReleaseDetails,
+    ) -> Result<Option<Outcome>, BoxError> {
+        let Some(group) = release.release_group_mbid.clone() else {
+            return Ok(None);
+        };
+        let (wikidata_id, wikipedia) =
+            match self.get_json(&mb::release_group_lookup_url(&group)).await? {
+                Ok(Some(body)) => (mb::wikidata_relation(&body), mb::wikipedia_relation(&body)),
+                Ok(None) => return Ok(None),
+                Err(outcome) => return Ok(Some(outcome)),
+            };
+        if wikidata_id.is_none() && wikipedia.is_none() {
+            return Ok(None);
+        }
+        let profile = ProfileRow {
+            musicbrainz_id: None,
+            release_group_mbid: Some(group),
+            wikidata_id,
+            profile_json: json!({
+                "title": album.title,
+                "artist": album.artist_name,
+                // Album, EP, Single: the release group's own type, which
+                // every edition shares.
+                "release_type": release.release_group_type,
+                WIKIPEDIA_KEY: wikipedia_link_json(&wikipedia),
+                GROUP_ONLY_KEY: true,
+            })
+            .to_string(),
+        };
+        let album_id = album.id.clone();
+        db(&self.pool, move |connection| {
+            let linked = profile.wikidata_id.is_some();
+            store::save_profile(connection, "album", &album_id, &profile)?;
+            queue_text_stages(connection, "album", &album_id, linked)
+        })
+        .await?;
+        Ok(Some(Outcome::Done))
+    }
+
     /// The MusicBrainz stage for a work: what MusicBrainz says about it
     /// (form, key, catalogue number, composer, date, the piece a movement
     /// belongs to), which the library's works are built with, and its
@@ -1047,9 +1118,27 @@ impl<F: Fetch> Enricher<F> {
                 Ok(None) => return Ok(Outcome::Retry("artist search failed".into())),
                 Err(outcome) => return Ok(outcome),
             };
-            let Some(candidate) =
-                mb::choose_artist(&artist.name, &mb::parse_artist_search(&body), &known)
-            else {
+            let found = mb::parse_artist_search(&body);
+            let mut candidate = mb::choose_artist(&artist.name, &found, &known);
+            if candidate.is_none() && !mb::has_exact_name(&artist.name, &found) {
+                // No artist goes by this name any more: look for it among
+                // other names (an artist renamed since the files were tagged).
+                match self
+                    .get_json(&mb::artist_alias_search_url(&artist.name))
+                    .await?
+                {
+                    Ok(Some(body)) => {
+                        candidate = mb::choose_artist_by_alias(
+                            &artist.name,
+                            &mb::parse_artist_search(&body),
+                            &known,
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(outcome) => return Ok(outcome),
+                }
+            }
+            let Some(candidate) = candidate else {
                 return Ok(Outcome::Skipped(
                     "no unambiguous MusicBrainz artist match".into(),
                 ));
@@ -1580,9 +1669,7 @@ impl<F: Fetch> Enricher<F> {
         album_id: &str,
     ) -> Result<Outcome, BoxError> {
         let Some(album) = cache.album(album_id) else {
-            return Ok(Outcome::Skipped(
-                "the album is no longer in the library".into(),
-            ));
+            return self.missing_album_outcome(album_id).await;
         };
         let covers = self.covers_directory();
         let own_art = !album.cover_url.trim().is_empty()
@@ -2086,6 +2173,23 @@ impl<F: Fetch> Enricher<F> {
         .await
     }
 
+    /// What to do with an album the in-memory library does not hold. While
+    /// the library is being rebuilt (a scan just added the album) the
+    /// catalogue already has it, so the task waits and runs again; only an
+    /// album the catalogue no longer has is skipped.
+    async fn missing_album_outcome(&self, album_id: &str) -> Result<Outcome, BoxError> {
+        let lookup = album_id.to_string();
+        let exists = db(&self.pool, move |connection| {
+            store::album_exists(connection, &lookup)
+        })
+        .await?;
+        Ok(if exists {
+            Outcome::Retry("the library is still loading this album".into())
+        } else {
+            Outcome::Skipped(store::MISSING_ALBUM_REASON.into())
+        })
+    }
+
     /// Runs one stage for one task.
     pub async fn run_task(
         &self,
@@ -2101,9 +2205,7 @@ impl<F: Fetch> Enricher<F> {
                 };
                 match album_input(cache, &task.entity_id) {
                     Some(input) => self.resolve_album(&input).await,
-                    None => Ok(Outcome::Skipped(
-                        "the album is no longer in the library".into(),
-                    )),
+                    None => self.missing_album_outcome(&task.entity_id).await,
                 }
             }
             (Stage::Musicbrainz, "work") => self.resolve_work(&task.entity_id).await,
@@ -2130,9 +2232,7 @@ impl<F: Fetch> Enricher<F> {
                         )
                         .await
                     }
-                    None => Ok(Outcome::Skipped(
-                        "the artist is no longer in the library".into(),
-                    )),
+                    None => Ok(Outcome::Skipped(store::MISSING_ARTIST_REASON.into())),
                 }
             }
             (Stage::Wikidata, "genre") => {
@@ -2969,6 +3069,13 @@ async fn run_stage(
                 Ok(queued) if queued > 0 => tracing::info!(queued, "queued metadata enrichment"),
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "could not queue metadata enrichment"),
+            }
+            match db(&pool, store::requeue_items_missed_while_loading).await {
+                Ok(requeued) if requeued > 0 => {
+                    tracing::info!(requeued, "queued items skipped while the library loaded");
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "could not requeue skipped items"),
             }
             match db(&pool, store::seed_genre_tasks).await {
                 Ok(queued) if queued > 0 => {

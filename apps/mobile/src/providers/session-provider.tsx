@@ -136,7 +136,10 @@ type SessionContextValue = {
   retry: () => Promise<void>;
   updateBitrate: (bitrate: number) => void;
   setupAccount: (username: string, password: string) => Promise<boolean>;
-  setupLibrary: (path: string) => Promise<boolean>;
+  setupLibrary: (
+    path: string,
+    options?: { onlineMetadata?: boolean },
+  ) => Promise<boolean>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -905,14 +908,14 @@ export function SessionProvider({ children }: PropsWithChildren) {
   );
 
   const setupLibrary = useCallback(
-    async (path: string) => {
+    async (path: string, options: { onlineMetadata?: boolean } = {}) => {
       if (userOperationInFlight.current) return false;
       userOperationInFlight.current = true;
       const expectedGeneration = generation.current;
       setError(null);
       setPhase("indexing");
       try {
-        await indexSetupLibrary(path.trim());
+        await indexSetupLibrary(path.trim(), options);
         if (expectedGeneration !== generation.current) return false;
         const next = await getSetupStatus();
         if (expectedGeneration !== generation.current) return false;

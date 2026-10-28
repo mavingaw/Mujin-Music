@@ -12,6 +12,7 @@ import {
 } from "@parson/music-sdk";
 import { RadioQueueSection, RadioThumbs } from "./radio/radio-controls";
 import {
+  GripVertical,
   ListMusic,
   ListX,
   Play,
@@ -27,10 +28,16 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
 import { queueDropIndex } from "./player-queue-reorder";
+import { queueRowDuration, queueSummary } from "./queue-summary";
 import { SongTitle, ExplicitBadge } from "@/features/library/song-title";
 import { isExplicitSongTitle } from "@/features/library/song-presentation";
 import { trackArtistCredit } from "@/features/library/track-artist-credit";
@@ -78,8 +85,8 @@ export function QueueToolbar({
   const toggleClass = (active: boolean) =>
     `flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
       active
-        ? "bg-white/12 text-white"
-        : "text-zinc-500 hover:bg-white/10 hover:text-white"
+        ? "bg-mujin-copper/[0.16] text-mujin-copper"
+        : "text-mujin-text-tertiary hover:bg-white/[0.07] hover:text-mujin-text"
     }`;
   return (
     <div className="flex items-center gap-1">
@@ -186,11 +193,18 @@ export default function PlayerQueue({
   return (
     <aside
       aria-label="Queue"
-      className="fixed bottom-42 left-3 right-3 z-60 flex max-h-[min(380px,calc(100dvh-188px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/95 text-white shadow-2xl backdrop-blur-2xl sm:left-auto sm:right-5 sm:w-90 md:bottom-31 md:max-h-[min(380px,calc(100dvh-144px))] lg:right-[max(1.25rem,calc((100vw-80px-min(960px,100vw-112px))/2))]"
+      className="fixed bottom-[calc(var(--shell-footer)+80px)] left-2 right-2 z-60 flex max-h-[min(460px,calc(100dvh-220px))] flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-mujin-raised/97 text-mujin-text shadow-2xl backdrop-blur-2xl md:inset-x-auto md:bottom-(--shell-footer) md:right-0 md:top-(--shell-header) md:max-h-none md:w-[380px] md:rounded-none md:border-y-0 md:border-r-0 md:border-l md:border-white/[0.06] md:shadow-[-30px_0_60px_-30px_rgba(0,0,0,0.9)] motion-safe:animate-in motion-safe:fade-in motion-safe:md:slide-in-from-right-4"
       ref={queueRef}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-white/10 py-2 pl-4 pr-2">
-        <h2 className="min-w-0 truncate font-semibold">{title}</h2>
+      <header className="flex items-center justify-between gap-2 border-b border-white/[0.06] py-3 pl-5 pr-3">
+        <div className="min-w-0">
+          <h2 className="mj-title min-w-0 truncate text-[1.375rem] leading-tight">
+            {title}
+          </h2>
+          <p className="mj-tnum text-[0.7188rem] text-mujin-text-tertiary">
+            {queueSummary(queue, editing?.currentIndex)}
+          </p>
+        </div>
         <div className="flex shrink-0 items-center gap-1">
           {editing && <QueueToolbar editing={editing} length={queue.length} />}
           <button
@@ -215,11 +229,11 @@ export default function PlayerQueue({
         <div className="flex flex-1 flex-col overflow-y-auto p-2">
           <div className="grid flex-1 place-items-center px-6 py-6 text-center">
             <div>
-              <ListMusic className="mx-auto h-7 w-7 text-zinc-700" />
-              <p className="mt-3 text-sm font-medium text-zinc-300">
-                Nothing queued
+              <ListMusic className="mx-auto h-7 w-7 text-mujin-text-disabled" />
+              <p className="mj-title mt-3 text-lg text-mujin-text">
+                Go find something to play
               </p>
-              <p className="mt-1 text-xs leading-5 text-zinc-600">
+              <p className="mt-1 text-xs leading-5 text-mujin-text-tertiary">
                 Play a song or album, or start a station.
               </p>
             </div>
@@ -253,6 +267,21 @@ export function PlayerQueueList({
     index: number;
   } | null>(null);
   const suppressClick = useRef(false);
+  // The row just moved: lit for a moment and announced, so a drag (or an
+  // arrow-key move) visibly lands.
+  const [moved, setMoved] = useState<{
+    index: number;
+    message: string;
+    at: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!moved) return;
+    const timer = window.setTimeout(() => setMoved(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [moved]);
+  const lyrics = useLyricsAvailability(
+    useMemo(() => queue.map((item) => item.song.id ?? ""), [queue]),
+  );
   const { currentIndex } = usePlayer();
   // A remote zone's queue is positioned by the zone, not this player.
   const radioStart = radioSectionStart(
@@ -272,6 +301,11 @@ export function PlayerQueueList({
       return;
     }
     onReorder(from, to);
+    setMoved({
+      index: to,
+      message: `Moved ${queue[from]?.song.name || "the song"} to position ${to + 1} of ${queue.length}.`,
+      at: Date.now(),
+    });
   };
   const drop = (event: DragEvent<HTMLButtonElement>, targetIndex: number) => {
     event.preventDefault();
@@ -303,6 +337,9 @@ export function PlayerQueueList({
       aria-label="Playback queue. Drag rows to reorder, or use the arrow keys."
       className={`overflow-y-auto p-2 ${className}`}
     >
+      <p aria-live="polite" className="sr-only" data-queue-announcement>
+        {moved?.message ?? ""}
+      </p>
       {queue.map((item, index) => {
         const active = editing
           ? index === editing.currentIndex
@@ -319,7 +356,11 @@ export function PlayerQueueList({
               <button
                 aria-current={active ? "true" : undefined}
                 aria-label={`${item.song.name || "Untitled song"}. Position ${index + 1} of ${queue.length}.${rowMovable ? " Drag to reorder, or use the arrow keys." : ""}`}
-                className={`group relative flex h-15.5 w-full items-center gap-3 rounded-xl p-2 text-left transition-colors ${
+                className={`group relative flex h-15.5 w-full items-center gap-2 rounded-xl p-2 pl-1 text-left transition-[background-color,box-shadow] duration-500 ${
+                  moved?.index === index
+                    ? "bg-mujin-copper/[0.12] shadow-[inset_0_0_0_1px_rgb(var(--mj-accent-rgb)/0.45)]"
+                    : ""
+                } ${
                   rowMovable ? "cursor-grab active:cursor-grabbing" : ""
                 } ${active ? "bg-white/9" : "hover:bg-white/5"} ${
                   draggedIndex === index ? "opacity-60" : ""
@@ -378,12 +419,21 @@ export function PlayerQueueList({
                 {dropTarget?.index === index && draggedIndex !== index && (
                   <span
                     aria-hidden="true"
-                    className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-white ${
+                    className={`pointer-events-none absolute inset-x-2 z-20 h-0.5 rounded-full bg-mujin-copper ${
                       dropTarget.edge === "before" ? "top-0" : "bottom-0"
                     }`}
                   />
                 )}
-                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
+                <GripVertical
+                  aria-hidden="true"
+                  className={`h-4 w-4 shrink-0 text-mujin-text-tertiary transition-opacity ${
+                    rowMovable
+                      ? "opacity-55 group-hover:opacity-100 group-focus-visible:opacity-100"
+                      : "invisible"
+                  }`}
+                  data-drag-handle
+                />
+                <div className="relative ml-1 h-11 w-11 shrink-0 overflow-hidden rounded-md bg-zinc-900">
                   <Image
                     alt=""
                     className="object-cover"
@@ -401,6 +451,10 @@ export function PlayerQueueList({
                     className={`truncate text-sm font-medium ${active ? "text-white" : "text-zinc-200"}`}
                   >
                     <SongTitle title={item.song.name || "Untitled song"} />
+                    <TimedLyricsMark
+                      availability={item.song.id ? lyrics[item.song.id] : null}
+                      className="ml-2"
+                    />
                   </p>
                   <p className="truncate text-xs text-zinc-500">
                     {radioPick && item.reason && (
@@ -421,7 +475,18 @@ export function PlayerQueueList({
                   </p>
                 </div>
                 {active && (
-                  <span className="mr-2 h-2 w-2 rounded-full bg-white" />
+                  <span
+                    aria-hidden="true"
+                    className="mj-signal-dot mr-1 shrink-0"
+                  />
+                )}
+                {queueRowDuration(item.song.duration) && (
+                  <span
+                    className={`mj-tnum shrink-0 pr-1 font-mono text-[0.7188rem] ${active ? "text-mujin-text-secondary" : "text-mujin-text-tertiary"}`}
+                  >
+                    <span className="sr-only">Length </span>
+                    {queueRowDuration(item.song.duration)}
+                  </span>
                 )}
               </button>
               {radioPick && (

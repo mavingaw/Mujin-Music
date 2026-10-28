@@ -1,0 +1,44 @@
+diff --git a/dist/cjs.js b/dist/cjs.js
+index 7c36cbdd06cc22c92d590be3f87a08a91ca06b40..b11d4ba8997b149237d9ce2cf08b43bb99fe344d 100644
+--- a/dist/cjs.js
++++ b/dist/cjs.js
+@@ -80,11 +80,16 @@ function mergeObject(target, source, options) {
+ 	var destination = {};
+ 	if (options.isMergeableObject(target)) {
+ 		getKeys(target).forEach(function(key) {
++			if (key === '__proto__') {
++				return
++			}
+ 			destination[key] = cloneUnlessOtherwiseSpecified(target[key], options);
+ 		});
+ 	}
+ 	getKeys(source).forEach(function(key) {
+-		if (propertyIsUnsafe(target, key)) {
++		// An own "__proto__" key, as JSON.parse produces, would replace the
++		// prototype of the returned object.
++		if (key === '__proto__' || propertyIsUnsafe(target, key)) {
+ 			return
+ 		}
+ 
+diff --git a/dist/umd.js b/dist/umd.js
+index 4071e7c..06b36c7 100644
+--- a/dist/umd.js
++++ b/dist/umd.js
+@@ -84,11 +84,16 @@
+ 		var destination = {};
+ 		if (options.isMergeableObject(target)) {
+ 			getKeys(target).forEach(function(key) {
++				if (key === '__proto__') {
++					return
++				}
+ 				destination[key] = cloneUnlessOtherwiseSpecified(target[key], options);
+ 			});
+ 		}
+ 		getKeys(source).forEach(function(key) {
+-			if (propertyIsUnsafe(target, key)) {
++			// An own "__proto__" key, as JSON.parse produces, would replace the
++			// prototype of the returned object.
++			if (key === '__proto__' || propertyIsUnsafe(target, key)) {
+ 				return
+ 			}
+ 

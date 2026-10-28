@@ -7,21 +7,23 @@ describe("the logo's signal dot", () => {
     expect(brandSignalColor(undefined)).toBeNull();
   });
 
+  // The theme variable carries the light in the active theme's tone; the
+  // brand hex is its fallback.
   test("follows the signal-path light", () => {
     expect(brandSignalColor({ quality: "lossless", clipping: false })).toBe(
-      "#D98B5F",
+      "var(--color-quality-lossless, #D98B5F)",
     );
     expect(brandSignalColor({ quality: "enhanced", clipping: false })).toBe(
-      "#8FC3E0",
+      "var(--color-quality-enhanced, #8FC3E0)",
     );
     expect(brandSignalColor({ quality: "high_quality", clipping: false })).toBe(
-      "#A3C98B",
+      "var(--color-quality-high, #A3C98B)",
     );
     expect(brandSignalColor({ quality: "low_quality", clipping: false })).toBe(
-      "#7E7A74",
+      "var(--color-quality-low, #7E7A74)",
     );
     expect(brandSignalColor({ quality: "lossless", clipping: true })).toBe(
-      "#F2473F",
+      "var(--color-quality-clipping, #F2473F)",
     );
   });
 });
