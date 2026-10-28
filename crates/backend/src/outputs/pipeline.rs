@@ -1024,6 +1024,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(if lossless { 2_000 } else { 320 }),
             lossless: Some(lossless),
+            enhanced_by: None,
         }
     }
 
@@ -1399,6 +1400,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(5_644),
             lossless: Some(true),
+            enhanced_by: None,
         }
     }
 

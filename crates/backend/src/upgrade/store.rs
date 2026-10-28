@@ -563,7 +563,8 @@ pub struct EnhanceJobRow {
 const ENHANCE_COLUMNS: &str = "id, song_id, album_id, source_path, title, state, worker_job_id,
     progress, output_path, message, batch, attempts";
 
-/// Queues tracks; a track already queued or running is not added twice.
+/// Queues tracks; a track already queued or running is not added twice,
+/// and queuing a track again replaces its earlier failed or stopped job.
 /// Returns how many were added.
 pub fn queue_enhance(
     connection: &mut SqliteConnection,
@@ -572,6 +573,12 @@ pub fn queue_enhance(
 ) -> QueryResult<usize> {
     let mut added = 0;
     for (song_id, album_id, path, title) in tracks {
+        diesel::sql_query(
+            "DELETE FROM upgrade_enhance_job
+             WHERE source_path = ? AND state IN ('failed', 'cancelled')",
+        )
+        .bind::<Text, _>(path)
+        .execute(connection)?;
         added += diesel::sql_query(
             "INSERT INTO upgrade_enhance_job (song_id, album_id, source_path, title, batch)
              SELECT ?, ?, ?, ?, ?
@@ -793,6 +800,10 @@ mod tests {
         assert_eq!(enhance_counts(&mut connection).unwrap().running, 1);
         assert_eq!(cancel_enhance_queue(&mut connection).unwrap(), 2);
         assert!(next_enhance_job(&mut connection).unwrap().is_none());
+        // Queuing again replaces the stopped jobs instead of piling up.
+        assert_eq!(queue_enhance(&mut connection, &tracks, "b").unwrap(), 2);
+        assert_eq!(enhance_jobs(&mut connection, 10).unwrap().len(), 2);
+        assert_eq!(cancel_enhance_queue(&mut connection).unwrap(), 2);
 
         record_enhanced(&mut connection, "/e/1.flac", "/m/1.mp3", "apollo-1.0").unwrap();
         assert_eq!(

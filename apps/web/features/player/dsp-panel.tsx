@@ -736,7 +736,7 @@ export function DspPanel({
             >
               <Sparkles className="h-3.5 w-3.5 text-quality-enhanced" />
               {realtime.data?.available
-                ? `${realtime.data.model ?? "Enhancer"} · ${formatRealtimeFactor(realtime.data.realtime_factor ?? 0)} on the enhancer${
+                ? `${realtime.data.model ?? "Enhancer"} · ${(realtime.data.realtime_factor ?? 0).toFixed(2)} s per second of audio on the enhancer${
                     realtime.data.status.enhanced_chunks ||
                     realtime.data.status.original_chunks
                       ? ` · ${realtime.data.status.enhanced_chunks} chunks enhanced, ${realtime.data.status.original_chunks} played original`

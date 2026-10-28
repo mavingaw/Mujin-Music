@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { UpgradeCandidate, UpgradeRequest } from "@parson/music-sdk";
 import {
+  candidateBadges,
   canRequest,
   matchesFilter,
   refreshInterval,
@@ -88,4 +89,36 @@ test("the page refreshes quickly only while something moves", () => {
   expect(refreshInterval([candidate("a", { enhance_queued: 2 })], [])).toBe(
     4_000,
   );
+});
+
+test("AI-enhanced rows say so once", () => {
+  const reason = (kind: "ai_enhanced_only" | "lossy") => ({
+    kind,
+    label: kind,
+    detail: "",
+    tracks: 2,
+  });
+  const enhanced = candidate("enhanced", {
+    track_count: 2,
+    quality: {
+      tier: "ai_enhanced",
+      score: 1,
+      label: "AI-enhanced (Apollo)",
+      format: "FLAC",
+    },
+    reasons: [reason("ai_enhanced_only")],
+    enhanced_tracks: 2,
+  });
+  expect(candidateBadges(enhanced)).toEqual({
+    reasons: [],
+    enhancedCount: null,
+  });
+  const partly = candidate("partly", {
+    reasons: [reason("lossy")],
+    enhanced_tracks: 3,
+  });
+  expect(candidateBadges(partly)).toEqual({
+    reasons: [reason("lossy")],
+    enhancedCount: "3 of 10 AI-enhanced",
+  });
 });

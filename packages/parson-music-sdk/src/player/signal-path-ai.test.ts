@@ -3,9 +3,12 @@ import { normalizeDspSettings, defaultDspSettings } from "./dsp";
 import {
   AI_ENHANCE_STAGE,
   carryLossyGeneration,
+  describeAudioFormat,
+  describeCollectionFormat,
   describeSignalPath,
   isAiEnhancedPath,
   overallSignalQuality,
+  sourceQuality,
   type SignalStage,
 } from "./signal-path";
 
@@ -75,4 +78,35 @@ test("AI enhance is off unless stored as on", () => {
   expect(
     normalizeDspSettings({ aiEnhance: { enabled: true } }).aiEnhance,
   ).toEqual({ enabled: true });
+});
+
+test("AI-enhanced files are never shown as lossless or hi-res", () => {
+  const enhanced = {
+    codec: "flac",
+    container: "flac",
+    sample_rate: 44_100,
+    bit_depth: 24,
+    channels: 2,
+    bitrate_kbps: 900,
+    lossless: true,
+    enhanced_by: "Apollo",
+  };
+  const real = { ...enhanced, enhanced_by: null };
+  expect(sourceQuality(enhanced)).toBe("enhanced");
+  expect(sourceQuality(real)).toBe("lossless");
+  const format = describeAudioFormat(enhanced)!;
+  expect(format.high_res).toBeFalse();
+  expect(format.lossless).toBeFalse();
+  expect(format.summary).toBe("AI-enhanced (Apollo) · FLAC 44.1kHz 24bit 2ch");
+  expect(describeAudioFormat(real)!.high_res).toBeTrue();
+  const album = describeCollectionFormat([enhanced, enhanced])!;
+  expect(album).toEqual({
+    summary: "AI-enhanced · FLAC 44.1kHz 24bit",
+    quality: "enhanced",
+    highRes: false,
+  });
+  const mixed = describeCollectionFormat([enhanced, real])!;
+  expect(mixed.summary.startsWith("Partly AI-enhanced · ")).toBeTrue();
+  expect(mixed.quality).toBe("enhanced");
+  expect(mixed.highRes).toBeTrue();
 });

@@ -279,9 +279,13 @@ pub struct LocalFocusPage {
 }
 
 /// Quality tier of one file: `hires`, `cd` (lossless up to 48 kHz/16-bit)
-/// or `lossy`.
+/// or `lossy`. An AI-enhanced copy is made from a lossy file and counts as
+/// lossy, whatever its container.
 pub fn audio_quality(audio: Option<&AudioProperties>) -> Option<&'static str> {
     let audio = audio?;
+    if audio.enhanced_by.is_some() {
+        return Some("lossy");
+    }
     let lossless = audio.lossless.or_else(|| {
         audio
             .codec

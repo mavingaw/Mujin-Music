@@ -990,7 +990,7 @@ impl AiEnhanceStage {
             kind: StageKind::Dsp,
             title: format!("AI-enhanced ({})", self.model),
             detail: format!(
-                "real time, {:.0} s chunks, {:.0} s ahead, {:.2}× real-time on the enhancer",
+                "real time, {:.0} s chunks, {:.0} s ahead; the enhancer needs {:.2} s per second of audio",
                 self.chunk_seconds,
                 self.chunk_seconds * self.lookahead_chunks as f64,
                 self.realtime_factor
@@ -1866,6 +1866,7 @@ mod tests {
             channels: Some(channels),
             bitrate_kbps: Some(2_100),
             lossless: Some(true),
+            enhanced_by: None,
         }
     }
 
@@ -1878,6 +1879,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(bitrate),
             lossless: Some(false),
+            enhanced_by: None,
         }
     }
 
@@ -1914,6 +1916,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(5_644),
             lossless: Some(true),
+            enhanced_by: None,
         }
     }
 
@@ -2391,6 +2394,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(3_000),
             lossless: Some(true),
+            enhanced_by: None,
         };
         let path = describe_server_leg("s", Some(&alac), Some("m4a"), "audio/mp4", &direct(0));
         assert_eq!(path.source.summary, "ALAC (MP4) 88.2kHz 24bit 2ch");
@@ -2404,6 +2408,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(1_411),
             lossless: Some(true),
+            enhanced_by: None,
         };
         let path = describe_server_leg("s", Some(&wav), Some("wav"), "audio/wav", &direct(0));
         assert_eq!(path.source.summary, "WAV 44.1kHz 16bit 2ch");

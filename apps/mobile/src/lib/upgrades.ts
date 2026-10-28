@@ -1,5 +1,6 @@
 import { palette } from "@/constants/colors";
 import {
+  enhancedStatusLabel,
   isUpgradeOpen,
   upgradeStatusLabel,
   type AlbumUpgradeStatus,
@@ -37,13 +38,11 @@ export function upgradeChips(status: AlbumUpgradeStatus | undefined) {
       busy: isUpgradeOpen(request.state) && request.state !== "handed_off",
     });
   }
-  if (status.enhanced_copies > 0) {
+  const enhanced = enhancedStatusLabel(status);
+  if (enhanced) {
     chips.push({
       key: "enhanced",
-      label:
-        status.enhanced_tracks > 0
-          ? `AI-enhanced · ${status.enhanced_tracks} of ${status.enhanced_copies} tracks`
-          : "AI-enhanced copies available",
+      label: enhanced,
       color: palette.qualityEnhanced,
       busy: false,
     });

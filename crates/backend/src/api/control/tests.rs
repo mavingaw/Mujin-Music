@@ -37,6 +37,7 @@ fn song(id: &str, name: &str, artist: &str, track: u16, hires: bool) -> Song {
                 channels: Some(2),
                 bitrate_kbps: Some(3_000),
                 lossless: Some(true),
+                enhanced_by: None,
             }
         } else {
             AudioProperties {
@@ -47,6 +48,7 @@ fn song(id: &str, name: &str, artist: &str, track: u16, hires: bool) -> Song {
                 channels: Some(2),
                 bitrate_kbps: Some(320),
                 lossless: Some(false),
+                enhanced_by: None,
             }
         }),
         ..Song::default()
@@ -347,6 +349,7 @@ fn quality_labels_lead_with_the_lossless_format() {
         channels: Some(2),
         bitrate_kbps: None,
         lossless: Some(true),
+        enhanced_by: None,
     };
     assert_eq!(quality_label(&hires).as_deref(), Some("FLAC 24/96"));
     let cd = AudioProperties {
@@ -364,6 +367,16 @@ fn quality_labels_lead_with_the_lossless_format() {
     };
     assert_eq!(quality_label(&lossy).as_deref(), Some("MP3 320"));
     assert_eq!(quality_label(&AudioProperties::default()), None);
+    let enhanced = AudioProperties {
+        enhanced_by: Some("Apollo".into()),
+        ..hires.clone()
+    };
+    assert_eq!(
+        quality_label(&enhanced).as_deref(),
+        Some("AI-enhanced (Apollo)")
+    );
+    assert_eq!(crate::app::audio_quality(Some(&enhanced)), Some("lossy"));
+    assert_eq!(crate::app::audio_quality(Some(&hires)), Some("hires"));
 }
 
 #[test]

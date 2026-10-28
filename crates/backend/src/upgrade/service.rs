@@ -18,7 +18,7 @@ use super::enhancer::{
 use super::fetch::{
     FetchClient, FetchConfig, FetchError, FetchJob, JobStatus, OpenApiReport, SearchOutcome,
 };
-use super::matching::{MatchOutcome, TrackFact, match_album};
+use super::matching::{MatchOutcome, match_album};
 use super::query::{AlbumTags, build_query, search_terms};
 use super::realtime::{HttpChunkEnhancer, RealtimeBackend, RealtimeStats};
 use super::settings::{self, SecretName, UpgradeSettings};
@@ -953,6 +953,7 @@ impl UpgradeService {
                 .unwrap_or_default(),
             Err(_) => Vec::new(),
         };
+        let track_count = song_ids.len();
         let enhanced_tracks = match self.cache().await {
             Ok(cache) => cache
                 .album(&album_id)
@@ -980,6 +981,7 @@ impl UpgradeService {
         Ok(AlbumStatus {
             album_id,
             request,
+            track_count,
             enhanced_tracks,
             enhanced_copies,
             enhance_queued: queued,
@@ -1340,9 +1342,25 @@ impl UpgradeService {
             .cloned()
             .ok_or(ServiceError::NotConfigured("The library is not ready yet."))?;
         let folder = match (&settings.fetch.library_root, row.result_folder.as_deref()) {
+            // Already mapped by an earlier attempt.
+            (Some(root), Some(dest))
+                if Path::new(dest).is_absolute() && super::files::path_is_under(dest, root) =>
+            {
+                Some(PathBuf::from(dest))
+            }
             (Some(root), Some(dest)) => map_dest(dest, Path::new(root)),
             _ => None,
         };
+        // Remember the local folder before rescanning: the indexer then
+        // treats it as a copy added to an album already in the library, so
+        // the album and its tracks keep their ids.
+        if let Some(local) = &folder {
+            let local = local.to_string_lossy().into_owned();
+            self.db(move |connection| {
+                store::set_request_result(connection, id, None, Some(&local))
+            })
+            .await?;
+        }
         // 1. Rescan the folder FETCH saves into (or the whole library).
         if let Err(message) = crate::api::library::refresh_root_for_tools(
             library.clone(),
@@ -1363,12 +1381,10 @@ impl UpgradeService {
             .cache()
             .await
             .map_err(|_| ServiceError::NotConfigured("The library is not ready yet."))?;
-        // 2. Old album facts, and the new files.
+        // 2. The album's original copies (never the files FETCH just
+        // saved, which may already be copies of the same tracks), and the
+        // new files.
         let old_album = row.album_id.clone();
-        let old_paths: HashSet<String> = cache
-            .album(&old_album)
-            .map(|album| album.songs.iter().map(|song| song.path.clone()).collect())
-            .unwrap_or_default();
         let folder_text = folder
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned());
@@ -1378,7 +1394,14 @@ impl UpgradeService {
             .map(|(album, artist)| (artist.name.clone(), album.name.clone()));
         let (old_facts, new_facts) = self
             .db(move |connection| {
-                let old = super::files::album_track_facts(connection, &old_album)?;
+                let copies = super::files::album_copy_facts(connection, &old_album)?;
+                let under = |path: &str| {
+                    folder_text
+                        .as_deref()
+                        .is_some_and(|folder| super::files::path_is_under(path, folder))
+                };
+                let old = super::files::original_copies(&copies, under);
+                let old_paths: HashSet<String> = old.iter().map(|fact| fact.path.clone()).collect();
                 let new = match &folder_text {
                     Some(folder) => super::files::facts_under(connection, folder)?,
                     None => match &identity {
@@ -1388,22 +1411,13 @@ impl UpgradeService {
                         None => Vec::new(),
                     },
                 };
+                let new = new
+                    .into_iter()
+                    .filter(|fact| !old_paths.contains(&fact.path))
+                    .collect::<Vec<_>>();
                 Ok((old, new))
             })
             .await?;
-        let new_facts: Vec<TrackFact> = new_facts
-            .into_iter()
-            .filter(|fact| !old_paths.contains(&fact.path))
-            .collect();
-        let old_lossless: HashSet<String> = old_facts
-            .iter()
-            .filter(|fact| super::files::is_lossless_path(&fact.path))
-            .map(|fact| fact.path.clone())
-            .collect();
-        let new_facts: Vec<TrackFact> = new_facts
-            .into_iter()
-            .filter(|fact| !old_lossless.contains(&fact.path))
-            .collect();
         let outcome = match_album(&old_facts, &new_facts);
         // 3. Verify the new lossless files with the spectral check.
         let new_lossless: Vec<String> = outcome
@@ -1710,7 +1724,14 @@ impl UpgradeService {
             Some(worker_id) => worker_id,
             None => {
                 let submitted = if settings.enhancer.shared_paths {
-                    client.submit_path(&job.source_path).await
+                    match client.submit_path(&job.source_path).await {
+                        // The worker cannot see this file at that path: send
+                        // the bytes instead.
+                        Err(EnhancerError::PathRefused | EnhancerError::NotFound) => {
+                            client.submit_upload(&source).await
+                        }
+                        other => other,
+                    }
                 } else {
                     client.submit_upload(&source).await
                 };
@@ -1988,6 +2009,8 @@ impl UpgradeService {
 pub struct AlbumStatus {
     pub album_id: String,
     pub request: Option<RequestView>,
+    /// Tracks on the album.
+    pub track_count: usize,
     /// Tracks that play an AI-enhanced copy now.
     pub enhanced_tracks: usize,
     /// Tracks that have an AI-enhanced copy (playing or not).

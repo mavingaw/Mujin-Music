@@ -110,6 +110,8 @@ export interface UpgradeCandidates {
 export interface AlbumUpgradeStatus {
   album_id: string;
   request: UpgradeRequest | null;
+  /** Tracks on the album. */
+  track_count: number;
   /** Tracks that play an AI-enhanced copy now. */
   enhanced_tracks: number;
   /** Tracks that have an AI-enhanced copy, playing or not. */
@@ -409,6 +411,22 @@ function percent(value: number | null) {
  * One line for the album page and the list, e.g. `Lossless version on its
  * way · 45%`, `Handed to Lidarr`, `Upgraded to lossless`.
  */
+/**
+ * The album line for AI-enhanced copies: `AI-enhanced · 9 of 10 tracks`
+ * while they play, a quieter line when the originals play, else `null`.
+ */
+export function enhancedStatusLabel(
+  status: Pick<
+    AlbumUpgradeStatus,
+    "track_count" | "enhanced_tracks" | "enhanced_copies"
+  >,
+): string | null {
+  if (status.enhanced_copies <= 0) return null;
+  if (status.enhanced_tracks <= 0) return "AI-enhanced copies available";
+  const total = Math.max(status.track_count, status.enhanced_tracks);
+  return `AI-enhanced · ${status.enhanced_tracks} of ${total} tracks`;
+}
+
 export function upgradeStatusLabel(request: UpgradeRequest): string {
   const progress = percent(request.progress);
   switch (request.state) {

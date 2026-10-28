@@ -145,8 +145,12 @@ in** to `/enhanced`. Mujin Music adds that folder to your library by itself.
 - New files go into the enhanced folder (by default "Mujin Enhanced" in your
   first library folder) as 24-bit FLAC with the original tags, cover, and a
   `MUJIN_ENHANCED=apollo-1.0` tag. Originals are never changed.
-- The album page shows **AI-enhanced · 9 of 10 tracks**. Admins can press
-  **Play the originals** to switch back for that album.
+- The album page shows **AI-enhanced · 9 of 10 tracks**, and wherever the
+  format is shown it reads "AI-enhanced", never "FLAC" lossless or
+  "Hi-Res". Admins can press **Play the originals** to switch back for that
+  album.
+- The enhanced copies join the album you already have: its page, your
+  favourites and playlists stay the same.
 - **Prefer AI-enhanced versions** (on by default) decides whether enhanced
   copies play instead of the lossy originals. A real lossless copy always
   plays first.

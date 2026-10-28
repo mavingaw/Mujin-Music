@@ -115,6 +115,7 @@ impl ToolLayers {
         self.hidden_paths.is_empty()
             && self.preferred_files.is_empty()
             && self.marked_copies.is_empty()
+            && !self.marks.has_ai_enhanced()
             && self.user_albums.is_empty()
             && !self
                 .version_choices
@@ -269,6 +270,22 @@ pub fn apply(library: &mut Vec<Artist>, layers: &ToolLayers) -> HashSet<String> 
             {
                 song.path = best.path.clone();
                 song.audio = best.audio.clone();
+            }
+        }
+    }
+
+    // An AI-enhanced copy says so wherever its format is shown, so its
+    // FLAC container is never taken for lossless or hi-res.
+    if layers.marks.has_ai_enhanced() {
+        for song in library
+            .iter_mut()
+            .flat_map(|artist| artist.albums.iter_mut())
+            .flat_map(|album| album.songs.iter_mut())
+        {
+            if let Some(model) = layers.marks.enhanced_model(&song.path) {
+                song.audio
+                    .get_or_insert_with(AudioProperties::default)
+                    .enhanced_by = Some(marks::model_label(model));
             }
         }
     }
@@ -531,5 +548,58 @@ mod tests {
         let albums: Vec<&str> = catalog[0].albums.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(albums, vec!["album", "loose-2"]);
         assert_eq!(catalog[0].albums[0].songs[0].path, "/m/album/a.wav");
+    }
+
+    #[test]
+    fn ai_enhanced_copies_play_when_preferred_and_say_what_they_are() {
+        use super::super::marks::FileMark;
+        let mut catalog = library();
+        let flac = AudioProperties {
+            codec: Some("flac".into()),
+            sample_rate: Some(44_100),
+            bit_depth: Some(24),
+            lossless: Some(true),
+            ..AudioProperties::default()
+        };
+        let mp3 = AudioProperties {
+            codec: Some("mp3".into()),
+            bitrate_kbps: Some(128),
+            lossless: Some(false),
+            ..AudioProperties::default()
+        };
+        let enhanced_path = "/e/loose/c (AI-enhanced).flac".to_string();
+        let layers = ToolLayers {
+            marked_copies: HashMap::from([(
+                "c".to_string(),
+                vec![
+                    PreferredFile {
+                        path: "/m/loose/c.mp3".into(),
+                        audio: Some(mp3),
+                    },
+                    PreferredFile {
+                        path: enhanced_path.clone(),
+                        audio: Some(flac),
+                    },
+                ],
+            )]),
+            marks: std::sync::Arc::new(FileMarks {
+                by_path: HashMap::from([(
+                    enhanced_path.clone(),
+                    FileMark::AiEnhanced {
+                        model: "apollo-1.0".into(),
+                        source_path: "/m/loose/c.mp3".into(),
+                    },
+                )]),
+                prefer_enhanced: true,
+            }),
+            ..ToolLayers::default()
+        };
+        apply(&mut catalog, &layers);
+        let song = &catalog[0].albums[1].songs[0];
+        assert_eq!(song.path, enhanced_path);
+        let audio = song.audio.as_ref().unwrap();
+        assert_eq!(audio.enhanced_by.as_deref(), Some("Apollo"));
+        // Other songs are left alone.
+        assert!(catalog[0].albums[0].songs[0].audio.is_none());
     }
 }

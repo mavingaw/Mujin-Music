@@ -157,17 +157,17 @@ pub fn find_candidates(
             if let Some((tracks, kbps, label)) = low {
                 reasons.push(Reason {
                     kind: ReasonKind::LowBitrate,
-                    label,
+                    label: "Low bitrate".into(),
                     detail: format!(
-                        "{tracks} track(s) at {kbps} kbps or less: clearly audible compression."
+                        "{tracks} track(s) at {kbps} kbps or less ({label}): clearly audible compression."
                     ),
                     tracks,
                 });
             } else if lossy > 0 {
                 reasons.push(Reason {
                     kind: ReasonKind::Lossy,
-                    label: lossy_label,
-                    detail: format!("{lossy} track(s) only in a lossy format."),
+                    label: "Lossy".into(),
+                    detail: format!("{lossy} track(s) only in a lossy format ({lossy_label})."),
                     tracks: lossy,
                 });
             }
@@ -345,7 +345,9 @@ mod tests {
         assert_eq!(low.reasons[0].kind, ReasonKind::LowBitrate);
         let lossy = found.iter().find(|c| c.album_id == "mp3-320").unwrap();
         assert_eq!(lossy.reasons[0].kind, ReasonKind::Lossy);
-        assert_eq!(lossy.reasons[0].label, "MP3 320");
+        assert_eq!(lossy.reasons[0].label, "Lossy");
+        assert!(lossy.reasons[0].detail.contains("MP3 320"));
+        assert_eq!(low.reasons[0].label, "Low bitrate");
         let fake = found.iter().find(|c| c.album_id == "fake").unwrap();
         assert_eq!(fake.reasons[0].kind, ReasonKind::FakeLossless);
         assert_eq!(fake.reasons[0].label, "Fake lossless · 16 kHz");

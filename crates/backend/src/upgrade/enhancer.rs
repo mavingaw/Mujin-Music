@@ -37,6 +37,8 @@ pub const MAX_FILE_BYTES: usize = 1024 * 1024 * 1024;
 pub enum EnhancerError {
     Unreachable(String),
     Unauthorized,
+    /// The worker may not read that path (outside its shared folders).
+    PathRefused,
     NotFound,
     Http(u16),
     Invalid(String),
@@ -51,6 +53,9 @@ impl std::fmt::Display for EnhancerError {
             }
             Self::Unauthorized => f.write_str(
                 "The enhancer did not accept the shared secret. Copy it from the enhancer's window again.",
+            ),
+            Self::PathRefused => f.write_str(
+                "The enhancer may not read that folder. Start it with --shared-root pointing at the music, or turn off \"The enhancer can read the music folders\".",
             ),
             Self::NotFound => f.write_str("The enhancer does not know that job."),
             Self::Http(status) => write!(f, "The enhancer answered with HTTP {status}."),
@@ -248,7 +253,8 @@ impl EnhancerClient {
             })
         })?;
         match response.status() {
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(EnhancerError::Unauthorized),
+            StatusCode::UNAUTHORIZED => Err(EnhancerError::Unauthorized),
+            StatusCode::FORBIDDEN => Err(EnhancerError::PathRefused),
             StatusCode::NOT_FOUND => Err(EnhancerError::NotFound),
             status if !status.is_success() => Err(EnhancerError::Http(status.as_u16())),
             _ => Ok(response),
@@ -513,6 +519,14 @@ mod tests {
 
         let by_path = client.submit_path("/srv/music/a.mp3").await.unwrap();
         assert_eq!(fake.paths(), vec!["/srv/music/a.mp3".to_string()]);
+        // A folder the worker may not read is not a wrong secret.
+        let refused = client.submit_path("/home/someone/b.mp3").await;
+        assert_eq!(refused.unwrap_err(), EnhancerError::PathRefused);
+        assert!(
+            EnhancerError::PathRefused
+                .to_string()
+                .contains("--shared-root")
+        );
         client.cancel(&by_path.id).await.unwrap();
         assert_eq!(client.job(&by_path.id).await, Err(EnhancerError::NotFound));
 

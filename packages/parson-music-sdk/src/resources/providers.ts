@@ -1510,11 +1510,14 @@ export function localAlbumFormat(
   for (const song of songs) {
     const audio = song.audio;
     if (!audio?.codec) continue;
-    const lossless = audio.lossless === true;
+    // An AI-enhanced copy is never compared as lossless.
+    const lossless = audio.lossless === true && !audio.enhanced_by;
     const codec = audio.codec.toUpperCase();
-    const label = lossless
-      ? `${audio.bit_depth ?? 16}/${formatKhz(audio.sample_rate ?? 44_100)} ${codec}`
-      : `${codec} ${audio.bitrate_kbps ?? ""}`.trim();
+    const label = audio.enhanced_by
+      ? `AI-enhanced (${audio.enhanced_by})`
+      : lossless
+        ? `${audio.bit_depth ?? 16}/${formatKhz(audio.sample_rate ?? 44_100)} ${codec}`
+        : `${codec} ${audio.bitrate_kbps ?? ""}`.trim();
     const format = {
       lossless,
       bit_depth: audio.bit_depth,

@@ -50,6 +50,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+  candidateBadges,
   candidateFilterLabels,
   canRequest,
   matchesFilter,
@@ -163,6 +164,7 @@ function CandidateRow({
     }
   };
   const search = candidate.search;
+  const badges = candidateBadges(candidate);
   return (
     <li
       className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-b border-white/[0.05] px-1 py-3 last:border-0 sm:grid-cols-[auto_auto_minmax(0,1.3fr)_minmax(0,1fr)_auto]"
@@ -191,13 +193,13 @@ function CandidateRow({
         </p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           <QualityBadge quality={candidate.quality} />
-          {candidate.reasons.map((reason) => (
+          {badges.reasons.map((reason) => (
             <ReasonBadge key={reason.kind} reason={reason} />
           ))}
-          {candidate.enhanced_tracks > 0 && (
+          {badges.enhancedCount && (
             <span className="inline-flex h-5 items-center gap-1 rounded-full border border-quality-enhanced/40 px-2 text-[11px] font-medium text-quality-enhanced">
               <Sparkles className="h-3 w-3" />
-              {candidate.enhanced_tracks} AI-enhanced
+              {badges.enhancedCount}
             </span>
           )}
         </div>
@@ -300,27 +302,28 @@ function CandidateRow({
                 <Search />
               )}
             </Button>
-            {enhancerEnabled && (
-              <Button
-                disabled={busy !== null}
-                onClick={() =>
-                  run("enhance", async () => {
-                    const queued = await enhanceWithAi({
-                      albumIds: [candidate.album_id],
-                    });
-                    return queued
-                      ? `${queued} track(s) queued for AI enhancement`
-                      : "Nothing to enhance: every track has a copy already";
-                  })
-                }
-                size="sm"
-                title="Make an AI-enhanced copy. The original stays."
-                variant="ghost"
-              >
-                <Sparkles />
-                Enhance
-              </Button>
-            )}
+            {enhancerEnabled &&
+              candidate.enhanced_tracks < candidate.track_count && (
+                <Button
+                  disabled={busy !== null}
+                  onClick={() =>
+                    run("enhance", async () => {
+                      const queued = await enhanceWithAi({
+                        albumIds: [candidate.album_id],
+                      });
+                      return queued
+                        ? `${queued} track(s) queued for AI enhancement`
+                        : "Nothing to enhance: every track has a copy already";
+                    })
+                  }
+                  size="sm"
+                  title="Make an AI-enhanced copy. The original stays."
+                  variant="ghost"
+                >
+                  <Sparkles />
+                  Enhance
+                </Button>
+              )}
             <Button
               disabled={
                 busy !== null || !fetchEnabled || !canRequest(candidate)
@@ -565,6 +568,7 @@ export function BetterVersionsPanel() {
                       : "Nothing to enhance: ask FETCH first, then enhance what it could not find";
                   })
                 }
+                className="h-auto min-h-10 whitespace-normal text-left"
                 variant="secondary"
               >
                 <Sparkles />

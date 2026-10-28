@@ -482,7 +482,11 @@ export function describeAudioFormat(
   if (audio.channels) parts.push(`${audio.channels}ch`);
   if (audio.lossless !== true && audio.bitrate_kbps)
     parts.push(`${audio.bitrate_kbps}kbps`);
+  // An AI-enhanced copy is a FLAC of generated treble: never lossless or
+  // hi-res, and it says so.
+  const enhanced = Boolean(audio.enhanced_by);
   const highRes =
+    !enhanced &&
     audio.lossless === true &&
     ((audio.sample_rate ?? 0) > 48_000 || (audio.bit_depth ?? 0) > 16);
   return {
@@ -492,9 +496,11 @@ export function describeAudioFormat(
     bit_depth: audio.bit_depth,
     channels: audio.channels,
     bitrate_kbps: audio.bitrate_kbps,
-    lossless: audio.lossless,
+    lossless: enhanced ? false : audio.lossless,
     high_res: highRes,
-    summary: parts.join(" "),
+    summary: enhanced
+      ? `AI-enhanced (${audio.enhanced_by}) · ${parts.join(" ")}`
+      : parts.join(" "),
   };
 }
 
@@ -502,6 +508,7 @@ export function describeAudioFormat(
 export function sourceQuality(
   audio: AudioProperties | null | undefined,
 ): SignalQuality | null {
+  if (audio?.enhanced_by) return "enhanced";
   if (!audio || audio.lossless === null || audio.lossless === undefined)
     return null;
   return audio.lossless ? "lossless" : "low_quality";
@@ -1255,8 +1262,15 @@ export function describeCollectionFormat(
     }
     quality = quality ? worseQuality(quality, next) : next;
   }
+  const enhanced = known.filter((audio) => audio.enhanced_by).length;
+  const prefix =
+    enhanced === 0
+      ? ""
+      : enhanced === known.length
+        ? "AI-enhanced · "
+        : "Partly AI-enhanced · ";
   return {
-    summary: parts.join(" "),
+    summary: prefix + parts.join(" "),
     quality,
     highRes: known.some(
       (audio) => describeAudioFormat(audio)?.high_res === true,

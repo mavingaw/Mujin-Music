@@ -135,8 +135,12 @@ fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-/// "FLAC 24/96", "ALAC 16/44.1", "MP3 320" or `None` when unknown.
+/// "FLAC 24/96", "ALAC 16/44.1", "MP3 320", "AI-enhanced (Apollo)" or
+/// `None` when unknown.
 pub fn quality_label(audio: &AudioProperties) -> Option<String> {
+    if let Some(model) = &audio.enhanced_by {
+        return Some(format!("AI-enhanced ({model})"));
+    }
     let codec = audio
         .codec
         .as_deref()
@@ -181,7 +185,7 @@ fn album_quality(album: &Album) -> Option<String> {
         .filter_map(|song| song.audio.as_ref())
         .max_by_key(|audio| {
             (
-                audio.lossless == Some(true),
+                audio.lossless == Some(true) && audio.enhanced_by.is_none(),
                 audio.bit_depth.unwrap_or(0),
                 audio.sample_rate.unwrap_or(0),
                 audio.bitrate_kbps.unwrap_or(0),

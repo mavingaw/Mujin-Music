@@ -25,5 +25,7 @@ LICENSE
 # TrueNAS app templates contain Jinja directives and are not plain YAML.
 distribution/truenas/ix-dev/community/parson/templates/docker-compose.yaml
 
-# The enhancer worker's local Python environment.
+# The enhancer worker's local Python environment and caches.
 tools/enhancer/.venv/
+tools/enhancer/.pytest_cache/
+tools/enhancer/.ruff_cache/

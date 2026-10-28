@@ -2443,6 +2443,7 @@ mod reliability_tests {
                 channels: Some(2),
                 bitrate_kbps: Some(2_800),
                 lossless: Some(true),
+                enhanced_by: None,
             }),
             ..Song::default()
         };
@@ -4237,6 +4238,7 @@ mod delivery_tests {
                 channels: Some(2),
                 bitrate_kbps: None,
                 lossless: Some(true),
+                enhanced_by: None,
             }),
             ..crate::domain::Song::default()
         };
@@ -4309,6 +4311,7 @@ mod delivery_tests {
             channels: Some(2),
             bitrate_kbps: None,
             lossless: Some(true),
+            enhanced_by: None,
         };
         let browser = OutputCapabilities::from_query(Some("flac,mp3,opus"), None, None, None, None);
         let (cache, live) = convert(&directory, &input, audio, &browser).await;
@@ -4365,6 +4368,7 @@ mod delivery_tests {
             channels: Some(2),
             bitrate_kbps: None,
             lossless: Some(true),
+            enhanced_by: None,
         };
         let browser = OutputCapabilities::from_query(Some("flac,mp3"), None, None, None, None);
         let (cache, _) = convert(&directory, &input, audio, &browser).await;
@@ -4431,6 +4435,7 @@ mod delivery_tests {
                 channels: Some(2),
                 bitrate_kbps: None,
                 lossless: Some(true),
+                enhanced_by: None,
             }),
             ..Default::default()
         };

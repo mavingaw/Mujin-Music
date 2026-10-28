@@ -154,6 +154,9 @@ describe("facts and formats", () => {
     );
     expect(formatAudio(mp3)).toBe("MP3 320 kbps");
     expect(
+      formatAudio({ ...flac, sample_rate: 44100, enhanced_by: "Apollo" }),
+    ).toBe("AI-enhanced (Apollo), FLAC 44.1 kHz");
+    expect(
       albumFormat([{ audio: flac }, { audio: flac }, { audio: mp3 }]),
     ).toBe("FLAC 96 kHz 24-bit");
     expect(albumFormat([{ audio: flac }, { audio: mp3 }])).toBe(

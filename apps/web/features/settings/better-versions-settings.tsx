@@ -348,14 +348,14 @@ function SettingsForm({ view }: { view: UpgradeSettingsView }) {
                 label="CF-Access-Client-Id"
                 name="cf_access_client_id"
                 onChanged={refresh}
-                placeholder="CF-Access-Client-Id"
+                placeholder="Client ID"
                 saved={saved.has("cf_access_client_id")}
               />
               <SecretField
                 label="CF-Access-Client-Secret"
                 name="cf_access_client_secret"
                 onChanged={refresh}
-                placeholder="CF-Access-Client-Secret"
+                placeholder="Client secret"
                 saved={saved.has("cf_access_client_secret")}
               />
             </div>
@@ -558,22 +558,26 @@ function SettingsForm({ view }: { view: UpgradeSettingsView }) {
         </div>
       </section>
 
-      <div className="sticky bottom-24 flex items-center justify-end gap-3 rounded-xl border border-white/[0.07] bg-mujin-raised/95 p-3 backdrop-blur">
-        <p className="mr-auto text-xs text-zinc-500">
+      {dirty ? (
+        <div className="sticky bottom-24 z-10 flex flex-wrap items-center justify-end gap-3 rounded-xl border border-white/[0.07] bg-mujin-raised/95 p-3 shadow-lg backdrop-blur">
+          <p className="mr-auto text-xs text-zinc-400">Unsaved changes</p>
+          <Button
+            disabled={saving}
+            onClick={() => setDraft(view.settings)}
+            variant="ghost"
+          >
+            Undo
+          </Button>
+          <Button disabled={saving} onClick={() => void save()}>
+            {saving && <Loader2 className="animate-spin" />}
+            Save
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-500">
           Tokens are saved on the server, encrypted, and never shown again.
         </p>
-        <Button
-          disabled={!dirty || saving}
-          onClick={() => setDraft(view.settings)}
-          variant="ghost"
-        >
-          Undo
-        </Button>
-        <Button disabled={!dirty || saving} onClick={() => void save()}>
-          {saving && <Loader2 className="animate-spin" />}
-          Save
-        </Button>
-      </div>
+      )}
     </div>
   );
 }

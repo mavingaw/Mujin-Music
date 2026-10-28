@@ -67,6 +67,12 @@ impl FileMarks {
         matches!(self.get(path), Some(FileMark::FakeLossless { .. }))
     }
 
+    pub fn has_ai_enhanced(&self) -> bool {
+        self.by_path
+            .values()
+            .any(|mark| matches!(mark, FileMark::AiEnhanced { .. }))
+    }
+
     /// The enhancer model that made `path`, e.g. `apollo-1.0`.
     pub fn enhanced_model(&self, path: &str) -> Option<&str> {
         match self.get(path) {

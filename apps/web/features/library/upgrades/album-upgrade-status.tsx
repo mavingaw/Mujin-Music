@@ -4,6 +4,7 @@ import { useSession } from "@/features/account/session-provider";
 import { invalidateCatalogRevisionQueries } from "@/features/library/library-readiness-state";
 import { getApiErrorMessage } from "@/features/library/tools/tool-errors";
 import {
+  enhancedStatusLabel,
   getAlbumUpgradeStatus,
   isUpgradeOpen,
   playOriginalsForAlbum,
@@ -98,9 +99,7 @@ export function AlbumUpgradeStatus({ albumId }: { albumId: string }) {
           title="Restored by the AI enhancer: plausible treble, not the original master."
         >
           <Sparkles className="h-3.5 w-3.5" />
-          {playingEnhanced
-            ? `AI-enhanced · ${data.enhanced_tracks} of ${data.enhanced_copies} tracks`
-            : "AI-enhanced copies available"}
+          {enhancedStatusLabel(data)}
         </span>
       )}
       {hasEnhanced && isAdmin && (

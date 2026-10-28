@@ -54,6 +54,7 @@ fn library(directory: &std::path::Path) -> LibraryCache {
                 channels: Some(2),
                 bitrate_kbps: Some(320),
                 lossless: Some(false),
+                enhanced_by: None,
             }),
             ..Song::default()
         });
@@ -1380,6 +1381,7 @@ fn set_audio(
         channels: Some(2),
         bitrate_kbps: None,
         lossless: Some(bit_depth.is_some()),
+        enhanced_by: None,
     });
 }
 
@@ -1855,6 +1857,7 @@ async fn leveled_sonos_stream_reaches_the_target_loudness() {
             channels: Some(1),
             bitrate_kbps: None,
             lossless: Some(true),
+            enhanced_by: None,
         });
     }
     let lifecycle = Arc::new(LibraryLifecycle::new());
@@ -2009,6 +2012,7 @@ async fn sonos_gets_ogg_and_opus_as_24_bit_flac() {
             channels: Some(1),
             bitrate_kbps: Some(128),
             lossless: Some(false),
+            enhanced_by: None,
         });
     }
     let lifecycle = Arc::new(LibraryLifecycle::new());

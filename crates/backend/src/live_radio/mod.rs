@@ -758,6 +758,7 @@ impl LiveRadio {
             duration: 0.0,
             audio: Some(crate::domain::AudioProperties {
                 lossless: codec.as_deref().map(station::codec_is_lossless),
+                enhanced_by: None,
                 codec,
                 container: format.map(|format| format.container.as_str().to_string()),
                 sample_rate: format.and_then(|format| format.sample_rate),

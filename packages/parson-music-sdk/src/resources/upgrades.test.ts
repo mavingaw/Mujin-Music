@@ -3,6 +3,7 @@ import api from "../core/http";
 import {
   checkForFakeLossless,
   enhanceWithAi,
+  enhancedStatusLabel,
   fetchQueryPreview,
   getAlbumUpgradeStatus,
   isUpgradeOpen,
@@ -42,7 +43,7 @@ function request(overrides: Partial<UpgradeRequest>): UpgradeRequest {
   };
 }
 
-test("status lines say what the owner asked for", () => {
+test("status lines name the download state, progress and app", () => {
   expect(upgradeStatusLabel(request({}))).toBe(
     "Lossless version on its way · 45%",
   );
@@ -61,6 +62,15 @@ test("status lines say what the owner asked for", () => {
   expect(upgradeProgressDetail(request({}))).toBe("3.2 MB/s · 1m 10s left");
   expect(isUpgradeOpen("handed_off")).toBeTrue();
   expect(isUpgradeOpen("upgraded")).toBeFalse();
+});
+
+test("the AI-enhanced line counts the album's tracks", () => {
+  const counts = { track_count: 10, enhanced_tracks: 9, enhanced_copies: 9 };
+  expect(enhancedStatusLabel(counts)).toBe("AI-enhanced · 9 of 10 tracks");
+  expect(enhancedStatusLabel({ ...counts, enhanced_tracks: 0 })).toBe(
+    "AI-enhanced copies available",
+  );
+  expect(enhancedStatusLabel({ ...counts, enhanced_copies: 0 })).toBeNull();
 });
 
 test("the query preview matches the server's FETCH text", () => {
@@ -105,6 +115,7 @@ test("requests, secrets and checks use the admin endpoints", async () => {
     ok({
       album_id: "a/b",
       request: null,
+      track_count: 3,
       enhanced_tracks: 0,
       enhance_queued: 0,
     }),

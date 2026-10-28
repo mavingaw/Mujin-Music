@@ -82,6 +82,16 @@ test("audio badges summarise lossless depth and rate or lossy bitrate", () => {
   expect(
     audioBadge({ ...base, codec: "mp3", bitrate_kbps: 320, lossless: false }),
   ).toBe("MP3 320");
+  expect(
+    audioBadge({
+      ...base,
+      codec: "flac",
+      bit_depth: 24,
+      sample_rate: 44_100,
+      lossless: true,
+      enhanced_by: "Apollo",
+    }),
+  ).toBe("AI-enhanced");
   expect(audioBadge(null)).toBeNull();
 });
 

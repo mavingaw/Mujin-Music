@@ -282,6 +282,11 @@ impl FakeEnhancer {
                             .ok()
                             .and_then(|value| value.get("path")?.as_str().map(str::to_string))
                             .unwrap_or_default();
+                        // Like the worker: only files under its shared roots.
+                        if !path.starts_with("/srv/music/") {
+                            return HttpResponse::Forbidden()
+                                .json(json!({"detail": "path outside the shared folders"}));
+                        }
                         state.paths.push(path);
                     } else {
                         state.uploads.push(body.len());

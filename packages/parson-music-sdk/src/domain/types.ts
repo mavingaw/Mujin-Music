@@ -69,6 +69,11 @@ export interface AudioProperties {
   bitrate_kbps: number | null;
   /** `null` when the codec is unknown. */
   lossless: boolean | null;
+  /**
+   * Set on AI-enhanced copies (the model, e.g. `Apollo`): generated treble
+   * in a FLAC container, never shown as lossless or hi-res.
+   */
+  enhanced_by?: string | null;
 }
 
 /**

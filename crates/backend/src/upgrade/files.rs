@@ -102,6 +102,40 @@ pub fn album_track_facts(
         .collect())
 }
 
+/// Every available file of an album's tracks, every copy.
+pub fn album_copy_facts(
+    connection: &mut SqliteConnection,
+    album_id: &str,
+) -> QueryResult<Vec<TrackFact>> {
+    let rows = diesel::sql_query(format!(
+        "{FACT_QUERY} AND te.album_id = ? ORDER BY tf.is_primary DESC, fe.path"
+    ))
+    .bind::<Text, _>(album_id)
+    .load::<FactRow>(connection)?;
+    Ok(facts(rows))
+}
+
+/// Whether `path` lies inside `folder`.
+pub fn path_is_under(path: &str, folder: &str) -> bool {
+    let folder = folder.trim_end_matches(['/', '\\']);
+    path.len() > folder.len()
+        && path.starts_with(folder)
+        && matches!(path.as_bytes()[folder.len()], b'/' | b'\\')
+}
+
+/// One original copy per track: never one `excluded` (where FETCH saved),
+/// a lossy copy before a lossless one, as an upgrade replaces the lossy.
+pub fn original_copies(copies: &[TrackFact], excluded: impl Fn(&str) -> bool) -> Vec<TrackFact> {
+    let mut sorted: Vec<&TrackFact> = copies.iter().filter(|fact| !excluded(&fact.path)).collect();
+    sorted.sort_by_key(|fact| is_lossless_path(&fact.path));
+    let mut seen = std::collections::HashSet::new();
+    sorted
+        .into_iter()
+        .filter(|fact| seen.insert(fact.track_id.clone()))
+        .cloned()
+        .collect()
+}
+
 /// Escapes `%`, `_` and `\` for a `LIKE ... ESCAPE '\'` prefix.
 fn like_prefix(folder: &str) -> String {
     let mut escaped = String::with_capacity(folder.len() + 2);
@@ -275,6 +309,17 @@ mod tests {
         let like = facts_like_album(&mut connection, "Rise Against", "Endgame (Deluxe)").unwrap();
         assert_eq!(like.len(), 2);
         assert!(is_lossless_path("/a/b.FLAC"));
+        // The FETCH folder's FLAC is a copy of the same track: the
+        // original is the MP3 outside it.
+        let copies = album_copy_facts(&mut connection, "old").unwrap();
+        assert_eq!(copies.len(), 2);
+        let originals = original_copies(&copies, |path| {
+            path_is_under(path, "/m/Rise Against/Endgame")
+        });
+        assert_eq!(originals.len(), 1);
+        assert_eq!(originals[0].path, "/m/mp3/1.mp3");
+        assert!(path_is_under("/m/a/b.flac", "/m/a/"));
+        assert!(!path_is_under("/m/ab/c.flac", "/m/a"));
         assert!(!is_lossless_path("/a/b.mp3"));
     }
 }

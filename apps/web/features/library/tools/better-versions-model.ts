@@ -6,15 +6,15 @@ import {
 } from "@parson/music-sdk";
 
 /**
- * Reason badge colours follow the signal-path light: a fake lossless file
- * and low bitrates sit with the low-quality grey (the light dims rather
- * than alarms), AI-enhanced takes the enhanced blue, and CD quality the
- * lossless copper it already is.
+ * Reason badge colours follow the signal-path light: lossy reasons sit with
+ * the low-quality grey (the light dims rather than alarms; a fake lossless
+ * file is a brighter grey so it still stands out), AI-enhanced takes the
+ * enhanced blue, and CD quality the lossless copper it already is.
  */
 export const reasonColors: Record<UpgradeReasonKind, string> = {
   lossy: "var(--color-quality-low)",
   low_bitrate: "var(--color-quality-low)",
-  fake_lossless: "var(--color-quality-clipping)",
+  fake_lossless: "var(--color-mujin-text-secondary)",
   ai_enhanced_only: "var(--color-quality-enhanced)",
   cd_quality: "var(--color-mujin-copper)",
 };
@@ -62,6 +62,25 @@ export function matchesFilter(
   }
 }
 
+/**
+ * Badges for a row without saying the same thing twice: when the copy that
+ * plays is AI-enhanced, its quality badge already says so, and the track
+ * count only shows while some tracks are still the lossy originals.
+ */
+export function candidateBadges(candidate: UpgradeCandidate) {
+  const enhancedQuality = candidate.quality.tier === "ai_enhanced";
+  return {
+    reasons: candidate.reasons.filter(
+      (reason) => !(enhancedQuality && reason.kind === "ai_enhanced_only"),
+    ),
+    enhancedCount:
+      candidate.enhanced_tracks > 0 &&
+      candidate.enhanced_tracks < candidate.track_count
+        ? `${candidate.enhanced_tracks} of ${candidate.track_count} AI-enhanced`
+        : null,
+  };
+}
+
 /** A request can be made unless one is already on its way. */
 export function canRequest(candidate: UpgradeCandidate): boolean {
   return !candidate.request || !isUpgradeOpen(candidate.request.state);
@@ -84,7 +103,7 @@ export function requestColor(request: UpgradeRequest): string {
       return "var(--color-quality-lossless)";
     case "fake_lossless":
     case "failed":
-      return "var(--color-quality-clipping)";
+      return "var(--color-mujin-text-secondary)";
     case "no_match":
     case "not_found":
     case "cancelled":

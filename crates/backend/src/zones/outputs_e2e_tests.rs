@@ -130,6 +130,7 @@ fn song(id: &str, path: &Path, seconds: f64, codec: &str, rate: u32, bits: Optio
             channels: Some(2),
             bitrate_kbps: None,
             lossless: Some(codec == "flac"),
+            enhanced_by: None,
         }),
         ..Song::default()
     }

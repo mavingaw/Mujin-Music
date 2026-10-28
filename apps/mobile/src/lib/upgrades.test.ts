@@ -27,6 +27,7 @@ const status = (
 ): AlbumUpgradeStatus => ({
   album_id: "a",
   request: null,
+  track_count: 10,
   enhanced_tracks: 0,
   enhanced_copies: 0,
   enhance_queued: 0,
@@ -36,7 +37,7 @@ const status = (
 test("the album line shows a download on its way and AI copies", () => {
   expect(upgradeChips(undefined)).toEqual([]);
   const chips = upgradeChips(
-    status({ request: request({}), enhanced_tracks: 3, enhanced_copies: 10 }),
+    status({ request: request({}), enhanced_tracks: 3, enhanced_copies: 3 }),
   );
   expect(chips.map((chip) => chip.label)).toEqual([
     "Lossless version on its way · 45%",
