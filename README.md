@@ -43,13 +43,16 @@ and open source:
   Spotify, Apple Music, YouTube Music and Deezer.
 - Profiles, Last.fm and ListenBrainz scrobbling, a Home Assistant
   integration, away-from-home access, backups and library tools.
+- Better versions: lossless copies of lossy albums from FETCH, your own
+  download manager, and clearly labelled AI-enhanced copies of the rest from
+  a self-hosted Apollo enhancer.
 - A dark, gallery-style design with timed lyrics, a display mode for TVs and
   tablets, and six theme presets (Mujin Dark and Light, Material You, Frosted
   Glass, OLED Black, High Contrast) with full appearance settings that follow
   your profile to every device.
 
-Read the full write-up, including how it was tested, what is coming next and
-the known limitations, in [docs/mujin-music.md](docs/mujin-music.md).
+Read the full write-up, including how it was tested and the known
+limitations, in [docs/mujin-music.md](docs/mujin-music.md).
 
 Roon is a trademark of Roon Labs; Mujin Music is not affiliated with or
 endorsed by Roon Labs.

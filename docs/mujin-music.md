@@ -108,6 +108,28 @@ free, open source and entirely on your own hardware.
   thumbs, grouping and transfer. It pairs with a six-digit code and talks to
   your server directly, never through a cloud.
 
+### Better versions and AI enhance
+
+- **Better versions** (Library tools) lists albums you only have as MP3s,
+  low-bitrate files, or "lossless" files that were really made from MP3s.
+  A spectrum check spots those fake lossless files.
+- It asks **FETCH**, your own download manager, for a real lossless copy:
+  one album at a time or several at once, with the exact request shown
+  before it is sent. The album page shows the download ("Lossless version on
+  its way · 45%"). When the copy arrives, Mujin Music checks that it is the
+  same album and really lossless, then plays it instead. The old copy stays
+  as an alternate version; nothing is deleted.
+- **AI enhance** sends lossy tracks to the **enhancer**, a small program you
+  run on your own PC with the graphics card (Windows launcher or Docker).
+  It uses the Apollo model to restore some of the treble MP3 compression
+  removed and saves new 24-bit FLAC copies beside the originals. These are
+  always labelled **AI-enhanced**, never lossless, and a real lossless copy
+  always plays first.
+- With a fast enough graphics card, a zone can enhance lossy tracks **in
+  real time** (experimental); the signal path then shows "AI-enhanced
+  (Apollo)".
+- Setup and details: [Better versions and AI enhance](better-versions.md).
+
 ### Look and packaging
 
 - **The Mujin Music identity**: the Ensō Signal logo (whose dot follows the
@@ -188,6 +210,9 @@ model, working in Claude Code at the owner's direction; the commits say so.
   stations and their directory, TIDAL or Qobuz if you sign in, the playlist
   services you connect, Last.fm or ListenBrainz if you connect them, and the
   desktop app's update check against this repository's releases.
+- FETCH and the AI enhancer are your own programs on your own network. The
+  enhancer downloads the Apollo model once (or you copy the file in by hand)
+  and after that never connects to the internet.
 
 ## Install
 
@@ -215,13 +240,6 @@ version is tagged.
 
 The user guide is in [apps/site/content/docs](../apps/site/content/docs).
 
-## Coming next
-
-These are being worked on and are **not** in the current code yet:
-
-- **FETCH**: finds better (lossless) versions of music you already have.
-- **Apollo**: a self-hosted AI enhancer.
-
 ## Known limitations
 
 - **Credits and metadata are still behind Roon.** Roon licenses editorial
@@ -238,6 +256,10 @@ These are being worked on and are **not** in the current code yet:
   audio streaming. Spotify needs your own client id; Apple Music needs a
   developer token.
 - **AirPlay 2-only speakers are not supported**; AirPlay 1 receivers are.
+- **Better versions and AI enhance were tested against stand-ins.** FETCH
+  and the enhancer were replaced by local fakes that speak their HTTP APIs;
+  a real FETCH, the Apollo model on a graphics card, the Windows launcher
+  and the Docker images have not been run yet.
 - **No iOS build yet.** CI builds the Android app only.
 - **Internal names still say "parson"** (crate names, `PARSON_*` settings,
   data folders, the `_parson._tcp` network service), so existing installs and
