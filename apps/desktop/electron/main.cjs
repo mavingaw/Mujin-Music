@@ -29,7 +29,7 @@ const {
   isTrustedBackendManifest,
 } = require("./backend-trust.cjs");
 const { classifyStartupFailure } = require("./failure-state.cjs");
-const { createUpdates, updateSupport } = require("./updates.cjs");
+const { createUpdates, releasePage, updateSupport } = require("./updates.cjs");
 const { browse } = require("./mdns.cjs");
 const {
   applyWindowMaterial,
@@ -1289,6 +1289,7 @@ if (primary) {
         updater: unsupported ? null : require("electron-updater").autoUpdater,
         version: app.getVersion(),
         unsupported,
+        releaseUrl: releasePage(metadata),
         publish: (state) => {
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send("parson:updates", state);

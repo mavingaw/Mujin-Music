@@ -10,7 +10,7 @@ const {
 
 const buildScript = path.resolve(__dirname, "../scripts/build.cjs");
 
-function packagingArguments(platform, architecture) {
+function packagingArguments(platform, architecture, environment = {}) {
   let arguments;
   let buildEnvironment;
   const mockedRequire = (name) => {
@@ -42,6 +42,7 @@ function packagingArguments(platform, architecture) {
       env: {
         PARSON_BUILD_PLATFORM: platform,
         PARSON_BUILD_ARCH: architecture,
+        ...environment,
       },
     },
   });
@@ -70,6 +71,41 @@ for (const architecture of ["x64", "arm64"]) {
     assert.equal(options.publish, "never");
   });
 }
+
+test("the update feed follows MUJIN_RELEASES_BASE", () => {
+  for (const platform of ["win32", "darwin"]) {
+    const github = packagingArguments(platform, "x64");
+    assert.equal(
+      github.config.publish.url,
+      "https://github.com/mavingaw/Mujin-Music/releases/latest/download",
+    );
+    assert.equal(
+      github.config.extraMetadata.parsonUpdates.releasePage,
+      "https://github.com/mavingaw/Mujin-Music/releases/latest",
+    );
+    const gitea = packagingArguments(platform, "arm64", {
+      MUJIN_RELEASES_BASE:
+        "https://git.example.test/owner/Mujin-Music/releases",
+    });
+    assert.equal(
+      gitea.config.publish.url,
+      "https://git.example.test/owner/Mujin-Music/releases/download/latest",
+    );
+    assert.equal(
+      gitea.config.extraMetadata.parsonUpdates.releasePage,
+      "https://git.example.test/owner/Mujin-Music/releases/latest",
+    );
+  }
+  assert.throws(() =>
+    packagingArguments("win32", "x64", {
+      MUJIN_RELEASES_BASE:
+        "http://192.168.1.58:3002/owner/Mujin-Music/releases",
+    }),
+  );
+  // electron-updater's generic provider reads latest*.yml from that folder.
+  const metadata = require("../package.json");
+  assert.equal(metadata.build.publish.provider, "generic");
+});
 
 test("every shipped desktop file is packaged", () => {
   const { readdirSync } = require("node:fs");

@@ -4,6 +4,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["MUJIN_RELEASES_BASE"],
       "outputs": [".next/**", "!.next/cache/**"]
     },
     "dev": {

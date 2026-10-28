@@ -1,4 +1,22 @@
 const updateErrorMessage = "Could not check or download the update. Try again.";
+// Builds record their own release page (MUJIN_RELEASES_BASE at build time,
+// see scripts/build.cjs); older builds and development runs use this one.
+const defaultReleaseUrl =
+  "https://github.com/mavingaw/Mujin-Music/releases/latest";
+
+/** The release page a build was packaged for, if it is a safe link. */
+function releasePage(metadata) {
+  const configured = metadata?.parsonUpdates?.releasePage;
+  if (typeof configured !== "string") {
+    return defaultReleaseUrl;
+  }
+  try {
+    const url = new URL(configured);
+    return url.protocol === "https:" ? url.href : defaultReleaseUrl;
+  } catch {
+    return defaultReleaseUrl;
+  }
+}
 
 function updateSupport({ packaged, platform, environment, macSigned }) {
   if (!packaged) {
@@ -23,12 +41,13 @@ function createUpdates({
   publish,
   stopBackend,
   restartBackend,
+  releaseUrl = defaultReleaseUrl,
 }) {
   let state = {
     status: unsupported ? "manual" : "idle",
     version,
     message: unsupported || "",
-    releaseUrl: "https://github.com/mavingaw/Mujin-Music/releases/latest",
+    releaseUrl,
   };
   let checking = null;
   let installing = false;
@@ -120,4 +139,4 @@ function createUpdates({
   return { state: () => state, check, install };
 }
 
-module.exports = { createUpdates, updateSupport };
+module.exports = { createUpdates, releasePage, updateSupport };

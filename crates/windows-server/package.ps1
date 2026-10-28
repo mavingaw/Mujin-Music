@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+. (Join-Path $PSScriptRoot "releases-base.ps1")
 
 $packagePath = Join-Path $workspace "package.json"
 $packageVersion = (Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json).version
@@ -68,7 +69,7 @@ $hash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerIn
 $size = (Get-Item -LiteralPath $executable).Length
 $manifest = [ordered]@{
     version = $Version
-    url = "https://github.com/mavingaw/Mujin-Music/releases/download/v$Version/ParsonMusicServer.exe"
+    url = "$(Get-ReleasesBase)/download/v$Version/ParsonMusicServer.exe"
     sha256 = $hash
     size = $size
 } | ConvertTo-Json

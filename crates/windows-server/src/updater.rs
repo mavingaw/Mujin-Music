@@ -13,9 +13,14 @@ use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/mavingaw/Mujin-Music/releases/latest/download/windows-server-update.json";
-const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/mavingaw/Mujin-Music/releases/download/";
+/// The releases page this build updates from: `MUJIN_RELEASES_BASE` at
+/// build time, such as `https://git.example.com/owner/repo/releases`.
+/// tools/releases-base.cjs derives the desktop app's URLs by the same rules.
+const DEFAULT_RELEASES_BASE: &str = "https://github.com/mavingaw/Mujin-Music/releases";
+const CONFIGURED_RELEASES_BASE: &str = match option_env!("MUJIN_RELEASES_BASE") {
+    Some(base) => base,
+    None => DEFAULT_RELEASES_BASE,
+};
 const MAX_UPDATE_BYTES: u64 = 128 * 1024 * 1024;
 const SYNCHRONIZE_PROCESS: u32 = 0x0010_0000;
 
@@ -33,8 +38,37 @@ pub enum UpdateCheck {
     Available(UpdateManifest),
 }
 
+fn releases_base() -> &'static str {
+    let base = CONFIGURED_RELEASES_BASE.trim().trim_end_matches('/');
+    if base.is_empty() {
+        DEFAULT_RELEASES_BASE
+    } else {
+        base
+    }
+}
+
+/// The folder holding the newest stable release's files: GitHub serves it
+/// at `<base>/latest/download`, Gitea and Forgejo at `<base>/download/latest`.
+fn latest_download_base(base: &str) -> String {
+    if base.starts_with("https://github.com/") {
+        format!("{base}/latest/download")
+    } else {
+        format!("{base}/download/latest")
+    }
+}
+
+/// Every official update is a file of a tagged release under this prefix.
+fn release_download_prefix(base: &str) -> String {
+    format!("{base}/download/")
+}
+
+fn default_manifest_url(base: &str) -> String {
+    format!("{}/windows-server-update.json", latest_download_base(base))
+}
+
 pub fn manifest_url() -> String {
-    std::env::var("PARSON_UPDATE_MANIFEST_URL").unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string())
+    std::env::var("PARSON_UPDATE_MANIFEST_URL")
+        .unwrap_or_else(|_| default_manifest_url(releases_base()))
 }
 
 pub fn check(client: &Client, manifest_url: &str) -> Result<UpdateCheck, String> {
@@ -160,6 +194,16 @@ pub fn client() -> Result<Client, String> {
 }
 
 fn validate_manifest(manifest: &UpdateManifest, manifest_url: &str) -> Result<(), String> {
+    let custom_channel = std::env::var_os("PARSON_UPDATE_MANIFEST_URL").is_some();
+    validate_manifest_from(manifest, manifest_url, releases_base(), custom_channel)
+}
+
+fn validate_manifest_from(
+    manifest: &UpdateManifest,
+    manifest_url: &str,
+    releases_base: &str,
+    custom_channel: bool,
+) -> Result<(), String> {
     Version::parse(&manifest.version).map_err(|_| "update version is invalid".to_string())?;
     if manifest.size == 0 || manifest.size > MAX_UPDATE_BYTES {
         return Err("update size is outside the allowed range".to_string());
@@ -168,14 +212,36 @@ fn validate_manifest(manifest: &UpdateManifest, manifest_url: &str) -> Result<()
     {
         return Err("update checksum is invalid".to_string());
     }
-    let custom_channel = std::env::var_os("PARSON_UPDATE_MANIFEST_URL").is_some();
     if !custom_channel && !manifest_url.starts_with("https://") {
         return Err("the update manifest must use HTTPS".to_string());
     }
-    if !custom_channel && !manifest.url.starts_with(RELEASE_DOWNLOAD_PREFIX) {
-        return Err("the update download is not from the official release channel".to_string());
+    if !custom_channel {
+        let prefix = release_download_prefix(releases_base);
+        let official = prefix.starts_with("https://")
+            && manifest
+                .url
+                .strip_prefix(&prefix)
+                .is_some_and(is_release_file_path);
+        if !official {
+            return Err("the update download is not from the official release channel".to_string());
+        }
     }
     Ok(())
+}
+
+/// `<tag>/<file>` below the release download prefix, with nothing that
+/// could lead a client to another path once the URL is normalized.
+fn is_release_file_path(rest: &str) -> bool {
+    let segments: Vec<&str> = rest.split('/').collect();
+    segments.len() == 2
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && *segment != "."
+                && *segment != ".."
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-+".contains(&byte))
+        })
 }
 
 pub fn start_apply_helper(update: &Path, target: &Path) -> Result<(), String> {
@@ -379,16 +445,16 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{
-        UpdateCheck, UpdateManifest, apply_update_after_shutdown, parse_arguments,
-        validate_manifest,
+        DEFAULT_RELEASES_BASE, UpdateCheck, UpdateManifest, apply_update_after_shutdown,
+        default_manifest_url, parse_arguments, releases_base, validate_manifest,
+        validate_manifest_from,
     };
 
     fn manifest() -> UpdateManifest {
         UpdateManifest {
             version: "99.0.0".to_string(),
-            url:
-                "https://github.com/mavingaw/Mujin-Music/releases/download/v99.0.0/ParsonMusicServer.exe"
-                    .to_string(),
+            // The channel this build was configured for (MUJIN_RELEASES_BASE).
+            url: format!("{}/download/v99.0.0/ParsonMusicServer.exe", releases_base()),
             sha256: "ab".repeat(32),
             size: 42,
         }
@@ -397,6 +463,70 @@ mod tests {
     #[test]
     fn official_manifest_is_accepted() {
         assert!(validate_manifest(&manifest(), "https://example.test/manifest").is_ok());
+    }
+
+    #[test]
+    fn manifest_urls_follow_the_configured_forge() {
+        assert_eq!(
+            default_manifest_url(DEFAULT_RELEASES_BASE),
+            "https://github.com/mavingaw/Mujin-Music/releases/latest/download/windows-server-update.json"
+        );
+        assert_eq!(
+            default_manifest_url("https://git.example.test/owner/repo/releases"),
+            "https://git.example.test/owner/repo/releases/download/latest/windows-server-update.json"
+        );
+    }
+
+    #[test]
+    fn downloads_must_come_from_the_configured_release_channel() {
+        let gitea = "https://git.example.test/owner/repo/releases";
+        let mut candidate = manifest();
+        candidate.url =
+            "https://github.com/mavingaw/Mujin-Music/releases/download/v99.0.0/ParsonMusicServer.exe"
+                .to_string();
+        assert!(
+            validate_manifest_from(&candidate, "https://m.test", DEFAULT_RELEASES_BASE, false)
+                .is_ok()
+        );
+        assert!(validate_manifest_from(&candidate, "https://m.test", gitea, false).is_err());
+
+        candidate.url =
+            "https://git.example.test/owner/repo/releases/download/v99.0.0/ParsonMusicServer.exe"
+                .to_string();
+        assert!(validate_manifest_from(&candidate, "https://m.test", gitea, false).is_ok());
+        assert!(
+            validate_manifest_from(&candidate, "https://m.test", DEFAULT_RELEASES_BASE, false)
+                .is_err()
+        );
+        // A manifest fetched over plain HTTP is refused unless the channel
+        // was chosen explicitly with PARSON_UPDATE_MANIFEST_URL.
+        assert!(validate_manifest_from(&candidate, "http://m.test", gitea, false).is_err());
+        assert!(validate_manifest_from(&candidate, "http://m.test", gitea, true).is_ok());
+        // A build pointed at a plain-HTTP forge never accepts an update.
+        assert!(
+            validate_manifest_from(
+                &candidate,
+                "https://m.test",
+                "http://git.example.test/owner/repo/releases",
+                false
+            )
+            .is_err()
+        );
+
+        for escape in [
+            "https://git.example.test/owner/repo/releases/download/../../other/releases/download/v1.0.0/x.exe",
+            "https://git.example.test/owner/repo/releases/download/v99.0.0/../x.exe",
+            "https://git.example.test/owner/repo/releases/download/v99.0.0/x.exe?redirect=1",
+            "https://git.example.test/owner/repo/releases/download//x.exe",
+            "https://git.example.test/owner/repo/releases/download/v99.0.0/sub/x.exe",
+            "https://git.example.test/owner/repo/releases/download.evil.test/v1/x.exe",
+        ] {
+            candidate.url = escape.to_string();
+            assert!(
+                validate_manifest_from(&candidate, "https://m.test", gitea, false).is_err(),
+                "{escape} must be rejected"
+            );
+        }
     }
 
     #[test]

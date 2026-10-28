@@ -4,6 +4,10 @@ const path = require("node:path");
 const {
   generateThirdPartyNotices,
 } = require("../../../tools/generate-third-party-notices.cjs");
+const {
+  latestDownloadBase,
+  releasesBase,
+} = require("../../../tools/releases-base.cjs");
 
 const desktopDirectory = path.resolve(__dirname, "..");
 const outputDirectory = path.resolve(
@@ -20,6 +24,16 @@ const architecture =
       : requestedArchitecture;
 
 generateThirdPartyNotices();
+
+// The update feed and the release page the app links to come from
+// MUJIN_RELEASES_BASE (tools/releases-base.cjs), so a build made for another
+// forge checks that forge for updates. electron-updater's generic provider
+// reads latest*.yml from the newest stable release's download folder.
+const base = releasesBase(process.env);
+const releaseArguments = [
+  `--config.publish.url=${latestDownloadBase(base)}`,
+  `--config.extraMetadata.parsonUpdates.releasePage=${base}/latest`,
+];
 
 if (architecture !== "x64" && architecture !== "arm64") {
   throw new Error(
@@ -68,7 +82,7 @@ if (targetPlatform === "linux") {
       name.endsWith(".AppImage") ||
       name.endsWith(".deb"),
   );
-  run("bash", [path.join(__dirname, "build-linux.sh")]);
+  run("bash", [path.join(__dirname, "build-linux.sh"), ...releaseArguments]);
 } else if (targetPlatform === "win32") {
   cleanOutput(
     (name) =>
@@ -83,6 +97,7 @@ if (targetPlatform === "linux") {
     "portable",
     `--${architecture}`,
     "--publish=never",
+    ...releaseArguments,
   ];
   run(process.execPath, args);
 } else if (targetPlatform === "darwin") {
@@ -99,6 +114,7 @@ if (targetPlatform === "linux") {
     "zip",
     `--${architecture}`,
     "--publish=never",
+    ...releaseArguments,
   ];
   if (process.env.CSC_LINK || process.env.CSC_NAME) {
     args.push(

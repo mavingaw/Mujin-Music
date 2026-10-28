@@ -139,14 +139,10 @@
     "portable": {
       "artifactName": "Mujin-Music-${version}-${arch}-portable.${ext}"
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "mavingaw",
-        "repo": "Mujin-Music",
-        "releaseType": "release"
-      }
-    ]
+    "publish": {
+      "provider": "generic",
+      "url": "https://github.com/mavingaw/Mujin-Music/releases/latest/download"
+    }
   },
   "dependencies": {
     "electron-updater": "6.8.9"

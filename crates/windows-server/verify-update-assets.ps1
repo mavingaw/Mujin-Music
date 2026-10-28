@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+. (Join-Path $PSScriptRoot "releases-base.ps1")
 
 $packagePath = Join-Path $workspace "package.json"
 $packageVersion = (Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json).version
@@ -27,7 +28,7 @@ foreach ($path in @($executable, $manifestPath, $checksumPath)) {
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $expectedHash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
 $expectedSize = (Get-Item -LiteralPath $executable).Length
-$expectedUrl = "https://github.com/mavingaw/Mujin-Music/releases/download/v$Version/ParsonMusicServer.exe"
+$expectedUrl = "$(Get-ReleasesBase)/download/v$Version/ParsonMusicServer.exe"
 $sidecarHash = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split '\s+')[0]
 
 if ($manifest.version -ne $Version) { throw "Update manifest version does not match $Version." }

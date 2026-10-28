@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
-const { createUpdates, updateSupport } = require("./updates.cjs");
+const { createUpdates, releasePage, updateSupport } = require("./updates.cjs");
 test("downloads updates without restarting playback and stops the backend before installation", async () => {
   const updater = new EventEmitter();
   const calls = [];
@@ -118,4 +118,27 @@ test("download rejections are handled without an unhandled promise", async () =>
     publish: () => {},
   });
   assert.equal((await service.check()).status, "error");
+});
+
+test("links to the release page the build was packaged for", () => {
+  const github = "https://github.com/mavingaw/Mujin-Music/releases/latest";
+  assert.equal(releasePage({}), github);
+  assert.equal(
+    releasePage({ parsonUpdates: { releasePage: "javascript:alert(1)" } }),
+    github,
+  );
+  assert.equal(
+    releasePage({ parsonUpdates: { releasePage: "http://x.test/latest" } }),
+    github,
+  );
+  const gitea = "https://git.example.test/o/r/releases/latest";
+  assert.equal(releasePage({ parsonUpdates: { releasePage: gitea } }), gitea);
+  const service = createUpdates({
+    updater: null,
+    version: "1.0.0",
+    unsupported: "Manual update",
+    publish: () => {},
+    releaseUrl: gitea,
+  });
+  assert.equal(service.state().releaseUrl, gitea);
 });
