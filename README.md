@@ -70,7 +70,9 @@ Android comes as two APKs: `arm64-v8a` for most phones and tablets, `armeabi-v7a
 
 The server container is `ghcr.io/mavingaw/mujin-music:latest`. Versioned image tags are also published for pinned deployments.
 
-Build provenance is included with the release.
+Build provenance (GitHub-built packages) or `SHA256SUMS` checksums (packages built on the project's own machines) are included with each release.
+
+The project can also be hosted and built on a self-hosted Gitea server, with GitHub as a mirror that still builds macOS: see [`deploy/unraid/README.md`](deploy/unraid/README.md) and [`RELEASING.md`](RELEASING.md).
 
 ## Docker
 

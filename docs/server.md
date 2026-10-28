@@ -275,6 +275,15 @@ The container image is `ghcr.io/mavingaw/mujin-music:latest`. It is built for
 x86_64 and arm64, including the Raspberry Pi 4/5, most Synology and QNAP
 models, and Unraid.
 
+When the project builds on its own Gitea server
+([`deploy/unraid/README.md`](../deploy/unraid/README.md)), the image is
+published to Gitea's package registry as
+`<gitea host>/mavingaw/mujin-music` (for example
+`192.168.1.58:3002/mavingaw/mujin-music:latest` on the home network) and
+copied to `ghcr.io` only when that is configured; each release's notes name
+the image to pull. A registry without HTTPS must be listed under
+`insecure-registries` in the Docker settings of the machine that pulls it.
+
 ```yaml
 services:
   parson:
