@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { normalizeDspSettings, defaultDspSettings } from "./dsp";
 import {
   AI_ENHANCE_STAGE,
+  aiEnhancerModel,
   carryLossyGeneration,
   describeAudioFormat,
   describeCollectionFormat,
@@ -109,4 +110,14 @@ test("AI-enhanced files are never shown as lossless or hi-res", () => {
   expect(mixed.summary.startsWith("Partly AI-enhanced · ")).toBeTrue();
   expect(mixed.quality).toBe("enhanced");
   expect(mixed.highRes).toBeTrue();
+});
+
+test("reads the enhancer model from a stage label in linear time", () => {
+  expect(aiEnhancerModel("Source AI-enhanced (Apollo) 24-bit")).toBe("Apollo");
+  expect(aiEnhancerModel("AI-enhanced ()")).toBeUndefined();
+  expect(aiEnhancerModel("lossless FLAC")).toBeUndefined();
+  const hostile = "AI-enhanced (" + "AI-enhanced ((".repeat(50_000);
+  const started = performance.now();
+  expect(aiEnhancerModel(hostile)).toBeUndefined();
+  expect(performance.now() - started).toBeLessThan(100);
 });

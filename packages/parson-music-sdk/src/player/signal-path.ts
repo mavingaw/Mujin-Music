@@ -1029,9 +1029,7 @@ export function describeSignalPath(
         const ai =
           stages.find((stage) => stage.id === AI_ENHANCE_STAGE) ??
           stages.find((stage) => stage.kind === "source");
-        const model = /AI-enhanced \(([^)]+)\)/.exec(
-          `${ai?.title ?? ""} ${ai?.detail ?? ""}`,
-        )?.[1];
+        const model = aiEnhancerModel(`${ai?.title ?? ""} ${ai?.detail ?? ""}`);
         const others = enhanced.filter(
           (stage) => stage !== ai && stage.kind !== "conversion",
         );
@@ -1276,4 +1274,14 @@ export function describeCollectionFormat(
       (audio) => describeAudioFormat(audio)?.high_res === true,
     ),
   };
+}
+
+/** The model named in "AI-enhanced (Apollo)", read without a regular expression. */
+export function aiEnhancerModel(text: string): string | undefined {
+  const marker = "AI-enhanced (";
+  const start = text.indexOf(marker);
+  if (start < 0) return undefined;
+  const from = start + marker.length;
+  const end = text.indexOf(")", from);
+  return end > from ? text.slice(from, end) : undefined;
 }
