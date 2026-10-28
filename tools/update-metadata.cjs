@@ -41,13 +41,45 @@ async function sha512(file) {
   return hash.digest("base64");
 }
 
-async function generate(directory, version) {
+/**
+ * Chooses the channels to write. Without a selection, all of them, each
+ * with its usual number of files. A selection such as
+ * ["latest.yml:1", "latest-linux.yml"] writes only those channels; ":<n>"
+ * changes how many files a channel must list (a release built without one
+ * architecture).
+ */
+function selectChannels(only) {
+  if (!only) {
+    return channels;
+  }
+  return only.map((entry) => {
+    const [name, count] = entry.split(":");
+    const channel = channels.find((candidate) => candidate.name === name);
+    if (!channel) {
+      throw new Error(`Unknown update channel ${name}.`);
+    }
+    if (count === undefined) {
+      return channel;
+    }
+    const artifactCount = Number(count);
+    if (
+      !Number.isInteger(artifactCount) ||
+      artifactCount < 1 ||
+      artifactCount > channel.artifactCount
+    ) {
+      throw new Error(`${name}: invalid artifact count ${count}.`);
+    }
+    return { ...channel, artifactCount };
+  });
+}
+
+async function generate(directory, version, { only } = {}) {
   versionParts(version);
   const names = fs.readdirSync(directory);
   // versionParts accepts digits and dots only; dots must match literally.
   const escaped = version.replaceAll(".", "\\.");
 
-  for (const channel of channels) {
+  for (const channel of selectChannels(only)) {
     const pattern = channel.file(escaped);
     const assets = names
       .filter((name) => pattern.test(name))
@@ -88,10 +120,23 @@ async function generate(directory, version) {
 }
 
 if (require.main === module) {
-  generate(path.resolve(process.argv[2]), process.argv[3]).catch((error) => {
-    console.error(error.message);
-    process.exitCode = 1;
-  });
+  // node tools/update-metadata.cjs <directory> <version> [--only a,b:1]
+  const [directory, version, flag, selection] = process.argv.slice(2);
+  Promise.resolve()
+    .then(() => {
+      if (flag !== undefined && (flag !== "--only" || !selection)) {
+        throw new Error(
+          "Usage: update-metadata.cjs <dir> <version> [--only <channels>]",
+        );
+      }
+      return generate(path.resolve(directory), version, {
+        only: selection?.split(","),
+      });
+    })
+    .catch((error) => {
+      console.error(error.message);
+      process.exitCode = 1;
+    });
 }
 
 module.exports = { generate };

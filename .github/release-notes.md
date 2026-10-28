@@ -1,11 +1,14 @@
 <!--
-The body of each stable GitHub release. release.yml renders it with
-tools/release-notes.cjs, which replaces {{version}}, {{repository}}
-(owner/name), {{image}} (the lowercase ghcr.io image) and {{certificate}}
+The body of each stable release. release.yml (GitHub) and
+.gitea/workflows/release.yml render it with tools/release-notes.cjs, which
+replaces {{version}}, {{repository}} (owner/name), {{downloads}} (the
+release's download folder, from MUJIN_RELEASES_BASE), {{serverGuide}},
+{{commits}}, {{image}} (the lowercase container image) and {{certificate}}
 (the SHA-256 of the Android signing certificate), keeps only the
-android-signing block for the key that signed the APKs, and removes these
-comments. The download names must match the files release.yml publishes;
-tools/release.test.cjs checks that.
+android-signing and provenance blocks that apply and the optional blocks
+that are switched on, and removes these comments. The download names must
+match the files the release workflows publish; tools/release.test.cjs
+checks that.
 -->
 
 # Mujin Music {{version}}
@@ -17,20 +20,19 @@ other computers, phones and speakers on the same network.
 
 ## Downloads
 
-| What                                                                     | Download                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Windows app** (includes the server)                                    | [Installer, 64-bit PC](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-Setup-{{version}}-x64.exe) · [Installer, ARM PC](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-Setup-{{version}}-arm64.exe) |
-| Windows app, portable (no install)                                       | [64-bit PC](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-x64-portable.exe) · [ARM PC](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-arm64-portable.exe)                 |
-| **Windows server** (no app window, tray only)                            | [Mujin-Music-Server-{{version}}-win-x64.zip](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-Server-{{version}}-win-x64.zip) (with the Windows Firewall scripts)                                                                  |
-| **macOS** (includes the server)                                          | [Apple silicon](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-arm64.dmg) · [Intel](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-x64.dmg)                                |
-| **Linux** (includes the server)                                          | x86_64: [AppImage](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-x86_64.AppImage) · [.deb](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-amd64.deb)                      |
-|                                                                          | ARM64: [AppImage](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-arm64.AppImage) · [.deb](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-arm64.deb)                        |
-| **Android, 64-bit** (most phones and tablets)                            | [Mujin-Music-{{version}}-android-arm64-v8a.apk](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-android-arm64-v8a.apk)                                                                                                |
-| **Android, 32-bit** (older phones, tablets and smart displays)           | [Mujin-Music-{{version}}-android-armeabi-v7a.apk](https://github.com/{{repository}}/releases/download/v{{version}}/Mujin-Music-{{version}}-android-armeabi-v7a.apk)                                                                                            |
-| **Docker** (server for Linux, a NAS or a Raspberry Pi; x86_64 and arm64) | `docker pull {{image}}:{{version}}` (also tagged `latest`)                                                                                                                                                                                                     |
+| What                                                                     | Download                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Windows app** (includes the server)                                    | [Installer, 64-bit PC]({{downloads}}/Mujin-Music-Setup-{{version}}-x64.exe) · [Installer, ARM PC]({{downloads}}/Mujin-Music-Setup-{{version}}-arm64.exe)                                                                                                                                                                   |
+| Windows app, portable (no install)                                       | [64-bit PC]({{downloads}}/Mujin-Music-{{version}}-x64-portable.exe) · [ARM PC]({{downloads}}/Mujin-Music-{{version}}-arm64-portable.exe)                                                                                                                                                                                   |
+| **Windows server** (no app window, tray only)                            | [Mujin-Music-Server-{{version}}-win-x64.zip]({{downloads}}/Mujin-Music-Server-{{version}}-win-x64.zip) (with the Windows Firewall scripts)                                                                                                                                                                                 |
+| **macOS** (includes the server)                                          | [Apple silicon]({{downloads}}/Mujin-Music-{{version}}-arm64.dmg) · [Intel]({{downloads}}/Mujin-Music-{{version}}-x64.dmg)                                                                                                                                                                                                  |
+| **Linux** (includes the server)                                          | x86_64: [AppImage]({{downloads}}/Mujin-Music-{{version}}-x86_64.AppImage) · [.deb]({{downloads}}/Mujin-Music-{{version}}-amd64.deb)<!-- optional: linux-arm64 --> · ARM64: [AppImage]({{downloads}}/Mujin-Music-{{version}}-arm64.AppImage) · [.deb]({{downloads}}/Mujin-Music-{{version}}-arm64.deb)<!-- end optional --> |
+| **Android, 64-bit** (most phones and tablets)                            | [Mujin-Music-{{version}}-android-arm64-v8a.apk]({{downloads}}/Mujin-Music-{{version}}-android-arm64-v8a.apk)                                                                                                                                                                                                               |
+| **Android, 32-bit** (older phones, tablets and smart displays)           | [Mujin-Music-{{version}}-android-armeabi-v7a.apk]({{downloads}}/Mujin-Music-{{version}}-android-armeabi-v7a.apk)                                                                                                                                                                                                           |
+| **Docker** (server for Linux, a NAS or a Raspberry Pi; x86_64 and arm64) | `docker pull {{image}}:{{version}}` (also tagged `latest`)                                                                                                                                                                                                                                                                 |
 
 For a server without a screen on Linux, use Docker; the
-[server guide](https://github.com/{{repository}}/blob/v{{version}}/docs/server.md)
+[server guide]({{serverGuide}})
 also covers systemd. On macOS and Linux the desktop app runs the server
 itself.
 
@@ -109,11 +111,26 @@ and choose `/music` as the music folder.
 
 ## Checking a download
 
+<!-- provenance: attested -->
+
 Every file here was built by this repository's GitHub Actions from the
 tagged source, with build provenance you can check:
 `gh attestation verify <file> --repo {{repository}}`.
 
-[All changes in this release](https://github.com/{{repository}}/commits/v{{version}})
+<!-- end provenance -->
+<!-- provenance: checksums -->
+
+Every file here was built from the tagged source by the project's own build
+machines. `SHA256SUMS` lists the SHA-256 checksum of each file (the macOS
+files, built by GitHub Actions, are in `SHA256SUMS-macos`; they also carry
+GitHub build provenance: `gh attestation verify <file> --repo {{repository}}`).
+Check a download with `sha256sum --check --ignore-missing SHA256SUMS`. When
+a `.minisig` file is published next to a checksum list, it is signed with
+the project's minisign key: `minisign -Vm SHA256SUMS -P <public key>`.
+
+<!-- end provenance -->
+
+[All changes in this release]({{commits}})
 
 ---
 
