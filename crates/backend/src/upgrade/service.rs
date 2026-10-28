@@ -1918,6 +1918,15 @@ impl UpgradeService {
     /// Polls FETCH, imports finished albums, works the enhance queue and
     /// makes automatic requests, until the server stops.
     pub async fn run(self: Arc<Self>) {
+        // A catalog restored from its cache at startup was layered before
+        // the restart; load the marks (AI-enhanced and fake lossless files)
+        // now so status, ranking and the signal path know them at once.
+        if let Err(error) = self
+            .db(|connection| Ok(marks::install(marks::load(connection)?)))
+            .await
+        {
+            tracing::debug!(%error, "Better versions marks load with the next catalog build");
+        }
         // Startup: allow real time if the worker is fast enough.
         self.refresh_realtime().await;
         let enhancer = {
