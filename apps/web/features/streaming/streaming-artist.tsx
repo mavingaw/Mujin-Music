@@ -55,7 +55,7 @@ export default function StreamingArtistDetails({ id }: { id: string }) {
         </div>
         <div className="min-w-0">
           <SourceBadge provider={data.provider} />
-          <h1 className="mt-3 text-4xl font-black text-white sm:text-6xl">
+          <h1 className="mt-3 text-4xl mj-display text-mujin-text sm:text-6xl">
             {data.name}
           </h1>
           <div className="mt-5 flex items-center gap-4">

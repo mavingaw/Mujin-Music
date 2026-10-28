@@ -10,11 +10,11 @@ import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import { Artwork } from "@/components/artwork";
 import { DrawerAction } from "@/components/action-drawer";
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { immediateBorderlessPressFeedback } from "@/lib/press-feedback";
 import { usePlayer, usePlayerPosition } from "@/providers/player-provider";
 
-const sky = "#38bdf8";
+const sky = palette.enhanced;
 
 const countdown = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -49,8 +49,8 @@ export function RadioThumbs({
         onPress={() => player.radio.thumbsUp(index)}
       >
         <ThumbsUp
-          color={solid ? "white" : liked ? sky : palette.secondary}
-          fill={liked ? (solid ? "white" : sky) : "transparent"}
+          color={solid ? palette.text : liked ? sky : palette.secondary}
+          fill={liked ? (solid ? palette.text : sky) : "transparent"}
           size={size}
         />
       </Pressable>
@@ -64,11 +64,16 @@ export function RadioThumbs({
         accessibilityRole="button"
         hitSlop={8}
         style={
-          solid ? [styles.solid, { backgroundColor: "white" }] : styles.plain
+          solid
+            ? [styles.solid, { backgroundColor: palette.text }]
+            : styles.plain
         }
         onPress={() => player.radio.thumbsDown(index)}
       >
-        <ThumbsDown color={solid ? "black" : palette.secondary} size={size} />
+        <ThumbsDown
+          color={solid ? palette.background : palette.secondary}
+          size={size}
+        />
       </Pressable>
     </View>
   );
@@ -95,8 +100,8 @@ export function RadioQueueHeader({ hasPicks }: { hasPicks: boolean }) {
       <Switch
         accessibilityLabel="Radio: keep playing similar music when the queue ends"
         onValueChange={radio.setEnabled}
-        thumbColor="white"
-        trackColor={{ false: "#3f3f46", true: sky }}
+        thumbColor={palette.text}
+        trackColor={{ false: palette.washStrong, true: sky }}
         value={radio.enabled}
       />
     </View>
@@ -262,8 +267,8 @@ export function RadioSettingsRows() {
         <Switch
           accessibilityLabel="Continue with Radio"
           onValueChange={radio.setEnabled}
-          thumbColor="white"
-          trackColor={{ false: "#3f3f46", true: sky }}
+          thumbColor={palette.text}
+          trackColor={{ false: palette.washStrong, true: sky }}
           value={radio.enabled}
         />
       </View>
@@ -277,8 +282,8 @@ export function RadioSettingsRows() {
         <Switch
           accessibilityLabel="Coming up notice"
           onValueChange={radio.setComingUpNotice}
-          thumbColor="white"
-          trackColor={{ false: "#3f3f46", true: sky }}
+          thumbColor={palette.text}
+          trackColor={{ false: palette.washStrong, true: sky }}
           value={radio.comingUpNotice}
         />
       </View>
@@ -313,7 +318,7 @@ const styles = StyleSheet.create({
     borderTopColor: palette.borderStrong,
   },
   headerTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  headerTitle: { color: "white", fontSize: 18, fontWeight: "900" },
+  headerTitle: { color: palette.text, fontSize: 18, fontWeight: "900" },
   headerDetail: { color: palette.secondary, fontSize: 13, marginTop: 3 },
   card: {
     flexDirection: "row",
@@ -321,12 +326,12 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 10,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,.09)",
+    backgroundColor: tint(0.09),
   },
   skipCard: { flexDirection: "column", alignItems: "stretch" },
   skipHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   cardKicker: { color: sky, fontSize: 12, fontWeight: "800" },
-  cardTitle: { color: "white", fontSize: 15, fontWeight: "800" },
+  cardTitle: { color: palette.text, fontSize: 15, fontWeight: "800" },
   cardDetail: { color: palette.secondary, fontSize: 13 },
   reasons: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   reason: {
@@ -336,9 +341,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  reasonText: { color: "white", fontSize: 13, fontWeight: "700" },
+  reasonText: { color: palette.text, fontSize: 13, fontWeight: "700" },
   settings: { marginTop: 28, gap: 4 },
-  settingsTitle: { color: "white", fontSize: 18, fontWeight: "900" },
+  settingsTitle: { color: palette.text, fontSize: 18, fontWeight: "900" },
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -347,6 +352,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: palette.border,
   },
-  settingLabel: { color: "white", fontSize: 15, fontWeight: "700" },
+  settingLabel: { color: palette.text, fontSize: 15, fontWeight: "700" },
   settingDetail: { color: palette.secondary, fontSize: 13, marginTop: 3 },
 });

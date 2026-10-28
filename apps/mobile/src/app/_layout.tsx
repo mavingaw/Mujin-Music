@@ -5,11 +5,13 @@ import {
 } from "@tanstack/react-query";
 import {
   DarkTheme,
+  DefaultTheme,
   Stack,
   ThemeProvider,
   useRouter,
   useSegments,
 } from "expo-router";
+import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
@@ -23,17 +25,20 @@ import { ActionDrawerProvider } from "@/components/action-drawer";
 import { PlayerProvider } from "@/providers/player-provider";
 import { SessionProvider, useSession } from "@/providers/session-provider";
 import { ZonesProvider } from "@/providers/zones-provider";
+import { AppearanceSync } from "@/providers/appearance-sync";
 
 void SplashScreen.preventAutoHideAsync();
 
+const baseTheme = palette.mode === "light" ? DefaultTheme : DarkTheme;
 const theme = {
-  ...DarkTheme,
+  ...baseTheme,
   colors: {
-    ...DarkTheme.colors,
+    ...baseTheme.colors,
     background: palette.background,
     card: palette.background,
     border: palette.border,
     primary: palette.text,
+    text: palette.text,
   },
 };
 
@@ -44,6 +49,7 @@ function PersistentMiniPlayer() {
   const route = String(segments[segments.length - 1] ?? "");
   if (
     route === "player" ||
+    route === "display" ||
     (session.phase !== "ready" && session.phase !== "offline")
   )
     return null;
@@ -110,9 +116,16 @@ export default function RootLayout() {
         defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
       }),
   );
+  // Brand display face; the app shows with system type if it can't load.
+  const [fontsLoaded, fontError] = useFonts({
+    "Jost-Light": require("../../assets/fonts/jost/Jost-Light.ttf"),
+    "Jost-Regular": require("../../assets/fonts/jost/Jost-Regular.ttf"),
+    "Jost-Medium": require("../../assets/fonts/jost/Jost-Medium.ttf"),
+  });
+  const fontsSettled = fontsLoaded || Boolean(fontError);
   useEffect(() => {
-    void SplashScreen.hideAsync();
-  }, []);
+    if (fontsSettled) void SplashScreen.hideAsync();
+  }, [fontsSettled]);
   return (
     <GestureHandlerRootView
       style={{ flex: 1, backgroundColor: palette.background }}
@@ -124,7 +137,10 @@ export default function RootLayout() {
             <ZonesProvider>
               <ActionDrawerProvider>
                 <ThemeProvider value={theme}>
-                  <StatusBar style="light" />
+                  <StatusBar
+                    style={palette.mode === "light" ? "dark" : "light"}
+                  />
+                  <AppearanceSync />
                   <Stack
                     screenOptions={{
                       headerShown: false,
@@ -143,6 +159,14 @@ export default function RootLayout() {
                     <Stack.Screen
                       name="connect"
                       options={{ animation: "fade" }}
+                    />
+                    <Stack.Screen
+                      name="display"
+                      options={{
+                        presentation: "fullScreenModal",
+                        animation: "fade",
+                        orientation: "all",
+                      }}
                     />
                     <Stack.Screen
                       name="player"

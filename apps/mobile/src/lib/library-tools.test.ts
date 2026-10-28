@@ -18,7 +18,17 @@ test("library numbers read naturally", () => {
       { key: "lossy", label: "", tracks: 1 },
     ]),
   ).toBe(75);
-  expect(tierColor("nope")).toBe(tierColor("unknown"));
+  const palette = {
+    accent: "#d98b5f",
+    accentSoft: "#e6a27a",
+    accentDeep: "#bf7246",
+    enhanced: "#8fc3e0",
+    qualityLow: "#7e7a74",
+    muted: "#5c5955",
+  };
+  expect(tierColor("nope", palette)).toBe(tierColor("unknown", palette));
+  expect(tierColor("hi_res", palette)).toBe("#d98b5f");
+  expect(tierColor("ai_enhanced", palette)).toBe("#8fc3e0");
 });
 
 test("skipped files group by reason without ignored ones", () => {

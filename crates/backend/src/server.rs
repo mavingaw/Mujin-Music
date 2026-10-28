@@ -16,10 +16,10 @@ use crate::api::library::{
     remove_library_root, song_delivery, song_signal_path, stream_song,
 };
 use crate::api::{
-    album, album_sources, artist, cast, control, data, editorial, filesystem, focus, genre_pages,
-    genres, home, imports, key_service, library_tools, listen_later, live_radio, lyrics, metadata,
-    outputs, playback, playlist, profiles, providers, remote_access, scrobbling, search, setup,
-    song, upgrade, user, works, zones,
+    album, album_sources, artist, cast, control, data, displays, editorial, filesystem, focus,
+    genre_pages, genres, home, imports, key_service, library_tools, listen_later, live_radio,
+    lyrics, metadata, outputs, playback, playlist, profiles, providers, remote_access, scrobbling,
+    search, setup, song, upgrade, user, works, zones,
 };
 use crate::app::LocalApp;
 use crate::library::state::LibraryLifecycle;
@@ -174,6 +174,7 @@ fn music_routes_at(path: &'static str) -> impl HttpServiceFactory {
         .configure(cast::configure)
         .configure(outputs::configure)
         .configure(zones::configure)
+        .configure(displays::configure)
         .configure(control::configure)
         .configure(genres::configure)
         .configure(home::configure)
@@ -327,6 +328,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "radio",
             "focus",
             "zones",
+            "displays",
             "sonos",
             "upnp",
             "audio_devices",
@@ -346,6 +348,7 @@ async fn discovery_manifest(request: HttpRequest) -> HttpResponse {
             "profiles",
             "scrobbling",
             "live_radio",
+            "appearance",
             "better_versions"
         ],
     });
@@ -549,6 +552,9 @@ pub async fn build_server_with_shutdown_timeout(
                 web::get().to(cast::cast_media),
             )
             .configure(zones::configure_device_routes)
+            // Displays (TVs, tablets) read their zone with a display key,
+            // never a session.
+            .configure(displays::configure_device_routes)
             .route(
                 "/api/v1/scrobbling/lastfm/complete",
                 web::post().to(scrobbling::complete_lastfm),

@@ -1,4 +1,3 @@
-import { palette } from "@/constants/colors";
 import type {
   Breakdown,
   FileQualityTier,
@@ -6,15 +5,29 @@ import type {
   ToolJob,
 } from "@parson/music-sdk";
 
-/** Tier colours, matching the signal-path light and the web tools. */
-export const TIER_COLORS: Record<FileQualityTier, string> = {
-  dsd: palette.accentDeep,
-  hi_res: palette.accent,
-  lossless: palette.accentSoft,
-  ai_enhanced: palette.qualityEnhanced,
-  lossy: palette.qualityLow,
-  unknown: palette.muted,
+/** The palette colours tiers are drawn in (the active theme's). */
+export type TierPalette = {
+  accent: string;
+  accentSoft: string;
+  accentDeep: string;
+  enhanced: string;
+  qualityLow: string;
+  muted: string;
 };
+
+/** Tier colours, matching the signal-path light and the web tools. */
+export function tierColors(
+  palette: TierPalette,
+): Record<FileQualityTier, string> {
+  return {
+    dsd: palette.accentDeep,
+    hi_res: palette.accent,
+    lossless: palette.accentSoft,
+    ai_enhanced: palette.enhanced,
+    lossy: palette.qualityLow,
+    unknown: palette.muted,
+  };
+}
 
 export const TIER_LABELS: Record<FileQualityTier, string> = {
   dsd: "DSD",
@@ -25,10 +38,9 @@ export const TIER_LABELS: Record<FileQualityTier, string> = {
   unknown: "Unknown",
 };
 
-export function tierColor(key: string): string {
-  return key in TIER_COLORS
-    ? TIER_COLORS[key as FileQualityTier]
-    : TIER_COLORS.unknown;
+export function tierColor(key: string, palette: TierPalette): string {
+  const colors = tierColors(palette);
+  return key in colors ? colors[key as FileQualityTier] : colors.unknown;
 }
 
 export function tierLabel(key: string, fallback: string): string {

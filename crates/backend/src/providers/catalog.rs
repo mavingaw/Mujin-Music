@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::store::LibraryItemRow;
 use super::{AudioFormat, ProviderAlbum, ProviderId, entity_id};
-use crate::domain::{Album, Artist};
+use crate::domain::Artist;
 use crate::library::search::normalize;
 
 /// Genre facets beyond this many are left out (the long tail of tags).
@@ -64,6 +64,16 @@ impl QualityTier {
         }
     }
 
+    fn of_album(quality: &crate::library::quality::AlbumQuality) -> Self {
+        if quality.hi_res {
+            Self::HiRes
+        } else if quality.lossless {
+            Self::Lossless
+        } else {
+            Self::Lossy
+        }
+    }
+
     fn of(format: &AudioFormat) -> Self {
         if format.is_hi_res() {
             Self::HiRes
@@ -109,32 +119,6 @@ fn year_of(date: &str) -> Option<u16> {
         .filter(|year| (1000..=2999).contains(year))
 }
 
-/// The best format among an album's tracks.
-fn local_format(album: &Album) -> Option<AudioFormat> {
-    album
-        .songs
-        .iter()
-        .filter_map(|song| song.audio.as_ref())
-        .filter_map(|audio| {
-            let codec = audio.codec.as_deref()?;
-            Some(match audio.lossless {
-                Some(false) => AudioFormat::lossy(codec, audio.bitrate_kbps.unwrap_or(0)),
-                _ if audio.lossless == Some(true) || audio.bit_depth.is_some() => {
-                    AudioFormat::lossless(codec, audio.bit_depth, audio.sample_rate)
-                }
-                _ => return None,
-            })
-        })
-        .max_by_key(|format| {
-            (
-                format.lossless,
-                format.bit_depth.unwrap_or(0),
-                format.sample_rate.unwrap_or(0),
-                format.bitrate_kbps.unwrap_or(0),
-            )
-        })
-}
-
 /// The Library's local albums, with the same visibility rule as its paged
 /// catalog: when any album has artwork, albums without it are hidden.
 pub fn local_albums(
@@ -150,7 +134,8 @@ pub fn local_albums(
         .flat_map(|artist| artist.albums.iter().map(move |album| (artist, album)))
         .filter(|(_, album)| !has_artwork || !album.cover_url.trim().is_empty())
         .map(|(artist, album)| {
-            let format = local_format(album);
+            // The same answer as Home and every other album card.
+            let quality = crate::library::quality::album_quality(album);
             CatalogAlbum {
                 key: format!("local:{}", album.id),
                 id: album.id.clone(),
@@ -164,8 +149,8 @@ pub fn local_albums(
                     .map(|genres| clean_genres(genres.iter().map(String::as_str)))
                     .unwrap_or_default(),
                 source: CatalogSource::Local,
-                quality: format.as_ref().map(QualityTier::of),
-                format_label: format.map(|format| format.label),
+                quality: quality.as_ref().map(QualityTier::of_album),
+                format_label: quality.map(|quality| quality.label),
                 genre_inferred: false,
             }
         })

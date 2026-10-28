@@ -109,7 +109,7 @@ function Value({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-white/8 bg-black/20 py-1.5 pr-1.5 pl-3">
       <div className="min-w-0">
-        <div className="text-[11px] tracking-wide text-zinc-500 uppercase">
+        <div className="text-[0.6875rem] tracking-wide text-zinc-500 uppercase">
           {label}
         </div>
         <div className="truncate font-mono text-sm text-zinc-100">{value}</div>
@@ -185,9 +185,9 @@ export default function HomeAssistantSettings() {
 
   return (
     <div className="space-y-8">
-      <section className="overflow-hidden rounded-xl border border-white/10 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(56,189,248,0.14),transparent_55%),radial-gradient(120%_140%_at_100%_100%,rgba(16,185,129,0.10),transparent_50%)] p-5 sm:p-6">
+      <section className="overflow-hidden rounded-xl border border-white/10 bg-[radial-gradient(120%_140%_at_0%_0%,rgb(var(--mj-accent-rgb)/0.12),transparent_55%),radial-gradient(120%_140%_at_100%_100%,rgba(163,201,139,0.08),transparent_50%)] p-5 sm:p-6">
         <div className="flex items-start gap-4">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-400/15 text-sky-300 ring-1 ring-sky-300/20">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-mujin-copper/15 text-mujin-copper ring-1 ring-mujin-copper/20">
             <House className="h-5 w-5" />
           </span>
           <div className="min-w-0">
@@ -321,7 +321,7 @@ export default function HomeAssistantSettings() {
                 <div className="text-sm font-medium text-zinc-100">
                   {feature.title}
                 </div>
-                <p className="mt-0.5 text-[13px] leading-5 text-zinc-400">
+                <p className="mt-0.5 text-[0.8125rem] leading-5 text-zinc-400">
                   {feature.text}
                 </p>
               </div>
@@ -347,7 +347,7 @@ export default function HomeAssistantSettings() {
           Morning radio at a gentle volume. Thumbs up and down, transfer, sleep
           timer and pause all are available as actions too.
         </p>
-        <pre className="overflow-x-auto rounded-lg border border-white/8 bg-black/40 p-4 font-mono text-[12.5px] leading-5 text-zinc-300">
+        <pre className="overflow-x-auto rounded-lg border border-white/8 bg-black/40 p-4 font-mono text-[0.7812rem] leading-5 text-zinc-300">
           <code>{homeAssistantAutomationExample()}</code>
         </pre>
       </section>

@@ -138,7 +138,7 @@ export function PreferredPlayCaption({
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span
-        className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-white"
+        className="inline-flex items-center gap-1.5 text-[0.8125rem] font-semibold text-white"
         title={version.reason ?? undefined}
       >
         {version.source === "local" ? (

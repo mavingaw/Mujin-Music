@@ -64,7 +64,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { DspControls } from "./signal-path";
 import { signedLabel, steppedValue } from "@/lib/zones";
 import { useZones } from "@/providers/zones-provider";
@@ -190,7 +190,7 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
           hitSlop={12}
           onPress={onClose}
         >
-          <X color="white" size={24} />
+          <X color={palette.text} size={24} />
         </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
@@ -230,7 +230,7 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
                   style={[styles.iconChoice, selected && styles.choiceActive]}
                 >
                   <ZoneIconGlyph
-                    color={selected ? "black" : "white"}
+                    color={selected ? palette.background : palette.text}
                     size={18}
                     zone={{ kind: zone.kind, icon: icon ?? undefined }}
                   />
@@ -539,7 +539,7 @@ function SettingsForm({ zone, onClose }: { zone: Zone; onClose: () => void }) {
             <View style={styles.switchRow}>
               <View style={styles.switchText}>
                 <View style={styles.inlineStart}>
-                  <Lock color="white" size={14} />
+                  <Lock color={palette.text} size={14} />
                   <Text style={styles.rowTitle}>Private zone</Text>
                 </View>
                 <Text style={styles.note}>
@@ -648,7 +648,7 @@ function Stepper({
         }
         style={styles.stepButton}
       >
-        <Minus color="white" size={16} />
+        <Minus color={palette.text} size={16} />
       </Pressable>
       <Text style={styles.stepperValue}>{text}</Text>
       <Pressable
@@ -660,7 +660,7 @@ function Stepper({
         }
         style={styles.stepButton}
       >
-        <Plus color="white" size={16} />
+        <Plus color={palette.text} size={16} />
       </Pressable>
     </View>
   );
@@ -668,10 +668,10 @@ function Stepper({
 
 /** Roon's quality-light colours: purple, blue, green, yellow. */
 const QUALITY_COLORS: Record<ZoneStreamQuality, string> = {
-  lossless: "#e879f9",
-  enhanced: "#38bdf8",
-  high: "#34d399",
-  low: "#fcd34d",
+  lossless: palette.accentSoft,
+  enhanced: palette.enhanced,
+  high: palette.success,
+  low: palette.brass,
 };
 
 /** The quality light, then source, each step in order, and the output. */
@@ -735,7 +735,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     marginBottom: 8,
-    backgroundColor: "rgba(255,255,255,0.03)",
+    backgroundColor: tint(0.03),
   },
   qualityLight: {
     width: 9,
@@ -757,11 +757,11 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.2)",
+    borderColor: tint(0.2),
     marginTop: 4,
   },
   stageKicker: {
-    color: "#71717a",
+    color: palette.tertiary,
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: 1.2,
@@ -776,7 +776,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   headerText: { flex: 1 },
-  title: { color: "white", fontSize: 22, fontWeight: "700" },
+  title: { color: palette.text, fontSize: 22, fontWeight: "700" },
   subtitle: { color: palette.secondary, fontSize: 13, marginTop: 2 },
   content: { padding: 20, gap: 22, paddingBottom: 32 },
   section: { gap: 8 },
@@ -793,7 +793,7 @@ const styles = StyleSheet.create({
     borderColor: palette.borderStrong,
     borderRadius: 10,
     borderWidth: 1,
-    color: "white",
+    color: palette.text,
     fontSize: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -817,7 +817,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 40,
   },
-  choiceActive: { backgroundColor: "white", borderColor: "white" },
+  choiceActive: { backgroundColor: palette.text, borderColor: palette.text },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
     borderColor: palette.borderStrong,
@@ -826,15 +826,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
-  chipText: { color: "white", fontSize: 13, fontWeight: "600" },
-  chipTextActive: { color: "black" },
+  chipText: { color: palette.text, fontSize: 13, fontWeight: "600" },
+  chipTextActive: { color: palette.background },
   switchRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   switchText: { flex: 1, gap: 2 },
-  rowTitle: { color: "white", fontSize: 15, fontWeight: "600" },
+  rowTitle: { color: palette.text, fontSize: 15, fontWeight: "600" },
   stepper: { flexDirection: "row", alignItems: "center", gap: 10 },
   stepperLabel: { color: palette.secondary, fontSize: 13, flex: 1 },
   stepperValue: {
-    color: "white",
+    color: palette.text,
     fontSize: 14,
     fontVariant: ["tabular-nums"],
     minWidth: 76,
@@ -850,18 +850,18 @@ const styles = StyleSheet.create({
     width: 32,
   },
   problem: {
-    color: "#fbbf24",
+    color: palette.brass,
     fontSize: 12,
     paddingHorizontal: 20,
     paddingBottom: 8,
   },
   primary: {
     alignItems: "center",
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     borderRadius: 999,
     marginHorizontal: 20,
     paddingVertical: 13,
   },
-  primaryText: { color: "black", fontSize: 15, fontWeight: "700" },
+  primaryText: { color: palette.background, fontSize: 15, fontWeight: "700" },
   disabled: { opacity: 0.4 },
 });

@@ -236,7 +236,7 @@ function ProfileDialog({
                 />
                 <p
                   className={cn(
-                    "mt-1.5 text-[11px]",
+                    "mt-1.5 text-[0.6875rem]",
                     pinValid ? "text-zinc-500" : "text-rose-300",
                   )}
                 >
@@ -332,7 +332,7 @@ function ProfileCard({
               {profile.name}
             </p>
             {badge && (
-              <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-zinc-400 max-sm:hidden">
+              <span className="shrink-0 rounded-full border border-white/10 px-1.5 py-px text-[0.625rem] font-medium uppercase tracking-wide text-zinc-400 max-sm:hidden">
                 {badge}
               </span>
             )}
@@ -341,13 +341,13 @@ function ProfileCard({
             {profileSubtitle(profile)}
           </p>
           {!profile.quickSwitch && (
-            <p className="mt-0.5 text-[11px] text-zinc-600">
+            <p className="mt-0.5 text-[0.6875rem] text-zinc-600">
               Hidden from the switcher
             </p>
           )}
         </div>
         {profile.isCurrent ? (
-          <span className="flex items-center gap-1 rounded-full bg-mujin-copper/15 px-2 py-1 text-[11px] font-semibold text-mujin-copper">
+          <span className="flex items-center gap-1 rounded-full bg-mujin-copper/15 px-2 py-1 text-[0.6875rem] font-semibold text-mujin-copper">
             <Check aria-label="This device" className="h-3 w-3" />
             <span className="max-sm:hidden">This device</span>
           </span>

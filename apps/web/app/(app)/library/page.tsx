@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 export default function LibraryPage() {
   return (
-    <div className="px-5 py-8 pb-36 sm:px-7">
+    <div className="px-5 pb-36 pt-8 sm:px-8 md:pt-12 lg:px-12">
       <Suspense fallback={<RouteLoading />}>
         <LibraryOverview />
       </Suspense>

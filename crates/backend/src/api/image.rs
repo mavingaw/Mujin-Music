@@ -138,8 +138,62 @@ pub async fn image(
             }
             Err(_) => Ok(HttpResponse::NoContent().body("Image not found")),
         }
+    } else if requested_format == "swatch" {
+        serve_swatch(file_path, etag).await
     } else {
         serve_transformed_image(file_path, requested_format, etag).await
+    }
+}
+
+/// Side of the colour swatch a client reads a cover's colours from.
+pub const SWATCH_SIDE: u32 = 24;
+
+/// A cover reduced to 24×24 RGBA pixels, base64-encoded: what a client
+/// without a canvas (the phone app) scores for Material You's source
+/// colour with the SDK's `sourceColorFromPixels`, so every app picks the
+/// same colour from the same cover.
+pub fn cover_swatch(path: &Path) -> std::io::Result<serde_json::Value> {
+    use base64::Engine;
+    let mut reader = ImageReader::open(path)?.with_guessed_format()?;
+    let mut limits = ::image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let small = decoded
+        .resize_exact(SWATCH_SIDE, SWATCH_SIDE, FilterType::Triangle)
+        .to_rgba8();
+    Ok(serde_json::json!({
+        "width": SWATCH_SIDE,
+        "height": SWATCH_SIDE,
+        "rgba": base64::engine::general_purpose::STANDARD.encode(small.as_raw()),
+    }))
+}
+
+async fn serve_swatch(file_path: PathBuf, etag: Option<String>) -> Result<HttpResponse, Error> {
+    let permit = acquire_image_transform_slot(image_transform_slots()).await;
+    let result = spawn_blocking(move || {
+        let _permit = permit;
+        cover_swatch(&file_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(swatch)) => {
+            let mut response = HttpResponse::Ok();
+            if let Some(etag) = etag.as_deref() {
+                response.insert_header((ETAG, etag));
+            }
+            Ok(response
+                .insert_header(CacheControl(vec![
+                    CacheDirective::Private,
+                    CacheDirective::NoCache,
+                ]))
+                .json(swatch))
+        }
+        _ => Ok(HttpResponse::NoContent().finish()),
     }
 }
 
@@ -490,9 +544,38 @@ mod tests {
     use tokio::sync::Semaphore;
 
     use super::{
-        acquire_image_transform_slot, image, image_candidate, read_file_bounded, sign_image_path,
-        signed_image_request_is_valid,
+        SWATCH_SIDE, acquire_image_transform_slot, cover_swatch, image, image_candidate,
+        read_file_bounded, sign_image_path, signed_image_request_is_valid,
     };
+
+    #[test]
+    fn a_cover_swatch_is_24_by_24_rgba_pixels() {
+        use base64::Engine;
+        let directory =
+            std::env::temp_dir().join(format!("parson-swatch-test-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("cover.png");
+        // A blue cover with a copper corner.
+        let cover = ::image::RgbaImage::from_fn(96, 96, |x, y| {
+            if x < 24 && y < 24 {
+                ::image::Rgba([217, 139, 95, 255])
+            } else {
+                ::image::Rgba([30, 80, 200, 255])
+            }
+        });
+        cover.save(&path).unwrap();
+        let swatch = cover_swatch(&path).unwrap();
+        assert_eq!(swatch["width"], SWATCH_SIDE);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(swatch["rgba"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(bytes.len(), (SWATCH_SIDE * SWATCH_SIDE * 4) as usize);
+        // The far corner stays blue.
+        let last = &bytes[bytes.len() - 4..];
+        assert_eq!(last, [30, 80, 200, 255]);
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(cover_swatch(&directory.join("missing.png")).is_err());
+    }
 
     #[actix_web::test]
     async fn image_transform_requests_wait_for_capacity() {

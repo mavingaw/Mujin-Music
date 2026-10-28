@@ -2,6 +2,7 @@ import { getAlbumUpgradeStatus, isUpgradeOpen } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 
+import { alpha, palette } from "@/constants/colors";
 import { upgradeChips } from "@/lib/upgrades";
 
 /** Better versions status for an album: everyone sees it, nobody acts here. */
@@ -15,14 +16,14 @@ export function AlbumUpgradeStatus({ albumId }: { albumId: string }) {
         ? 5_000
         : false,
   });
-  const chips = upgradeChips(status.data);
+  const chips = upgradeChips(status.data, palette);
   if (chips.length === 0) return null;
   return (
     <View style={styles.row}>
       {chips.map((chip) => (
         <View
           key={chip.key}
-          style={[styles.chip, { borderColor: `${chip.color}66` }]}
+          style={[styles.chip, { borderColor: alpha(chip.color, 0.4) }]}
         >
           {chip.busy ? (
             <ActivityIndicator color={chip.color} size="small" />

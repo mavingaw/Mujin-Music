@@ -28,7 +28,7 @@ function createUpdates({
     status: unsupported ? "manual" : "idle",
     version,
     message: unsupported || "",
-    releaseUrl: "https://github.com/mavingaw/parson-jin/releases/latest",
+    releaseUrl: "https://github.com/mavingaw/Mujin-Music/releases/latest",
   };
   let checking = null;
   let installing = false;

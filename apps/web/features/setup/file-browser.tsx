@@ -25,6 +25,7 @@ export default function FileBrowser({
   onIndexStarted,
   onIndexed,
   setupMode = false,
+  onlineMetadata,
 }: {
   actionLabel?: string;
   beforeIndex?: () => boolean | Promise<boolean>;
@@ -34,6 +35,8 @@ export default function FileBrowser({
   onIndexStarted?: (path: string) => void | Promise<void>;
   onIndexed?: (report: LibraryIndexReport) => void | Promise<void>;
   setupMode?: boolean;
+  /** First-run setup: whether to look up photos, biographies and reviews. */
+  onlineMetadata?: boolean;
 }) {
   const router = useRouter();
   const [currentDirectory, setCurrentDirectory] = useState(initialDirectory);
@@ -104,7 +107,7 @@ export default function FileBrowser({
         if (beforeIndex && !(await beforeIndex())) return;
         await onIndexStarted?.(selectedDirectory);
         const response = await (setupMode
-          ? indexSetupLibrary(selectedDirectory)
+          ? indexSetupLibrary(selectedDirectory, { onlineMetadata })
           : indexLibrary(selectedDirectory));
         await onIndexed?.(response.report);
         if (!mounted.current) return;

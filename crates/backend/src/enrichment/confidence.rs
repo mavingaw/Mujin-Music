@@ -564,6 +564,37 @@ pub fn check_release(local: &LocalAlbum<'_>, release: &ReleaseDetails) -> MatchC
     }
 }
 
+/// Whether a release that failed the check is still clearly the same
+/// *album*: the same title, every local track found on it, and nothing but
+/// the track lengths disagreeing (a partial or trimmed copy). Another year,
+/// label, conductor, ensemble or composer means another recording, and a
+/// single that shares the album's name is not the album. The edition stays
+/// unconfirmed, so nothing from the release itself is used, but the release
+/// group's own article (background, reception) describes this album as much
+/// as any edition of it.
+pub fn same_album_group(local_title: &str, release: &ReleaseDetails, check: &MatchCheck) -> bool {
+    let tracks_fit = check.signals.iter().any(|signal| {
+        signal.key == "tracks"
+            && matches!(
+                signal.outcome,
+                SignalOutcome::Match | SignalOutcome::Partial
+            )
+    });
+    let only_lengths_differ = check
+        .signals
+        .iter()
+        .all(|signal| signal.key == "lengths" || signal.outcome != SignalOutcome::Mismatch);
+    let single = release
+        .release_group_type
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("single"));
+    release.release_group_mbid.is_some()
+        && !single
+        && tracks_fit
+        && only_lengths_differ
+        && title_match(local_title, &release.title) == TitleMatch::Exact
+}
+
 /// A first ranking of search results from what the search returns (no
 /// lengths or credits yet). `None` when the title or artist rules the
 /// release out.
@@ -858,6 +889,64 @@ mod tests {
             check.signals[4].detail,
             "Your tags name Philharmonia Orchestra as ensemble; the release credits Berliner Philharmoniker."
         );
+    }
+
+    #[test]
+    fn a_trimmed_partial_copy_is_the_same_album_but_another_recording_is_not() {
+        let release = ReleaseDetails {
+            title: "Ghosts I–IV".into(),
+            release_group_mbid: Some("group".into()),
+            release_group_type: Some("Album".into()),
+            first_release_date: Some("2008-03-02".into()),
+            tracks: (1..=36)
+                .map(|position| track(position, &format!("{position} Ghosts I"), 180.0))
+                .collect(),
+            ..ReleaseDetails::default()
+        };
+        // Five 48-second clips of the album's first five tracks.
+        let local = LocalAlbum {
+            track_count: 5,
+            paired_tracks: 5,
+            paired_lengths: (0..5).map(|_| (48.0, 180.0)).collect(),
+            year: Some("2008"),
+            ..LocalAlbum::default()
+        };
+        let check = check_release(&local, &release);
+        assert!(
+            !check.verified,
+            "a trimmed copy is not this edition: {check:?}"
+        );
+        assert!(same_album_group("Ghosts I-IV", &release, &check));
+        // Another title, a single of the same name, or no release group.
+        assert!(!same_album_group("Ghosts V: Together", &release, &check));
+        let single = ReleaseDetails {
+            release_group_type: Some("Single".into()),
+            ..release.clone()
+        };
+        assert!(!same_album_group("Ghosts I-IV", &single, &check));
+        let no_group = ReleaseDetails {
+            release_group_mbid: None,
+            ..release.clone()
+        };
+        assert!(!same_album_group("Ghosts I-IV", &no_group, &check));
+        // Tracks the release does not have.
+        let extra = check_release(
+            &LocalAlbum {
+                paired_tracks: 4,
+                ..local.clone()
+            },
+            &release,
+        );
+        assert!(!same_album_group("Ghosts I-IV", &release, &extra));
+        // Another year: another recording, whatever the title.
+        let other_year = check_release(
+            &LocalAlbum {
+                year: Some("1990"),
+                ..local.clone()
+            },
+            &release,
+        );
+        assert!(!same_album_group("Ghosts I-IV", &release, &other_year));
     }
 
     /// Another composer's work with the same title and conductor.

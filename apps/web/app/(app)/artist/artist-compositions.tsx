@@ -84,7 +84,7 @@ function workDetails(entry: ComposerWork) {
 function LibraryBadge({ entry }: { entry: ComposerWork }) {
   if (entry.track_count > 0) {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-400/12 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-400/12 px-2 py-0.5 text-[0.6875rem] font-semibold text-emerald-300">
         <Library aria-hidden className="h-3 w-3" />
         {entry.recording_count || 1}{" "}
         {(entry.recording_count || 1) === 1 ? "recording" : "recordings"}
@@ -92,7 +92,7 @@ function LibraryBadge({ entry }: { entry: ComposerWork }) {
     );
   }
   return (
-    <span className="shrink-0 text-[11px] font-medium text-zinc-600">
+    <span className="shrink-0 text-[0.6875rem] font-medium text-zinc-600">
       Not in your library
     </span>
   );
@@ -113,12 +113,12 @@ export function NotableWorkCard({ entry }: { entry: ComposerWork }) {
     >
       <div className="min-w-0">
         {entry.notable_rank != null && (
-          <p className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200/80">
+          <p className="mb-1.5 flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-amber-200/80">
             <Sparkles aria-hidden className="h-3 w-3" />
             Notable
           </p>
         )}
-        <p className="line-clamp-2 text-[15px] font-semibold leading-snug text-white group-hover:underline group-hover:underline-offset-2">
+        <p className="line-clamp-2 text-[0.9375rem] font-semibold leading-snug text-white group-hover:underline group-hover:underline-offset-2">
           {entry.work.title}
         </p>
         {facts.length > 0 && (
@@ -192,7 +192,7 @@ export function ArtistCompositionsPanel({
         className="flex flex-col gap-4 rounded-2xl border border-white/8 bg-gradient-to-br from-white/[0.05] via-white/[0.02] to-transparent p-5 sm:flex-row sm:items-end sm:justify-between"
       >
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+          <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-zinc-500">
             {hasCatalogue ? "Complete catalogue" : "In your library"}
           </p>
           <p className="mt-1 text-lg font-semibold text-white">

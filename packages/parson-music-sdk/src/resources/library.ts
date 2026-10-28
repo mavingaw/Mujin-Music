@@ -10,6 +10,10 @@ export interface LibraryCatalogAlbum {
   releaseYear: string;
   songCount: number;
   firstSongId?: string | null;
+  /** Quality badge text ("24/96", "16/44.1", "MP3"); newer servers only. */
+  formatLabel?: string | null;
+  hiRes?: boolean;
+  lossless?: boolean;
 }
 
 export interface LibraryCatalogSong {
@@ -31,6 +35,8 @@ export interface LibraryCatalogArtist {
   albumCount: number;
   appearanceCount: number;
   songCount: number;
+  /** API path of the artist's photo, when online metadata found one. */
+  photoUrl?: string;
 }
 
 export interface LibraryCatalogPage {
@@ -313,14 +319,29 @@ export async function indexLibrary(
   return response.data;
 }
 
+export interface SetupLibraryOptions {
+  /**
+   * Look up artist photos, biographies and album reviews online
+   * (MusicBrainz, Wikipedia, Wikimedia Commons). The setup screens send
+   * `true` unless the person unticks it; leaving it out keeps the server's
+   * current setting.
+   */
+  onlineMetadata?: boolean;
+}
+
 export async function indexSetupLibrary(
   pathToLibrary: string,
+  options: SetupLibraryOptions = {},
 ): Promise<LibraryIndexResponse> {
-  const response = await api.post(
-    `/setup/library`,
-    { path: pathToLibrary },
-    { timeout: 30 * 60 * 1000 },
-  );
+  const body: { path: string; online_metadata?: boolean } = {
+    path: pathToLibrary,
+  };
+  if (options.onlineMetadata !== undefined) {
+    body.online_metadata = options.onlineMetadata;
+  }
+  const response = await api.post(`/setup/library`, body, {
+    timeout: 30 * 60 * 1000,
+  });
   return response.data;
 }
 

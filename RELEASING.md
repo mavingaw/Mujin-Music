@@ -1,13 +1,23 @@
-# Releasing Parson
+# Releasing Mujin Music
 
-The root `package.json` is the version source. The release command synchronises workspace packages, Rust manifests and lockfile, Expo version and build numbers, then creates a release commit and an annotated tag. It requires a clean checkout and a newer stable version.
+The root `package.json` is the version source. The release command synchronises workspace packages, Rust manifests and lockfile, Expo version, iOS build number and Android versionCode, then creates a release commit and an annotated tag. It requires a clean checkout and a newer stable version.
 
 ```sh
-bun run release 1.0.1
+bun run release 1.1.0
 git push origin HEAD --follow-tags
 ```
 
-Pushing the tag runs the stable release pipeline. It builds desktop installers for both architectures, the standalone Windows server, and versioned Docker images plus `latest`. It generates desktop update channels and the server manifest from those exact artifacts. No release-specific workflow edits are needed.
+Pushing the tag runs the stable release pipeline (`.github/workflows/release.yml`). It builds desktop installers for both architectures, the standalone Windows server, the Android APKs for `arm64-v8a` and `armeabi-v7a`, and versioned Docker images plus `latest`. The image is pushed only after every package has built. The release job checks the exact package set, generates desktop update channels and the server manifest from those exact artifacts, attests them, and writes the release body from `.github/release-notes.md` (rendered by `tools/release-notes.cjs`). No release-specific workflow edits are needed.
+
+A v1.1.0 release publishes:
+
+- `Mujin-Music-Setup-1.1.0-{x64,arm64}.exe`, `Mujin-Music-1.1.0-{x64,arm64}-portable.exe` and the installers' `.blockmap` files
+- `Mujin-Music-1.1.0-{x64,arm64}.dmg`, `Mujin-Music-1.1.0-{x64,arm64}.zip` and their `.blockmap` files
+- `Mujin-Music-1.1.0-{x86_64,arm64}.AppImage`, `Mujin-Music-1.1.0-{amd64,arm64}.deb`
+- `Mujin-Music-Server-1.1.0-win-x64.zip`, `ParsonMusicServer.exe`, `ParsonMusicServer.exe.sha256`, `windows-server-update.json`
+- `Mujin-Music-1.1.0-android-arm64-v8a.apk`, `Mujin-Music-1.1.0-android-armeabi-v7a.apk`
+- `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`
+- the container image `ghcr.io/<owner>/<repository>:1.1.0` (lowercase), also tagged `latest`
 
 For an existing version, `bun run version:sync` refreshes generated version fields without committing or tagging. `bun run version:check` checks that everything agrees.
 
@@ -15,7 +25,11 @@ For an existing version, `bun run version:sync` refreshes generated version fiel
 
 For signed macOS desktop updates, configure `MACOS_CSC_LINK` and `MACOS_CSC_KEY_PASSWORD`, plus `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` for notarization. Unsigned macOS builds still work but offer manual downloads instead of auto-updates. Windows signing optionally uses `WINDOWS_CSC_LINK` and `WINDOWS_CSC_KEY_PASSWORD`.
 
-Signing secrets are inherited by the reusable build workflow. They are never stored in this repository.
+Android release APKs are signed with the upload key when all four of `ANDROID_UPLOAD_KEYSTORE_BASE64` (the keystore, base64-encoded), `ANDROID_UPLOAD_STORE_PASSWORD`, `ANDROID_UPLOAD_KEY_ALIAS` and `ANDROID_UPLOAD_KEY_PASSWORD` are set; with only some of them, the build fails. With none, the APKs are signed with the public debug key from Expo's project template, the same key CI uses, so they update each other in place, and the release notes say so. Android refuses to update an install signed with one key from an APK signed with another, so moving from the debug key to an upload key means uninstalling the app once. Set the upload key before the first release that people install if you can.
+
+The container image is pushed with the workflow's `GITHUB_TOKEN`. A new GitHub package starts out private: make it public once (the package's settings on GitHub) so that `docker pull` works without signing in.
+
+Signing secrets are inherited by the reusable build workflows. They are never stored in this repository.
 
 ## Update behaviour
 

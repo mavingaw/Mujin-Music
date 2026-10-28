@@ -30,7 +30,7 @@ export function BrowseHeader({
           hitSlop={12}
           onPress={router.back}
         >
-          <ArrowLeft color="white" size={25} />
+          <ArrowLeft color={palette.text} size={25} />
         </Pressable>
         {right}
       </View>
@@ -85,7 +85,7 @@ export const browseStyles = StyleSheet.create({
     paddingVertical: 8,
   },
   rowText: { flex: 1, minWidth: 0 },
-  rowTitle: { color: "white", fontSize: 15, fontWeight: "700" },
+  rowTitle: { color: palette.text, fontSize: 15, fontWeight: "700" },
   rowMeta: { color: palette.secondary, fontSize: 13, marginTop: 3 },
   sectionHeader: {
     flexDirection: "row",
@@ -96,10 +96,10 @@ export const browseStyles = StyleSheet.create({
     paddingBottom: 6,
     backgroundColor: palette.background,
   },
-  sectionTitle: { color: "white", fontSize: 18, fontWeight: "800" },
+  sectionTitle: { color: palette.text, fontSize: 18, fontWeight: "800" },
   sectionMeta: { color: palette.muted, fontSize: 12 },
   empty: { alignItems: "center", padding: 40, marginTop: 24 },
-  emptyTitle: { color: "white", fontSize: 18, fontWeight: "800" },
+  emptyTitle: { color: palette.text, fontSize: 18, fontWeight: "800" },
   emptyText: {
     color: palette.secondary,
     marginTop: 8,
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 32,
     lineHeight: 36,
     fontWeight: "900",
@@ -142,7 +142,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  chipActive: { backgroundColor: "white", borderColor: "white" },
-  chipText: { color: "white", fontSize: 13, fontWeight: "700" },
-  chipTextActive: { color: "black" },
+  chipActive: { backgroundColor: palette.text, borderColor: palette.text },
+  chipText: { color: palette.text, fontSize: 13, fontWeight: "700" },
+  chipTextActive: { color: palette.background },
 });

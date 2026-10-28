@@ -12,7 +12,14 @@ import {
   getLibraryUnavailable,
   removeLibraryRoot,
 } from "./library";
-import { findLyrics, getCachedLyrics } from "./lyrics";
+import {
+  clearLyricsAvailability,
+  findLyrics,
+  getCachedLyrics,
+  getLyricsAvailability,
+  lookupLyricsAvailability,
+  peekLyricsAvailability,
+} from "./lyrics";
 import { signImagePath } from "./images";
 import {
   addAlbumToPlaylist,
@@ -155,6 +162,45 @@ describe("cached entity resources", () => {
     await findLyrics("lyrics-single-flight");
     expect(get).toHaveBeenCalledTimes(1);
     expect(getCachedLyrics("lyrics-single-flight")).toBe(first);
+  });
+
+  test("lyrics availability asks once per song, in one batch", async () => {
+    clearLyricsAvailability();
+    const post = spyOn(api, "post").mockResolvedValue({
+      data: {
+        songs: { "timed-song": { synced: true, source: "embedded_lrc" } },
+      },
+      status: 200,
+      headers: new Headers(),
+    } as never);
+    expect(
+      await getLyricsAvailability(["timed-song", "quiet-song", "timed-song"]),
+    ).toEqual({ "timed-song": { synced: true, source: "embedded_lrc" } });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith("/lyrics/availability", {
+      song_ids: ["timed-song", "quiet-song"],
+    });
+    expect(peekLyricsAvailability("quiet-song")).toBeNull();
+    await getLyricsAvailability(["quiet-song", "timed-song"]);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  test("rows asking for their own lyrics share one batched request", async () => {
+    clearLyricsAvailability();
+    const post = spyOn(api, "post").mockResolvedValue({
+      data: { songs: { "row-a": { synced: false, source: "embedded_text" } } },
+      status: 200,
+      headers: new Headers(),
+    } as never);
+    const [first, second] = await Promise.all([
+      lookupLyricsAvailability("row-a"),
+      lookupLyricsAvailability("row-b"),
+    ]);
+    expect(first).toEqual({ synced: false, source: "embedded_text" });
+    expect(second).toBeNull();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(await lookupLyricsAvailability("row-b")).toBeNull();
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
   test("concurrent album lookups share a request and keep bare/full caches separate", async () => {

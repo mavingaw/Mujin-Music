@@ -271,14 +271,14 @@ Ethernet → the network → Network profile type). Check the rules with
 
 ## Headless server on Linux or a NAS (Docker)
 
-The container image is `ghcr.io/parsonlabs/parson:latest`. It is built for
+The container image is `ghcr.io/mavingaw/mujin-music:latest`. It is built for
 x86_64 and arm64, including the Raspberry Pi 4/5, most Synology and QNAP
 models, and Unraid.
 
 ```yaml
 services:
   parson:
-    image: ghcr.io/parsonlabs/parson:latest
+    image: ghcr.io/mavingaw/mujin-music:latest
     # Host networking lets phones and Mujin Music Desktop find the server via
     # mDNS. With bridge networking, publish 1993 and connect by address.
     network_mode: host

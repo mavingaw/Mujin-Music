@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld("__PARSON_ELECTRON__", {
       );
     },
   },
+  windowMaterial: {
+    supported: () => ipcRenderer.invoke("parson:window-material", "supported"),
+    set: (material) =>
+      ipcRenderer.invoke("parson:window-material", "set", material ?? null),
+  },
   watchPowerResume: (callback) => {
     const listener = () => callback();
     ipcRenderer.on("parson:power-resume", listener);

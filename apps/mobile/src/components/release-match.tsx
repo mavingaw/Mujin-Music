@@ -9,12 +9,12 @@ import { Linking, StyleSheet, Text, View } from "react-native";
 
 import { palette } from "@/constants/colors";
 
-const AMBER = "#fcd34d";
+const AMBER = palette.brass;
 
 const SIGNAL_ICON = {
-  match: { Icon: Check, color: "#6ee7b7" },
+  match: { Icon: Check, color: palette.success },
   partial: { Icon: CircleHelp, color: AMBER },
-  mismatch: { Icon: X, color: "#fda4af" },
+  mismatch: { Icon: X, color: palette.danger },
   unknown: { Icon: CircleHelp, color: palette.muted },
 } as const;
 
@@ -23,7 +23,14 @@ const SIGNAL_ICON = {
  * its own tags, and the evidence says why. Identifying the album is done
  * from Parson on the web.
  */
-export function UnverifiedMatchNotice({ check }: { check: ReleaseMatchCheck }) {
+export function UnverifiedMatchNotice({
+  check,
+  text = UNVERIFIED_MATCH_TEXT,
+}: {
+  check: ReleaseMatchCheck;
+  /** What the check means for this album's page. */
+  text?: string;
+}) {
   const summary = releaseMatchSummary(check);
   return (
     <View accessibilityLabel="Unverified match" style={styles.box}>
@@ -42,7 +49,7 @@ export function UnverifiedMatchNotice({ check }: { check: ReleaseMatchCheck }) {
         </Text>
         {summary ? <Text style={styles.muted}> · {summary}</Text> : null}
       </Text>
-      <Text style={styles.body}>{UNVERIFIED_MATCH_TEXT}</Text>
+      <Text style={styles.body}>{text}</Text>
       {releaseMatchSignals(check).map((signal) => {
         const { Icon, color } =
           SIGNAL_ICON[signal.outcome] ?? SIGNAL_ICON.unknown;
@@ -67,8 +74,8 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(252,211,77,0.28)",
-    backgroundColor: "rgba(252,211,77,0.07)",
+    borderColor: "rgba(230,197,153,0.28)",
+    backgroundColor: "rgba(230,197,153,0.07)",
     padding: 14,
     gap: 6,
   },
@@ -85,6 +92,11 @@ const styles = StyleSheet.create({
   body: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
   signal: { flexDirection: "row", alignItems: "flex-start", gap: 7 },
   signalIcon: { marginTop: 3 },
-  signalText: { flex: 1, color: "#d4d4d8", fontSize: 13, lineHeight: 19 },
+  signalText: {
+    flex: 1,
+    color: palette.secondary,
+    fontSize: 13,
+    lineHeight: 19,
+  },
   hint: { color: palette.muted, fontSize: 12, lineHeight: 17, marginTop: 4 },
 });

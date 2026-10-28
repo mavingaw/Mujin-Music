@@ -192,7 +192,7 @@ function Operation({
           {icon}
         </span>
         <div className="min-w-0">
-          <h2 className="text-[15px] font-semibold text-white">{title}</h2>
+          <h2 className="text-[0.9375rem] font-semibold text-white">{title}</h2>
           <p className="mt-1 text-sm leading-5 text-zinc-500">{description}</p>
         </div>
       </div>
@@ -268,7 +268,7 @@ function MissingFilesSection() {
         <div className="mb-4 space-y-2">
           {offline.map((root) => (
             <div
-              className="flex items-center gap-3 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2.5 text-sm text-[#f5d27a]"
+              className="flex items-center gap-3 rounded-lg border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2.5 text-sm text-amber-200"
               key={root.path}
             >
               <HardDrive className="h-4 w-4 shrink-0" />
@@ -308,11 +308,11 @@ function MissingFilesSection() {
                     </span>
                   )}
                 </p>
-                <p className="truncate font-mono text-[11px] text-zinc-600">
+                <p className="truncate font-mono text-[0.6875rem] text-zinc-600">
                   {file.path}
                 </p>
               </div>
-              <span className="shrink-0 text-[11px] text-zinc-500">
+              <span className="shrink-0 text-[0.6875rem] text-zinc-500">
                 {file.present_again
                   ? "Back on disk"
                   : !file.root_reachable

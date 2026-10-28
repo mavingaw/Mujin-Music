@@ -225,7 +225,7 @@ export default function AlbumEditor({
           ).map(([key, title]) => (
             <button
               aria-selected={tab === key}
-              className={`-mb-px border-b-2 pb-2.5 text-[13px] font-semibold transition-colors ${
+              className={`-mb-px border-b-2 pb-2.5 text-[0.8125rem] font-semibold transition-colors ${
                 tab === key
                   ? "border-white text-white"
                   : "border-transparent text-zinc-500 hover:text-zinc-200"

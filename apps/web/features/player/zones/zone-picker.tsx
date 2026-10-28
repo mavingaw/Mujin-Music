@@ -29,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   Settings2,
+  Tv,
   SlidersHorizontal,
   Unlink,
   Volume2,
@@ -58,6 +59,7 @@ import { ZoneOutputsPanel } from "./zone-outputs";
 import { ZoneSettingsDialog } from "./zone-settings";
 import { QualityLight, ZoneSignalPathDialog } from "./zone-signal-path";
 import { useZones } from "./zones-provider";
+import { openZoneDisplay } from "@/features/display/display-links";
 
 const SLEEP_CHOICES = [15, 30, 45, 60, 90] as const;
 
@@ -99,7 +101,7 @@ export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
     <>
       <button
         aria-label={`Zone: ${label}. Choose where music plays`}
-        className={`group/control relative flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors ${remoteZone ? "bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25" : "text-zinc-400 hover:bg-white/10 hover:text-white"}`}
+        className={`group/control relative flex h-8 min-w-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors ${remoteZone ? "bg-mujin-copper/[0.16] text-mujin-copper hover:bg-mujin-copper/25" : "text-mujin-text-secondary hover:bg-white/[0.07] hover:text-mujin-text"}`}
         data-zone-picker
         onClick={() => setOpen(true)}
         onContextMenu={(event) => {
@@ -113,12 +115,12 @@ export function ZonePickerButton({ compact = false }: { compact?: boolean }) {
       >
         <ZoneIcon zone={current ?? { kind: "web" }} />
         {!compact && (
-          <span className="hidden max-w-28 truncate lg:inline">{label}</span>
+          <span className="hidden max-w-32 truncate lg:inline">{label}</span>
         )}
         {remoteZone?.group && (
           <span
             aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${remoteZone.group.synced ? "bg-emerald-400" : "bg-amber-400"}`}
+            className={`h-1.5 w-1.5 rounded-full ${remoteZone.group.synced ? "bg-quality-high" : "bg-amber-400"}`}
           />
         )}
       </button>
@@ -343,7 +345,7 @@ function ZoneFooterNotes() {
   const devices = outputs?.devices;
   const upnp = outputs?.upnp;
   return (
-    <div className="max-h-[32dvh] space-y-1 overflow-y-auto border-t border-white/10 px-5 py-3 text-[11px] leading-4 text-zinc-500">
+    <div className="max-h-[32dvh] space-y-1 overflow-y-auto border-t border-white/10 px-5 py-3 text-[0.6875rem] leading-4 text-zinc-500">
       <ZoneOutputsPanel />
       {sonos && (
         <p>
@@ -480,7 +482,7 @@ function ZoneRow({
             <span className="block truncate text-xs text-zinc-400">
               {subtitle}
             </span>
-            <span className="block truncate text-[11px] text-zinc-600">
+            <span className="block truncate text-[0.6875rem] text-zinc-600">
               {device}
               {zone.sleep_timer
                 ? ` · ${sleepTimerLabel(zone.sleep_timer, Date.now())}`
@@ -536,7 +538,7 @@ function ZoneRow({
         />
       )}
       {!grouping && deviceVolume && (
-        <p className="mt-1 pl-12 text-[11px] tabular-nums text-zinc-600">
+        <p className="mt-1 pl-12 text-[0.6875rem] tabular-nums text-zinc-600">
           {deviceVolume}
         </p>
       )}
@@ -544,7 +546,7 @@ function ZoneRow({
         <div className="mt-2 space-y-1 border-l border-white/10 pl-3">
           {zone.group.members.map((member) => (
             <div className="flex items-center gap-2" key={member.id}>
-              <span className="w-24 truncate text-[11px] text-zinc-400">
+              <span className="w-24 truncate text-[0.6875rem] text-zinc-400">
                 {member.name}
               </span>
               {member.volume && (
@@ -607,7 +609,7 @@ function ZoneRow({
               </button>
             </div>
           ))}
-          <p className="pt-1 text-[11px] leading-4 text-zinc-500">
+          <p className="pt-1 text-[0.6875rem] leading-4 text-zinc-500">
             {zone.group.sync_note}
           </p>
         </div>
@@ -620,7 +622,10 @@ function ZoneRow({
           {zone.notes
             .filter((note) => note !== zone.group?.sync_note)
             .map((note) => (
-              <li className="text-[11px] leading-4 text-zinc-500" key={note}>
+              <li
+                className="text-[0.6875rem] leading-4 text-zinc-500"
+                key={note}
+              >
                 {note}
               </li>
             ))}
@@ -644,7 +649,7 @@ function SignalPathSummary({ zone }: { zone: Zone }) {
   return (
     <>
       <button
-        className="mt-2 flex w-full items-start gap-2 rounded-lg px-1 py-1 text-left text-[11px] leading-4 text-zinc-400 transition hover:bg-white/[0.04] hover:text-zinc-200"
+        className="mt-2 flex w-full items-start gap-2 rounded-lg px-1 py-1 text-left text-[0.6875rem] leading-4 text-zinc-400 transition hover:bg-white/[0.04] hover:text-zinc-200"
         data-signal-path-summary
         onClick={() => setOpen(true)}
         type="button"
@@ -676,7 +681,7 @@ function Badge({
   } as const;
   return (
     <span
-      className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium ${tones[tone]}`}
+      className={`shrink-0 rounded-full border px-1.5 py-px text-[0.625rem] font-medium ${tones[tone]}`}
     >
       {children}
     </span>
@@ -752,7 +757,7 @@ function ZoneVolumeRow({
         <Plus className="h-3 w-3" />
       </button>
       <span
-        className={`w-14 text-right text-[11px] tabular-nums ${aboveComfort ? "text-amber-300" : "text-zinc-500"}`}
+        className={`w-14 text-right text-[0.6875rem] tabular-nums ${aboveComfort ? "text-amber-300" : "text-zinc-500"}`}
         title={
           max < 100
             ? `The slider stops at ${max}; + goes past it up to the safety limit.`
@@ -824,6 +829,16 @@ function ZoneMenu({
         <DropdownMenuItem onSelect={() => onEdit()}>
           <Settings2 className="h-4 w-4" /> Zone settings
         </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() =>
+            void run(
+              () => openZoneDisplay({ id: zone.id, name: zone.name }),
+              "Could not open a display.",
+            )
+          }
+        >
+          <Tv className="h-4 w-4" /> Open as display
+        </DropdownMenuItem>
         {zone.settings?.supports.dsp && (
           <DropdownMenuItem
             onSelect={() =>
@@ -831,7 +846,7 @@ function ZoneMenu({
             }
           >
             <SlidersHorizontal className="h-4 w-4" /> DSP
-            <span className="ml-auto max-w-24 truncate text-[11px] text-zinc-500">
+            <span className="ml-auto max-w-24 truncate text-[0.6875rem] text-zinc-500">
               {dspSummary(zone.settings.dsp)}
             </span>
           </DropdownMenuItem>

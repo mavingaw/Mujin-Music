@@ -1,4 +1,3 @@
-import { palette } from "@/constants/colors";
 import {
   enhancedStatusLabel,
   isUpgradeOpen,
@@ -14,12 +13,22 @@ export interface UpgradeChip {
   busy: boolean;
 }
 
+/** The palette colours the chips are drawn in (the active theme's). */
+export type ChipPalette = {
+  accentSoft: string;
+  secondary: string;
+  enhanced: string;
+};
+
 /**
  * The album page's Better versions line on the phone: a lossless copy on
  * its way ("Lossless version on its way · 45%", "Handed to Lidarr") and
  * AI-enhanced copies, which are never called lossless.
  */
-export function upgradeChips(status: AlbumUpgradeStatus | undefined) {
+export function upgradeChips(
+  status: AlbumUpgradeStatus | undefined,
+  palette: ChipPalette,
+) {
   const chips: UpgradeChip[] = [];
   if (!status) return chips;
   const request = status.request;
@@ -33,7 +42,7 @@ export function upgradeChips(status: AlbumUpgradeStatus | undefined) {
       label: upgradeStatusLabel(request),
       color:
         request.state === "fake_lossless" || request.state === "failed"
-          ? palette.danger
+          ? palette.secondary
           : palette.accentSoft,
       busy: isUpgradeOpen(request.state) && request.state !== "handed_off",
     });
@@ -43,7 +52,7 @@ export function upgradeChips(status: AlbumUpgradeStatus | undefined) {
     chips.push({
       key: "enhanced",
       label: enhanced,
-      color: palette.qualityEnhanced,
+      color: palette.enhanced,
       busy: false,
     });
   }
@@ -51,7 +60,7 @@ export function upgradeChips(status: AlbumUpgradeStatus | undefined) {
     chips.push({
       key: "queued",
       label: `${status.enhance_queued} track(s) being enhanced`,
-      color: palette.qualityEnhanced,
+      color: palette.enhanced,
       busy: true,
     });
   }

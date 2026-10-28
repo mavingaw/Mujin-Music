@@ -32,6 +32,9 @@ import {
   Maximize2,
   MicVocal,
   MonitorSpeaker,
+  Play,
+  SkipBack,
+  SkipForward,
   SlidersHorizontal,
 } from "lucide-react";
 import Image from "next/image";
@@ -40,6 +43,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AudioPreset, AudioPresetId } from "./audio-presets";
 import PlayerMoreMenu from "./player-more-menu";
+import { holdPhoneDock } from "./phone-dock";
 import { DSP_SHORTCUT_LABEL } from "./dsp-panel";
 import {
   ActionButton,
@@ -90,6 +94,7 @@ export function PlayerFooter({
   zoneLabel,
   zoneSignal,
   livePlaying,
+  lyricsMark,
 }: {
   albumCover?: string;
   albumId: string;
@@ -140,17 +145,23 @@ export function PlayerFooter({
   zoneSignal?: ReactNode;
   /** What a live station is playing (titles and format), when one plays. */
   livePlaying?: LiveNowPlaying | null;
+  /** The "timed lyrics" marker for the playing track; opens the lyrics. */
+  lyricsMark?: ReactNode;
 }) {
   const live = isLiveRadioId(songId);
+  usePhoneDock();
   const footer = (
-    <footer className="fixed bottom-20 left-2 right-2 z-50 isolate overflow-visible rounded-[14px] border border-white/10 bg-[#080808] px-3 py-2 text-white shadow-[0_20px_70px_rgba(0,0,0,0.72)] md:bottom-4 md:left-[calc(50%+40px)] md:right-auto md:w-[min(980px,calc(100vw-112px))] md:-translate-x-1/2 md:rounded-3xl md:px-4 md:py-4 md:pl-5 md:pr-3">
+    <footer
+      data-surface="footer"
+      className="fixed bottom-[calc(var(--shell-footer)+8px)] left-2 right-2 z-50 isolate overflow-hidden rounded-xl border border-white/[0.07] bg-mujin-surface-1/94 px-2.5 py-2 text-mujin-text shadow-[0_18px_50px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl md:inset-x-0 md:bottom-0 md:h-(--shell-footer) md:overflow-visible md:rounded-none md:border-x-0 md:border-b-0 md:border-t md:border-white/[0.06] md:bg-mujin-raised/96 md:px-5 md:py-0 md:shadow-[0_-24px_60px_-30px_rgba(0,0,0,0.9)]"
+    >
       <button
         aria-label={`Open now playing: ${title}`}
-        className="absolute inset-0 z-20 rounded-[14px] md:hidden"
+        className="absolute inset-0 z-20 rounded-xl md:hidden"
         onClick={onOpenFullscreen}
         type="button"
       />
-      <div className="relative z-10 grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(180px,0.9fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_300px_minmax(0,1fr)] lg:gap-x-4">
+      <div className="relative z-10 grid h-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(300px,1.15fr)_minmax(0,1fr)] lg:gap-x-6">
         <TrackInfo
           albumId={albumId}
           artistCredits={artistCredits}
@@ -161,11 +172,28 @@ export function PlayerFooter({
           feedback={feedback}
           zoneLabel={zoneLabel ?? null}
           zoneSignal={zoneSignal}
+          lyricsMark={
+            lyricsMark && !live ? (
+              <button
+                aria-label={lyricsOpen ? "Hide lyrics" : "Show lyrics"}
+                className="relative z-30 hidden shrink-0 rounded-[4px] transition-opacity hover:opacity-80 sm:inline-flex"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleLyrics();
+                }}
+                type="button"
+              >
+                {lyricsMark}
+              </button>
+            ) : null
+          }
         />
-        <section className="relative z-30 flex min-w-0 flex-col items-center gap-1.5 lg:w-75">
-          <div className="flex items-center gap-1.5">
+        <section className="relative z-30 flex min-w-0 flex-col items-center gap-1 md:w-full md:max-w-140 md:justify-self-center">
+          <div className="flex items-center gap-2">
             {signalLight ? (
-              <span className="hidden md:contents">{signalLight}</span>
+              <span className="hidden w-9 justify-center md:flex">
+                {signalLight}
+              </span>
             ) : null}
             <PlaybackControls
               compact
@@ -176,7 +204,7 @@ export function PlayerFooter({
               onToggle={onTogglePlayback}
             />
             {signalLight ? (
-              <span aria-hidden="true" className="hidden h-8 w-8 md:block" />
+              <span aria-hidden="true" className="hidden w-9 md:block" />
             ) : null}
           </div>
           {live ? (
@@ -198,17 +226,8 @@ export function PlayerFooter({
             />
           )}
         </section>
-        <section className="relative z-30 flex items-center justify-end gap-1.5 lg:justify-self-end">
-          <span className="hidden md:inline" data-player-queue-trigger>
-            <ActionButton
-              active={queueOpen}
-              label="Queue"
-              onClick={onOpenQueue}
-            >
-              <ListMusic className="h-4 w-4" />
-            </ActionButton>
-          </span>
-          <div className={live ? "hidden" : "hidden sm:block"}>
+        <section className="relative z-30 flex items-center justify-end gap-1 lg:justify-self-end">
+          <div className={live ? "hidden" : "hidden lg:block"}>
             <ActionButton
               active={lyricsOpen}
               label="Lyrics"
@@ -217,7 +236,17 @@ export function PlayerFooter({
               <MicVocal className="h-4 w-4" />
             </ActionButton>
           </div>
-          <div className="hidden sm:block">
+          <span className="hidden md:inline" data-player-queue-trigger>
+            <ActionButton
+              active={queueOpen}
+              label="Queue"
+              onClick={onOpenQueue}
+              shortcut="Ctrl E"
+            >
+              <ListMusic className="h-4 w-4" />
+            </ActionButton>
+          </span>
+          <div className="hidden xl:block">
             <ActionButton
               active={slowedReverb}
               label="Sound"
@@ -227,12 +256,16 @@ export function PlayerFooter({
             </ActionButton>
           </div>
           {zonePicker && (
-            <div className="relative z-30" data-zone-picker-slot>
+            <div
+              className="relative z-30 md:ml-1 md:border-l md:border-white/[0.07] md:pl-2"
+              data-zone-picker-slot
+            >
               {zonePicker}
             </div>
           )}
           <div className="hidden sm:block">
             <VolumeControl
+              expanded
               muted={muted}
               onChange={onVolumeChange}
               onToggleMute={onToggleMute}
@@ -256,11 +289,17 @@ export function PlayerFooter({
               <DropdownMenuItem onSelect={onOpenDsp}>
                 <SlidersHorizontal className="h-4 w-4" />
                 DSP engine
-                <span className="ml-auto text-[11px] text-zinc-500">
+                <span className="ml-auto text-[0.6875rem] text-zinc-500">
                   {DSP_SHORTCUT_LABEL}
                 </span>
               </DropdownMenuItem>
             ) : null}
+            {!live && (
+              <DropdownMenuItem className="lg:hidden" onSelect={onToggleLyrics}>
+                <MicVocal className="h-4 w-4" />
+                Lyrics
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={onOpenFullscreen}>
               <Maximize2 className="h-4 w-4" />
               Fullscreen
@@ -272,20 +311,20 @@ export function PlayerFooter({
               </DropdownMenuItem>
             )}
           </PlayerMoreMenu>
+          <span className="hidden md:inline">
+            <ActionButton
+              active={false}
+              label="Now playing"
+              onClick={onOpenFullscreen}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </ActionButton>
+          </span>
         </section>
       </div>
-      <div className="relative z-10 hidden md:block">
-        {!live && (
-          <Timeline
-            className="mt-2 flex w-full md:hidden"
-            currentTime={currentTime}
-            duration={duration}
-            isPlaying={isPlaying}
-            onChange={onSeek}
-            playbackRate={playbackRate}
-          />
-        )}
-      </div>
+      {!live && duration > 0 && (
+        <MiniProgress currentTime={currentTime} duration={duration} />
+      )}
     </footer>
   );
   // A live station is not a library song: no song menu.
@@ -306,6 +345,103 @@ export function PlayerFooter({
   );
 }
 
+/**
+ * The docked footer when nothing plays (Roon keeps its footer too): the
+ * zone button stays reachable, the transport waits. Desktop only; phones
+ * show the zone button on its own when there is more than one zone.
+ */
+export function IdleFooter({ zonePicker }: { zonePicker?: ReactNode }) {
+  return (
+    <footer
+      data-surface="footer"
+      className="fixed inset-x-0 bottom-0 z-50 hidden h-(--shell-footer) items-center border-t border-white/[0.06] bg-mujin-raised/96 px-5 text-mujin-text md:flex"
+    >
+      <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            aria-hidden="true"
+            className="grid h-14 w-14 shrink-0 place-items-center rounded-[5px] bg-mujin-surface-1 shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.06)]"
+          >
+            <span className="mj-signal-dot opacity-40" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-[0.875rem] font-medium text-mujin-text-secondary">
+              Nothing playing
+            </p>
+            <p className="truncate text-[0.75rem] text-mujin-text-tertiary">
+              Pick an album to start listening
+            </p>
+          </div>
+        </div>
+        <div aria-hidden="true" className="flex items-center gap-2 opacity-35">
+          <span className="grid h-10 w-10 place-items-center">
+            <SkipBack className="h-5 w-5" />
+          </span>
+          <span className="grid h-11 w-11 place-items-center rounded-full bg-mujin-text/15">
+            <Play className="ml-0.5 h-5 w-5" fill="currentColor" />
+          </span>
+          <span className="grid h-10 w-10 place-items-center">
+            <SkipForward className="h-5 w-5" />
+          </span>
+        </div>
+        <div className="flex items-center justify-end">{zonePicker}</div>
+      </div>
+    </footer>
+  );
+}
+
+/**
+ * Marks that a bar floats above the phone tab bar (the mini player, or the
+ * idle zone bar), so the page reserves room for it and nothing it floats
+ * over is hidden at the end of a scroll.
+ */
+export function usePhoneDock() {
+  useEffect(() => holdPhoneDock(document.documentElement), []);
+}
+
+/**
+ * Phones, nothing playing, more than one zone: a slim bar docked where the
+ * mini player sits (never a button floating over the page), naming the
+ * zone and opening the picker.
+ */
+export function PhoneIdleDock({ zonePicker }: { zonePicker: ReactNode }) {
+  usePhoneDock();
+  return (
+    <div
+      data-surface="footer"
+      className="fixed bottom-[calc(var(--shell-footer)+8px)] left-2 right-2 z-50 flex h-12 items-center gap-3 rounded-xl border border-white/[0.07] bg-mujin-surface-1/94 pl-3.5 pr-1.5 text-mujin-text shadow-[0_18px_50px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl md:hidden"
+    >
+      <span aria-hidden="true" className="mj-signal-dot opacity-40" />
+      <p className="min-w-0 flex-1 truncate text-[0.8125rem] text-mujin-text-secondary">
+        Nothing playing here
+      </p>
+      {zonePicker}
+    </div>
+  );
+}
+
+/** A hairline of progress along the bottom of the phone mini player. */
+function MiniProgress({
+  currentTime,
+  duration,
+}: {
+  currentTime: number;
+  duration: number;
+}) {
+  const ratio = Math.min(1, Math.max(0, currentTime / (duration || 1)));
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-3 bottom-0 h-[2px] overflow-hidden rounded-full bg-white/10 md:hidden"
+    >
+      <span
+        className="block h-full origin-left bg-mujin-text/85"
+        style={{ transform: `scaleX(${ratio})` }}
+      />
+    </span>
+  );
+}
+
 function TrackInfo({
   albumId,
   artistCredits,
@@ -316,6 +452,7 @@ function TrackInfo({
   songId,
   zoneLabel,
   zoneSignal,
+  lyricsMark,
 }: {
   albumId: string;
   artistCredits: TrackArtistCreditPart[];
@@ -326,22 +463,23 @@ function TrackInfo({
   songId: string;
   zoneLabel: string | null;
   zoneSignal?: ReactNode;
+  lyricsMark?: ReactNode;
 }) {
   const liveStation = liveStationIdFromSongId(songId);
   const href = liveStation
     ? stationHref(liveStation)
     : `/album?id=${encodeURIComponent(albumId)}`;
   return (
-    <section className="flex w-fit min-w-0 max-w-full items-center gap-2 overflow-hidden md:justify-self-start">
+    <section className="flex w-fit min-w-0 max-w-full items-center gap-2.5 overflow-hidden md:justify-self-start md:gap-3">
       <Link
         href={href}
         aria-label={`View ${title} album`}
-        className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg md:h-14 md:w-14"
+        className="mj-artwork relative h-11 w-11 shrink-0 overflow-hidden rounded-[5px] md:h-14 md:w-14"
       >
         {liveStation ? (
           <StationArtwork
             className="h-full w-full"
-            rounded="rounded-lg"
+            rounded="rounded-[5px]"
             sizes="56px"
             station={{
               name: title,
@@ -360,7 +498,7 @@ function TrackInfo({
       </Link>
       <div className="min-w-0 flex-[0_1_auto] sm:ml-1">
         <MarqueeTitle href={href} title={title} />
-        <span className="flex min-w-0 items-center gap-2 text-xs text-zinc-400">
+        <span className="flex min-w-0 items-center gap-2 text-[0.7812rem] text-mujin-text-secondary">
           {liveStation && <LiveBadge className="shrink-0" />}
           <span className="block min-w-0 truncate">
             {explicit && <ExplicitBadge />}
@@ -372,10 +510,11 @@ function TrackInfo({
               songId={songId}
             />
           )}
+          {lyricsMark}
         </span>
         {zoneLabel && (
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[11px] font-medium text-emerald-300">
+            <span className="truncate text-[0.6875rem] font-medium text-mujin-copper">
               Playing on {zoneLabel}
             </span>
             {zoneSignal}
@@ -421,7 +560,7 @@ function MarqueeTitle({ href, title }: { href: string; title: string }) {
 
   return (
     <Link
-      className="relative block w-full max-w-full overflow-hidden whitespace-nowrap text-sm font-semibold text-white hover:underline md:text-base"
+      className="relative block w-full max-w-full overflow-hidden whitespace-nowrap text-[0.8438rem] font-semibold text-mujin-text hover:underline md:text-[0.9062rem]"
       href={href}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

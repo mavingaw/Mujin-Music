@@ -1,5 +1,6 @@
 import {
   getSongWorks,
+  lookupLyricsAvailability,
   trackWorkTarget,
   type LibrarySong,
   type ResponseAlbum,
@@ -14,6 +15,7 @@ import {
   ChevronUp,
   ListEnd,
   ListPlus,
+  MicVocal,
   MoreHorizontal,
   Music2,
   Play,
@@ -29,7 +31,7 @@ import { StartRadioAction } from "@/components/radio-ui";
 import { BanAction, BannedMark } from "@/components/radio-bans";
 import { ListenLaterAction } from "@/components/listen-later";
 import { TagsAction } from "@/components/tag-picker";
-import { palette } from "@/constants/colors";
+import { alpha, fonts, palette, tint } from "@/constants/colors";
 import { usePlayer } from "@/providers/player-provider";
 import { useZonePlayback } from "@/hooks/use-zone-playback";
 import {
@@ -115,6 +117,14 @@ export function SongRow({
   const [downloadError, setDownloadError] = useState(false);
   useDownloadsRevision();
   const active = player.current?.id === song.id;
+  // The "timed lyrics" marker; rows of one list share a batched request.
+  const lyrics = useQuery({
+    queryKey: ["lyrics-availability", song.id],
+    queryFn: () => lookupLyricsAvailability(song.id),
+    enabled: session.phase === "ready",
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
   const songWorks = useQuery({
     queryKey: ["song-works", song.id],
     queryFn: () => getSongWorks(song.id),
@@ -163,6 +173,27 @@ export function SongRow({
               {title ?? song.name}
             </Text>
             <BannedMark target={{ kind: "song", id: song.id }} />
+            {lyrics.data ? (
+              <View
+                accessibilityLabel={
+                  lyrics.data.synced ? "Timed lyrics" : "Lyrics"
+                }
+                accessible
+                style={[
+                  styles.lyricsMark,
+                  lyrics.data.synced ? styles.lyricsMarkTimed : null,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.lyricsMarkText,
+                    lyrics.data.synced ? styles.lyricsMarkTextTimed : null,
+                  ]}
+                >
+                  {lyrics.data.synced ? "LRC" : "LYRICS"}
+                </Text>
+              </View>
+            ) : null}
           </View>
           {subtitle ? (
             <Text numberOfLines={1} style={styles.songArtist}>
@@ -188,7 +219,7 @@ export function SongRow({
       >
         <DrawerAction
           icon={Play}
-          label="Play"
+          label="Play now"
           onPress={() => {
             setMenu(false);
             playback.playSong(song, queue);
@@ -196,7 +227,7 @@ export function SongRow({
         />
         <DrawerAction
           icon={ListPlus}
-          label="Play next"
+          label="Add next"
           onPress={() => {
             setMenu(false);
             playback.addNext(song);
@@ -214,6 +245,17 @@ export function SongRow({
           <StartRadioAction
             seed={{ kind: "song", id: song.id }}
             onStarted={() => setMenu(false)}
+          />
+        ) : null}
+        {session.phase !== "offline" ? (
+          <DrawerAction
+            icon={MicVocal}
+            label={active ? "View lyrics" : "Play and view lyrics"}
+            onPress={() => {
+              setMenu(false);
+              if (!active) playback.playSong(song, queue);
+              router.push({ pathname: "/player", params: { panel: "lyrics" } });
+            }}
           />
         ) : null}
         <BanAction
@@ -365,7 +407,7 @@ export function AlbumRail({ albums }: { albums: ResponseAlbum[] }) {
             }}
             onLongPress={() => setSelected(album)}
           >
-            <Artwork path={album.cover_url} size={154} rounded={10} />
+            <Artwork path={album.cover_url} size={154} rounded={6} />
             <Text numberOfLines={1} style={styles.cardTitle}>
               {album.name}
             </Text>
@@ -392,23 +434,42 @@ export function AlbumRail({ albums }: { albums: ResponseAlbum[] }) {
 }
 
 const styles = StyleSheet.create({
+  lyricsMark: {
+    borderWidth: 1,
+    borderColor: tint(0.14),
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    marginLeft: 6,
+  },
+  lyricsMarkTimed: {
+    borderColor: alpha(palette.accent, 0.4),
+    backgroundColor: alpha(palette.accent, 0.08),
+  },
+  lyricsMarkText: {
+    color: palette.tertiary,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+  },
+  lyricsMarkTextTimed: { color: palette.accent },
   songTitleRow: { alignItems: "center", flexDirection: "row", gap: 6 },
   shrink: { flexShrink: 1 },
   screen: { flex: 1, backgroundColor: palette.background },
   titleBlock: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 14 },
   pageTitle: {
-    color: "white",
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: "900",
-    letterSpacing: -1,
+    color: palette.text,
+    fontFamily: fonts.display,
+    fontSize: 36,
+    lineHeight: 42,
+    letterSpacing: -0.3,
   },
   subtitle: { color: palette.secondary, marginTop: 4, fontSize: 14 },
   sectionTitle: {
-    color: "white",
-    fontSize: 21,
-    fontWeight: "800",
-    letterSpacing: -0.4,
+    color: palette.text,
+    fontFamily: fonts.title,
+    fontSize: 22,
+    letterSpacing: -0.1,
     marginHorizontal: 20,
     marginTop: 18,
     marginBottom: 13,
@@ -428,7 +489,11 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   pressed: { opacity: 0.62 },
-  actionError: { color: "#ff9b9b", paddingHorizontal: 16, paddingVertical: 8 },
+  actionError: {
+    color: palette.danger,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
   trackNumber: {
     color: palette.secondary,
     width: 24,
@@ -436,7 +501,7 @@ const styles = StyleSheet.create({
     fontVariant: ["tabular-nums"],
   },
   songLabels: { flex: 1, justifyContent: "center" },
-  songTitle: { color: "white", fontSize: 15, fontWeight: "600" },
+  songTitle: { color: palette.text, fontSize: 15, fontWeight: "500" },
   songArtist: { color: palette.secondary, fontSize: 13, marginTop: 3 },
   rowMenuButton: {
     width: 36,
@@ -446,6 +511,11 @@ const styles = StyleSheet.create({
   },
   rail: { paddingHorizontal: 20, gap: 15 },
   card: { width: 154 },
-  cardTitle: { color: "white", fontWeight: "700", fontSize: 14, marginTop: 9 },
+  cardTitle: {
+    color: palette.text,
+    fontWeight: "500",
+    fontSize: 14,
+    marginTop: 9,
+  },
   cardSubtitle: { color: palette.secondary, fontSize: 13, marginTop: 3 },
 });

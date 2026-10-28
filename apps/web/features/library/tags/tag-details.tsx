@@ -220,7 +220,7 @@ export default function TagDetails() {
               </>
             )}
           </p>
-          <h1 className="break-words text-5xl font-black leading-none text-white sm:text-7xl">
+          <h1 className="break-words text-5xl mj-display leading-none text-mujin-text sm:text-7xl">
             <span className={tone.text}>#</span>
             {tag.name}
           </h1>
@@ -238,12 +238,12 @@ export default function TagDetails() {
           <div className="mt-7 flex flex-wrap items-center gap-3">
             <button
               aria-label={`Play #${tag.name}`}
-              className="grid h-12 w-12 place-items-center rounded-full bg-white text-black transition-transform hover:scale-105 disabled:opacity-50"
+              className="grid h-12 w-12 place-items-center rounded-full mj-primary motion-safe:hover:scale-105 disabled:opacity-50"
               disabled={empty}
               onClick={() => void playFocus(playQuery, false)}
               type="button"
             >
-              <Play className="ml-0.5 h-6 w-6 fill-black" />
+              <Play className="ml-0.5 h-6 w-6 fill-current" />
             </button>
             <button
               aria-label={`Shuffle #${tag.name}`}

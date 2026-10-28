@@ -200,6 +200,31 @@ test("anonymous server preflights never leak the current bearer token", async ()
   });
 });
 
+test("anonymous display requests never send, refresh or redirect the session", async () => {
+  configureApiRuntime({
+    getAccessToken: () => "signed-in-token",
+    onUnauthorized: () => {
+      throw new Error("a display must never be sent to the sign-in page");
+    },
+  });
+  const calls: string[] = [];
+  globalThis.fetch = mock(async (input, init) => {
+    calls.push(String(input));
+    expect(new Headers(init?.headers).has("authorization")).toBeFalse();
+    expect(init?.credentials).toBe("omit");
+    expect("anonymous" in (init ?? {})).toBeFalse();
+    return Response.json({ error: "display_not_paired" }, { status: 401 });
+  }) as typeof fetch;
+
+  await expect(
+    api.get("/display/state", {
+      baseURL: "https://music.test/api/v1",
+      anonymous: true,
+    }),
+  ).rejects.toThrow("Request failed with status 401");
+  expect(calls).toEqual(["https://music.test/api/v1/display/state"]);
+});
+
 test("invalid stored server URLs fall back to the current origin", () => {
   expect(normalizeApiBaseURL("not a URL", "https://music.test")).toBe(
     "https://music.test/api/v1",

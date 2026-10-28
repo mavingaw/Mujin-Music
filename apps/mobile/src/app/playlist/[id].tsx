@@ -59,7 +59,7 @@ export default function PlaylistScreen() {
   if (query.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   if (!query.data)
@@ -149,7 +149,7 @@ export default function PlaylistScreen() {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" />
+            <ArrowLeft color={palette.text} />
           </Pressable>
           <Pressable
             {...immediateBorderlessPressFeedback}
@@ -158,7 +158,7 @@ export default function PlaylistScreen() {
             hitSlop={12}
             onPress={() => setMenu(true)}
           >
-            <MoreHorizontal color="white" />
+            <MoreHorizontal color={palette.text} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 130 }}>
@@ -189,7 +189,11 @@ export default function PlaylistScreen() {
                   data.songs[0] && playback.playSong(data.songs[0], data.songs)
                 }
               >
-                <Play color="black" fill="black" size={28} />
+                <Play
+                  color={palette.background}
+                  fill={palette.background}
+                  size={28}
+                />
               </Pressable>
               <Pressable
                 {...immediateBorderlessPressFeedback}
@@ -341,14 +345,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   hero: { padding: 20, alignItems: "flex-start" },
-  title: { color: "white", fontSize: 32, fontWeight: "900", marginTop: 22 },
+  title: {
+    color: palette.text,
+    fontSize: 32,
+    fontWeight: "900",
+    marginTop: 22,
+  },
   description: { color: palette.secondary, marginTop: 8, lineHeight: 20 },
   meta: { color: palette.secondary, marginTop: 8 },
   play: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -370,8 +379,8 @@ const styles = StyleSheet.create({
   input: {
     minHeight: 50,
     borderRadius: 10,
-    backgroundColor: "#29292e",
-    color: "white",
+    backgroundColor: palette.surfaceStrong,
+    color: palette.text,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
@@ -379,13 +388,13 @@ const styles = StyleSheet.create({
   save: {
     height: 50,
     borderRadius: 25,
-    backgroundColor: "white",
+    backgroundColor: palette.text,
     alignItems: "center",
     justifyContent: "center",
   },
-  saveText: { color: "black", fontWeight: "800" },
+  saveText: { color: palette.background, fontWeight: "800" },
   disabled: { opacity: 0.45 },
-  editError: { color: "#ff9b9b", textAlign: "center" },
+  editError: { color: palette.danger, textAlign: "center" },
   empty: {
     margin: 20,
     padding: 28,
@@ -394,7 +403,7 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     alignItems: "center",
   },
-  emptyTitle: { color: "white", fontSize: 16, fontWeight: "800" },
+  emptyTitle: { color: palette.text, fontSize: 16, fontWeight: "800" },
   emptyText: {
     color: palette.secondary,
     textAlign: "center",

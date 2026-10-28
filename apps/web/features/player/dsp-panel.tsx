@@ -19,8 +19,6 @@ import {
   formatSampleRate,
   getRealtimeEnhanceStatus,
   recommendedHeadroomDb,
-  SIGNAL_CLIPPING_COLOR,
-  signalLightColor,
   signalLightLabel,
   type CrossfeedStrength,
   type DspAvailability,
@@ -32,6 +30,7 @@ import {
   type SignalPath,
 } from "@parson/music-sdk";
 import { useQuery } from "@tanstack/react-query";
+import { SIGNAL_CLIPPING_COLOR, signalLightColor } from "./themed-signal";
 import {
   AlertTriangle,
   Gauge,
@@ -149,7 +148,7 @@ function Section({
           </p>
           {unavailable ? (
             <p
-              className="mt-1 text-[11px] leading-4 text-amber-300/80"
+              className="mt-1 text-[0.6875rem] leading-4 text-amber-300/80"
               data-dsp-unavailable
             >
               {unavailable}
@@ -174,7 +173,7 @@ function Section({
 }
 
 const fieldClass =
-  "h-8 rounded-md border border-white/10 bg-[#141416] px-2 text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-white/40";
+  "h-8 rounded-md border border-white/10 bg-mujin-surface-1 px-2 text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-white/40";
 
 function EqCurve({ settings }: { settings: DspSettings }) {
   const points = useMemo(() => {
@@ -292,7 +291,7 @@ function BandRow({
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
-      <label className="col-span-3 flex items-center gap-1 text-[11px] text-zinc-500 sm:col-span-1">
+      <label className="col-span-3 flex items-center gap-1 text-[0.6875rem] text-zinc-500 sm:col-span-1">
         <input
           aria-label={`${label} frequency in hertz`}
           className={cn(fieldClass, "w-full")}
@@ -332,7 +331,7 @@ function BandRow({
             : "—"}
         </span>
       </label>
-      <label className="col-span-3 flex items-center gap-1 text-[11px] text-zinc-500 sm:col-span-1">
+      <label className="col-span-3 flex items-center gap-1 text-[0.6875rem] text-zinc-500 sm:col-span-1">
         Q
         <input
           aria-label={`${label} Q`}
@@ -518,7 +517,7 @@ export function DspPanel({
 
         {serverRun && (status || path?.processing?.notes.length) ? (
           <div
-            className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-white/6 px-5 py-2.5 text-[11px] text-zinc-400"
+            className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-white/6 px-5 py-2.5 text-[0.6875rem] text-zinc-400"
             data-dsp-processing
           >
             {status?.realtime_factor ? (
@@ -626,17 +625,17 @@ export function DspPanel({
             ) : null}
             {blocked ? (
               <p
-                className="w-full rounded-lg bg-white/4 px-3 py-2 text-[11px] leading-4 text-amber-300/90"
+                className="w-full rounded-lg bg-white/4 px-3 py-2 text-[0.6875rem] leading-4 text-amber-300/90"
                 data-dsp-blocked
               >
                 {blocked}
               </p>
             ) : null}
             {error ? (
-              <p className="w-full text-[11px] text-red-300">{error}</p>
+              <p className="w-full text-[0.6875rem] text-red-300">{error}</p>
             ) : null}
             {serverRun ? (
-              <p className="flex w-full items-start gap-1.5 text-[11px] leading-4 text-zinc-500">
+              <p className="flex w-full items-start gap-1.5 text-[0.6875rem] leading-4 text-zinc-500">
                 <Server className="mt-px h-3 w-3 shrink-0" />
                 <span>
                   The server runs this chain itself, in 64-bit float, before{" "}
@@ -654,7 +653,7 @@ export function DspPanel({
               </p>
             ) : null}
             {output && !output.selectable ? (
-              <p className="w-full text-[11px] text-zinc-500">
+              <p className="w-full text-[0.6875rem] text-zinc-500">
                 This browser always plays through the system default output.
               </p>
             ) : null}
@@ -663,7 +662,7 @@ export function DspPanel({
           <Section
             badge={
               clipping ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/12 px-2 text-[10px] font-semibold text-amber-300">
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/12 px-2 text-[0.625rem] font-semibold text-amber-300">
                   <AlertTriangle className="h-3 w-3" /> May clip
                 </span>
               ) : null
@@ -700,7 +699,7 @@ export function DspPanel({
               </span>
             </div>
             {clipping ? (
-              <p className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-300/90">
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-[0.6875rem] text-amber-300/90">
                 The EQ boosts up to {Math.abs(recommended).toFixed(1)} dB.
                 <button
                   className="rounded-full border border-amber-300/30 px-2 py-0.5 hover:bg-amber-300/10"
@@ -862,7 +861,7 @@ export function DspPanel({
               </button>
             </div>
             <EqCurve settings={settings} />
-            <div className="mt-1 flex justify-between text-[10px] text-zinc-600">
+            <div className="mt-1 flex justify-between text-[0.625rem] text-zinc-600">
               <span>20 Hz</span>
               <span>{formatFrequency(1_000)}</span>
               <span>20 kHz</span>
@@ -937,7 +936,7 @@ export function DspPanel({
                     <button
                       aria-checked={settings.crossfeed.strength === strength}
                       className={cn(
-                        "h-7 flex-1 rounded-full text-[11px] font-medium transition-colors",
+                        "h-7 flex-1 rounded-full text-[0.6875rem] font-medium transition-colors",
                         settings.crossfeed.strength === strength
                           ? "bg-white text-black"
                           : "text-zinc-400 hover:text-white",
@@ -986,7 +985,7 @@ export function DspPanel({
             />
           </Section>
         </div>
-        <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/6 px-5 py-3 text-[11px] text-zinc-500">
+        <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-white/6 px-5 py-3 text-[0.6875rem] text-zinc-500">
           <span>
             Press{" "}
             <kbd className="rounded border border-white/12 px-1 font-sans text-zinc-300">

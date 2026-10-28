@@ -15,6 +15,7 @@ import {
   shouldContinuePlayback,
   wasSystemLikelyAsleep,
 } from "./playback-lifecycle";
+import { effectiveDuration } from "./player-state";
 
 export type PlaybackTelemetry = {
   started: boolean;
@@ -50,6 +51,7 @@ export function useAudioEvents({
   currentOrigin,
   handleEnded,
   handleMediaError,
+  knownDuration,
   resumeOnReconnect,
   sendPlaybackEvent,
   setCurrentTime,
@@ -63,6 +65,8 @@ export function useAudioEvents({
   currentOrigin: MutableRefObject<QueueOrigin>;
   handleEnded: () => void;
   handleMediaError?: (code: number | undefined) => boolean;
+  /** The playing track's length from the library, in seconds. */
+  knownDuration: () => number | undefined;
   resumeOnReconnect: MutableRefObject<boolean>;
   sendPlaybackEvent: PlaybackEventSender;
   setCurrentTime: StateSetter<number>;
@@ -95,8 +99,9 @@ export function useAudioEvents({
       telemetry.current.lastPosition = nextPosition;
       telemetry.current.lastUpdateMs = now;
       setCurrentTime(nextPosition);
-      setDuration(element.duration || 0);
-      const threshold = Math.min(element.duration * 0.5, 240);
+      const length = effectiveDuration(element.duration, knownDuration());
+      setDuration(length);
+      const threshold = Math.min(length * 0.5, 240);
       if (
         !telemetry.current.qualified &&
         Number.isFinite(threshold) &&
@@ -150,6 +155,7 @@ export function useAudioEvents({
     const listeners: [keyof HTMLMediaElementEventMap, EventListener][] = [
       ["timeupdate", update],
       ["loadedmetadata", update],
+      ["durationchange", update],
       ["play", started],
       ["playing", started],
       ["pause", paused],
@@ -171,6 +177,7 @@ export function useAudioEvents({
     currentOrigin,
     handleEnded,
     handleMediaError,
+    knownDuration,
     resumeOnReconnect,
     sendPlaybackEvent,
     setCurrentTime,

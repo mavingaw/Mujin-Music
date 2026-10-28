@@ -27,7 +27,7 @@ export default function CapabilityChips({
     >
       {ordered.map((grant) => (
         <li
-          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium ${
             grant.available
               ? "border-emerald-400/25 bg-emerald-400/8 text-emerald-200"
               : "border-white/8 bg-white/2 text-zinc-500"

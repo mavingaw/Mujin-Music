@@ -48,6 +48,25 @@ export function personHue(name: string) {
   return hash % 360;
 }
 
+/**
+ * Muted Mujin Music tones for initials avatars ([lit stop, deep stop]):
+ * copper, steel, sage, brass, clay, graphite.
+ */
+export const PERSON_TONES: readonly [string, string][] = [
+  ["#8a5638", "#2a1a12"],
+  ["#4f6d7d", "#18232a"],
+  ["#5b7550", "#1a2217"],
+  ["#8a6c43", "#261d12"],
+  ["#7d5d57", "#251b19"],
+  ["#55555d", "#18181b"],
+];
+
+/** A stable brand tone for a person without a photo. */
+export function personTone(name: string): [string, string] {
+  const [from, to] = PERSON_TONES[personHue(name) % PERSON_TONES.length]!;
+  return [from, to];
+}
+
 type WaitingText = { artist: string; album: string };
 
 const MUSICBRAINZ_WAITING: WaitingText = {
@@ -88,6 +107,31 @@ export function enrichmentWaitingLabel(
   if (!paused) return label;
   const minutes = Math.max(1, Math.round(paused / 60));
   return `${label.replace(/\.$/, "")}; the service is busy, retrying in ${minutes} min.`;
+}
+
+/**
+ * Skip reasons that describe the server's own bookkeeping rather than the
+ * album: an item the in-memory library briefly missed while it reloaded.
+ * They are never shown as "no confident match", since the item is present.
+ */
+const BOOKKEEPING_SKIPS = [
+  "no longer in the library",
+  "the library is still loading",
+];
+
+/**
+ * Whether a skipped lookup really means "no confident MusicBrainz match",
+ * and the reason to show beside it (null when there is none worth showing).
+ */
+export function enrichmentNoMatch(
+  task: EnrichmentTaskState | null | undefined,
+): { reason: string | null } | null {
+  if (task?.status !== "skipped") return null;
+  const reason = task.last_error?.trim() || null;
+  if (reason && BOOKKEEPING_SKIPS.some((text) => reason.includes(text))) {
+    return null;
+  }
+  return { reason };
 }
 
 export const ENRICHMENT_STAGE_LABELS: Record<string, string> = {

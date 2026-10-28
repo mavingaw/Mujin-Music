@@ -17,7 +17,7 @@ import { Artwork } from "@/components/artwork";
 import { EditorialBlock } from "@/components/credits";
 import { Screen, SectionTitle } from "@/components/music-ui";
 import { PersonAvatar } from "@/components/person-avatar";
-import { palette } from "@/constants/colors";
+import { palette, tint } from "@/constants/colors";
 import { artistRoute, genreRoute, joinMeta } from "@/lib/credit-links";
 import {
   immediateBorderlessPressFeedback,
@@ -101,7 +101,7 @@ export default function GenreScreen() {
   if (page.isPending)
     return (
       <Screen>
-        <ActivityIndicator color="white" style={{ flex: 1 }} />
+        <ActivityIndicator color={palette.text} style={{ flex: 1 }} />
       </Screen>
     );
   if (!page.data)
@@ -129,7 +129,7 @@ export default function GenreScreen() {
             hitSlop={12}
             onPress={router.back}
           >
-            <ArrowLeft color="white" size={25} />
+            <ArrowLeft color={palette.text} size={25} />
           </Pressable>
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 135 }}>
@@ -235,7 +235,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   title: {
-    color: "white",
+    color: palette.text,
     fontSize: 32,
     lineHeight: 36,
     fontWeight: "900",
@@ -245,10 +245,10 @@ const styles = StyleSheet.create({
   meta: { color: palette.secondary, fontSize: 13, marginTop: 6 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 12 },
   chip: {
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: tint(0.14),
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: tint(0.06),
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   rail: { gap: 14, paddingHorizontal: 20 },
   person: { width: 96, alignItems: "center" },
   personName: {
-    color: "white",
+    color: palette.text,
     fontSize: 13,
     fontWeight: "700",
     marginTop: 6,
@@ -272,7 +272,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 6,
   },
-  albumName: { color: "white", fontSize: 15, fontWeight: "700" },
+  albumName: { color: palette.text, fontSize: 15, fontWeight: "700" },
   error: { color: palette.secondary, margin: 30 },
   errorState: { flex: 1, alignItems: "center", justifyContent: "center" },
 });

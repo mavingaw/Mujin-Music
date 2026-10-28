@@ -148,19 +148,24 @@ export function profileInitials(name: string): string {
   return `${first}${last}`.toLocaleUpperCase();
 }
 
-/** Two stops of each profile colour, for avatar gradients on any client. */
+/**
+ * Two stops of each profile colour, for avatar gradients on any client.
+ * The stored colour ids are kept, but each renders as a muted tone from the
+ * Mujin Music palette (copper, brass, sage, steel, clay, graphite) so
+ * avatars never bring a second accent into the interface.
+ */
 export const PROFILE_GRADIENTS: Record<ProfileColor, [string, string]> = {
-  violet: ["#a78bfa", "#6d28d9"],
-  indigo: ["#818cf8", "#3730a3"],
-  sky: ["#7dd3fc", "#0369a1"],
-  teal: ["#5eead4", "#0f766e"],
-  emerald: ["#6ee7b7", "#047857"],
-  lime: ["#bef264", "#4d7c0f"],
-  amber: ["#fcd34d", "#b45309"],
-  orange: ["#fdba74", "#c2410c"],
-  rose: ["#fda4af", "#be123c"],
-  pink: ["#f9a8d4", "#be185d"],
-  slate: ["#cbd5e1", "#334155"],
+  violet: ["#c48a68", "#5a3320"],
+  indigo: ["#a8806a", "#3d2a20"],
+  sky: ["#9fc4d8", "#2f4654"],
+  teal: ["#8fb5a8", "#2a3d37"],
+  emerald: ["#a3c98b", "#3d4d33"],
+  lime: ["#c2c98b", "#45482a"],
+  amber: ["#e0b77f", "#5a4220"],
+  orange: ["#e6a27a", "#6a3418"],
+  rose: ["#d49a8f", "#5e2a24"],
+  pink: ["#d6a9a0", "#4e2e2a"],
+  slate: ["#b8b3aa", "#34343a"],
 };
 
 export function profileGradient(color: string): [string, string] {

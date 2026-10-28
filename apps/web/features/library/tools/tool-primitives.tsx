@@ -25,7 +25,7 @@ export function QualityBadge({
   return (
     <span
       className={cn(
-        "inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium tabular-nums tracking-wide",
+        "inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[0.6875rem] font-medium tabular-nums tracking-wide",
         className,
       )}
       data-quality-tier={quality.tier}
@@ -64,7 +64,7 @@ export function ToolCover({
   return (
     <span
       className={cn(
-        "relative block shrink-0 overflow-hidden rounded-md bg-mujin-raised shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]",
+        "relative block shrink-0 overflow-hidden rounded-md bg-mujin-raised shadow-[inset_0_0_0_1px_rgb(var(--mj-ink)/0.06)]",
         className,
       )}
       style={{ width: size, height: size }}
@@ -100,7 +100,7 @@ export function ToolCard({
   return (
     <section
       className={cn(
-        "rounded-xl border border-white/[0.07] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.012))] p-5",
+        "rounded-xl border border-white/[0.07] bg-[linear-gradient(180deg,rgb(var(--mj-ink)/0.035),rgb(var(--mj-ink)/0.012))] p-5",
         className,
       )}
     >
@@ -108,7 +108,9 @@ export function ToolCard({
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap">
           <div className="min-w-0 flex-1">
             {title && (
-              <h2 className="text-[15px] font-semibold text-white">{title}</h2>
+              <h2 className="text-[0.9375rem] font-semibold text-white">
+                {title}
+              </h2>
             )}
             {description && (
               <p className="mt-1 text-sm leading-5 text-zinc-500">
@@ -223,7 +225,7 @@ export function EmptyState({
 export function CountPill({ count }: { count: number }) {
   if (!count) return null;
   return (
-    <span className="ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-white/[0.08] px-1.5 text-[10px] font-semibold tabular-nums text-zinc-300">
+    <span className="ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-white/[0.08] px-1.5 text-[0.625rem] font-semibold tabular-nums text-zinc-300">
       {count > 999 ? "999+" : count}
     </span>
   );

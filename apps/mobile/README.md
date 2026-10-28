@@ -41,6 +41,20 @@ up) it signs the same build with the debug key and names the artifact
 `mujin-music-android-arm64-v8a-debug-signed`: it installs for testing, but
 cannot update an install signed with the upload key.
 
+The debug key is the one in Expo's project template
+(`android/app/debug.keystore`, certificate SHA-256
+`fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`), so it is
+the same in every build and debug-signed APKs update each other. CI fails if
+a debug-signed APK carries any other certificate, or if the upload key
+secrets hold this public key.
+
+The stable release (`.github/workflows/release.yml`) calls the same workflow
+for `arm64-v8a` and `armeabi-v7a` and publishes
+`Mujin-Music-<version>-android-<abi>.apk`, signed the same way; the release
+notes say which key signed them. `versionName` is the release version and
+`versionCode` is `major * 1000000 + minor * 1000 + patch`, both written to
+`app.json` by `bun run version:sync`.
+
 ## Licensing
 
 GPL-3.0-only. See the root and local `LICENSE` files.

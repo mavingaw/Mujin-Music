@@ -147,9 +147,58 @@ fn review_scores(profile: Option<&store::ProfileRow>) -> Option<ReviewScores> {
         .filter(|scores| !scores.scores.is_empty())
 }
 
+/// An album's release type ("Album", "EP", "Single", "Live" ...) and where
+/// it comes from. Only a person's edit, the matched MusicBrainz release
+/// group or the files' own tags count; a type is never guessed from the
+/// track count or running time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReleaseTypeFact {
+    pub value: String,
+    /// `edited`, `musicbrainz` or `tags`.
+    pub source: &'static str,
+}
+
+/// The release type to show, in order of trust: an edit, MusicBrainz, the
+/// tags. None when nobody named one.
+pub fn resolve_release_type(
+    edited: Option<String>,
+    musicbrainz: Option<&str>,
+    tagged: Option<String>,
+) -> Option<ReleaseTypeFact> {
+    let clean = |value: &str| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    edited
+        .as_deref()
+        .and_then(clean)
+        .map(|value| ReleaseTypeFact {
+            value,
+            source: "edited",
+        })
+        .or_else(|| {
+            musicbrainz.and_then(clean).map(|value| ReleaseTypeFact {
+                value,
+                source: "musicbrainz",
+            })
+        })
+        .or_else(|| {
+            tagged
+                .as_deref()
+                .and_then(clean)
+                .map(|value| ReleaseTypeFact {
+                    value,
+                    source: "tags",
+                })
+        })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AlbumAbout {
     pub album_id: String,
+    /// The release type from an edit, MusicBrainz or the tags; never a
+    /// guess from track count or length.
+    pub release_type: Option<ReleaseTypeFact>,
     pub credits: Vec<AboutCredit>,
     /// Background (the article lead) from Wikipedia.
     pub background: Option<EditorialText>,
@@ -976,6 +1025,12 @@ pub async fn album_about(
             .map_err(|error| error.to_string())?;
         let release_match = store::load_release_match(&mut connection, &lookup)
             .map_err(|error| error.to_string())?;
+        let release_types = (
+            crate::enrichment::preferences::album_edited_release_type(&mut connection, &lookup)
+                .map_err(|error| error.to_string())?,
+            crate::enrichment::preferences::album_tagged_release_type(&mut connection, &lookup)
+                .map_err(|error| error.to_string())?,
+        );
         let mut work_texts = Vec::new();
         for work in works.1.iter().filter(|work| work.parent_mbid.is_none()) {
             if work_texts.len() >= 4 {
@@ -994,10 +1049,22 @@ pub async fn album_about(
                 });
             }
         }
-        Ok::<_, String>((works, identification, release_match, work_texts))
+        Ok::<_, String>((
+            works,
+            identification,
+            release_match,
+            work_texts,
+            release_types,
+        ))
     })
     .await;
-    let ((work_links, work_rows), identification, release_match, work_texts) = match works {
+    let (
+        (work_links, work_rows),
+        identification,
+        release_match,
+        work_texts,
+        (edited_release_type, tagged_release_type),
+    ) = match works {
         Ok(Ok(found)) => found,
         _ => {
             tracing::error!("could not load album works");
@@ -1020,12 +1087,22 @@ pub async fn album_about(
         .as_ref()
         .is_some_and(|found| found.status == "unverified");
     let untrusted = placeholder || unverified;
+    // A partial copy of a known album: the edition is unconfirmed, but the
+    // release group's article (background and reception) still applies.
+    let group_texts = !placeholder
+        && unverified
+        && stored
+            .profile
+            .as_ref()
+            .is_some_and(crate::enrichment::worker::profile_is_group_only);
     if untrusted {
-        stored.profile = None;
-        stored.texts.clear();
-        stored.all_texts.clear();
-        stored.source_texts.clear();
         stored.credits.clear();
+        if !group_texts {
+            stored.profile = None;
+            stored.texts.clear();
+            stored.all_texts.clear();
+            stored.source_texts.clear();
+        }
     }
     let work_texts = if untrusted { Vec::new() } else { work_texts };
     let source_pool = image_pool.clone();
@@ -1074,6 +1151,14 @@ pub async fn album_about(
         }
     };
     let facts = parse_facts(stored.profile.as_ref());
+    let release_type = resolve_release_type(
+        edited_release_type,
+        facts
+            .as_ref()
+            .and_then(|facts| facts.get("release_type"))
+            .and_then(Value::as_str),
+        tagged_release_type,
+    );
     let sources = crate::api::album_sources::album_sources(album, facts.as_ref(), source_inputs);
     for credit in &mut credits {
         if sources.credits_edited {
@@ -1091,6 +1176,7 @@ pub async fn album_about(
         (work_links, work_rows)
     };
     HttpResponse::Ok().json(AlbumAbout {
+        release_type,
         release_match: release_match.map(ReleaseMatchView::from),
         works: crate::api::works::album_track_works(&work_links, &work_rows, &people),
         identification,
@@ -1284,8 +1370,11 @@ pub async fn artist_about(
 
 #[get("/{id}/image")]
 pub async fn artist_image(id: web::Path<String>, pool: web::Data<DbPool>) -> HttpResponse {
-    let artist_id = id.into_inner();
-    let pool = pool.get_ref().clone();
+    artist_image_response(pool.get_ref().clone(), id.into_inner()).await
+}
+
+/// The stored photo of `artist_id` (an artist page's or a display's).
+pub(crate) async fn artist_image_response(pool: DbPool, artist_id: String) -> HttpResponse {
     let image = web::block(move || {
         let mut connection = pool.get().map_err(|error| error.to_string())?;
         store::load_image(&mut connection, "artist", &artist_id).map_err(|error| error.to_string())
@@ -1304,6 +1393,57 @@ pub async fn artist_image(id: web::Path<String>, pool: web::Data<DbPool>) -> Htt
             .body(bytes),
         Err(_) => HttpResponse::NotFound().finish(),
     }
+}
+
+/// What a display shows about the playing artist: their photo (with its
+/// credit) and the opening of their biography (with its source).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ArtistPortrait {
+    /// The id the photo is stored under, when there is one.
+    pub image_id: Option<String>,
+    /// e.g. `Photo: Jane Doe, CC BY-SA 4.0`.
+    pub image_credit: Option<String>,
+    pub biography: Option<EditorialText>,
+}
+
+/// The photo and biography the artist page would show for `artist_id`,
+/// found the same way (aliases and MusicBrainz ids included).
+pub(crate) async fn artist_portrait(
+    pool: DbPool,
+    cache: std::sync::Arc<LibraryCache>,
+    artist_id: &str,
+) -> Option<ArtistPortrait> {
+    let name = cache.artist(artist_id).map(|artist| artist.name.clone())?;
+    if is_placeholder_artist(&name) {
+        return None;
+    }
+    let identity = load_identity(pool.clone(), cache.clone()).await;
+    let members = identity.members(artist_id);
+    let stored = load_stored(
+        pool,
+        "artist",
+        members.canonical.clone(),
+        None,
+        Some(PersonLookup::new(&members)),
+    )
+    .await
+    .ok()?;
+    let mut texts = stored.texts;
+    let image_credit = stored.image.as_ref().map(|image| {
+        let author = image.author.trim();
+        let license = image.license.trim();
+        match (author.is_empty(), license.is_empty()) {
+            (false, false) => format!("Photo: {author}, {license}"),
+            (false, true) => format!("Photo: {author}"),
+            (true, false) => format!("Photo: {license}"),
+            (true, true) => "Photo: Wikimedia Commons".to_string(),
+        }
+    });
+    Some(ArtistPortrait {
+        image_id: stored.image.as_ref().map(|_| stored.image_id.clone()),
+        image_credit,
+        biography: texts.remove("biography"),
+    })
 }
 
 #[derive(Deserialize)]
@@ -1425,6 +1565,8 @@ async fn overview(pool: DbPool) -> HttpResponse {
                         hosts.push(host);
                     }
                 }
+                // Lyrics for the track being viewed, when its file has none.
+                hosts.push("lrclib.net");
                 hosts
             },
             stages: store::Stage::ALL
@@ -1622,6 +1764,36 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn release_type_is_named_never_guessed() {
+        // An edit wins, then MusicBrainz, then the tags.
+        assert_eq!(
+            resolve_release_type(Some("Live".into()), Some("Album"), Some("EP".into())),
+            Some(ReleaseTypeFact {
+                value: "Live".into(),
+                source: "edited"
+            })
+        );
+        assert_eq!(
+            resolve_release_type(None, Some("Album"), Some("single".into())),
+            Some(ReleaseTypeFact {
+                value: "Album".into(),
+                source: "musicbrainz"
+            })
+        );
+        assert_eq!(
+            resolve_release_type(Some("  ".into()), None, Some("EP".into())),
+            Some(ReleaseTypeFact {
+                value: "EP".into(),
+                source: "tags"
+            })
+        );
+        // Goldberg Variations (one long track) and Pink Moon (eleven short
+        // ones) with no tag and no match: nothing, not "Single" or "EP".
+        assert_eq!(resolve_release_type(None, None, None), None);
+        assert_eq!(resolve_release_type(None, Some(""), Some(" ".into())), None);
+    }
     use crate::domain::{Credit, Song};
     use crate::library::search::SearchIndex;
 

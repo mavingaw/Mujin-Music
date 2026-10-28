@@ -23,7 +23,16 @@ import {
 } from "@parson/music-sdk";
 import type { AboutCredit, TrackWork } from "@parson/music-sdk/types";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Clock, Info, Pause, Play } from "lucide-react";
+import { Clock, Info, MicVocal, Pause, Play } from "lucide-react";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import {
+  TimedLyricsMark,
+  useLyricsAvailability,
+} from "@/features/library/timed-lyrics-mark";
+import { PlayNowSplit } from "@/features/player/play-now-split";
+import { requestViewLyrics } from "@/features/player/view-lyrics";
+import getBaseURL from "@/lib/api/server-url";
+import { getLibraryImageUrl } from "@/lib/images/image-url";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CreditName } from "@/features/library/credits/credits-list";
@@ -209,6 +218,10 @@ function TrackRows({
     () => new Map(tracks.map((song, index) => [song.id, index])),
     [tracks],
   );
+  const lyrics = useLyricsAvailability(
+    useMemo(() => tracks.map((track) => track.id), [tracks]),
+  );
+  const coverUrl = getLibraryImageUrl(album.cover_url, getBaseURL) ?? undefined;
   const renderTrack = (
     track: LibraryAlbum["songs"][number],
     index: number,
@@ -228,6 +241,7 @@ function TrackRows({
     const trackWork = workByTrack.get(track.id);
     // Under a work heading the composer line repeats the heading.
     const creditLine = inWork ? null : trackCreditLine(credits);
+    const queueItem = { song: track, album, artist: album.artist_object };
     return (
       <SongMenu
         album_id={album.id}
@@ -247,7 +261,7 @@ function TrackRows({
         }
       >
         <div
-          className={`group relative grid min-h-14 grid-cols-[2rem_minmax(0,1fr)_5rem] items-center gap-4 rounded-md px-4 py-3 text-left text-sm transition-colors hover:bg-zinc-800/50 ${
+          className={`group relative grid min-h-14 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-4 rounded-md px-4 py-3 text-left text-sm transition-colors hover:bg-zinc-800/50 ${
             active ? "bg-white/2" : ""
           }`}
         >
@@ -298,6 +312,10 @@ function TrackRows({
                 className="ml-1.5 align-[-2px]"
                 target={{ kind: "song", id: track.id }}
               />
+              <TimedLyricsMark
+                availability={lyrics[track.id]}
+                className="ml-2 align-[1px]"
+              />
             </span>
             {(artistCredit || isExplicitSongTitle(track.name)) && (
               <span className="mt-0.5 truncate text-zinc-400">
@@ -345,6 +363,36 @@ function TrackRows({
             )}
           </div>
           <div className="relative z-10 flex items-center justify-end gap-2 text-right tabular-nums text-zinc-400">
+            <PlayNowSplit
+              onPlayNow={() => onPlay(track)}
+              playing={active && isPlaying}
+              target={{
+                kind: "track",
+                id: track.id,
+                name: displayTitle,
+                item: queueItem,
+              }}
+              variant="row"
+            >
+              <DropdownMenuItem
+                onSelect={() =>
+                  requestViewLyrics({
+                    songId: track.id,
+                    title: displayTitle,
+                    artist: track.artist || artistName,
+                    cover: coverUrl,
+                    item: queueItem,
+                  })
+                }
+              >
+                <MicVocal className="h-4 w-4" />
+                View lyrics
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setCreditsFor(track)}>
+                <Info className="h-4 w-4" />
+                View credits
+              </DropdownMenuItem>
+            </PlayNowSplit>
             <button
               aria-label={`Credits for ${displayTitle}`}
               className="rounded p-1 text-zinc-500 opacity-0 transition-opacity hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
@@ -354,7 +402,7 @@ function TrackRows({
             >
               <Info className="h-4 w-4" />
             </button>
-            <span className="pointer-events-none">
+            <span className="pointer-events-none w-10">
               {formatDuration(track.duration)}
             </span>
           </div>
@@ -365,10 +413,10 @@ function TrackRows({
 
   return (
     <div className="w-full pb-8">
-      <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_5rem] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
+      <div className="mb-2 grid select-none grid-cols-[2rem_minmax(0,1fr)_auto] gap-4 border-b border-white/10 px-4 py-2 text-sm font-medium text-zinc-500">
         <div className="text-center">#</div>
         <div>Track</div>
-        <div className="flex justify-end text-right">
+        <div className="flex w-10 justify-end text-right">
           <Clock className="h-4 w-4" />
         </div>
       </div>

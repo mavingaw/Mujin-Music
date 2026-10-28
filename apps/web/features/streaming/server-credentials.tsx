@@ -68,7 +68,7 @@ export function ServerCredentialsPanel() {
           >
             Server credentials
           </h3>
-          <p className="mt-1 text-[13px] leading-5 text-zinc-400">
+          <p className="mt-1 text-[0.8125rem] leading-5 text-zinc-400">
             Add them once and every listener on this server signs in with just
             their TIDAL approval or Qobuz email and password. Use credentials
             you are entitled to use; Mujin Music does not provide any.
@@ -83,7 +83,7 @@ export function ServerCredentialsPanel() {
                 <ProviderMark provider={credential.provider} />
                 {credential.name}
               </span>
-              <span className="min-w-0 flex-1 text-[13px] text-zinc-400">
+              <span className="min-w-0 flex-1 text-[0.8125rem] text-zinc-400">
                 {describe(credential)}
               </span>
               {credential.source !== "environment" && (
@@ -128,7 +128,7 @@ export function ServerCredentialsPanel() {
         ))}
       </ul>
       {query.isError && (
-        <p className="text-[13px] text-zinc-500">
+        <p className="text-[0.8125rem] text-zinc-500">
           Server credentials could not be loaded.
         </p>
       )}
@@ -221,11 +221,11 @@ function CredentialForm({
 
   return (
     <form className="mt-3 grid gap-3 sm:grid-cols-2" onSubmit={submit}>
-      <p className="text-[13px] leading-5 text-zinc-500 sm:col-span-2">
+      <p className="text-[0.8125rem] leading-5 text-zinc-500 sm:col-span-2">
         Enter {labels.what}. Stored encrypted on this server and never shown
         again.
       </p>
-      <label className="grid gap-1.5 text-[13px] text-zinc-300">
+      <label className="grid gap-1.5 text-[0.8125rem] text-zinc-300">
         {labels.id}
         <Input
           autoComplete="off"
@@ -235,7 +235,7 @@ function CredentialForm({
           value={clientId}
         />
       </label>
-      <label className="grid gap-1.5 text-[13px] text-zinc-300">
+      <label className="grid gap-1.5 text-[0.8125rem] text-zinc-300">
         <span>
           {labels.secret}
           {!labels.secretRequired && (

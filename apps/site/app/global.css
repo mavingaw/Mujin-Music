@@ -4232,3 +4232,30 @@ button.demo-card-subtitle:hover {
 .demo-app[data-demo-capture="true"] :focus-visible {
   outline: none;
 }
+
+.landing-shots {
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.landing-shots img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 14px;
+  box-shadow: 0 40px 90px -40px rgb(0 0 0 / 0.8);
+}
+
+.landing-shot-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .landing-shot-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
