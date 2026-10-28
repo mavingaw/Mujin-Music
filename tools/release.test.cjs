@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { versionFiles, versionParts, checkVersions } = require("./release.cjs");
 const { generate } = require("./update-metadata.cjs");
-const { render, templatePath } = require("./release-notes.cjs");
+const { render, stripComments, templatePath } = require("./release-notes.cjs");
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "parson-release-"));
@@ -193,4 +193,10 @@ test("renders the release notes with a link to each package the stable release p
     () => render("{{version}} {{other}}", { ...options, signingKey: "debug" }),
     /android-signing/,
   );
+});
+
+test("removes nested release-note comments completely and rejects unclosed ones", () => {
+  assert.equal(stripComments("a<!<!-- x -->-- hidden -->b"), "ab");
+  assert.equal(stripComments("a<!-- one -->\n\nb<!-- two -->c"), "abc");
+  assert.throws(() => stripComments("a<!-- never closed"), /unclosed comment/);
 });
