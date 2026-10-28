@@ -13,6 +13,23 @@ const signingBlock =
   /<!-- android-signing: ([a-z]+) -->\n([\s\S]*?)<!-- end android-signing -->\n?/g;
 
 /**
+ * Removes HTML comments, repeating until none are left so that a comment
+ * nested inside another cannot leave a new "<!--" behind, and rejects a
+ * comment that is never closed.
+ */
+function stripComments(text) {
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<!--[\s\S]*?-->\n*/g, "");
+  } while (text !== previous);
+  if (text.includes("<!--")) {
+    throw new Error("The release notes template has an unclosed comment.");
+  }
+  return text;
+}
+
+/**
  * Renders .github/release-notes.md for one release: keeps the Android
  * signing block for the key that signed the APKs, removes the template's
  * comments and fills in the placeholders.
@@ -46,9 +63,11 @@ function render(template, { version, repository, signingKey, certificate }) {
     image: `ghcr.io/${repository.toLowerCase()}`,
     certificate,
   };
-  const body = template
-    .replace(signingBlock, (_, key, text) => (key === signingKey ? text : ""))
-    .replace(/<!--[\s\S]*?-->\n*/g, "")
+  const body = stripComments(
+    template.replace(signingBlock, (_, key, text) =>
+      key === signingKey ? text : "",
+    ),
+  )
     .replace(/\{\{(\w+)\}\}/g, (placeholder, name) => {
       if (!Object.hasOwn(values, name)) {
         throw new Error(`Unknown placeholder ${placeholder}.`);
@@ -77,4 +96,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { render, templatePath };
+module.exports = { render, stripComments, templatePath };
