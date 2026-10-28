@@ -87,11 +87,14 @@ pub struct UpgradeSettings {
 }
 
 /// Checks an `http(s)://host[:port][/path]` base URL and drops a
-/// trailing slash. No credentials, query or fragment.
+/// trailing slash. No credentials, query or fragment. Plain `http` is
+/// accepted only for hosts on the local network, because every request
+/// carries the service's bearer token.
 pub fn normalize_base_url(value: &str) -> Option<String> {
     let url = reqwest::Url::parse(value.trim()).ok()?;
+    let host = url.host_str()?;
     if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
+        || (url.scheme() == "http" && !is_local_network_host(host))
         || url.query().is_some()
         || url.fragment().is_some()
         || !url.username().is_empty()
@@ -100,6 +103,37 @@ pub fn normalize_base_url(value: &str) -> Option<String> {
         return None;
     }
     Some(url.as_str().trim_end_matches('/').to_string())
+}
+
+/// Loopback, private, link-local and shared (CGNAT) addresses, single-label
+/// names such as a Docker service, and names under the local-only
+/// `.local`, `.lan`, `.home.arpa` and `.internal` domains.
+fn is_local_network_host(host: &str) -> bool {
+    use std::net::IpAddr;
+    match host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    {
+        Ok(IpAddr::V4(ip)) => {
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || (ip.octets()[0] == 100 && (ip.octets()[1] & 0xC0) == 64)
+        }
+        Ok(IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || (ip.segments()[0] & 0xFE00) == 0xFC00
+                || (ip.segments()[0] & 0xFFC0) == 0xFE80
+        }
+        Err(_) => {
+            let name = host.trim_end_matches('.').to_ascii_lowercase();
+            !name.contains('.')
+                || [".local", ".lan", ".home.arpa", ".internal"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix))
+        }
+    }
 }
 
 impl UpgradeSettings {
@@ -294,6 +328,27 @@ mod tests {
         let mut bad = settings.clone();
         bad.fetch.base_url = "http://user:pw@fetch".into();
         assert!(bad.validated().is_err());
+        for public_http in ["http://fetch.example.com", "http://8.8.8.8:8490"] {
+            let mut bad = settings.clone();
+            bad.fetch.base_url = public_http.into();
+            assert!(
+                bad.validated().is_err(),
+                "{public_http} sends the token in clear"
+            );
+        }
+        for local in [
+            "http://127.0.0.1:8490",
+            "http://10.0.0.5",
+            "http://100.64.1.2",
+            "http://[fd00::1]:8765",
+            "http://fetch",
+            "http://nas.local:8490",
+            "https://fetch.example.com",
+        ] {
+            let mut ok = settings.clone();
+            ok.enhancer.base_url = local.into();
+            assert!(ok.validated().is_ok(), "{local} should be accepted");
+        }
         let mut bad = settings.clone();
         bad.enhancer.output_folder = Some("relative/folder".into());
         assert!(bad.validated().is_err());
