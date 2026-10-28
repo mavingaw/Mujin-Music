@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS idx_upgrade_enhance_job_source;
+DROP INDEX IF EXISTS idx_upgrade_enhance_job_state;
+DROP TABLE IF EXISTS upgrade_enhance_job;
+DROP INDEX IF EXISTS idx_upgrade_enhanced_source;
+DROP TABLE IF EXISTS upgrade_enhanced_file;
+DROP TABLE IF EXISTS upgrade_request_job;
+DROP INDEX IF EXISTS idx_upgrade_request_state;
+DROP INDEX IF EXISTS idx_upgrade_request_album;
+DROP TABLE IF EXISTS upgrade_request;
+DROP TABLE IF EXISTS upgrade_spectral_check;
+DROP TABLE IF EXISTS upgrade_secret;

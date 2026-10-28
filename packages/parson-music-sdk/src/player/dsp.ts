@@ -39,6 +39,12 @@ export interface DspSettings {
    */
   convolution: { enabled: boolean; filterId: string | null };
   sampleRate: { enabled: boolean; mode: DspSampleRateMode };
+  /**
+   * AI enhance in real time (experimental): lossy tracks on a server output
+   * stream through your enhancer worker. It generates plausible
+   * treble; it never recovers the original master. Older settings omit it.
+   */
+  aiEnhance?: { enabled: boolean };
 }
 
 export const DSP_SAMPLE_RATES = [
@@ -128,6 +134,7 @@ export function defaultDspSettings(): DspSettings {
     crossfeed: { enabled: false, strength: "medium" },
     convolution: { enabled: false, filterId: null },
     sampleRate: { enabled: false, mode: "device" },
+    aiEnhance: { enabled: false },
   };
 }
 
@@ -183,6 +190,7 @@ export function normalizeDspSettings(value: unknown): DspSettings {
   const crossfeed = record(input.crossfeed);
   const convolution = record(input.convolution);
   const sampleRate = record(input.sampleRate);
+  const aiEnhance = record(input.aiEnhance);
   const rawBands = Array.isArray(eq.bands) ? eq.bands.slice(0, 10) : null;
   const mode = sampleRate.mode;
   return {
@@ -229,6 +237,7 @@ export function normalizeDspSettings(value: unknown): DspSettings {
           ? mode
           : "device",
     },
+    aiEnhance: { enabled: aiEnhance.enabled === true },
   };
 }
 

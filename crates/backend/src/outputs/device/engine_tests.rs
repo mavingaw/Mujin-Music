@@ -95,6 +95,7 @@ fn dsd_file(dir: &Path) -> (PathBuf, AudioProperties) {
         channels: Some(2),
         bitrate_kbps: Some(5_644),
         lossless: Some(true),
+        enhanced_by: None,
     };
     (path, audio)
 }
@@ -267,6 +268,7 @@ fn tone(dir: &Path, rate: u32, seconds: f32) -> (PathBuf, AudioProperties) {
         channels: Some(2),
         bitrate_kbps: None,
         lossless: Some(true),
+        enhanced_by: None,
     };
     (path, audio)
 }

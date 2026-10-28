@@ -1,0 +1,28 @@
+# The enhancer next to the Mujin Music server. Build the image first:
+#   docker build -f Dockerfile.cuda -t mujin-enhancer:cuda tools/enhancer
+# (or Dockerfile and mujin-enhancer:cpu without an NVIDIA GPU).
+services:
+  mujin-enhancer:
+    image: mujin-enhancer:cuda
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      # Secret, model weights and temporary jobs.
+      - "mujin-enhancer:/data"
+      # Optional: the music, read-only, so Mujin Music can send paths
+      # instead of uploading files ("The enhancer can read the music
+      # folders" in Settings → Better versions).
+      - "/path/to/music:/music:ro"
+    command: ["--shared-root", "/music"]
+    # Remove this block for the CPU image.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  mujin-enhancer:

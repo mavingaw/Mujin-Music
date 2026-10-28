@@ -43,13 +43,16 @@ and open source:
   Spotify, Apple Music, YouTube Music and Deezer.
 - Profiles, Last.fm and ListenBrainz scrobbling, a Home Assistant
   integration, away-from-home access, backups and library tools.
+- Better versions: lossless copies of lossy albums from FETCH, your own
+  download manager, and clearly labelled AI-enhanced copies of the rest from
+  a self-hosted Apollo enhancer.
 - A dark, gallery-style design with timed lyrics, a display mode for TVs and
   tablets, and six theme presets (Mujin Dark and Light, Material You, Frosted
   Glass, OLED Black, High Contrast) with full appearance settings that follow
   your profile to every device.
 
-Read the full write-up, including how it was tested, what is coming next and
-the known limitations, in [docs/mujin-music.md](docs/mujin-music.md).
+Read the full write-up, including how it was tested and the known
+limitations, in [docs/mujin-music.md](docs/mujin-music.md).
 
 Roon is a trademark of Roon Labs; Mujin Music is not affiliated with or
 endorsed by Roon Labs.
@@ -88,6 +91,18 @@ Open `http://localhost:1993`, create your account, and choose `/music`.
 
 The Mujin Music server holds your library. Mujin Music Desktop, the Android app, and any browser are remotes for it. Mujin Music Desktop can run the server itself, or be a remote for a server on your NAS or another computer. See [docs/server.md](docs/server.md) for headless installs on Linux, NAS, Docker and Windows, and for how to connect phones.
 
+## Better versions and AI enhance
+
+Library tools → **Better versions** lists albums that are only lossy (or
+"lossless" files made from MP3s, found by a spectral check) and asks
+**FETCH**, your own download manager, for real lossless copies. Verified
+copies play instead; the old copy stays as an alternate version. The
+optional **AI enhancer** (`tools/enhancer`, Apollo on your GPU, Windows or
+Docker) makes AI-enhanced copies of what FETCH cannot find, and can enhance
+lossy tracks live on server zones. AI-enhanced audio is always labelled as
+such, never as lossless. See
+[docs/better-versions.md](docs/better-versions.md).
+
 ## Privacy
 
 Mujin Music does not upload analytics or crash reports.
@@ -98,6 +113,8 @@ updates, casting, and online metadata (credits, biographies and reviews from
 MusicBrainz and Wikipedia, and lyrics from LRCLIB), which is off until an
 administrator turns it on. Lyrics in your files (embedded LRC, ID3 SYLT/USLT, or
 an `.lrc` file beside the track) are always shown, timed when they carry stamps.
+FETCH and the AI enhancer are your own machines on your network; nothing about
+them goes to a cloud service.
 
 [Privacy and security](apps/site/content/docs/accounts-privacy-security.mdx)
 

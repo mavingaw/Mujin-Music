@@ -1133,6 +1133,7 @@ mod tests {
                     channels: Some(2),
                     bitrate_kbps: None,
                     lossless: Some(true),
+                    enhanced_by: None,
                 }),
                 credits: vec![Credit {
                     artist_id: "bach".into(),

@@ -10,6 +10,7 @@ export type TierPalette = {
   accent: string;
   accentSoft: string;
   accentDeep: string;
+  enhanced: string;
   qualityLow: string;
   muted: string;
 };
@@ -22,6 +23,7 @@ export function tierColors(
     dsd: palette.accentDeep,
     hi_res: palette.accent,
     lossless: palette.accentSoft,
+    ai_enhanced: palette.enhanced,
     lossy: palette.qualityLow,
     unknown: palette.muted,
   };
@@ -31,6 +33,7 @@ export const TIER_LABELS: Record<FileQualityTier, string> = {
   dsd: "DSD",
   hi_res: "Hi-Res",
   lossless: "CD quality",
+  ai_enhanced: "AI-enhanced",
   lossy: "Lossy",
   unknown: "Unknown",
 };

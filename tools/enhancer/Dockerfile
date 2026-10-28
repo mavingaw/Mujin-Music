@@ -1,0 +1,15 @@
+# Mujin Music enhancer, CPU only: works, but slowly (no real time).
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /usr/local/bin/uv
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY mujin_enhancer ./mujin_enhancer
+RUN uv pip install --system --no-cache --index-url https://download.pytorch.org/whl/cpu torch \
+    && uv pip install --system --no-cache ".[apollo]"
+ENV MUJIN_ENHANCER_HOME=/data
+VOLUME ["/data"]
+EXPOSE 8765
+ENTRYPOINT ["mujin-enhancer", "serve", "--home", "/data", "--device", "cpu"]

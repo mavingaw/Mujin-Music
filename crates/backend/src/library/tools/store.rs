@@ -407,6 +407,7 @@ impl CopyRow {
                 .codec
                 .as_deref()
                 .and_then(crate::domain::codec_is_lossless),
+            enhanced_by: None,
         };
         (!audio.is_empty()).then_some(audio)
     }

@@ -98,6 +98,11 @@ pub struct AudioProperties {
     pub bitrate_kbps: Option<u32>,
     /// Whether the codec is lossless (`None` when the codec is unknown).
     pub lossless: Option<bool>,
+    /// Set when this file is an AI-enhanced copy (the model's name, e.g.
+    /// "Apollo"): its FLAC container holds generated treble, so it is
+    /// never shown as lossless or hi-res.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enhanced_by: Option<String>,
 }
 
 impl AudioProperties {

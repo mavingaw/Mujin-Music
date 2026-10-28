@@ -21,6 +21,8 @@ export function audioBadge(
   audio: AudioProperties | null | undefined,
 ): string | null {
   if (!audio) return null;
+  // Generated treble in a FLAC: name what it is, not the container.
+  if (audio.enhanced_by) return "AI-enhanced";
   const codec =
     audio.codec === "pcm" || audio.codec === "pcm_float"
       ? (audio.container ?? audio.codec)

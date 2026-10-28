@@ -35,7 +35,8 @@ export function stepIcon(step: string): SignalStageIcon {
     step.startsWith("Parametric EQ") ||
     step.startsWith("Headroom") ||
     step.startsWith("Crossfeed") ||
-    step.startsWith("Convolution")
+    step.startsWith("Convolution") ||
+    step.startsWith("AI-enhanced")
   )
     return "dsp";
   if (step.startsWith("Decoded") || step.startsWith("Renderer reports"))

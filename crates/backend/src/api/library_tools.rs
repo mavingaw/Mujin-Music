@@ -2157,6 +2157,35 @@ pub(crate) fn file_version(path: &Path) -> Option<String> {
     Some(format!("{}:{modified}", metadata.len()))
 }
 
+/// Better versions' fake-lossless check, run with the other analysis for
+/// lossless files whose current version was not checked yet.
+async fn check_spectrum(pool: &DbPool, path: &str, version: &str, force: bool) -> bool {
+    if !crate::upgrade::files::is_lossless_path(path) {
+        return true;
+    }
+    let lookup = path.to_string();
+    let stored = db_task(pool, move |connection| {
+        crate::upgrade::store::spectral_for(connection, &lookup)
+    })
+    .await
+    .ok()
+    .flatten();
+    if !force && stored.is_some_and(|row| row.file_version == version) {
+        return true;
+    }
+    match crate::library::tools::spectral::check_file(Path::new(path), None).await {
+        Ok(result) => {
+            let (path, version) = (path.to_string(), version.to_string());
+            db_task(pool, move |connection| {
+                crate::upgrade::store::save_spectral(connection, &path, &version, &result)
+            })
+            .await
+            .is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
 async fn analyze_one(
     zones: &ZoneService,
     pool: &DbPool,
@@ -2193,7 +2222,11 @@ async fn analyze_one(
             Some(analysis::analyze_file(file).await)
         }
     };
-    let (loudness, analysis) = tokio::join!(loudness, analysis);
+    let spectrum = check_spectrum(pool, path, &version, force);
+    let (loudness, analysis, spectrum) = tokio::join!(loudness, analysis, spectrum);
+    if !spectrum {
+        tracing::debug!(path, "the fake-lossless check could not read this file");
+    }
     let saved = match analysis {
         None => true,
         Some(result) => {

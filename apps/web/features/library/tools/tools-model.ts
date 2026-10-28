@@ -13,6 +13,7 @@ export const toolViews = [
   "skipped",
   "duplicates",
   "versions",
+  "better",
   "albumizer",
   "maintenance",
 ] as const;
@@ -23,6 +24,7 @@ export const toolViewLabels: Record<ToolView, string> = {
   skipped: "Skipped files",
   duplicates: "Duplicates",
   versions: "Album versions",
+  better: "Better versions",
   albumizer: "Albumizer",
   maintenance: "Maintenance",
 };
@@ -42,6 +44,7 @@ export const tierColors: Record<FileQualityTier, string> = {
   dsd: "var(--color-mujin-copper-pressed)",
   hi_res: "var(--color-mujin-copper)",
   lossless: "var(--color-mujin-copper-hover)",
+  ai_enhanced: "var(--color-quality-enhanced)",
   lossy: "var(--color-quality-low)",
   unknown: "var(--color-mujin-text-disabled)",
 };
@@ -50,6 +53,7 @@ export const tierShortLabels: Record<FileQualityTier, string> = {
   dsd: "DSD",
   hi_res: "Hi-Res",
   lossless: "CD quality",
+  ai_enhanced: "AI-enhanced",
   lossy: "Lossy",
   unknown: "Unknown",
 };

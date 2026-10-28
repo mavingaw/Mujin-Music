@@ -29,7 +29,7 @@ use parson_output::convolution::FilterSummary;
 use parson_output::dsd::{DsdPacking, DsdPcm, DsdReader, DsdSource, plan_dsd};
 use parson_output::dsp::{
     ConvolutionFilter, DspChain, DspPcm, DspSettings, DspStats, ProcessingPlan, ResamplerKind,
-    plan_processing_with,
+    plan_processing_forced,
 };
 use parson_output::player::{InputFormat, PcmOpener, PcmSource};
 use parson_output::{
@@ -113,6 +113,13 @@ pub struct DevicePlace<'a> {
     pub host: &'a str,
 }
 
+/// Real-time AI enhancement of one track, before the DSP chain.
+#[derive(Clone, Debug)]
+pub struct AiEnhancePlan {
+    pub backend: Arc<crate::upgrade::realtime::RealtimeBackend>,
+    pub config: crate::upgrade::realtime::RealtimeConfig,
+}
+
 /// What a track's samples become on the way to an output.
 #[derive(Clone, Debug)]
 pub struct SamplePlan {
@@ -120,6 +127,44 @@ pub struct SamplePlan {
     /// The server's DSP chain for the track, when anything processes.
     pub processing: Option<ProcessingPlan>,
     pub source: SourceFormat,
+    /// The track streams through the AI enhancer first.
+    pub ai_enhance: Option<AiEnhancePlan>,
+    /// Why AI enhancement, though asked for, does not run on this track.
+    pub ai_enhance_skipped: Option<String>,
+}
+
+/// Whether real-time AI enhancement can run on `source`, and why not.
+pub fn ai_enhance_fit(
+    dsp: &DspSettings,
+    source: &SourceFormat,
+    dsd: bool,
+    backend: Option<&crate::upgrade::realtime::RealtimeBackend>,
+) -> Result<bool, String> {
+    if !dsp.ai_enhance_requested() {
+        return Ok(false);
+    }
+    let Some(backend) = backend else {
+        return Err(
+            "AI enhance is on, but the enhancer is not connected or is too slow for real time (it needs a real-time factor under 0.5), so the original plays.".into(),
+        );
+    };
+    if dsd || source.lossless {
+        return Err(
+            "AI enhance only works on lossy tracks; this one is lossless and plays untouched."
+                .into(),
+        );
+    }
+    if source.sample_rate != backend.sample_rate {
+        return Err(format!(
+            "AI enhance works at {}; this track is {}, so the original plays.",
+            crate::signal_path::format_rate(backend.sample_rate),
+            crate::signal_path::format_rate(source.sample_rate)
+        ));
+    }
+    if source.channels == 0 || source.channels > 2 {
+        return Err("AI enhance works on mono and stereo tracks only.".into());
+    }
+    Ok(true)
 }
 
 impl SamplePlan {
@@ -261,8 +306,11 @@ impl Pipeline {
         let filter = dsp
             .convolution_filter()
             .and_then(|id| self.filters.load(id));
-        let processing = caps.filter(|_| !sent_as_dsd).and_then(|caps| {
-            plan_processing_with(
+        let backend = crate::upgrade::realtime::backend();
+        let fit = ai_enhance_fit(dsp, &source, plan.dsd.is_some(), backend.as_deref());
+        let wants_ai = fit.as_ref().is_ok_and(|fits| *fits) && caps.is_some() && !sent_as_dsd;
+        let mut processing = caps.filter(|_| !sent_as_dsd).and_then(|caps| {
+            plan_processing_forced(
                 &mut plan,
                 &source,
                 dsp,
@@ -270,12 +318,43 @@ impl Pipeline {
                 caps,
                 settings,
                 filter.as_ref(),
+                wants_ai,
             )
         });
+        let mut skipped = fit.err();
+        // The decoder resamples for ratios the chain cannot: the enhancer
+        // then never sees the source rate, so it stands aside.
+        let ai_enhance = match (&backend, &processing) {
+            (Some(backend), Some(planned))
+                if wants_ai && planned.resampler != Some(ResamplerKind::Decoder) =>
+            {
+                Some(AiEnhancePlan {
+                    backend: Arc::clone(backend),
+                    config: crate::upgrade::realtime::RealtimeConfig::standard(source.sample_rate),
+                })
+            }
+            _ if wants_ai => {
+                skipped = Some(
+                    "AI enhance cannot run with this rate conversion, so the original plays."
+                        .into(),
+                );
+                None
+            }
+            _ => None,
+        };
+        if wants_ai && ai_enhance.is_none() && !dsp.processes() && leveling.is_none() {
+            // Nothing else processes: stay bit-perfect.
+            processing = None;
+            if let Some(caps) = caps {
+                plan = plan_output(source, Some(caps), settings).map_err(PlanFailure::Plan)?;
+            }
+        }
         Ok(SamplePlan {
             plan,
             processing,
             source,
+            ai_enhance,
+            ai_enhance_skipped: skipped,
         })
     }
 
@@ -302,6 +381,15 @@ impl Pipeline {
             .extension()
             .and_then(|extension| extension.to_str());
         let mode_label = device.mode_label(settings.exclusive);
+        let ai_stage = samples
+            .ai_enhance
+            .as_ref()
+            .map(|ai| crate::signal_path::AiEnhanceStage {
+                model: ai.backend.model_label.clone(),
+                chunk_seconds: ai.config.chunk_seconds(samples.source.sample_rate),
+                lookahead_chunks: ai.config.lookahead_chunks,
+                realtime_factor: ai.backend.realtime_factor,
+            });
         let signal_path = describe_native_leg(
             track.song_id,
             track.audio,
@@ -332,8 +420,22 @@ impl Pipeline {
                 }),
                 processing: samples.processing.as_ref(),
                 network: device.network.as_ref(),
+                ai_enhance: ai_stage.as_ref(),
             },
         );
+        let mut signal_path = signal_path;
+        if let (Some(note), Some(processing)) = (
+            samples.ai_enhance_skipped.as_ref(),
+            signal_path.processing.as_mut(),
+        ) {
+            processing.notes.push(note.clone());
+        }
+        if let Some(model) = crate::library::tools::marks::current().enhanced_model(track.path) {
+            crate::signal_path::mark_ai_enhanced_source(
+                &mut signal_path,
+                &crate::library::tools::marks::model_label(model),
+            );
+        }
         Ok(PlannedTrack {
             stream: samples.stream(),
             input: samples.input(),
@@ -371,8 +473,20 @@ impl Pipeline {
         };
         let input_rate = resample_to.unwrap_or(planned.source.sample_rate);
         let output = InputFormat::for_container(planned.plan.sample_format);
+        let ai_enhance = planned.ai_enhance.clone();
+        let channels = planned.plan.channels;
         Box::new(move |position| {
-            let decoded = decoder(&path, &spec, position)?;
+            let mut decoded = decoder(&path, &spec, position)?;
+            if let Some(ai) = &ai_enhance {
+                decoded = Box::new(crate::upgrade::realtime::AiEnhancedPcm::new(
+                    decoded,
+                    channels,
+                    input_rate,
+                    Arc::clone(&ai.backend.enhancer),
+                    ai.config,
+                    Arc::clone(&ai.backend.stats),
+                ));
+            }
             let mut chain = DspChain::new(&processing, input_rate, output, Arc::clone(&stats));
             if let Some(impulse) = &impulse {
                 chain = chain.with_convolution(impulse).map_err(io::Error::other)?;
@@ -910,6 +1024,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(if lossless { 2_000 } else { 320 }),
             lossless: Some(lossless),
+            enhanced_by: None,
         }
     }
 
@@ -1004,6 +1119,118 @@ mod tests {
         let mut out = vec![0u8; frames * frame_bytes];
         pcm.read_exact(&mut out).unwrap();
         out
+    }
+
+    struct Halving;
+    struct HalvingSession;
+
+    impl crate::upgrade::realtime::ChunkEnhancer for Halving {
+        fn session(&self) -> Box<dyn crate::upgrade::realtime::EnhanceSession> {
+            Box::new(HalvingSession)
+        }
+    }
+
+    impl crate::upgrade::realtime::EnhanceSession for HalvingSession {
+        fn enhance(
+            &mut self,
+            samples: &[f32],
+            _: u8,
+            _: u32,
+            _: std::time::Duration,
+        ) -> Result<Vec<f32>, String> {
+            Ok(samples.iter().map(|sample| sample * 0.5).collect())
+        }
+    }
+
+    #[test]
+    fn ai_enhance_runs_on_lossy_tracks_only_and_shows_in_the_signal_path() {
+        use crate::upgrade::realtime::{RealtimeBackend, RealtimeStats, set_backend};
+        let pipeline = pipeline(None);
+        let mut dsp = DspSettings::default();
+        dsp.ai_enhance.enabled = true;
+        let mp3 = audio(44_100, 16, false);
+        // No worker (or one too slow): the original plays, bit-perfect.
+        set_backend(None);
+        let planned = plan(
+            &pipeline,
+            &OutputSettings::default(),
+            &dsp,
+            Some(&mp3),
+            None,
+        )
+        .unwrap();
+        assert!(planned.samples.ai_enhance.is_none());
+        assert!(planned.samples.processing.is_none());
+        assert!(
+            planned
+                .samples
+                .ai_enhance_skipped
+                .as_deref()
+                .is_some_and(|note| note.contains("0.5"))
+        );
+
+        set_backend(Some(RealtimeBackend {
+            enhancer: Arc::new(Halving),
+            model_label: "Apollo".into(),
+            realtime_factor: 0.2,
+            sample_rate: 44_100,
+            stats: Arc::new(RealtimeStats::default()),
+        }));
+        let planned = plan(
+            &pipeline,
+            &OutputSettings::default(),
+            &dsp,
+            Some(&mp3),
+            None,
+        )
+        .unwrap();
+        assert!(planned.samples.ai_enhance.is_some());
+        let ids = stage_ids(&planned.signal_path);
+        let ai = ids
+            .iter()
+            .position(|id| *id == crate::signal_path::AI_ENHANCE_STAGE)
+            .expect("an AI stage");
+        let stage = &planned.signal_path.stages[ai];
+        assert_eq!(stage.title, "AI-enhanced (Apollo)");
+        assert_eq!(stage.quality, Some(SignalQuality::Enhanced));
+        assert!(stage.explanation.contains("not lossless"));
+        assert_eq!(planned.signal_path.quality, SignalQuality::Enhanced);
+        // The source still says what it is.
+        assert_eq!(
+            planned.signal_path.stages[0].quality,
+            Some(SignalQuality::LowQuality)
+        );
+        // The opener streams through the enhancer: half the sine's level.
+        let stats = Arc::new(DspStats::default());
+        let mut opener = pipeline.opener(PathBuf::from("/music/a.mp3"), &planned.samples, stats);
+        let frame_bytes = planned.stream.sample_format.bytes() * 2;
+        let bytes = run(&mut opener, 2_000, frame_bytes);
+        assert_eq!(bytes.len(), 2_000 * frame_bytes);
+
+        // Lossless tracks are never touched.
+        let flac = audio(44_100, 16, true);
+        let lossless = plan(
+            &pipeline,
+            &OutputSettings::default(),
+            &dsp,
+            Some(&flac),
+            None,
+        )
+        .unwrap();
+        assert!(lossless.samples.ai_enhance.is_none());
+        assert!(lossless.samples.plan.bit_perfect);
+        // Another rate than the model's: skipped with a reason.
+        let other = audio(48_000, 16, false);
+        let skipped = plan(
+            &pipeline,
+            &OutputSettings::default(),
+            &dsp,
+            Some(&other),
+            None,
+        )
+        .unwrap();
+        assert!(skipped.samples.ai_enhance.is_none());
+        set_backend(None);
     }
 
     #[test]
@@ -1173,6 +1400,7 @@ mod tests {
             channels: Some(2),
             bitrate_kbps: Some(5_644),
             lossless: Some(true),
+            enhanced_by: None,
         }
     }
 

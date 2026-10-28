@@ -16,6 +16,8 @@ pub enum JobKind {
     Reidentify,
     Reanalyze,
     SkippedCheck,
+    /// Better versions' spectral check of lossless files.
+    LosslessCheck,
 }
 
 impl JobKind {
@@ -25,6 +27,7 @@ impl JobKind {
             Self::Reidentify => "Re-identify",
             Self::Reanalyze => "Re-analyze audio",
             Self::SkippedCheck => "Check for skipped files",
+            Self::LosslessCheck => "Check for fake lossless",
         }
     }
 }

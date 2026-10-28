@@ -22,6 +22,7 @@ import { useSearchParams } from "next/navigation";
 import HomeAssistantSettings from "@/features/settings/home-assistant-settings";
 import ProfilesSettings from "@/features/profiles/profiles-settings";
 import ScrobblingSettings from "@/features/scrobbling/scrobbling-settings";
+import BetterVersionsSettings from "@/features/settings/better-versions-settings";
 import AppearanceSettings from "@/features/appearance/appearance-settings";
 
 const settingsTabs = [
@@ -35,6 +36,7 @@ const settingsTabs = [
   "connections",
   "services",
   "library",
+  "better-versions",
   "data",
   "home-assistant",
   "users",
@@ -54,6 +56,7 @@ const labels: Record<SettingsTab, string> = {
   connections: "Connections",
   services: "Services",
   library: "Library",
+  "better-versions": "Better versions",
   data: "Data",
   "home-assistant": "Home Assistant",
   users: "Users",
@@ -172,6 +175,9 @@ function SettingsContent() {
                 <MetadataSourcesSettings />
               </div>
             </>
+          )}
+          {isAdmin && activeTab === "better-versions" && (
+            <BetterVersionsSettings />
           )}
           {isAdmin && activeTab === "users" && <UserForm />}
           {isAdmin && activeTab === "advanced" && <AdvancedSettings />}

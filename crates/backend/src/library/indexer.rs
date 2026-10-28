@@ -1076,6 +1076,7 @@ impl TrackRow {
                 .and_then(|value| u32::try_from(value).ok())
                 .filter(|value| *value > 0),
             lossless: self.codec.as_deref().and_then(codec_is_lossless),
+            enhanced_by: None,
         };
         (!audio.is_empty()).then_some(audio)
     }
@@ -4446,6 +4447,7 @@ fn parse_aiff_fast<R: Read + Seek>(
                 bit_depth: u8::try_from(bits).ok().filter(|bits| *bits > 0 && pcm),
                 channels: u8::try_from(channels).ok().filter(|channels| *channels > 0),
                 lossless: None,
+                enhanced_by: None,
             };
         } else if matches!(&kind, b"ID3 " | b"id3 ") {
             id3_offset = Some(start);
@@ -5212,6 +5214,7 @@ fn lofty_technical_properties(
             .or_else(|| properties.overall_bitrate())
             .filter(|bitrate| *bitrate > 0),
         lossless: None,
+        enhanced_by: None,
     }
 }
 
@@ -5490,6 +5493,7 @@ fn raw_metadata_from_probe(
         channels: probed.channels,
         bitrate_kbps: probed.bitrate_kbps,
         lossless: None,
+        enhanced_by: None,
     };
     metadata.duration_seconds = probed.duration_seconds;
     metadata.duration_source = Some(if probed.duration_seconds > 0.0 {
@@ -5541,6 +5545,7 @@ fn apply_dsd_stream(metadata: &mut RawAudioMetadata, file: &crate::library::dsd:
         channels: Some(stream.channels),
         bitrate_kbps: Some(stream.bitrate_kbps()).filter(|kbps| *kbps > 0),
         lossless: None,
+        enhanced_by: None,
     };
     if metadata.title.is_none() {
         metadata.title = file.title.clone();
@@ -5806,6 +5811,7 @@ fn snapshot_to_parsed(snapshot: &ExistingFileSnapshot) -> ParsedFile {
             channels: snapshot.channels.and_then(|value| u8::try_from(value).ok()),
             bitrate_kbps: snapshot.bitrate.and_then(|value| u32::try_from(value).ok()),
             lossless: None,
+            enhanced_by: None,
         },
         credits: serde_json::from_str(&snapshot.credits_json).unwrap_or_default(),
         label: snapshot.label.clone().unwrap_or_default(),
@@ -6347,9 +6353,44 @@ fn releases_are_duplicate_copies(
         || (smaller.len() >= 5 && smaller.len().saturating_mul(5) >= larger.len().saturating_mul(4))
 }
 
+/// Release folders that hold copies Mujin Music added to albums already in
+/// the library: AI-enhanced copies, and the folders FETCH saved lossless
+/// copies into (recorded before they are scanned). Such a folder never takes the album's identity from the copy
+/// that was there first, so album and track ids (and with them favourites,
+/// playlists and links) stay the same when a better copy arrives.
+fn added_copy_directories(conn: &mut SqliteConnection) -> HashSet<String> {
+    let rows = diesel::sql_query(
+        "SELECT path AS id FROM upgrade_enhanced_file
+         UNION SELECT result_folder AS id FROM upgrade_request
+         WHERE result_folder IS NOT NULL AND result_folder <> ''",
+    )
+    .load::<TextIdRow>(conn);
+    match rows {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| {
+                let path = Path::new(&row.id);
+                let is_file = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| {
+                        AUDIO_EXTENSIONS.contains(&value.to_ascii_lowercase().as_str())
+                    });
+                if is_file {
+                    release_directory(&row.id)
+                } else {
+                    release_directory(&path.join("track").to_string_lossy())
+                }
+            })
+            .collect(),
+        Err(_) => HashSet::new(),
+    }
+}
+
 fn canonical_release_directories(
     slots_by_release: &HashMap<AlbumGroupingKey, Vec<ReleaseDuplicateSlot>>,
     artist_by_release: &HashMap<AlbumGroupingKey, String>,
+    added_copies: &HashSet<String>,
 ) -> HashMap<AlbumGroupingKey, String> {
     let mut releases_by_identity = HashMap::<(String, String), Vec<AlbumGroupingKey>>::new();
     for key in slots_by_release.keys() {
@@ -6369,11 +6410,18 @@ fn canonical_release_directories(
     let mut canonical = HashMap::with_capacity(slots_by_release.len());
     for mut releases in releases_by_identity.into_values() {
         // Prefer the richest track list as the stable album identity. Ties use
-        // the path so input order cannot change IDs.
+        // the path so input order cannot change IDs. Copies Mujin Music added
+        // come last, so they join the existing album instead of renaming it.
         releases.sort_by(|left, right| {
-            slots_by_release[right]
-                .len()
-                .cmp(&slots_by_release[left].len())
+            let added =
+                |key: &AlbumGroupingKey| added_copies.contains(key.release_directory.as_ref());
+            added(left)
+                .cmp(&added(right))
+                .then_with(|| {
+                    slots_by_release[right]
+                        .len()
+                        .cmp(&slots_by_release[left].len())
+                })
                 .then_with(|| left.release_directory.cmp(&right.release_directory))
         });
         let mut representatives = Vec::<AlbumGroupingKey>::new();
@@ -6395,10 +6443,27 @@ fn canonical_release_directories(
     canonical
 }
 
+#[cfg(test)]
 fn prepare_tracks<'a>(
     seeds: Vec<PreparedTrackSeed<'a>>,
     aliases: &HashMap<String, String>,
     inferred_album_artists: &HashMap<AlbumGroupingKey, String>,
+    interner: &mut StringInterner,
+) -> Vec<PreparedTrack<'a>> {
+    prepare_tracks_with(
+        seeds,
+        aliases,
+        inferred_album_artists,
+        &HashSet::new(),
+        interner,
+    )
+}
+
+fn prepare_tracks_with<'a>(
+    seeds: Vec<PreparedTrackSeed<'a>>,
+    aliases: &HashMap<String, String>,
+    inferred_album_artists: &HashMap<AlbumGroupingKey, String>,
+    added_copies: &HashSet<String>,
     interner: &mut StringInterner,
 ) -> Vec<PreparedTrack<'a>> {
     // Collapse byte-quality copies when their release slots agree. A copy that
@@ -6429,7 +6494,7 @@ fn prepare_tracks<'a>(
             });
     }
     let canonical_release_directory =
-        canonical_release_directories(&slots_by_release, &artist_by_release);
+        canonical_release_directories(&slots_by_release, &artist_by_release, added_copies);
 
     let mut prepared = Vec::with_capacity(seeds.len());
     for seed in seeds {
@@ -8427,10 +8492,12 @@ fn reconcile_normalized_tables(
     } else {
         HashMap::with_capacity(0)
     };
-    let prepared_tracks = prepare_tracks(
+    let added_copies = added_copy_directories(conn);
+    let prepared_tracks = prepare_tracks_with(
         seeds,
         &artist_aliases,
         &inferred_album_artists,
+        &added_copies,
         &mut interner,
     );
     if mode == IndexMode::Repair {
@@ -11896,6 +11963,92 @@ mod external_library_tests {
                 &["C:/Music/1969-1975 Archive Collection/01.mp3".into()],
             ),
             ""
+        );
+    }
+
+    #[test]
+    fn copies_added_by_mujin_join_the_album_without_changing_its_ids() {
+        fn ids(parsed: &[ParsedFile], added: &HashSet<String>) -> Vec<(String, String)> {
+            let mut interner = StringInterner::with_capacity(parsed.len() * 8);
+            let seeds = prepare_track_seeds(parsed, &mut interner);
+            let mut ids = super::prepare_tracks_with(
+                seeds,
+                &HashMap::new(),
+                &HashMap::new(),
+                added,
+                &mut interner,
+            )
+            .into_iter()
+            .map(|track| (track.album_id.to_string(), track.track_id.to_string()))
+            .collect::<Vec<_>>();
+            ids.sort();
+            ids.dedup();
+            ids
+        }
+        let original = vec![
+            parsed_track(
+                "C:/Music/Shelf/Casey Rivers/Harbor Lights/01.mp3",
+                "Tide",
+                1,
+                200.0,
+            ),
+            parsed_track(
+                "C:/Music/Shelf/Casey Rivers/Harbor Lights/02.mp3",
+                "Wake",
+                2,
+                180.0,
+            ),
+        ];
+        let mut with_copy = original.clone();
+        with_copy.push(parsed_track(
+            "C:/Music/Mujin Enhanced/Casey Rivers/Harbor Lights/01 Tide (AI-enhanced).flac",
+            "Tide",
+            1,
+            200.4,
+        ));
+        with_copy.push(parsed_track(
+            "C:/Music/Mujin Enhanced/Casey Rivers/Harbor Lights/02 Wake (AI-enhanced).flac",
+            "Wake",
+            2,
+            180.3,
+        ));
+        let before = ids(&original, &HashSet::new());
+        assert_eq!(before.len(), 2);
+        // Without knowing which folder Mujin added, the alphabetically first
+        // folder wins and the ids move.
+        assert_ne!(ids(&with_copy, &HashSet::new()), before);
+        let added = HashSet::from([super::release_directory(
+            "C:/Music/Mujin Enhanced/Casey Rivers/Harbor Lights/01 Tide (AI-enhanced).flac",
+        )]);
+        assert_eq!(ids(&with_copy, &added), before);
+    }
+
+    #[test]
+    fn added_copy_folders_come_from_enhanced_files_and_finished_fetches() {
+        let mut connection = SqliteConnection::establish(":memory:").expect("database");
+        // Before the Better versions tables exist nothing is special.
+        assert!(super::added_copy_directories(&mut connection).is_empty());
+        connection
+            .batch_execute(
+                "CREATE TABLE upgrade_enhanced_file (path TEXT NOT NULL PRIMARY KEY);
+                 CREATE TABLE upgrade_request (result_folder TEXT, result_album_id TEXT);
+                 INSERT INTO upgrade_enhanced_file VALUES
+                     ('/music/Mujin Enhanced/A/Album/CD1/01 Song (AI-enhanced).flac');
+                 INSERT INTO upgrade_request VALUES
+                     ('/music/A/Album [FLAC]', 'album'),
+                     ('/music/A/Arriving', NULL),
+                     (NULL, NULL),
+                     ('', NULL);",
+            )
+            .expect("fixture");
+        let folders = super::added_copy_directories(&mut connection);
+        assert_eq!(
+            folders,
+            HashSet::from([
+                "/music/Mujin Enhanced/A/Album".to_string(),
+                "/music/A/Album [FLAC]".to_string(),
+                "/music/A/Arriving".to_string(),
+            ])
         );
     }
 

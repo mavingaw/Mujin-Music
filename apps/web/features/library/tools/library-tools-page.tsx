@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ShieldCheck } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AlbumizerPanel } from "./albumizer-panel";
+import { BetterVersionsPanel } from "./better-versions-panel";
 import { DuplicatesPanel } from "./duplicates-panel";
 import { MaintenancePanel } from "./maintenance-panel";
 import { OverviewPanel } from "./overview-panel";
@@ -130,6 +131,7 @@ export default function LibraryToolsPage() {
         {view === "skipped" && <SkippedPanel jobs={jobs.data ?? []} />}
         {view === "duplicates" && <DuplicatesPanel jobs={jobs.data ?? []} />}
         {view === "versions" && <VersionsPanel />}
+        {view === "better" && <BetterVersionsPanel />}
         {view === "albumizer" && <AlbumizerPanel />}
         {view === "maintenance" && (
           <MaintenancePanel

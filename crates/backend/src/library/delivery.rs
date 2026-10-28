@@ -855,6 +855,7 @@ mod tests {
             channels: Some(channels),
             bitrate_kbps: Some(900),
             lossless: crate::domain::codec_is_lossless(codec),
+            enhanced_by: None,
         }
     }
 

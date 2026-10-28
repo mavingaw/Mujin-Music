@@ -747,6 +747,7 @@ mod tests {
                 channels: Some(2),
                 bitrate_kbps: None,
                 lossless: Some(lossless),
+                enhanced_by: None,
             }),
             ..Song::default()
         }

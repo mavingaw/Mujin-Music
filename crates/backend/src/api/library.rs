@@ -454,10 +454,20 @@ async fn run_refresh_scan(
     scan_lease: LibraryScanLease,
     scan_message: &'static str,
 ) -> Result<LibraryRefreshResult, ScanFailure> {
+    run_refresh_scan_in(lifecycle, scan_lease, scan_message, None).await
+}
+
+/// [`run_refresh_scan`] limited to one library root when `only` names one.
+async fn run_refresh_scan_in(
+    lifecycle: web::Data<LibraryLifecycle>,
+    scan_lease: LibraryScanLease,
+    scan_message: &'static str,
+    only: Option<String>,
+) -> Result<LibraryRefreshResult, ScanFailure> {
     let cancellation = scan_lease.cancellation();
     lifecycle.set_indexing(scan_message).await;
     let result = async {
-        refresh_libraries_with(false, false, Some(cancellation.clone()))
+        refresh_libraries_in(false, false, Some(cancellation.clone()), only.as_deref())
             .await
             .map_err(|error| {
                 ScanFailure::new(
@@ -479,14 +489,15 @@ async fn run_refresh_scan(
         })?;
         lifecycle.set_available(cache).await;
         let _scan_lease = scan_lease;
-        let enriched = refresh_libraries_with(true, true, Some(cancellation.clone()))
-            .await
-            .map_err(|error| {
-                ScanFailure::new(
-                    format!("Failed to refresh library artwork and metadata: {error}"),
-                    "library_refresh_failed",
-                )
-            })?;
+        let enriched =
+            refresh_libraries_in(true, true, Some(cancellation.clone()), only.as_deref())
+                .await
+                .map_err(|error| {
+                    ScanFailure::new(
+                        format!("Failed to refresh library artwork and metadata: {error}"),
+                        "library_refresh_failed",
+                    )
+                })?;
         let cache = LibraryCache::new().await.map_err(|error| {
             ScanFailure::new(
                 format!("Failed to build library cache: {error}"),
@@ -516,6 +527,41 @@ async fn run_refresh_scan(
         lifecycle.set_scan_failed(&failure.message).await;
     }
     result
+}
+
+/// Rescans one library root (or every root with `None`) for Better
+/// versions, once FETCH or the enhancer saved new files. Returns the
+/// number of roots that failed, or why the scan could not run.
+pub(crate) async fn refresh_root_for_tools(
+    lifecycle: web::Data<LibraryLifecycle>,
+    root: Option<String>,
+    message: &'static str,
+) -> Result<usize, String> {
+    let Some(scan_lease) = lifecycle.try_begin_scan() else {
+        return Err(
+            "A library scan is already running. Try again when it has finished.".to_string(),
+        );
+    };
+    match tokio::spawn(run_refresh_scan_in(
+        lifecycle.clone(),
+        scan_lease,
+        message,
+        root,
+    ))
+    .await
+    {
+        Ok(Ok(result)) => Ok(result.failures.len()),
+        Ok(Err(failure)) => Err(failure.message),
+        Err(error) => Err(format!("The scan stopped unexpectedly: {error}")),
+    }
+}
+
+/// Adds `path` to the saved library roots (Better versions' "Enhanced"
+/// folder when it lies outside every root); the next refresh indexes it.
+pub(crate) async fn ensure_library_root(path: &str) -> Result<(), String> {
+    save_library_path(path)
+        .await
+        .map_err(|error| format!("could not add the library folder: {error}"))
 }
 
 /// Runs the refresh scan for library tools (rescan, retry). Returns the
@@ -1332,9 +1378,23 @@ async fn refresh_libraries_with(
     repair: bool,
     cancellation: Option<crate::library::indexer::ScanCancellation>,
 ) -> Result<LibraryRefreshResult, Box<dyn std::error::Error + Send + Sync>> {
+    refresh_libraries_in(enriched, repair, cancellation, None).await
+}
+
+async fn refresh_libraries_in(
+    enriched: bool,
+    repair: bool,
+    cancellation: Option<crate::library::indexer::ScanCancellation>,
+    only: Option<&str>,
+) -> Result<LibraryRefreshResult, Box<dyn std::error::Error + Send + Sync>> {
     info!("Refreshing all library paths...");
 
-    let paths = read_library_paths().await;
+    let mut paths = read_library_paths().await;
+    if let Some(only) = only
+        && paths.iter().any(|path| path == only)
+    {
+        paths.retain(|path| path == only);
+    }
     if paths.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -2394,6 +2454,7 @@ mod reliability_tests {
                 channels: Some(2),
                 bitrate_kbps: Some(2_800),
                 lossless: Some(true),
+                enhanced_by: None,
             }),
             ..Song::default()
         };
@@ -3445,13 +3506,21 @@ pub async fn song_signal_path(
             )
         },
     };
-    HttpResponse::Ok().json(describe_server_leg(
+    let mut path = describe_server_leg(
         &song.id,
         song.audio.as_ref(),
         extension,
         content_type_for_path(song_path),
         &request,
-    ))
+    );
+    // An AI-enhanced copy is labelled as such, never as lossless.
+    if let Some(model) = crate::library::tools::marks::current().enhanced_model(&song.path) {
+        crate::signal_path::mark_ai_enhanced_source(
+            &mut path,
+            &crate::library::tools::marks::model_label(model),
+        );
+    }
+    HttpResponse::Ok().json(path)
 }
 
 async fn resolve_stream_song_with_refresh(
@@ -4180,6 +4249,7 @@ mod delivery_tests {
                 channels: Some(2),
                 bitrate_kbps: None,
                 lossless: Some(true),
+                enhanced_by: None,
             }),
             ..crate::domain::Song::default()
         };
@@ -4252,6 +4322,7 @@ mod delivery_tests {
             channels: Some(2),
             bitrate_kbps: None,
             lossless: Some(true),
+            enhanced_by: None,
         };
         let browser = OutputCapabilities::from_query(Some("flac,mp3,opus"), None, None, None, None);
         let (cache, live) = convert(&directory, &input, audio, &browser).await;
@@ -4308,6 +4379,7 @@ mod delivery_tests {
             channels: Some(2),
             bitrate_kbps: None,
             lossless: Some(true),
+            enhanced_by: None,
         };
         let browser = OutputCapabilities::from_query(Some("flac,mp3"), None, None, None, None);
         let (cache, _) = convert(&directory, &input, audio, &browser).await;
@@ -4374,6 +4446,7 @@ mod delivery_tests {
                 channels: Some(2),
                 bitrate_kbps: None,
                 lossless: Some(true),
+                enhanced_by: None,
             }),
             ..Default::default()
         };

@@ -55,5 +55,6 @@ export * from "./editorial/works";
 export * from "./resources/imports";
 export * from "./resources/profiles";
 export * from "./resources/scrobbling";
+export * from "./resources/upgrades";
 export * from "./resources/appearance";
 export * from "./theme";

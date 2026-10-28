@@ -301,6 +301,10 @@ function formatRate(sampleRate: number) {
 export function formatAudio(audio: AudioProperties | null | undefined) {
   if (!audio?.codec) return null;
   const codec = CODEC_NAMES[audio.codec] ?? audio.codec.toUpperCase();
+  // Generated treble in a FLAC: say what it is before the container.
+  if (audio.enhanced_by) {
+    return `AI-enhanced (${audio.enhanced_by}), ${codec}${audio.sample_rate ? ` ${formatRate(audio.sample_rate)}` : ""}`;
+  }
   if (audio.lossless) {
     return [
       codec,

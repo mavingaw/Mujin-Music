@@ -352,10 +352,34 @@ export function worseQuality(
   return QUALITY_RANK[left] <= QUALITY_RANK[right] ? left : right;
 }
 
+/** Stage id of real-time AI enhancement on a server output. */
+export const AI_ENHANCE_STAGE = "native-ai-enhance";
+
+/**
+ * Where the current "generation" of audio starts: real-time AI enhancement
+ * replaces the lossy audio with AI-enhanced audio, so the path is rated from
+ * there on (the source stage still says the file is lossy).
+ */
+function generationStart(stages: SignalStage[]) {
+  for (let index = stages.length - 1; index >= 0; index -= 1) {
+    if (stages[index]?.id === AI_ENHANCE_STAGE) return index;
+  }
+  return 0;
+}
+
+/** Whether a path runs through AI enhancement (real time or an enhanced file). */
+export function isAiEnhancedPath(stages: SignalStage[]) {
+  return stages.some(
+    (stage) =>
+      stage.id === AI_ENHANCE_STAGE ||
+      (stage.kind === "source" && stage.detail.startsWith("AI-enhanced")),
+  );
+}
+
 /** Worst classified stage; an unclassified source caps the path at high quality. */
 export function overallSignalQuality(stages: SignalStage[]): SignalQuality {
   let worst: SignalQuality | null = null;
-  for (const stage of stages) {
+  for (const stage of stages.slice(generationStart(stages))) {
     if (!stage.quality) continue;
     worst = worst ? worseQuality(worst, stage.quality) : stage.quality;
   }
@@ -458,7 +482,11 @@ export function describeAudioFormat(
   if (audio.channels) parts.push(`${audio.channels}ch`);
   if (audio.lossless !== true && audio.bitrate_kbps)
     parts.push(`${audio.bitrate_kbps}kbps`);
+  // An AI-enhanced copy is a FLAC of generated treble: never lossless or
+  // hi-res, and it says so.
+  const enhanced = Boolean(audio.enhanced_by);
   const highRes =
+    !enhanced &&
     audio.lossless === true &&
     ((audio.sample_rate ?? 0) > 48_000 || (audio.bit_depth ?? 0) > 16);
   return {
@@ -468,9 +496,11 @@ export function describeAudioFormat(
     bit_depth: audio.bit_depth,
     channels: audio.channels,
     bitrate_kbps: audio.bitrate_kbps,
-    lossless: audio.lossless,
+    lossless: enhanced ? false : audio.lossless,
     high_res: highRes,
-    summary: parts.join(" "),
+    summary: enhanced
+      ? `AI-enhanced (${audio.enhanced_by}) · ${parts.join(" ")}`
+      : parts.join(" "),
   };
 }
 
@@ -478,6 +508,7 @@ export function describeAudioFormat(
 export function sourceQuality(
   audio: AudioProperties | null | undefined,
 ): SignalQuality | null {
+  if (audio?.enhanced_by) return "enhanced";
   if (!audio || audio.lossless === null || audio.lossless === undefined)
     return null;
   return audio.lossless ? "lossless" : "low_quality";
@@ -895,13 +926,18 @@ function clientStages(
  * it is rated low quality too: an exact copy of an MP3 is still an MP3.
  */
 export function carryLossyGeneration(stages: SignalStage[]): SignalStage[] {
-  const first = stages.findIndex((stage) => stage.quality === "low_quality");
-  if (first < 0) return stages;
-  return stages.map((stage, index) =>
-    index > first && stage.quality
-      ? { ...stage, quality: "low_quality" }
-      : stage,
-  );
+  // Real-time AI enhancement starts a new generation of audio.
+  const start = generationStart(stages);
+  const carry = (part: SignalStage[]) => {
+    const first = part.findIndex((stage) => stage.quality === "low_quality");
+    if (first < 0) return part;
+    return part.map((stage, index) =>
+      index > first && stage.quality
+        ? { ...stage, quality: "low_quality" as const }
+        : stage,
+    );
+  };
+  return [...carry(stages.slice(0, start)), ...carry(stages.slice(start))];
 }
 
 function listTitles(stages: SignalStage[]) {
@@ -989,6 +1025,16 @@ export function describeSignalPath(
         ? `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} bit-perfect, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
         : `${options.highRes ? "A high-resolution lossless" : "A lossless"} stream reaches ${output} without being modified.`;
     case "enhanced":
+      if (isAiEnhancedPath(stages)) {
+        const ai =
+          stages.find((stage) => stage.id === AI_ENHANCE_STAGE) ??
+          stages.find((stage) => stage.kind === "source");
+        const model = aiEnhancerModel(`${ai?.title ?? ""} ${ai?.detail ?? ""}`);
+        const others = enhanced.filter(
+          (stage) => stage !== ai && stage.kind !== "conversion",
+        );
+        return `AI-enhanced audio: ${model ?? "the enhancer"} generated plausible treble the lossy encode threw away. It is not the original master and not lossless; the original stays one click away.${others.length ? ` Mujin Music also applies processing you asked for: ${listTitles(others)}.` : ""}`;
+      }
       return outputStage?.id === "native-output" &&
         outputStage.quality === "lossless"
         ? `Mujin Music's server is processing the audio because you asked it to: ${listTitles(enhanced.filter((stage) => stage.kind !== "conversion" || stage.id === "native-resample"))}. The result reaches ${output}${options.clipping ? "" : " bit-exact"}, ${mode} at ${outputFormatFromDetail(outputStage.detail)}.`
@@ -1214,11 +1260,28 @@ export function describeCollectionFormat(
     }
     quality = quality ? worseQuality(quality, next) : next;
   }
+  const enhanced = known.filter((audio) => audio.enhanced_by).length;
+  const prefix =
+    enhanced === 0
+      ? ""
+      : enhanced === known.length
+        ? "AI-enhanced · "
+        : "Partly AI-enhanced · ";
   return {
-    summary: parts.join(" "),
+    summary: prefix + parts.join(" "),
     quality,
     highRes: known.some(
       (audio) => describeAudioFormat(audio)?.high_res === true,
     ),
   };
+}
+
+/** The model named in "AI-enhanced (Apollo)", read without a regular expression. */
+export function aiEnhancerModel(text: string): string | undefined {
+  const marker = "AI-enhanced (";
+  const start = text.indexOf(marker);
+  if (start < 0) return undefined;
+  const from = start + marker.length;
+  const end = text.indexOf(")", from);
+  return end > from ? text.slice(from, end) : undefined;
 }

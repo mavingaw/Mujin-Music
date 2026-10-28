@@ -118,7 +118,11 @@ export function ToolCard({
               </p>
             )}
           </div>
-          {action && <div className="flex shrink-0 gap-2">{action}</div>}
+          {action && (
+            <div className="flex max-w-full shrink-0 flex-wrap gap-2">
+              {action}
+            </div>
+          )}
         </div>
       )}
       {children}

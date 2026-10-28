@@ -84,8 +84,9 @@ fn tier_order(tier: QualityTier) -> usize {
         QualityTier::Dsd => 0,
         QualityTier::HiRes => 1,
         QualityTier::Lossless => 2,
-        QualityTier::Lossy => 3,
-        QualityTier::Unknown => 4,
+        QualityTier::AiEnhanced => 3,
+        QualityTier::Lossy => 4,
+        QualityTier::Unknown => 5,
     }
 }
 
@@ -94,6 +95,7 @@ fn tier_key(tier: QualityTier) -> &'static str {
         QualityTier::Dsd => "dsd",
         QualityTier::HiRes => "hi_res",
         QualityTier::Lossless => "lossless",
+        QualityTier::AiEnhanced => "ai_enhanced",
         QualityTier::Lossy => "lossy",
         QualityTier::Unknown => "unknown",
     }
