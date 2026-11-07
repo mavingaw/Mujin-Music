@@ -41,8 +41,46 @@ export function clearConfig() {
 }
 
 /** The URL to register as the OAuth redirect URL: this page, no query. */
+// Set by the desktop app (desktop/preload.cjs); absent in a normal browser.
+const desktop = globalThis.desktop;
+export const isDesktop = Boolean(desktop?.isDesktop);
+
+/** The URL to register as the OAuth redirect URL. */
 export function redirectUrl() {
-  return `${location.origin}${location.pathname}`;
+  return isDesktop
+    ? desktop.redirectUrl
+    : `${location.origin}${location.pathname}`;
+}
+
+/** The value to register as the Origin Header. */
+export function appOrigin() {
+  return isDesktop ? desktop.origin : location.origin;
+}
+
+/**
+ * fetch(), or in the desktop app a request made by the app itself (which adds
+ * the Origin header and avoids browser CORS rules). Returns { ok, status, json }.
+ */
+async function http(url, { method = "GET", headers = {}, body } = {}) {
+  if (!isDesktop) {
+    const response = await fetch(url, { method, headers, body });
+    return {
+      ok: response.ok,
+      status: response.status,
+      json: () => response.json(),
+    };
+  }
+  const result = await desktop.request({
+    url,
+    method,
+    headers,
+    body: body === undefined ? undefined : String(body),
+  });
+  return {
+    ok: result.status >= 200 && result.status < 300,
+    status: result.status,
+    json: async () => JSON.parse(result.body),
+  };
 }
 
 function getTokens() {
@@ -76,23 +114,42 @@ export function isSignedIn() {
 }
 
 /** Sends the browser to Bungie's sign-in page. */
-export function beginSignIn() {
+/**
+ * Starts Bungie sign-in. In a browser this leaves the page and Bungie sends
+ * it back with ?code=...; in the desktop app a sign-in window opens and this
+ * resolves once you are signed in.
+ */
+export async function beginSignIn() {
   const config = getConfig();
   const state = crypto.randomUUID();
-  sessionStorage.setItem(STATE_KEY, state);
   const params = new URLSearchParams({
     client_id: config.clientId,
     response_type: "code",
     state,
   });
-  location.assign(`${AUTHORIZE_URL}?${params}`);
+  const url = `${AUTHORIZE_URL}?${params}`;
+  if (!isDesktop) {
+    sessionStorage.setItem(STATE_KEY, state);
+    location.assign(url);
+    return;
+  }
+  const returned = new URLSearchParams(await desktop.signIn(url));
+  if (returned.get("state") !== state || !returned.get("code")) {
+    throw new BungieError(
+      returned.get("error_description") || "Sign-in didn't finish. Try again.",
+    );
+  }
+  await requestToken({
+    grant_type: "authorization_code",
+    code: returned.get("code"),
+  });
 }
 
 async function requestToken(fields) {
   const config = getConfig();
   const body = new URLSearchParams({ ...fields, client_id: config.clientId });
   if (config.clientSecret) body.set("client_secret", config.clientSecret);
-  const response = await fetch(TOKEN_URL, {
+  const response = await http(TOKEN_URL, {
     method: "POST",
     body,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -166,7 +223,7 @@ export async function api(path, { method = "GET", body, auth = true } = {}) {
     if (auth) headers.Authorization = `Bearer ${await accessToken()}`;
     if (body) headers["Content-Type"] = "application/json";
 
-    const response = await fetch(`${ROOT}/Platform${path}`, {
+    const response = await http(`${ROOT}/Platform${path}`, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -197,7 +254,7 @@ export async function api(path, { method = "GET", body, auth = true } = {}) {
 
 /** Fetches a file from bungie.net (manifest tables), not the Platform API. */
 export async function fetchContent(path) {
-  const response = await fetch(`${ROOT}${path}`);
+  const response = await http(`${ROOT}${path}`);
   if (!response.ok) {
     throw new BungieError(
       `Download failed (${response.status})`,

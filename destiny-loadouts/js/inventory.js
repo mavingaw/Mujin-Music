@@ -82,6 +82,8 @@ function itemFrom(raw, owner, equipped, profile, manifest) {
     locked: (raw.state & LOCKED_STATE) !== 0,
     power: instance.primaryStat?.value ?? instance.itemLevel ?? 0,
     canEquip: instance.canEquip !== false,
+    tier: instance.gearTier ?? 0,
+    set: manifest.itemSet?.[raw.itemHash] ?? 0,
     stats: isArmor
       ? ARMOR_STAT_HASHES.map((hash) => statValues[hash]?.value ?? 0)
       : null,
@@ -148,6 +150,8 @@ export function armorForClass(items, classType) {
       slot: item.slot,
       exotic: item.exotic,
       stats: item.stats,
+      power: item.power,
+      set: item.set,
     });
   }
   return bySlot;

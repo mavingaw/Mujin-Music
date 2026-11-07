@@ -46,23 +46,26 @@ function sameStats(a, b) {
 }
 
 /**
- * Drops pieces that another piece beats in every stat. Exotics and legendaries
- * are filtered separately, since an exotic is never interchangeable with a
- * legendary. Of several pieces with identical stats only one is kept.
+ * Drops pieces that another piece beats in every stat. Pieces are only
+ * compared within the same group (by default exotic vs legendary, since an
+ * exotic is never interchangeable with a legendary). Of several pieces with
+ * identical stats in a group only one is kept, the one with the most Power.
  */
-export function paretoFilter(pieces) {
+export function paretoFilter(pieces, groupOf = (p) => p.exotic) {
   const keep = [];
-  for (const piece of pieces) {
+  const ordered = [...pieces].sort((a, b) => (b.power ?? 0) - (a.power ?? 0));
+  for (const piece of ordered) {
+    const group = groupOf(piece);
     let dominated = false;
-    for (const other of pieces) {
-      if (other === piece || other.exotic !== piece.exotic) continue;
+    for (const other of ordered) {
+      if (other === piece || groupOf(other) !== group) continue;
       if (dominates(other, piece)) {
         dominated = true;
         break;
       }
     }
     if (dominated) continue;
-    if (keep.some((k) => k.exotic === piece.exotic && sameStats(k, piece))) {
+    if (keep.some((k) => groupOf(k) === group && sameStats(k, piece))) {
       continue;
     }
     keep.push(piece);
@@ -72,16 +75,26 @@ export function paretoFilter(pieces) {
 
 /**
  * Picks the candidates for one slot: undominated pieces, best first by the
- * weighted score, at most `depth` legendaries and `depth` exotics.
+ * weighted score, at most `depth` from each group. When a set bonus is
+ * required, pieces from that set form their own groups so the search never
+ * throws them away in favour of stronger pieces from other sets.
  */
-export function candidatesForSlot(pieces, weights, depth) {
+export function candidatesForSlot(pieces, weights, depth, setHash = 0) {
   const useTotal = weights.every((w) => w === 0);
   const rank = (p) => (useTotal ? statSum(p) : pieceScore(p, weights));
-  const byRank = (a, b) => rank(b) - rank(a) || statSum(b) - statSum(a);
-  const filtered = paretoFilter(pieces).sort(byRank);
-  const legendary = filtered.filter((p) => !p.exotic).slice(0, depth);
-  const exotic = filtered.filter((p) => p.exotic).slice(0, depth);
-  return [...legendary, ...exotic];
+  const byRank = (a, b) =>
+    rank(b) - rank(a) ||
+    statSum(b) - statSum(a) ||
+    (b.power ?? 0) - (a.power ?? 0);
+  const groupOf = (p) => `${p.exotic}:${setHash !== 0 && p.set === setHash}`;
+  const filtered = paretoFilter(pieces, groupOf).sort(byRank);
+  const counts = new Map();
+  return filtered.filter((p) => {
+    const g = groupOf(p);
+    const n = counts.get(g) ?? 0;
+    counts.set(g, n + 1);
+    return n < depth;
+  });
 }
 
 /**
@@ -94,11 +107,14 @@ export function candidatesForSlot(pieces, weights, depth) {
  *   exotic   "any" | "none" | number   "any" allows at most one exotic,
  *                       "none" forbids exotics, a number is the exotic's item
  *                       hash that every build must include
+ *   set      { hash, count } | null   require `count` pieces from the armor
+ *                       set `hash` (for its 2- or 4-piece bonus)
  *   depth    number     candidates kept per slot (search breadth)
  *   limit    number     how many builds to return
  *
  * Returns { builds, combinationsChecked }, builds best first. Each build is
- * { pieces: piece[5] in SLOTS order, totals: number[6], score, wasted }.
+ * { pieces: piece[5] in SLOTS order, totals: number[6], score, wasted,
+ *   capped, power }. Ties are broken by capped stat total, then Power.
  */
 export function optimize(piecesBySlot, options) {
   const {
@@ -106,12 +122,15 @@ export function optimize(piecesBySlot, options) {
     minimums = [0, 0, 0, 0, 0, 0],
     cap = 200,
     exotic = "any",
+    set = null,
     depth = 14,
     limit = 20,
   } = options;
 
   const useTotal = weights.every((w) => w === 0);
   const effectiveWeights = useTotal ? [1, 1, 1, 1, 1, 1] : weights;
+  const setHash = set?.hash ?? 0;
+  const setCount = set ? set.count : 0;
 
   const lists = SLOTS.map((slot) => {
     let pieces = piecesBySlot[slot] ?? [];
@@ -125,18 +144,33 @@ export function optimize(piecesBySlot, options) {
         ? pieces.filter((p) => p.hash === exotic)
         : pieces.filter((p) => !p.exotic);
     }
-    return candidatesForSlot(pieces, effectiveWeights, depth);
+    return candidatesForSlot(pieces, effectiveWeights, depth, setHash);
   });
 
   if (lists.some((l) => l.length === 0)) {
     return { builds: [], combinationsChecked: 0 };
   }
 
+  // How many set pieces the remaining slots could still add, for pruning.
+  const setAvailable = lists.map((l) =>
+    setHash && l.some((p) => p.set === setHash) ? 1 : 0,
+  );
+  const setStillPossible = setAvailable.map((_, i) =>
+    setAvailable.slice(i).reduce((a, b) => a + b, 0),
+  );
+  setStillPossible.push(0);
+
   const best = [];
-  let worstKept = -Infinity;
   let combinationsChecked = 0;
   const totals = [0, 0, 0, 0, 0, 0];
   const chosen = new Array(SLOTS.length);
+
+  const better = (a, b) =>
+    a.score !== b.score
+      ? a.score > b.score
+      : a.capped !== b.capped
+        ? a.capped > b.capped
+        : a.power > b.power;
 
   const consider = () => {
     combinationsChecked++;
@@ -144,7 +178,7 @@ export function optimize(piecesBySlot, options) {
       if (totals[i] < minimums[i]) return;
     }
     const score = scoreTotals(totals, effectiveWeights, cap);
-    if (best.length >= limit && score <= worstKept) return;
+    if (best.length >= limit && score < best[best.length - 1].score) return;
 
     let wasted = 0;
     let capped = 0;
@@ -152,23 +186,25 @@ export function optimize(piecesBySlot, options) {
       wasted += Math.max(0, totals[i] - cap);
       capped += Math.min(totals[i], cap);
     }
+    let power = 0;
+    for (const p of chosen) power += p.power ?? 0;
     const build = {
       pieces: chosen.slice(),
       totals: totals.slice(),
       score,
       wasted,
       capped,
+      power,
     };
-    let at = best.findIndex(
-      (b) => score > b.score || (score === b.score && capped > b.capped),
-    );
+    if (best.length >= limit && !better(build, best[best.length - 1])) return;
+    let at = best.findIndex((b) => better(build, b));
     if (at === -1) at = best.length;
     best.splice(at, 0, build);
     if (best.length > limit) best.pop();
-    if (best.length >= limit) worstKept = best[best.length - 1].score;
   };
 
-  const walk = (slotIndex, exoticCount) => {
+  const walk = (slotIndex, exoticCount, setPieces) => {
+    if (setPieces + setStillPossible[slotIndex] < setCount) return;
     if (slotIndex === SLOTS.length) {
       if (typeof exotic === "number" && exoticCount !== 1) return;
       consider();
@@ -177,13 +213,24 @@ export function optimize(piecesBySlot, options) {
     for (const piece of lists[slotIndex]) {
       const nextExotics = exoticCount + (piece.exotic ? 1 : 0);
       if (nextExotics > 1) continue;
+      const nextSet = setPieces + (setHash && piece.set === setHash ? 1 : 0);
       for (let i = 0; i < STAT_COUNT; i++) totals[i] += piece.stats[i];
       chosen[slotIndex] = piece;
-      walk(slotIndex + 1, nextExotics);
+      walk(slotIndex + 1, nextExotics, nextSet);
       for (let i = 0; i < STAT_COUNT; i++) totals[i] -= piece.stats[i];
     }
   };
 
-  walk(0, 0);
+  walk(0, 0, 0);
   return { builds: best, combinationsChecked };
+}
+
+/** Counts pieces per armor set in a build: Map(setHash -> count). */
+export function setCounts(pieces) {
+  const counts = new Map();
+  for (const p of pieces) {
+    if (!p.set) continue;
+    counts.set(p.set, (counts.get(p.set) ?? 0) + 1);
+  }
+  return counts;
 }

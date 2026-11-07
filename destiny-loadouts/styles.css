@@ -484,6 +484,80 @@ select {
   align-items: center;
 }
 
+/* ---------- max power ---------- */
+
+.power-summary {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.power-number {
+  font-size: 2.4rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #f1dd7a;
+  font-variant-numeric: tabular-nums;
+}
+.power-number.max {
+  color: var(--accent);
+}
+.power-arrow {
+  font-size: 1.6rem;
+  color: var(--muted);
+}
+
+/* ---------- builds extras ---------- */
+
+.stat-help {
+  margin-top: 12px;
+  font-size: 0.9rem;
+}
+.stat-help summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.stat-help dl {
+  margin: 8px 0;
+}
+.stat-help dt {
+  font-weight: 700;
+  margin-top: 6px;
+}
+.stat-help dd {
+  margin: 0;
+  color: var(--muted);
+}
+.set-bonuses {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 0.88rem;
+}
+.set-bonuses li {
+  margin-bottom: 4px;
+}
+
+/* ---------- dialog ---------- */
+
+.dialog {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 20px;
+  width: min(420px, calc(100vw - 32px));
+}
+.dialog::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+.dialog-form input {
+  width: 100%;
+}
+.dialog-form .actions {
+  justify-content: flex-end;
+}
+
 /* ---------- feedback ---------- */
 
 .toast {

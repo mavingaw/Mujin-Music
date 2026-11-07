@@ -5,6 +5,8 @@ import {
   completeSignInFromUrl,
   getConfig,
   imageUrl,
+  appOrigin,
+  isDesktop,
   isSignedIn,
   redirectUrl,
   saveConfig,
@@ -20,6 +22,8 @@ import {
   statNames,
 } from "./inventory.js";
 import { equipGameLoadout, planEquip, runPlan } from "./equip.js";
+import { setCounts } from "./optimizer.js";
+import { equippedPower, maxPowerLoadout, POWER_SLOTS } from "./power.js";
 
 const app = document.getElementById("app");
 const topbar = document.getElementById("topbar-actions");
@@ -41,7 +45,19 @@ const SLOT_LABELS = {
 };
 
 // Weight presets, in stat order: Weapons, Health, Class, Grenade, Super, Melee.
+// The solo presets lean on survivability: Health past 100 strengthens shields
+// and Class past 100 adds an overshield on every class ability.
 const PRESETS = [
+  {
+    name: "Solo dungeon",
+    weights: [6, 10, 8, 5, 3, 4],
+    minimums: [0, 100, 100, 0, 0, 0],
+  },
+  {
+    name: "Solo boss damage",
+    weights: [10, 7, 4, 3, 8, 2],
+    minimums: [0, 70, 0, 0, 0, 0],
+  },
   { name: "Balanced", weights: [5, 5, 5, 5, 5, 5] },
   { name: "Survival", weights: [3, 10, 7, 3, 2, 3] },
   { name: "Grenades", weights: [3, 6, 4, 10, 3, 2] },
@@ -51,12 +67,22 @@ const PRESETS = [
   { name: "Weapons", weights: [10, 6, 4, 3, 2, 3] },
 ];
 
+// What each Armor 3.0 stat does, below and above 100 (stat order as above).
+const STAT_HELP = [
+  "0–100: reload, handling and damage against regular enemies. 101–200: more ammo from bricks and more damage to bosses.",
+  "0–100: healing from Orbs of Power and flinch resistance. 101–200: stronger shields that recharge faster.",
+  "0–100: faster class ability. 101–200: an overshield every time you use your class ability.",
+  "0–100: faster grenade. 101–200: more grenade damage.",
+  "0–100: faster Super. 101–200: more Super damage.",
+  "0–100: faster melee. 101–200: more melee damage, including Glaives.",
+];
+
 const state = {
   manifest: null,
   membership: null,
   inventory: null,
   characterId: null,
-  tab: "builds",
+  tab: "power",
   results: null,
   searching: false,
   busy: false,
@@ -114,7 +140,7 @@ function tile(item, { label = true } = {}) {
   const where = label
     ? `<span class="tile-where">${esc(locationLabel(item))}</span>`
     : "";
-  return `<div class="tile ${item.exotic ? "exotic" : ""}" title="${esc(item.name)} · ${esc(item.typeName)}">
+  return `<div class="tile ${item.exotic ? "exotic" : ""}" title="${esc(item.name)} · ${esc(item.typeName)}${item.power ? ` · Power ${item.power}` : ""}">
       <img src="${esc(imageUrl(item.icon))}" alt="" loading="lazy" />
       ${item.watermark ? `<img class="tile-watermark" src="${esc(imageUrl(item.watermark))}" alt="" loading="lazy" />` : ""}
       ${where}
@@ -145,7 +171,7 @@ function statBars(totals, compare, cap) {
 function renderSetup(error) {
   topbar.innerHTML = "";
   const config = getConfig() ?? {};
-  const origin = location.origin;
+  const origin = appOrigin();
   app.innerHTML = `
     <section class="card narrow">
       <h1>Connect to Bungie.net</h1>
@@ -175,7 +201,7 @@ function renderSetup(error) {
       clientId: data.get("clientId").trim(),
       clientSecret: data.get("clientSecret").trim(),
     });
-    beginSignIn();
+    signIn();
   });
 }
 
@@ -189,7 +215,17 @@ function renderSignIn(error) {
       ${error ? `<p class="error-text">${esc(error)}</p>` : ""}
       <button class="primary" id="sign-in">Sign in with Bungie.net</button>
     </section>`;
-  document.getElementById("sign-in").onclick = beginSignIn;
+  document.getElementById("sign-in").onclick = signIn;
+}
+
+async function signIn() {
+  try {
+    await beginSignIn();
+    // In the desktop app sign-in finishes here; a browser has left the page.
+    if (isDesktop) await start();
+  } catch (error) {
+    renderSignIn(error.message);
+  }
 }
 
 function renderLoading(message) {
@@ -228,6 +264,7 @@ function renderMain() {
     </nav>
     <nav class="tabs" role="tablist">
       ${[
+        ["power", "Max Power"],
         ["builds", "Best builds"],
         ["loadouts", "Loadouts"],
         ["gear", "Equipped"],
@@ -254,7 +291,8 @@ function renderMain() {
     };
   });
 
-  if (state.tab === "builds") renderBuilds();
+  if (state.tab === "power") renderPower();
+  else if (state.tab === "builds") renderBuilds();
   else if (state.tab === "loadouts") renderLoadouts();
   else renderGear();
 }
@@ -266,9 +304,10 @@ function builderSettings() {
   return {
     key,
     value: readStore(key, {
-      weights: [5, 5, 5, 5, 5, 5],
-      minimums: [0, 0, 0, 0, 0, 0],
+      weights: PRESETS[0].weights.slice(),
+      minimums: PRESETS[0].minimums.slice(),
       exotic: "any",
+      set: null,
       cap: 200,
       depth: 14,
     }),
@@ -293,6 +332,26 @@ function renderBuilds() {
   const exoticOptions = [...exotics.entries()].sort((a, b) =>
     a[1].localeCompare(b[1]),
   );
+  // Armor sets this class owns pieces of, and in how many different slots.
+  const setSlots = new Map();
+  for (const slot of ARMOR_SLOTS) {
+    for (const piece of armor[slot]) {
+      if (!piece.set) continue;
+      if (!setSlots.has(piece.set)) setSlots.set(piece.set, new Set());
+      setSlots.get(piece.set).add(slot);
+    }
+  }
+  const setOptions = [...setSlots.entries()]
+    .filter(([, slots]) => slots.size >= 2)
+    .map(([hash, slots]) => ({
+      hash,
+      slots: slots.size,
+      name: state.manifest.sets?.[hash]?.name || "Armor set",
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const setValue = settings.set
+    ? `${settings.set.hash}:${settings.set.count}`
+    : "";
   const counts = ARMOR_SLOTS.map(
     (s) => `${SLOT_LABELS[s]} ${armor[s].length}`,
   ).join(" · ");
@@ -307,7 +366,7 @@ function renderBuilds() {
           ${names()
             .map(
               (name, i) => `<div class="weight-row">
-                <label for="w${i}">${esc(name)}</label>
+                <label for="w${i}" title="${esc(STAT_HELP[i])}">${esc(name)}</label>
                 <input type="range" id="w${i}" min="0" max="10" step="1" value="${settings.weights[i]}" data-weight="${i}" />
                 <output id="wo${i}">${settings.weights[i]}</output>
                 <label class="min">min <input type="number" min="0" max="300" step="5" value="${settings.minimums[i]}" data-min="${i}" aria-label="Minimum ${esc(name)}" /></label>
@@ -315,6 +374,15 @@ function renderBuilds() {
             )
             .join("")}
         </div>
+        <details class="stat-help">
+          <summary>What each stat does</summary>
+          <dl>${names()
+            .map(
+              (name, i) => `<dt>${esc(name)}</dt><dd>${esc(STAT_HELP[i])}</dd>`,
+            )
+            .join("")}</dl>
+          <p class="muted small">Solo tip: Health 100+ and Class 100+ keep you alive (stronger shields, an overshield on every class ability). Then push the stat your build's ability uses.</p>
+        </details>
         <label class="field">Exotic
           <select id="exotic">
             <option value="any" ${settings.exotic === "any" ? "selected" : ""}>Best exotic (or none)</option>
@@ -323,6 +391,21 @@ function renderBuilds() {
               .map(
                 ([hash, name]) =>
                   `<option value="${hash}" ${String(settings.exotic) === String(hash) ? "selected" : ""}>${esc(name)}</option>`,
+              )
+              .join("")}
+          </select>
+        </label>
+        <label class="field">Set bonus
+          <select id="set">
+            <option value="" ${setValue === "" ? "selected" : ""}>Any (no set required)</option>
+            ${setOptions
+              .flatMap((o) =>
+                [2, 4]
+                  .filter((n) => o.slots >= n)
+                  .map(
+                    (n) =>
+                      `<option value="${o.hash}:${n}" ${setValue === `${o.hash}:${n}` ? "selected" : ""}>${esc(o.name)}: ${n}-piece</option>`,
+                  ),
               )
               .join("")}
           </select>
@@ -372,7 +455,9 @@ function renderBuilds() {
   });
   panel.querySelectorAll("[data-preset]").forEach((el) => {
     el.onclick = () => {
-      settings.weights = PRESETS[el.dataset.preset].weights.slice();
+      const preset = PRESETS[el.dataset.preset];
+      settings.weights = preset.weights.slice();
+      settings.minimums = (preset.minimums ?? [0, 0, 0, 0, 0, 0]).slice();
       save();
       renderBuilds();
     };
@@ -380,6 +465,11 @@ function renderBuilds() {
   document.getElementById("exotic").onchange = (e) => {
     const v = e.target.value;
     settings.exotic = v === "any" || v === "none" ? v : Number(v);
+    save();
+  };
+  document.getElementById("set").onchange = (e) => {
+    const [hash, count] = e.target.value.split(":").map(Number);
+    settings.set = hash ? { hash, count } : null;
     save();
   };
   document.getElementById("cap").onchange = (e) => {
@@ -400,7 +490,7 @@ function renderResults(current, cap) {
     return `<div class="card empty">Pick what matters, then press <b>Find my best builds</b>.</div>`;
   }
   if (results.builds.length === 0) {
-    return `<div class="card empty">No set of your armor reaches those minimums. Lower a minimum or pick a different exotic.</div>`;
+    return `<div class="card empty">No combination of your armor reaches those minimums with that exotic and set bonus. Lower a minimum, or pick a different exotic or set.</div>`;
   }
   return (
     results.builds
@@ -410,14 +500,17 @@ function renderResults(current, cap) {
           (i) => i?.owner === state.characterId && i.equipped,
         );
         const total = build.totals.reduce((a, b) => a + b, 0);
+        const armorPower = Math.floor(build.power / build.pieces.length);
+        const bonuses = setBonusesHtml(build.pieces);
         return `<article class="card build">
         <header class="build-head">
           <span class="rank">#${index + 1}</span>
-          <span class="muted">Total ${total}${build.wasted ? ` · ${build.wasted} over cap` : ""}</span>
+          <span class="muted">Total ${total}${build.wasted ? ` · ${build.wasted} over cap` : ""}${armorPower ? ` · Armor Power ${armorPower}` : ""}</span>
           ${wearing ? `<span class="badge">Wearing</span>` : ""}
         </header>
         <div class="tiles">${items.map((i) => tile(i)).join("")}</div>
         ${statBars(build.totals, current, cap)}
+        ${bonuses}
         <div class="actions">
           <button class="primary" data-equip-build="${index}" ${state.busy || wearing ? "disabled" : ""}>Equip</button>
           <button class="ghost" data-save-build="${index}">Save as loadout</button>
@@ -427,6 +520,22 @@ function renderResults(current, cap) {
       .join("") +
     `<p class="muted small center">Checked ${results.combinationsChecked.toLocaleString()} combinations.</p>`
   );
+}
+
+/** Lists the set bonuses a group of armor pieces turns on. */
+function setBonusesHtml(pieces) {
+  const lines = [];
+  for (const [hash, count] of setCounts(pieces)) {
+    const set = state.manifest.sets?.[hash];
+    if (!set) continue;
+    for (const perk of set.perks) {
+      if (count < perk.count) continue;
+      lines.push(
+        `<li title="${esc(perk.description)}"><b>${esc(set.name)} (${perk.count}-piece):</b> ${esc(perk.name || "Set bonus")}${perk.description ? `<span class="muted"> · ${esc(perk.description)}</span>` : ""}</li>`,
+      );
+    }
+  }
+  return lines.length ? `<ul class="set-bonuses">${lines.join("")}</ul>` : "";
 }
 
 function bindResultButtons() {
@@ -440,12 +549,9 @@ function bindResultButtons() {
     };
   });
   document.querySelectorAll("[data-save-build]").forEach((el) => {
-    el.onclick = () => {
+    el.onclick = async () => {
       const build = state.results.builds[el.dataset.saveBuild];
-      const name = prompt(
-        "Name this loadout",
-        `${character().className} build`,
-      );
+      const name = await askName(`${character().className} build`);
       if (!name) return;
       addLoadout(
         name,
@@ -475,6 +581,7 @@ function findBuilds(armor, settings) {
       weights: settings.weights,
       minimums: settings.minimums,
       exotic: settings.exotic,
+      set: settings.set,
       cap: settings.cap,
       depth: settings.depth,
       limit: 10,
@@ -562,11 +669,11 @@ function renderLoadouts() {
       ${gameHtml || `<p class="muted">No in-game loadouts saved on this character.</p>`}
     </section>`;
 
-  document.getElementById("save-current").onclick = () => {
+  document.getElementById("save-current").onclick = async () => {
     const ids = state.inventory.items
       .filter((i) => i.owner === char.id && i.equipped)
       .map((i) => i.id);
-    const name = prompt("Name this loadout", `${char.className} loadout`);
+    const name = await askName(`${char.className} loadout`);
     if (!name) return;
     addLoadout(name, ids);
     renderLoadouts();
@@ -586,11 +693,11 @@ function renderLoadouts() {
     };
   });
   panel.querySelectorAll("[data-delete-loadout]").forEach((el) => {
-    el.onclick = () => {
+    el.onclick = async () => {
       const loadout = allLoadouts().find(
         (l) => l.id === el.dataset.deleteLoadout,
       );
-      if (!confirm(`Delete “${loadout.name}”?`)) return;
+      if (!(await askConfirm(`Delete “${loadout.name}”?`))) return;
       writeStore(
         LOADOUTS_KEY,
         allLoadouts().filter((l) => l.id !== loadout.id),
@@ -615,6 +722,90 @@ function renderLoadouts() {
       state.busy = false;
       await refreshInventory({ quiet: true });
     };
+  });
+}
+
+// ---------- max power ----------
+
+function renderPower() {
+  const panel = document.getElementById("panel");
+  const char = character();
+  const now = equippedPower(state.inventory.items, char.id);
+  const best = maxPowerLoadout(state.inventory.items, char.classType);
+  const ids = POWER_SLOTS.map((slot) => best.items[slot]?.id).filter(Boolean);
+  const wearing = ids.every((id) => {
+    const item = itemById(id);
+    return item.owner === char.id && item.equipped;
+  });
+  const gain = best.power - now.power;
+
+  panel.innerHTML = `
+    <section class="card power-card">
+      <div class="power-summary">
+        <div><div class="muted small">Wearing now</div><div class="power-number">${now.power}</div></div>
+        <div class="power-arrow" aria-hidden="true">→</div>
+        <div><div class="muted small">Your max Power</div><div class="power-number max">${best.power}</div></div>
+        ${gain > 0 ? `<span class="badge">+${gain}</span>` : `<span class="badge">At max</span>`}
+      </div>
+      <p class="muted">Power is the average of your 3 weapons and 5 armor pieces. This picks the highest-Power item you own for every slot, from this character, your vault and your other characters, keeping to one exotic weapon and one exotic armor piece. Higher Power means you deal more damage and take less in dungeons.</p>
+      ${best.missing.length ? `<p class="error-text">Nothing to equip for: ${esc(best.missing.map((s) => SLOT_LABELS[s]).join(", "))}.</p>` : ""}
+      <div class="gear-grid">
+        ${POWER_SLOTS.map((slot) => {
+          const item = best.items[slot];
+          return `<div class="gear-slot">
+            ${tile(item)}
+            <div><div class="small muted">${SLOT_LABELS[slot]}</div><div>${esc(item?.name ?? "Empty")}</div>
+            ${item ? `<div class="small">Power ${item.power}</div>` : ""}</div>
+          </div>`;
+        }).join("")}
+      </div>
+      <div class="actions">
+        <button class="primary" id="equip-max" ${state.busy || wearing || !ids.length ? "disabled" : ""}>${wearing ? "Already wearing max Power" : "Equip max Power"}</button>
+        <button class="ghost" id="save-max" ${ids.length ? "" : "disabled"}>Save as loadout</button>
+      </div>
+      <p class="muted small">Equipping max Power swaps your armor too, which changes your stats. Use <b>Best builds</b> for the strongest stats, then equip your highest-Power weapons on top.</p>
+    </section>`;
+
+  document.getElementById("equip-max").onclick = () => equip(ids, "max Power");
+  document.getElementById("save-max").onclick = async () => {
+    const name = await askName(`${char.className} max Power`);
+    if (!name) return;
+    addLoadout(name, ids);
+    toast(`Saved “${name}”.`);
+  };
+}
+
+// ---------- dialogs ----------
+
+const dialog = document.getElementById("dialog");
+
+/** In-app replacement for prompt(), which the desktop app doesn't support. */
+function askName(defaultValue) {
+  return openDialog({ title: "Name this loadout", input: defaultValue });
+}
+
+function askConfirm(message) {
+  return openDialog({ title: message, confirmLabel: "Delete" }).then(Boolean);
+}
+
+function openDialog({ title, input, confirmLabel = "Save" }) {
+  dialog.innerHTML = `<form method="dialog" class="dialog-form">
+      <h2>${esc(title)}</h2>
+      ${input !== undefined ? `<input name="value" value="${esc(input)}" maxlength="60" required />` : ""}
+      <div class="actions">
+        <button class="ghost" value="cancel" formnovalidate>Cancel</button>
+        <button class="primary" value="ok">${esc(confirmLabel)}</button>
+      </div>
+    </form>`;
+  return new Promise((resolve) => {
+    dialog.onclose = () => {
+      if (dialog.returnValue !== "ok") return resolve(null);
+      const field = dialog.querySelector("input");
+      resolve(field ? field.value.trim() || null : true);
+    };
+    dialog.returnValue = "";
+    dialog.showModal();
+    dialog.querySelector("input")?.select();
   });
 }
 

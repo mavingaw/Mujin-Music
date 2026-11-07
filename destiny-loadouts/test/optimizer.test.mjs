@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { optimize, paretoFilter, scoreTotals, SLOTS } from "../js/optimizer.js";
+import {
+  optimize,
+  paretoFilter,
+  scoreTotals,
+  setCounts,
+  SLOTS,
+} from "../js/optimizer.js";
 
 let nextId = 1;
 const piece = (slot, stats, exotic = false, hash = 0) => ({
@@ -142,4 +148,50 @@ test("an empty slot means no builds", () => {
   const sets = wardrobe();
   sets.classItem = [];
   assert.equal(optimize(sets, {}).builds.length, 0);
+});
+
+test("a required set bonus keeps weaker set pieces in the search", () => {
+  const sets = {};
+  for (const slot of SLOTS) {
+    // A strong off-set piece and a weaker piece from set 77 in every slot.
+    sets[slot] = [
+      { ...piece(slot, flat(30)), set: 0 },
+      { ...piece(slot, flat(10)), set: 77 },
+    ];
+  }
+  const free = optimize(sets, {});
+  assert.equal(free.builds[0].pieces.filter((p) => p.set === 77).length, 0);
+
+  const { builds } = optimize(sets, { set: { hash: 77, count: 4 } });
+  assert.ok(builds.length > 0);
+  for (const build of builds) {
+    assert.ok(build.pieces.filter((p) => p.set === 77).length >= 4);
+  }
+  // With four set pieces required, the best build uses exactly four.
+  assert.equal(builds[0].pieces.filter((p) => p.set === 77).length, 4);
+});
+
+test("an impossible set requirement returns nothing", () => {
+  const sets = wardrobe();
+  assert.equal(optimize(sets, { set: { hash: 5, count: 2 } }).builds.length, 0);
+});
+
+test("ties on stats go to the build with more Power", () => {
+  const sets = wardrobe();
+  const strong = { ...piece("helmet", flat(10)), power: 550 };
+  sets.helmet[0].power = 500;
+  sets.helmet.push(strong);
+  const { builds } = optimize(sets, {});
+  assert.equal(builds[0].pieces[0], strong);
+});
+
+test("setCounts counts pieces per set", () => {
+  const counts = setCounts([{ set: 1 }, { set: 1 }, { set: 2 }, { set: 0 }]);
+  assert.deepEqual(
+    [...counts],
+    [
+      [1, 2],
+      [2, 1],
+    ],
+  );
 });

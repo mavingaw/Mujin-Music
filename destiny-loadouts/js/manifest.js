@@ -5,7 +5,7 @@ import { api, fetchContent } from "./bungie.js";
 
 const DB_NAME = "d2lo-manifest";
 const STORE = "tables";
-const CACHE_KEY = "slim-v1";
+const CACHE_KEY = "slim-v2";
 
 // itemType values worth keeping: armor, weapons and subclasses.
 const ITEM_TYPES = new Set([2, 3, 16]);
@@ -86,7 +86,34 @@ function slimNamed(table) {
 }
 
 /**
- * Returns { version, items, stats, loadoutNames, loadoutColors, loadoutIcons }.
+ * Armor sets with their 2- and 4-piece bonuses, plus which set each item
+ * belongs to.
+ */
+function slimSets(setTable, perkTable) {
+  const sets = {};
+  const itemSet = {};
+  for (const [hash, def] of Object.entries(setTable ?? {})) {
+    if (def.redacted) continue;
+    sets[hash] = {
+      name: def.displayProperties?.name ?? "",
+      perks: (def.setPerks ?? [])
+        .map((p) => {
+          const perk = perkTable?.[p.sandboxPerkHash]?.displayProperties ?? {};
+          return {
+            count: p.requiredSetCount,
+            name: perk.name ?? "",
+            description: perk.description ?? "",
+          };
+        })
+        .sort((a, b) => a.count - b.count),
+    };
+    for (const item of def.setItems ?? []) itemSet[item] = Number(hash);
+  }
+  return { sets, itemSet };
+}
+
+/**
+ * Returns { version, items, sets, itemSet, stats, loadoutNames, loadoutColors, loadoutIcons }.
  * onProgress receives short status strings for the loading screen.
  */
 export async function loadManifest(onProgress = () => {}) {
@@ -102,19 +129,23 @@ export async function loadManifest(onProgress = () => {}) {
     paths.DestinyInventoryItemDefinition;
 
   onProgress("Downloading item definitions (one time per game update)…");
-  const [items, stats, names, colors, icons] = await Promise.all([
-    fetchContent(itemPath),
-    fetchContent(paths.DestinyStatDefinition),
-    paths.DestinyLoadoutNameDefinition
-      ? fetchContent(paths.DestinyLoadoutNameDefinition)
-      : {},
-    paths.DestinyLoadoutColorDefinition
-      ? fetchContent(paths.DestinyLoadoutColorDefinition)
-      : {},
-    paths.DestinyLoadoutIconDefinition
-      ? fetchContent(paths.DestinyLoadoutIconDefinition)
-      : {},
-  ]);
+  const optional = (path) => (path ? fetchContent(path) : {});
+  const [items, stats, names, colors, icons, setTable, perkTable] =
+    await Promise.all([
+      fetchContent(itemPath),
+      fetchContent(paths.DestinyStatDefinition),
+      paths.DestinyLoadoutNameDefinition
+        ? fetchContent(paths.DestinyLoadoutNameDefinition)
+        : {},
+      paths.DestinyLoadoutColorDefinition
+        ? fetchContent(paths.DestinyLoadoutColorDefinition)
+        : {},
+      paths.DestinyLoadoutIconDefinition
+        ? fetchContent(paths.DestinyLoadoutIconDefinition)
+        : {},
+      optional(paths.DestinyEquipableItemSetDefinition),
+      optional(paths.DestinySandboxPerkDefinition),
+    ]);
 
   onProgress("Preparing item definitions…");
   const slim = {
@@ -124,6 +155,7 @@ export async function loadManifest(onProgress = () => {}) {
     loadoutNames: slimNamed(names),
     loadoutColors: slimNamed(colors),
     loadoutIcons: slimNamed(icons),
+    ...slimSets(setTable, perkTable),
   };
   await cachePut(CACHE_KEY, slim);
   return slim;
