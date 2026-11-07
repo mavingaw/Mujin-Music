@@ -15,7 +15,8 @@ it:
 - saves your own loadouts and equips your in-game loadouts.
 
 It uses your own Bungie developer app, so only you can use it. Nothing is sent
-anywhere except to bungie.net.
+anywhere except to bungie.net. Your API key, client secret and sign-in are
+stored encrypted by Windows, tied to your Windows account.
 
 ## Install on Windows
 

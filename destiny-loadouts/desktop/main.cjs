@@ -14,7 +14,9 @@ const {
   protocol,
   shell,
   Menu,
+  safeStorage,
 } = require("electron");
+const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -50,6 +52,60 @@ function serveAppFiles() {
     return net.fetch(pathToFileURL(file).toString());
   });
 }
+
+// ---------- encrypted settings ----------
+//
+// Your API key, client secret and sign-in tokens are encrypted with
+// safeStorage (DPAPI on Windows, tied to your Windows account) and written to
+// the app's data folder. Where encryption isn't available they are kept in
+// memory only, so you sign in again next launch rather than storing them in
+// clear text.
+
+const SECRET_NAMES = new Set(["d2lo.config", "d2lo.tokens"]);
+const secretsFile = () => path.join(app.getPath("userData"), "secrets.json");
+const memorySecrets = {};
+
+function readSecretsFile() {
+  try {
+    return JSON.parse(fs.readFileSync(secretsFile(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+ipcMain.handle("secrets:load", () => {
+  if (!safeStorage.isEncryptionAvailable()) return { ...memorySecrets };
+  const values = {};
+  for (const [name, sealed] of Object.entries(readSecretsFile())) {
+    if (!SECRET_NAMES.has(name)) continue;
+    try {
+      values[name] = JSON.parse(
+        safeStorage.decryptString(Buffer.from(sealed, "base64")),
+      );
+    } catch {
+      // Encrypted by another Windows account or machine: ignore it.
+    }
+  }
+  return values;
+});
+
+ipcMain.handle("secrets:save", (_event, name, value) => {
+  if (!SECRET_NAMES.has(name)) throw new Error("Unknown setting.");
+  if (!safeStorage.isEncryptionAvailable()) {
+    if (value === null) delete memorySecrets[name];
+    else memorySecrets[name] = value;
+    return;
+  }
+  const stored = readSecretsFile();
+  if (value === null) delete stored[name];
+  else {
+    stored[name] = safeStorage
+      .encryptString(JSON.stringify(value))
+      .toString("base64");
+  }
+  fs.mkdirSync(path.dirname(secretsFile()), { recursive: true });
+  fs.writeFileSync(secretsFile(), JSON.stringify(stored), { mode: 0o600 });
+});
 
 /** Bungie.net requests from the page. Only bungie.net is reachable. */
 ipcMain.handle(

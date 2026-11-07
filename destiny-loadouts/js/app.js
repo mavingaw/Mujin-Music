@@ -8,6 +8,7 @@ import {
   appOrigin,
   isDesktop,
   isSignedIn,
+  loadStoredSignIn,
   redirectUrl,
   saveConfig,
   signOut,
@@ -193,16 +194,19 @@ function renderSetup(error) {
         <button class="primary" type="submit">Save and sign in</button>
       </form>
     </section>`;
-  document.getElementById("setup-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const data = new FormData(event.target);
-    saveConfig({
-      apiKey: data.get("apiKey").trim(),
-      clientId: data.get("clientId").trim(),
-      clientSecret: data.get("clientSecret").trim(),
+  document
+    .getElementById("setup-form")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(event.target);
+      // Saved (encrypted) before sign-in, which leaves the page in a browser.
+      await saveConfig({
+        apiKey: data.get("apiKey").trim(),
+        clientId: data.get("clientId").trim(),
+        clientSecret: data.get("clientSecret").trim(),
+      });
+      signIn();
     });
-    signIn();
-  });
 }
 
 function renderSignIn(error) {
@@ -239,8 +243,8 @@ function renderTopbar() {
     <button class="ghost" id="refresh" ${state.busy ? "disabled" : ""}>Refresh</button>
     <button class="ghost" id="sign-out">Sign out</button>`;
   document.getElementById("refresh").onclick = () => refreshInventory();
-  document.getElementById("sign-out").onclick = () => {
-    signOut();
+  document.getElementById("sign-out").onclick = async () => {
+    await signOut();
     renderSignIn();
   };
 }
@@ -925,9 +929,9 @@ function handleError(error) {
       <button class="ghost" id="settings">App settings</button>
     </section>`;
   document.getElementById("retry").onclick = start;
-  document.getElementById("settings").onclick = () => {
-    clearConfig();
-    signOut();
+  document.getElementById("settings").onclick = async () => {
+    await clearConfig();
+    await signOut();
     renderSetup();
   };
 }
@@ -957,4 +961,7 @@ async function start() {
   }
 }
 
-start();
+// Unreadable stored settings just mean starting from the setup screen.
+loadStoredSignIn()
+  .catch(() => {})
+  .then(start);

@@ -1,8 +1,9 @@
 // Bungie.net sign-in (OAuth) and API requests.
 //
-// Everything is stored in this browser's localStorage only: your API key,
-// OAuth client details and tokens never leave your machine except to talk to
-// bungie.net.
+// Your API key, OAuth client details and tokens are stored encrypted on this
+// machine only (see secrets.js) and are sent nowhere except bungie.net.
+
+import { getSecret, loadSecrets, setSecret } from "./secrets.js";
 
 const ROOT = "https://www.bungie.net";
 const AUTHORIZE_URL = `${ROOT}/en/OAuth/Authorize`;
@@ -20,27 +21,23 @@ export class BungieError extends Error {
   }
 }
 
-function readJson(key) {
-  try {
-    return JSON.parse(localStorage.getItem(key) ?? "null");
-  } catch {
-    return null;
-  }
+/** Loads the stored settings and sign-in. Call once before anything else. */
+export function loadStoredSignIn() {
+  return loadSecrets([CONFIG_KEY, TOKENS_KEY]);
 }
 
 export function getConfig() {
-  return readJson(CONFIG_KEY);
+  return getSecret(CONFIG_KEY);
 }
 
 export function saveConfig(config) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+  return setSecret(CONFIG_KEY, config);
 }
 
 export function clearConfig() {
-  localStorage.removeItem(CONFIG_KEY);
+  return setSecret(CONFIG_KEY, null);
 }
 
-/** The URL to register as the OAuth redirect URL: this page, no query. */
 // Set by the desktop app (desktop/preload.cjs); absent in a normal browser.
 const desktop = globalThis.desktop;
 export const isDesktop = Boolean(desktop?.isDesktop);
@@ -84,10 +81,10 @@ async function http(url, { method = "GET", headers = {}, body } = {}) {
 }
 
 function getTokens() {
-  return readJson(TOKENS_KEY);
+  return getSecret(TOKENS_KEY);
 }
 
-function saveTokens(response) {
+async function saveTokens(response) {
   const now = Date.now();
   const tokens = {
     access: response.access_token,
@@ -98,12 +95,12 @@ function saveTokens(response) {
       : 0,
     membershipId: response.membership_id,
   };
-  localStorage.setItem(TOKENS_KEY, JSON.stringify(tokens));
+  await setSecret(TOKENS_KEY, tokens);
   return tokens;
 }
 
 export function signOut() {
-  localStorage.removeItem(TOKENS_KEY);
+  return setSecret(TOKENS_KEY, null);
 }
 
 export function isSignedIn() {
