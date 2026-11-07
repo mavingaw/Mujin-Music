@@ -1,0 +1,92 @@
+name: Guardian Loadouts (Windows app)
+
+# Builds the Guardian Loadouts Windows installer from destiny-loadouts/.
+# Pull requests get the installer as a downloadable artifact; pushes to master
+# (and manual runs) also publish it on a GitHub release.
+
+on:
+  pull_request:
+    paths:
+      - "destiny-loadouts/**"
+      - ".github/workflows/guardian-loadouts.yml"
+  push:
+    branches: [master]
+    paths:
+      - "destiny-loadouts/**"
+      - ".github/workflows/guardian-loadouts.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guardian-loadouts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: destiny-loadouts
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build the installer
+        run: npm run dist:win
+        env:
+          # No code-signing certificate: Windows SmartScreen will show
+          # "Windows protected your PC" the first time; choose More info,
+          # then Run anyway.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Guardian-Loadouts-Windows-Installer
+          path: destiny-loadouts/dist/Guardian-Loadouts-Setup-*.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish the installer
+    needs: windows
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Download the installer
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: Guardian-Loadouts-Windows-Installer
+          path: installer
+
+      - name: Publish a GitHub release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="$(node -p "require('./destiny-loadouts/package.json').version")"
+          tag="guardian-loadouts-v${version}"
+          notes="Windows installer for Guardian Loadouts ${version}, a personal Destiny 2 build optimizer, Max Power finder and loadout equipper. Download the .exe below and run it. Setup steps are in destiny-loadouts/README.md."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" installer/*.exe --clobber
+          else
+            gh release create "$tag" installer/*.exe \
+              --title "Guardian Loadouts ${version}" \
+              --notes "$notes" \
+              --target "$GITHUB_SHA" \
+              --prerelease
+          fi

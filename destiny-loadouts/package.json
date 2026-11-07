@@ -1,0 +1,66 @@
+{
+  "name": "guardian-loadouts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A personal Destiny 2 build optimizer, Max Power finder and loadout equipper.",
+  "scripts": {
+    "start": "electron .",
+    "web": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "dist:dir": "electron-builder --dir --publish never"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "productName": "Guardian Loadouts",
+  "author": "Guardian Loadouts",
+  "main": "desktop/main.cjs",
+  "devDependencies": {
+    "electron": "44.9.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.guardianloadouts.app",
+    "productName": "Guardian Loadouts",
+    "copyright": "Personal use",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "index.html",
+      "styles.css",
+      "js/**/*",
+      "desktop/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Guardian Loadouts",
+      "artifactName": "Guardian-Loadouts-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "icon": "build/icon.png"
+    }
+  }
+}
